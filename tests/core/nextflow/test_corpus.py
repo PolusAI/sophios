@@ -1,12 +1,6 @@
-"""The corpus workflows the Nextflow target runs: each is compiled, run under Nextflow with Docker, and checked.
-
-Only `.github/workflows/run_workflows.yml` collects these tests, on a push. It checks out
-mm-workflows and image-workflows beside sophios, and `.github/update_sophios_config.py` writes
-the config that reaches them.
-"""
+"""The corpus workflows the Nextflow target runs, compiled and run under Nextflow with Docker. Only
+`.github/workflows/run_workflows.yml` collects these, on a push, with mm-workflows and image-workflows alongside."""
 from pathlib import Path
-import subprocess
-import sys
 
 import pytest
 
@@ -17,7 +11,8 @@ from sophios.nf_types import NfWorkflowOutputConnection
 from sophios.python_cwl_adapter import import_python_file
 
 from ..test_python_api_workflow import _step_registry_injected
-from .testkit import REPO_ROOT, execute_nextflow
+from ..helpers import REPO_ROOT, python_process
+from .testkit import execute_nextflow
 
 CHECKOUTS = REPO_ROOT.parent
 CONFIG = Path.home() / "wic" / "global_config.json"
@@ -35,11 +30,8 @@ WORKFLOWS = [
 def _compile(source: Path, pipeline: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Write the Nextflow artifacts of one corpus workflow, from the command line or the Python API."""
     if source.suffix == ".wic":
-        result = subprocess.run(
-            [sys.executable, "-m", "sophios.main", "--yaml", str(source), "--config_file", str(CONFIG),
-             "--target", "nextflow", "--basepath", str(pipeline)],
-            cwd=pipeline.parent, capture_output=True, text=True, timeout=900, check=False,
-        )
+        result = python_process("-m", "sophios.main", "--yaml", source, "--config_file", CONFIG, "--target", "nextflow",
+                                "--basepath", pipeline, cwd=pipeline.parent, capture_output=True, timeout=900)
         assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         return
     # A Python workflow names its tools relative to its repository, as run_workflows.yml compiles it.

@@ -1,13 +1,5 @@
-"""Properties of the Sophios syntax layer.
-
-Acceptance here is property-based. The unit tests at the end are sanity checks
-on wiring and obvious errors; they are not evidence that the parser is correct.
-
-The claims under test, one property each: every AST node carries a resolvable
-source span; parsing never raises — it returns an AST or diagnostics;
-InputValue is closed, so no value escapes the five forms; every diagnostic
-span indexes real source text; and every corpus document parses.
-"""
+"""Properties of the Sophios syntax layer, the unit tests at the end only sanity-checking wiring: every AST node has a
+span, parsing never raises, InputValue has five forms, diagnostic spans index real text, the corpus parses."""
 import re
 import time
 from collections.abc import Callable
@@ -50,11 +42,6 @@ from .strategies import WIC_VALUES, documents, identifiers, input_lines, pinned,
 from .wic_reading import YamlWithSophiosTagsOpaque
 
 FAST = budget(200)
-
-
-# --------------------------------------------------------------------------
-# Helpers
-# --------------------------------------------------------------------------
 
 
 def _spans(node: Any) -> list[SourceSpan]:
@@ -100,11 +87,6 @@ def _resolvable(span: SourceSpan, text: str) -> bool:
     if not 1 <= span.start_line <= len(lines):
         return False
     return bool(1 <= span.start_column <= len(lines[span.start_line - 1]) + 1)
-
-
-# --------------------------------------------------------------------------
-# Properties
-# --------------------------------------------------------------------------
 
 
 @pytest.mark.fast
@@ -254,15 +236,6 @@ def _payload(value: InputValue) -> Any:
             return value.name
 
 
-# --------------------------------------------------------------------------
-# Sanity checks (not acceptance evidence)
-# --------------------------------------------------------------------------
-
-
-# --------------------------------------------------------------------------
-# Accepted shapes
-# --------------------------------------------------------------------------
-#
 # Every row is the same three steps — parse, check the verdict, inspect one
 # thing — so only the source and the claim are worth reading. Each row is
 # still a named case in the test report.
@@ -532,13 +505,11 @@ def test_python_api_emits_documents_this_parser_accepts(tmp_path: Path) -> None:
     # Imported here: the API pulls in the whole compiler, which the syntax
     # layer deliberately does not depend on.
     # pylint: disable=import-outside-toplevel
-    from sophios.api.python.workflow import Step as ApiStep
     from sophios.api.python.workflow import Workflow
 
-    from .test_python_api_workflow import _adapter
+    from .helpers import adapter_step
 
-    touch = ApiStep(clt_path=_adapter('touch'))
-    touch.inputs.filename = 'empty.txt'
+    touch = adapter_step('touch', filename='empty.txt')
     workflow = Workflow([touch], 'adherence')
 
     result = parse(workflow.write_wic(tmp_path).read_text(encoding='utf-8'), 'api_emitted.wic')
@@ -553,16 +524,12 @@ def test_python_api_emits_documents_this_parser_accepts(tmp_path: Path) -> None:
 def _nested_api_workflow() -> Any:
     """A parent calling one nested workflow whose steps share an edge."""
     # pylint: disable=import-outside-toplevel
-    from sophios.api.python.workflow import Step as ApiStep
     from sophios.api.python.workflow import Workflow
 
-    from .test_python_api_workflow import _adapter
+    from .helpers import adapter_step
 
-    touch = ApiStep(clt_path=_adapter('touch'))
-    touch.inputs.filename = 'empty.txt'
-    append = ApiStep(clt_path=_adapter('append'))
-    append.inputs.file = touch.outputs.file
-    append.inputs.str = 'Hello'
+    touch = adapter_step('touch', filename='empty.txt')
+    append = adapter_step('append', file=touch.outputs.file, str='Hello')
     child = Workflow([touch, append], 'adherence_child')
     return Workflow([child], 'adherence_parent')
 
@@ -581,10 +548,6 @@ def test_python_api_writes_nested_workflows_this_parser_accepts(tmp_path: Path) 
         result = parse(path.read_text(), path.name)
         assert result.ok, (path.name, [str(d) for d in result.diagnostics])
 
-# --------------------------------------------------------------------------
-# The parser is never more permissive than YAML
-# --------------------------------------------------------------------------
-#
 # `yaml.SafeLoader` rejects unknown tags with ConstructorError; a syntax layer
 # that silently accepted them would specify a superset of the language. Both
 # escapes found so far are pinned, plus the agreement property.
@@ -692,11 +655,6 @@ def test_a_scalar_is_read_as_yaml_reads_it(spelled: tuple[str, str | None]) -> N
         assert (repr(value), type(value)) == (repr(read), type(read)), text
 
 
-# --------------------------------------------------------------------------
-# Pinned escapes
-# --------------------------------------------------------------------------
-
-
 @pytest.mark.fast
 def test_the_wic_block_is_closed_at_every_depth() -> None:
     """Each `wic:` key the language has parses clean; any other is `wic033`,
@@ -741,10 +699,6 @@ def test_alias_expansion_is_bounded() -> None:
     assert any(d.code is SophiosErrorCode.RECURSIVE_ALIAS for d in result.diagnostics)
 
 
-# --------------------------------------------------------------------------
-# Adversarial structure — the space `st.text()` alone never reaches
-# --------------------------------------------------------------------------
-#
 # `st.text()` almost never forms valid YAML with aliases, so quantifying
 # totality over it left the entire anchor/alias class untested: cycles raised
 # RecursionError and widening chains exhausted memory while the totality
@@ -869,11 +823,6 @@ def test_tag_decisions_agree_across_positions(tag: str, shape: str, data: st.Dat
         f'passthrough={unknown_through}')
 
 
-# --------------------------------------------------------------------------
-# Every diagnostic is provocable, mechanically (negative-testing rule 1)
-# --------------------------------------------------------------------------
-
-
 @pytest.mark.fast
 def test_every_code_has_a_registered_provocation() -> None:
     """Each declared SophiosErrorCode appears in exactly one tier of the registry.
@@ -978,10 +927,9 @@ _MERGE_TARGETS: Final = {
 
 @st.composite
 def merged_documents(draw: st.DrawFn) -> tuple[str, str]:
-    """1-3 anchored base mappings, each maybe merging earlier ones, then a mapping in one of `_MERGE_TARGETS` (the
-    text above it, its entries' indentation, how an entry spells `{n}`) that merges 1-3 of them among keys of its
-    own, flow or block. In a record the keys are its fields and every base has a default, since a record that gives
-    no value is wic038 whatever the merge."""
+    """1-3 anchored base mappings, each maybe merging earlier ones, then a mapping in one of `_MERGE_TARGETS` merging
+    1-3 of them among keys of its own, flow or block. In a record every base has a default: a record giving no value
+    is wic038 whatever the merge."""
     position = draw(st.sampled_from(sorted(_MERGE_TARGETS)))
     above, indent, spelled = _MERGE_TARGETS[position]
     keys = st.lists(st.sampled_from(['default', 'label', 'loadContents'] if position == 'record' else ['p', 'q', 'r']))

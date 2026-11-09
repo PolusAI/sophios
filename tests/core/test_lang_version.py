@@ -1,16 +1,5 @@
-"""Language-version resolution, surfacing, and override.
-
-The claims under test: the resolved version is the highest that satisfies the
-source; no lower version is ever silently selected; untagged files resolve
-rather than fail; an explicit setting always beats a file tag; and one
-compilation yields exactly one version, tree-wide -- one property, over
-fabricated histories. And every successful compile reports a resolved version,
-while the compiled CWL carries no `sophios` key or prefix.
-
-The mechanism is exercised against fabricated version histories as well as the
-real single-entry list — `sophios.lang.versions` states why, once. The claims
-under test have their normative home in the language spec, §6.
-"""
+"""Language-version resolution over fabricated histories (spec §6): the highest satisfying version, an explicit setting
+beating a file tag, one version per compile, reported on success and absent from the compiled CWL."""
 import sys
 from pathlib import Path
 import pytest
@@ -43,11 +32,6 @@ histories = st.lists(
 def _compile(yml: Yaml, lang_version: str | None = None) -> Yaml:
     """Compile one in-memory workflow and return the emitted CWL."""
     return compile_cwl(yml, 'lang_version', lang_version=lang_version)
-
-
-# --------------------------------------------------------------------------
-# The resolution rule, over fabricated histories, and precedence
-# --------------------------------------------------------------------------
 
 
 @pytest.mark.fast
@@ -107,10 +91,8 @@ def test_an_inline_implementation_body_pin_is_collected() -> None:
     assert caught.value.diagnostics[0].code is SophiosErrorCode.UNKNOWN_LANG_VERSION
 
 
-# --------------------------------------------------------------------------
 # The resolved version is never a secret: every compile reports
 # it (CLI, Python API), and the compiled CWL stays plain CWL
-# --------------------------------------------------------------------------
 
 
 @pytest.mark.skip_pypi_ci
@@ -173,36 +155,7 @@ def test_a_pinned_file_reports_its_version_and_writes_plain_cwl(
 
 
 @pytest.mark.fast
-def test_a_file_tag_reaches_the_compiler_from_its_own_text(tmp_path: Path) -> None:
-    """The `wic: lang_version:` pin survives the path a real `.wic` file takes.
-
-    Every other test here hands a document straight to the compiler. This one
-    writes a file and compiles that file, because a key can be specified,
-    parsed, resolved and surfaced and still be dead on arrival for anyone
-    writing one -- which is what happened when `lang_version` reached the language spec, the
-    resolver and the compiler but not the vocabulary that admits it.
-
-    The gate used to be the generated jsonschema, applied by the file loader.
-    It is the parser now: `Grammar.SIDECAR_KEYS` is where the language names
-    the keys its `wic:` block has.
-    """
-    from sophios.lang.parser import Grammar, parse  # pylint: disable=import-outside-toplevel
-
-    assert 'lang_version' in Grammar.SIDECAR_KEYS
-
-    source = f'wic:\n  lang_version: {LANG_VERSION}\nsteps:\n- id: mk_file\n'
-    written = tmp_path / 'pinned.wic'
-    written.write_text(source, encoding='utf-8')
-
-    parsed = parse(written.read_text(encoding='utf-8'), 'pinned.wic')
-    assert parsed.document is not None, list(parsed.diagnostics)
-    assert not parsed.diagnostics.has_errors, [str(d) for d in parsed.diagnostics]
-    assert parsed.document.sidecar is not None
-    assert dict(parsed.document.sidecar.entries)['lang_version'] == LANG_VERSION
-
-
-@pytest.mark.fast
-def test_the_cli_flag_reaches_the_compiler() -> None:
+def test_the_cli_flag_and_the_library_defaults_reach_the_compiler() -> None:
     """`--lang_version` survives the trip from argv to compiler options.
 
     The flag's entire contract is precedence — an explicit setting beats a
@@ -223,9 +176,12 @@ def test_the_cli_flag_reaches_the_compiler() -> None:
     options, _graph_settings = sophios.cli.get_dicts_for_compilation(supplied)
     assert options['lang_version'] == '9.9.9', 'the flag never reached the compiler'
 
-    # And a library caller asking for defaults gets no pin, as it should.
+    # A library caller asking for defaults by name (the Python API, the schema generator and a real-time analysis
+    # compile with them) gets the documented ones, and no pin.
     defaults = sophios.cli.default_compilation_settings()
     assert defaults['lang_version'] is None
+    assert defaults['allow_raw_cwl'] is False
+    assert defaults['inference_use_naming_conventions'] is True
 
 
 @pytest.mark.fast

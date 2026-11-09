@@ -1,2 +1,0 @@
-why: 'A CWL glob has no brace expansion: `a{b,c}.txt` names one file, not the decoy `ab.txt`.'
-outputs: {produce~result: {class: File, basename: 'a{b,c}.txt', contents: "literal\n"}}

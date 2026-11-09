@@ -1,16 +1,5 @@
-"""Strategies over the language AST, and their compilable projection.
-
-Documents are built as `sophios.lang.nodes` values and rendered to source, so
-the space the properties quantify over is the space the types admit rather than
-the space a dict builder imagined. Hypothesis shrinks the AST, so a
-counterexample arrives as a minimal document instead of a minimal string.
-
-The projection runs `render` then `parse` — the compiler's own reader, not a
-third path — and hands the compiler `to_json`'s spelling of what it read, so the
-writer and the reader disagreeing is a failure rather than a blind spot. Step
-ids name `synthetic_tools` stems and bindings name that tool's real inputs, so
-what is drawn is a workflow the compiler can resolve.
-"""
+"""Strategies over the language AST, rendered and re-parsed by `parse` before compiling, so writer and reader must
+agree and a counterexample shrinks to a minimal document; stems and bindings name synthetic_tools' real ports."""
 import copy
 from typing import Any, Callable, Final, cast
 
@@ -27,22 +16,15 @@ from sophios.wic_types import Yaml
 from .reference_model import may_reference
 from .synthetic_tools import SCHEMA_TYPES, STEMS, inputs_of, outputs_of, required_inputs_of
 
-#: A span the AST needs and the surface never shows. Generated nodes have no
-#: source, so they all carry the same one; nothing downstream reads it, and a
-#: property about spans belongs to the parser, where real positions exist.
+#: The one span generated nodes carry: they have no source, and nothing downstream reads it.
 _SPAN: Final = SourceSpan('<generated>', 1, 1, 1, 1)
 
-#: The construct kinds the coverage property enumerates. Derived from the .wic reference's tables
-#: (§2.1 surface forms, §5 outputs, §3.1 input forms, §2.2 interpreted keys,
-#: §7 the sidecar) rather than from the strategy below, so a construct the
-#: strategy stops producing is a failure instead of a silent narrowing.
-#: Construct kinds the generator cannot draw, each with the reason. The design
-#: requires every AST construct kind to appear within a bounded sample, so a kind
-#: that cannot be drawn is a declared gap rather than a silent one --
-#: `test_the_construct_inventory_accounts_for_every_input_kind` fails if a member
-#: of the `InputValue` union appears in neither this nor `CONSTRUCTS`.
+#: Kinds the generator cannot draw, each with its reason; an InputValue member in neither this nor CONSTRUCTS fails
+#: test_the_construct_inventory_accounts_for_every_input_kind.
 NOT_GENERATED: Final[dict[str, str]] = {}
 
+#: The construct kinds the coverage property demands, from the .wic reference's tables rather than the strategy, so a
+#: kind the strategy stops producing fails instead of narrowing silently.
 CONSTRUCTS: Final[tuple[str, ...]] = (
     'steps_mapping', 'steps_sequence',
     'inline_literal', 'edge_ref', 'raw_cwl_ref', 'unresolved_name', 'cwl_record',
@@ -55,8 +37,7 @@ CONSTRUCTS: Final[tuple[str, ...]] = (
 
 
 def constructs_in(document: Document) -> frozenset[str]:
-    """Which construct kinds a document contains. One place, so the coverage property and the
-    strategy cannot drift apart on what a construct is."""
+    """Which construct kinds a document contains: one place, so coverage and the strategy agree on what one is."""
     # pylint: disable=too-many-branches  # one branch per construct kind, by design
     found = {'steps_mapping' if document.steps_as_mapping else 'steps_sequence'}
     if document.passthrough:
@@ -113,8 +94,7 @@ _SCATTER_METHODS: Final = ('dotproduct', 'flat_crossproduct', 'nested_crossprodu
 
 
 def _literal_for(declared: Any) -> SearchStrategy[Any]:
-    """Draw a well-typed literal for `declared`, structured types included,
-    while leaving hostile literals reachable elsewhere."""
+    """Draw a well-typed literal for `declared`, structured types included; hostile ones are drawn elsewhere."""
     members = declared if isinstance(declared, list) else [declared]
     for member in members:
         name = member[:-1] if isinstance(member, str) and member.endswith('?') else member
@@ -138,29 +118,15 @@ edge_names: Final = st.text('abcdefgh', min_size=1, max_size=4)
 
 
 def _fresh_edge(draw: st.DrawFn, defined_edges: list[tuple[str, Any]], carries: Any) -> str:
-    """Draws a `!&` name not already defined in this document.
-
-    `edge_names` is a small bounded alphabet, drawn independently at each
-    definition site; two steps landing on the same string would both try to
-    `!&` it, which the compiler reports as `wic026`, not a workflow. Suffixing with how many edges the document has
-    already defined makes every name unique — `defined_edges` is document-
-    scoped (passed into every `_step` call for the document being built) —
-    without touching what `edge_names` itself produces or how `EdgeRef` draws
-    from `defined_edges`.
-    """
+    """Draw a `!&` name no earlier definition in this document used: two alike are wic026, so the count of edges
+    defined so far is appended."""
     name = f'{draw(edge_names)}{len(defined_edges)}'
     defined_edges.append((name, carries))
     return name
 
 
-#: Workflow-level input names a bare string may resolve to. A bare name is an
-#: `UnresolvedName`, and it compiles only when the top-level `inputs:` mapping
-#: has that key — `arg_var_is_input` at src/sophios/compiler.py:878; otherwise
-#: it is `wic011` with advice to write `!ii`. So the declaration and the
-#: reference are drawn from one list, and `documents()` declares whatever any
-#: step referenced. Without this the strategy could not produce an
-#: `UnresolvedName` at all, and the `unresolved_name` row of CONSTRUCTS would
-#: be a construct the coverage property demands and nothing supplies.
+#: Workflow-level inputs a bare name may resolve to, one list for declaration and reference, so `documents()` declares
+#: what any step referenced (an undeclared bare name is wic011) and UnresolvedName can be drawn at all.
 declared_inputs: Final[tuple[tuple[str, Any], ...]] = (
     ('wf_name', 'string'),
     ('wf_count', 'int'),
@@ -168,6 +134,12 @@ declared_inputs: Final[tuple[tuple[str, Any], ...]] = (
     ('wf_factor', 'float'),
     ('wf_any', 'Any'),
 )
+
+
+def _inputs_declared(referenced: set[str]) -> list[tuple[str, OpaqueCwl]]:
+    """Top-level `inputs:` declaring exactly what the steps referenced: an undeclared bare name is wic011."""
+    types = dict(declared_inputs)
+    return [('inputs', {name: {'type': types[name]} for name in sorted(referenced)})] if referenced else []
 
 
 def _structured(declared: Any) -> bool:
@@ -182,36 +154,23 @@ def _structured(declared: Any) -> bool:
 
 
 def _may_feed(source_type: Any, sink_type: Any) -> bool:
-    """Whether a generated reference from `source_type` may feed `sink_type`.
-
-    The independent model is unsure about a structured sink, so the compiler
-    lets any source through to it; cwltool then rejects every one but `Any`.
-    A generated document is well typed, so only `Any` feeds a structured sink.
-    """
+    """Whether a generated reference from `source_type` may feed `sink_type`; into a structured sink only `Any`, since
+    cwltool rejects every other source the compiler lets through."""
     if _structured(sink_type):
         return isinstance(source_type, str) and source_type == 'Any'
     return may_reference(source_type, sink_type)
 
 
 def _carried(declared: Any) -> Any:
-    """What an edge from an output declared `declared` carries: `stdout` and
-    `stderr` are a tool's shorthand for the captured stream, a `File`."""
+    """What an edge from an output declared `declared` carries: `stdout` and `stderr` are a `File`."""
     return 'File' if declared in ('stdout', 'stderr') else declared
-
-
-def _references_for(sink_type: Any) -> tuple[str, ...]:
-    """Inputs that may feed this sink."""
-    return tuple(input_name for input_name, source_type in declared_inputs
-                 if _may_feed(source_type, sink_type))
 
 
 @st.composite
 def _record(draw: st.DrawFn, sink: Any, fits: list[str], references: tuple[str, ...],
             referenced_inputs: set[str]) -> CwlRecord:
-    """A step-input record: one source with a default, or, into an array, two merged.
-
-    Two sources each fit the array sink, so `merge_flattened` keeps it one.
-    """
+    """A step-input record: one source with a default, or, into an array, two merged (each fits, so merge_flattened
+    keeps it one array)."""
     array = isinstance(sink, dict) and sink.get('type') == 'array'
     if len(fits) > 1 and array and draw(st.booleans()):
         pair = draw(st.permutations(fits))[:2]
@@ -230,26 +189,12 @@ def _record(draw: st.DrawFn, sink: Any, fits: list[str], references: tuple[str, 
 @st.composite
 def _step(draw: st.DrawFn, stem: str, defined_edges: list[tuple[str, Any]],
           referenced_inputs: set[str]) -> Step:
-    """One tool step: real stem, real input names, a subset of them bound.
-
-    Leaving a required input unbound is deliberate and load-bearing — it is
-    the only way an *inferred* edge exists, which is what edge type-compatibility is about.
-
-    The stem is passed in rather than drawn here. `documents()` has to know
-    every stem before any step is built, because mapping form cannot repeat one
-    — see its docstring for what drawing them here cost.
-
-    `defined_edges` and `referenced_inputs` are mutated rather than returned:
-    an `!*` reference is only well-formed after some `!&` defined the name, and
-    a bare name is only well-formed once the document declares it, so both are
-    facts about the document being built and not about this step.
-    """
+    """One tool step: a real stem, its real input names, a subset bound; an unbound required input is the only way an
+    inferred edge exists. `defined_edges` and `referenced_inputs` are the document's, so they are mutated."""
     # pylint: disable=too-many-branches,too-many-locals,too-many-statements  # one branch per construct
     names = sorted(inputs_of(stem))
 
-    # Drawn first, because a scattered input consumes an array: a reference
-    # must carry one, while a literal may be a scalar Complete wraps. Left
-    # unbound, a required one is lifted by Infer or fed an array.
+    # Drawn first: a scattered input consumes an array, so a reference must carry one; a literal may be a scalar.
     interpreted: list[tuple[str, OpaqueCwl]] = []
     ports: list[str] = []
     layers = 0
@@ -292,7 +237,8 @@ def _step(draw: st.DrawFn, stem: str, defined_edges: list[tuple[str, Any]],
             bindings.append((name, EdgeRef(draw(st.sampled_from(fits)), _SPAN)))
             continue
 
-        references = _references_for(sink(name))
+        references = tuple(input_name for input_name, source_type in declared_inputs
+                           if _may_feed(source_type, sink(name)))
         forms = ['literal'] + (['unresolved', 'raw'] if references else []) + (['ref'] if fits else []) \
             + (['record'] if references or fits else [])
         match draw(st.sampled_from(forms)):
@@ -301,25 +247,17 @@ def _step(draw: st.DrawFn, stem: str, defined_edges: list[tuple[str, Any]],
                 if name in ports:
                     literal = [literal]
                 bindings.append((name, InlineLiteral(literal, _SPAN)))
-            case 'unresolved':
+            case 'unresolved' | 'raw' as form:
                 declared = draw(st.sampled_from(references))
                 referenced_inputs.add(declared)
-                bindings.append((name, UnresolvedName(declared, _SPAN)))
-            case 'raw':
-                declared = draw(st.sampled_from(references))
-                referenced_inputs.add(declared)
-                bindings.append((name, RawCwlRef(declared, _SPAN)))
+                bindings.append((name, UnresolvedName(declared, _SPAN) if form == 'unresolved'
+                                 else RawCwlRef(declared, _SPAN)))
             case 'record':
                 bindings.append((name, draw(_record(sink(name), fits, references, referenced_inputs))))
             case _:
                 bindings.append((name, EdgeRef(draw(st.sampled_from(fits)), _SPAN)))
 
-    # `bool(...)` around the left operand, here and at every other `X and
-    # draw(...)` site below: mypy's bidirectional inference otherwise uses the
-    # left operand's type as the expected-argument context for the generic
-    # `DrawFn.__call__` on the right, so `outputs_of(stem) and draw(booleans())`
-    # is checked as if `draw` had to return `dict[str, Cwl]`. A `bool()` around
-    # a value already used only for truthiness costs nothing at runtime.
+    # `bool(...)` around the left operand of `and draw(...)`: mypy otherwise types draw's result from that operand.
     outs: list[OutputBinding] = []
     if bool(outputs_of(stem)):
         for out_name in draw(st.lists(st.sampled_from(sorted(outputs_of(stem))),
@@ -343,36 +281,8 @@ def _step(draw: st.DrawFn, stem: str, defined_edges: list[tuple[str, Any]],
 
 @st.composite
 def documents(draw: st.DrawFn) -> Document:  # pylint: disable=too-many-locals
-    """A well-formed Sophios document, over every construct in `CONSTRUCTS`.
-
-    CANNOT GENERATE (declared, and checked): the kinds in `NOT_GENERATED`.
-    ``python_script`` steps are absent because their module definition belongs
-    to the registry; deterministic generated identities are tested separately.
-
-    Well typed where it binds a literal: `_literal_for` draws one the bound
-    input's type admits, so every draw compiles unless `NOT_YET_COMPILABLE`
-    excludes it. Ill-typed literals are the provocation registry's.
-
-    Both step surface forms, because mapping form and sequence form were once
-    two languages to a generator that only spelled one. Mapping form cannot
-    repeat a step name (.wic reference §2.1), so its stems are drawn **unique and up
-    front** — that is the language's constraint, not a convenience, and
-    generating a document the language forbids would make every property
-    downstream quantify over documents that fail before reaching the compiler.
-
-    Up front, and not by drawing a step and discarding it on a collision, which
-    costs two things. A discarded step would already have appended its `!&`
-    names to `defined_edges` — document-scoped by design — and nothing
-    un-appends them, so a later step could draw an `!*`
-    reference to an edge no surviving step defines. `compile_hermetic` passes
-    `testing=True`, and `compiler.py:784` raises for a dangling edge only when
-    `not testing`, so that document did not fail: the compiler added a CWL
-    input "for testing only" where the edge should have been, and the corrupted
-    document reached every compile-driving property — including the relation, whose
-    entire subject is which port is fed from where. The distribution suffered
-    too: a mapping-form document asking for four steps routinely got two, so
-    `count` did not mean what it said.
-    """
+    """A well-formed document over every construct in CONSTRUCTS, well typed where it binds a literal, in both forms.
+    Mapping-form stems are drawn unique up front: a step drawn then discarded would leave its `!&` names dangling."""
     as_mapping = draw(st.booleans())
     stems = draw(st.lists(st.sampled_from(STEMS), min_size=1, max_size=4,
                           unique=as_mapping))
@@ -382,10 +292,7 @@ def documents(draw: st.DrawFn) -> Document:  # pylint: disable=too-many-locals
     steps: list[Step] = [draw(_step(stem, defined_edges, referenced_inputs))
                          for stem in stems]
 
-    # A subworkflow step, drawn sometimes. Its id is what makes it one:
-    # a subworkflow is recognised by the `.wic` suffix and nothing else.
-    # The body lives in `subtree`, which
-    # the AST has no field for, so `to_yml` attaches it after rendering.
+    # Sometimes a subworkflow step, known by its `.wic` id; `to_yml` attaches its body, which the AST has no field for.
     if bool(steps) and draw(st.booleans()):
         body = draw(st.sampled_from(sorted(SUBWORKFLOW_BODIES)))
         call: tuple[tuple[str, InputValue], ...] = ()
@@ -409,16 +316,7 @@ def documents(draw: st.DrawFn) -> Document:  # pylint: disable=too-many-locals
                        WicSidecar(entries=(('graphviz', {'label': draw(edge_names)}),), span=_SPAN)),)
         sidecar = WicSidecar(steps=nested, entries=entries, span=_SPAN)
 
-    passthrough: list[tuple[str, OpaqueCwl]] = []
-    if referenced_inputs:
-        # Not optional: a bare name that nothing declares is `wic011`, so the
-        # document must declare exactly what its steps referenced. `inputs` is
-        # top-level passthrough as far as the syntax layer is concerned — the
-        # compiler reads it (compiler.py:878) but the language does not claim
-        # it, which is why it lives here and not in a Document field.
-        types = dict(declared_inputs)
-        passthrough.append(('inputs', {name: {'type': types[name]}
-                                       for name in sorted(referenced_inputs)}))
+    passthrough = _inputs_declared(referenced_inputs)
     if draw(st.booleans()):
         key = draw(st.sampled_from(['label', 'doc', '$schemas']))
         passthrough.append((key, ['https://example/s.owl'] if key == '$schemas'
@@ -429,78 +327,32 @@ def documents(draw: st.DrawFn) -> Document:  # pylint: disable=too-many-locals
                     steps_as_mapping=as_mapping)
 
 
-#: Constructs the specification admits that the compiler does not accept
-#: today. Each entry names the construct, the finding it belongs to, and
-#: where the finding lives in `src/sophios/compiler.py`, so an exclusion
-#: cannot outlive the defect that justified it.
-#:
-#: The companion is `test_the_compilable_subset_still_reaches_every_construct_
-#: it_does_not_exclude` in `test_generators.py`. It holds the *filter* to the
-#: standard construct coverage holds the generator to: a construct `compilable_documents()`
-#: stops reaching turns that test red, so an exclusion cannot quietly cost a
-#: construct. Deliberately not a per-entry "this still fails to compile" check
-#: — that shape is vacuous whenever the mapping is empty, which is exactly when
-#: a filter that silently excluded everything would go unnoticed: an exclusion
-#: predicate of `lambda d: True` leaves the suite green under it.
-#:
-#: `documents()` keeps producing all of these — `CONSTRUCTS` and the
-#: parse-level properties quantify over the whole language, and trimming the
-#: generator to dodge a compiler gap is the narrowing the binding constraints
-#: forbid. `compilable_documents()` is the subset with these filtered out,
-#: for properties that need their input to actually compile. Keys
-#: name the exclusion, not a `CONSTRUCTS` row: an exclusion is an AST *shape*
-#: narrower than any single construct.
+#: Constructs the specification admits and the compiler does not accept yet, each with its finding;
+#: test_the_compilable_subset_still_reaches_every_construct_it_does_not_exclude holds the filter to construct coverage.
 NOT_YET_COMPILABLE: Final[dict[str, str]] = {}
 
 
-#: One predicate per `NOT_YET_COMPILABLE` entry, keyed identically. Separate
-#: from `NOT_YET_COMPILABLE` itself (a plain name-to-reason mapping, so the
-#: reason reads as documentation and not as code) rather than folded into one
-#: dict of `(reason, predicate)` pairs; the assertion below is what keeps the
-#: two from drifting apart, the same discipline `Tag.ALL`/`Key.ALL` in
-#: `utils_yaml.py` uses for the analogous problem.
+#: One predicate per NOT_YET_COMPILABLE entry, keyed identically, as the assertion below checks.
 _EXCLUSION_PREDICATES: Final[dict[str, Callable[[Document], bool]]] = {}
 assert NOT_YET_COMPILABLE.keys() == _EXCLUSION_PREDICATES.keys(), (
     'NOT_YET_COMPILABLE and _EXCLUSION_PREDICATES must name exactly the same exclusions')
 
 
 def compilable_documents() -> SearchStrategy[Document]:
-    """`documents()`, minus the constructs `NOT_YET_COMPILABLE` names.
-
-    A property comparing two compilations cannot use a document that does not
-    compile, so the compile-driving properties quantify over this. The
-    parse-level ones keep `documents()` — the whole language, unfiltered.
-
-    The strategy the compile-driving properties need: partition independence and the other
-    compile-driving properties cannot compare two compilations of a document
-    that does not compile, so they quantify over this, not over `documents()`
-    itself. `CONSTRUCTS` and the parse-level properties still use
-    `documents()` — the whole language, unfiltered — so this function's
-    narrowing is not the narrowing the binding constraints forbid; it is the
-    generator drawing a line between "the language" and "what those properties
-    can use today", with that line named and tested rather than silent.
-    """
+    """`documents()` minus what NOT_YET_COMPILABLE names: the compile-driving properties need input that compiles, the
+    parse-level ones keep the whole language."""
     # pylint: disable=no-member  # see workflows()'s identical disable, below
     return documents().filter(lambda d: not any(pred(d) for pred in _EXCLUSION_PREDICATES.values()))
 
 
 def excluded_documents(name: str) -> SearchStrategy[Document]:
-    """Documents that trip the named `NOT_YET_COMPILABLE` exclusion.
-
-    The other half of `compilable_documents()`'s filter — this module's own
-    non-vacuity check needs documents *matching* an exclusion's predicate to
-    prove the predicate's excuse is still true, the same way `hostile_documents`
-    needs documents outside the language to prove a diagnostic still fires.
-    """
+    """Documents that trip the named exclusion, so its predicate's excuse can be shown still true."""
     # pylint: disable=no-member  # see workflows()'s identical disable, below
     return documents().filter(_EXCLUSION_PREDICATES[name])
 
 
-#: The bodies a subworkflow step's id selects, by its stem less the index
-#: `documents()` appends. Each literal inside one is a child job value that
-#: Complete lifts to the caller: a string, a File written bare and as an
-#: object, a Directory. `decl` declares an input, so its caller binds it
-#: and may scatter over it.
+#: The bodies a subworkflow step's id selects, by its stem less the appended index; each literal is a child job value
+#: Complete lifts to the caller, and `decl` declares an input its caller binds and may scatter over.
 SUBWORKFLOW_BODIES: Final[dict[str, Yaml]] = {
     'sub': {'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'sub.txt'}}}]},
     'file': {'steps': [{'id': 'xform', 'in': {'file': {'wic_inline_input': 'in.txt'},
@@ -516,30 +368,8 @@ SUBWORKFLOW_BODIES: Final[dict[str, Yaml]] = {
 
 
 def to_yml(document: Document) -> Yaml:
-    """The compiler's input for a generated document.
-
-    Round-tripped through source rather than constructed directly: the compiler
-    reads `.wic` files, so anything a property proves about a dict this module
-    built by hand would be a claim about a path no user takes. This is also what
-    makes a counterexample printable — `render(document)` is the file to paste
-    into a bug report.
-
-    Stands in for `sophios.ast.read_ast_from_disk`, which is the only real pass
-    this oracle cannot run — it reads the disk. That function's first line is
-    `utils_cwl.desugar_into_canonical_normal_form`, which is why this function
-    calls it too: mapping-form `steps:` reaches the compiler as a dict, and
-    the compiler's step lowering (`step.interpreted.get('run')`)
-    indexes it as a list, so a mapping-form document that skipped this call
-    raised `KeyError: 0` before reaching anything interesting. Do not remove
-    this call to "simplify" `to_yml` — a mapping-form document depends on it to
-    compile at all.
-
-    Subworkflow bodies are attached here rather than generated into the AST.
-    `Step` has no subtree field, because in the language a subworkflow's body
-    lives in another file; `read_ast_from_disk` is what puts it inline. This
-    runs after desugaring so the attachment loop sees canonical list-form steps
-    regardless of which surface form the document used.
-    """
+    """The compiler's input for a generated document: rendered and parsed as a user's file is, then desugared as
+    read_ast_from_disk does (mapping-form steps fail without it), and subworkflow bodies attached as files would be."""
     reread = parse(render(document), 'generated.wic')
     assert reread.ok and reread.document is not None, [str(d) for d in reread.diagnostics]
     loaded: Yaml = utils_cwl.desugar_into_canonical_normal_form(to_json(reread.document))
@@ -552,8 +382,7 @@ def to_yml(document: Document) -> Yaml:
 
 
 def workflows() -> SearchStrategy[Yaml]:
-    """The strategy the compile-driving properties quantify over:
-    `compilable_documents()` rendered through `to_yml`."""
+    """The strategy the compile-driving properties quantify over: `compilable_documents()` through `to_yml`."""
     return compilable_documents().map(to_yml)
 
 
@@ -587,56 +416,37 @@ def freighted_documents(draw: st.DrawFn) -> tuple[Document, int]:
                      else draw(_step(draw(st.sampled_from(STEMS)),
                                      defined_edges, referenced_inputs)))
 
-    passthrough: list[tuple[str, OpaqueCwl]] = []
-    if referenced_inputs:
-        types = dict(declared_inputs)
-        passthrough.append(('inputs', {name: {'type': types[name]}
-                                       for name in sorted(referenced_inputs)}))
-    return Document(steps=tuple(steps), passthrough=tuple(passthrough), span=_SPAN), scatter_at
+    return Document(steps=tuple(steps), passthrough=tuple(_inputs_declared(referenced_inputs)), span=_SPAN), scatter_at
 
 
 def to_yml_with_freight(document: Document, step_index: int, freight: dict[str, Any]) -> Yaml:
     """Render ``document`` and add passthrough ``freight`` to its designated step."""
     loaded = to_yml(document)
-    steps: list[Yaml] = loaded['steps']
-    steps[step_index] = {**steps[step_index], **freight}
+    loaded['steps'][step_index].update(freight)
     return loaded
 
 
 @st.composite
 def partitionings(draw: st.DrawFn, steps: int) -> tuple[tuple[int, ...], ...]:
-    """A contiguous grouping of `range(steps)`.
-
-    Contiguous because that is what a subworkflow is: a step list splits at a
-    `.wic` id, and the steps a subworkflow contains are the ones
-    written inside its file. A non-contiguous 'partitioning' is not expressible
-    in the language, so generating one would test nothing.
-    """
+    """A contiguous grouping of `range(steps)`: a subworkflow is the steps written in one file, so nothing else is
+    expressible."""
     if steps <= 1:
         return ((0,),) if steps else ()
-    cuts = draw(st.lists(st.integers(min_value=1, max_value=steps - 1),
-                         unique=True, max_size=steps - 1)).copy()
-    cuts.sort()
+    cuts = sorted(draw(st.lists(st.integers(min_value=1, max_value=steps - 1), unique=True, max_size=steps - 1)))
     bounds = [0, *cuts, steps]
     return tuple(tuple(range(a, b)) for a, b in zip(bounds, bounds[1:]))
 
 
-#: Ill-formed source paired with the code it must provoke. Pairs, not bare
-#: strings: "some diagnostic fired" is satisfied by the wrong diagnostic, and a
-#: generator whose every output produces `wic001` would look green while saying
-#: nothing about the eleven other codes.
+#: Ill-formed source paired with the code it must provoke: a bare string would accept the wrong diagnostic.
 _HOSTILE: Final = (
     ('steps:\n  s:\n    in:\n      f: !ii a\n      f: !ii b\n', SophiosErrorCode.DUPLICATE_KEY),
     ('steps:\n- id: s\n  in:\n    f: !foo bar\n', SophiosErrorCode.UNKNOWN_TAG),
     ('steps:\n- id: ""\n', SophiosErrorCode.EMPTY_STEP_ID),
-    # A sequence step carries its name in `id:` (.wic reference §2.1), so an entry
-    # without one earns MISSING_STEP_ID whatever else it has — here, nothing.
+    # A sequence step names itself in `id:`, so an entry without one earns MISSING_STEP_ID.
     ('steps:\n- {}\n', SophiosErrorCode.MISSING_STEP_ID),
     ('steps:\n- id: s\n  out: {a: b}\n', SophiosErrorCode.EXPECTED_SEQUENCE),
     ('steps: 3\n', SophiosErrorCode.EXPECTED_MAPPING),
-    # A step's own `wic:` key is passthrough, not a sidecar (`_step_body` has
-    # no case for it) — the malformed key must live in the document-level
-    # `wic: steps:` mapping, which is the only place that string is parsed.
+    # A step's own `wic:` key is passthrough: the malformed key must live in the document-level `wic: steps:`.
     ('wic:\n  steps:\n    "not a key": {}\n', SophiosErrorCode.MALFORMED_WIC_STEP_KEY),
     ('steps: &a\n- id: s\n  wic: {x: *a}\n', SophiosErrorCode.RECURSIVE_ALIAS),
 )
@@ -666,10 +476,8 @@ passthrough_values: Final = st.recursive(
     max_leaves=8,
 )
 
-#: A `hints:` value as the parser keeps it. Not free-form freight like the above:
-#: CWL's list form of `hints:` is read as this mapping from requirement class to
-#: body, so a list survives byte-identically only when it holds an `$import` or
-#: `$include`, which `test_leak_boundary` pins by name.
+#: A `hints:` value as the parser keeps it: the list form is read as a mapping, so it survives byte-identically only
+#: with an $import or $include, which test_leak_boundary pins.
 hints_values: Final = st.dictionaries(
     st.sampled_from(['DockerRequirement', 'ResourceRequirement', 'NetworkAccess', 'cwltool:CUDARequirement']),
     st.dictionaries(st.text('abc', min_size=1, max_size=5), passthrough_values, max_size=3),

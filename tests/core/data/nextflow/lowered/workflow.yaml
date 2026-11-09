@@ -55,31 +55,31 @@
    process, from_process: _A, from_port: out, to_process: _C, to_port: value}]}}}
 - id: cuda_requirement_lowers_to_the_accelerator_directive-requirements-none
   why: &cuda 'The count cwltool''s job requests: the minimum, else the maximum, else 1 (design §6).'
-  tool: {id: GPU, requirements: {'cwltool:CUDARequirement': {}}}
+  tool: {requirements: {'cwltool:CUDARequirement': {}}}
   lowered: &gpu1 {processes: [{resources: {cpus: null, memory_mb: null, accelerator: 1, cuda_version_min: null,
                   cuda_compute_capability: null}}]}
   render: &accelerator1 ["\n    accelerator 1\n"]
   notes: []
-- {id: cuda_requirement_lowers_to_the_accelerator_directive-hints-none, why: *cuda, tool: {id: GPU, hints:
+- {id: cuda_requirement_lowers_to_the_accelerator_directive-hints-none, why: *cuda, tool: {hints:
    {'cwltool:CUDARequirement': {}}}, lowered: *gpu1, render: *accelerator1, notes: []}
 - {id: cuda_requirement_lowers_to_the_accelerator_directive-requirements-min, why: *cuda,
-    tool: {id: GPU, requirements: {
+    tool: {requirements: {
    'cwltool:CUDARequirement': {cudaDeviceCountMin: 2}}}, lowered: &gpu2 {processes: [{resources: {cpus: null, memory_mb:
    null, accelerator: 2, cuda_version_min: null, cuda_compute_capability: null}}]},
        render: &accelerator2 ["\n    accelerator 2\n"], notes: []}
-- {id: cuda_requirement_lowers_to_the_accelerator_directive-hints-min, why: *cuda, tool: {id: GPU, hints: {
+- {id: cuda_requirement_lowers_to_the_accelerator_directive-hints-min, why: *cuda, tool: {hints: {
    'cwltool:CUDARequirement': {cudaDeviceCountMin: 2}}}, lowered: *gpu2, render: *accelerator2, notes: []}
 - {id: cuda_requirement_lowers_to_the_accelerator_directive-requirements-max, why: *cuda,
-    tool: {id: GPU, requirements: {
+    tool: {requirements: {
    'cwltool:CUDARequirement': {cudaDeviceCountMax: 3}}}, lowered: &gpu3 {processes: [{resources: {cpus: null, memory_mb:
    null, accelerator: 3, cuda_version_min: null, cuda_compute_capability: null}}]},
        render: &accelerator3 ["\n    accelerator 3\n"], notes: []}
-- {id: cuda_requirement_lowers_to_the_accelerator_directive-hints-max, why: *cuda, tool: {id: GPU, hints: {
+- {id: cuda_requirement_lowers_to_the_accelerator_directive-hints-max, why: *cuda, tool: {hints: {
    'cwltool:CUDARequirement': {cudaDeviceCountMax: 3}}}, lowered: *gpu3, render: *accelerator3, notes: []}
-- {id: cuda_requirement_lowers_to_the_accelerator_directive-requirements-min-and-max, why: *cuda, tool: {id: GPU,
-   requirements: {'cwltool:CUDARequirement': {cudaDeviceCountMin: 2, cudaDeviceCountMax: 4}}}, lowered: *gpu2, render:
+- {id: cuda_requirement_lowers_to_the_accelerator_directive-requirements-min-and-max, why: *cuda, tool: {requirements:
+   {'cwltool:CUDARequirement': {cudaDeviceCountMin: 2, cudaDeviceCountMax: 4}}}, lowered: *gpu2, render:
    *accelerator2, notes: []}
-- {id: cuda_requirement_lowers_to_the_accelerator_directive-hints-min-and-max, why: *cuda, tool: {id: GPU, hints: {
+- {id: cuda_requirement_lowers_to_the_accelerator_directive-hints-min-and-max, why: *cuda, tool: {hints: {
    'cwltool:CUDARequirement': {cudaDeviceCountMin: 2, cudaDeviceCountMax: 4}}}, lowered: *gpu2, render: *accelerator2,
    notes: []}
 - id: the_unchecked_cuda_fields_are_notes_and_ride_in_the_ext_directive

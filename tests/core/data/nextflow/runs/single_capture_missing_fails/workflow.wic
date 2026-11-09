@@ -1,3 +1,0 @@
-steps:
-- id: write_nothing
-  in: {message: !ii nothing is written}

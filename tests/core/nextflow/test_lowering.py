@@ -167,19 +167,12 @@ def test_forward_conversion_uses_resolved_graph_edges(
     compilation = copy.deepcopy(real_supported_result)
     steps = compilation.artifact.cwl["steps"]
     steps[1]["in"]["source"]["source"] = "not_the_resolved_edge/result"
+    cwl = copy.deepcopy(compilation.artifact.cwl)
 
     connections = compiled_source_to_nextflow(compilation).connections
 
+    assert compilation.artifact.cwl == cwl, "lowering reads the compilation and never writes it"
     assert NfProcessConnection("touch", "result", "copy", "source") in connections
-
-
-@pytest.mark.fast
-def test_conversion_does_not_mutate_compilation_result(
-    real_supported_result: CompilationResult,
-) -> None:
-    before = copy.deepcopy(real_supported_result.artifact.cwl)
-    compiled_source_to_nextflow(real_supported_result)
-    assert real_supported_result.artifact.cwl == before
 
 
 @pytest.mark.fast

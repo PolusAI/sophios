@@ -1,11 +1,5 @@
-"""Every rewrite `transformations` names preserves the meaning it claims.
-
-One property, parameterised over `Transformation`, rather than a bespoke test
-per rewrite. Partition independence and its nested case are named
-instances of it — `split` at one level and `split` composed with itself — not
-separate tests with their own idea of "the same workflow", which is how the
-two regression tests already in this tree ended up with two.
-"""
+"""Every rewrite `transformations` names preserves the meaning it claims: one property over `Transformation`, with
+partition independence and its nested case as instances, not tests with their own idea of "the same workflow"."""
 import copy
 from collections import Counter
 from typing import Final
@@ -82,12 +76,8 @@ def test_a_meaning_preserving_rewrite_preserves_meaning(constant: Transformation
 
 
 def _closed(artifact: CompilationArtifact) -> bool:
-    """Whether every source in every workflow of the tree is a declared input or a step's output.
-
-    A generated child can read a root input by a raw name it never declares. CWL
-    rejects that nested document, and flattening leaves such a call nested rather
-    than guess what scope the name was meant to be read in; the model dissolves it.
-    """
+    """Whether every source in every workflow of the tree is a declared input or a step's output: CWL rejects a nested
+    document reading an undeclared root name."""
     cwl = artifact.cwl
     if cwl['class'] == 'Workflow':
         known = set(cwl.get('inputs', {})) | {step['id'] for step in cwl['steps']}
@@ -127,12 +117,8 @@ def test_flattening_agrees_with_the_independent_model(data: st.DataObject) -> No
 
 
 def _nesting_depth(document: Yaml) -> int:
-    """How many subworkflow layers a document goes down.
-
-    A step carrying a `subtree` is a subworkflow (`hermetic.subworkflow_step`
-    builds the shape `read_ast_from_disk` produces), so depth 2 means a
-    subworkflow that itself contains one — the shape the nested case is about.
-    """
+    """How many subworkflow layers a document goes down: a step with a `subtree` is a subworkflow, so depth 2 is the
+    nested case."""
     return max((1 + _nesting_depth(step['subtree']) for step in document.get('steps', [])
                 if isinstance(step, dict) and isinstance(step.get('subtree'), dict)),
                default=0)

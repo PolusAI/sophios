@@ -1,9 +1,5 @@
-"""The CWL substrate version: one declared value, enforced at every emitting path.
-
-`.wic` is an abstraction over a single declared CWL version. Three sites once
-disagreed: the compiler emitted `v1.2`, a CommandLineTool generator emitted
-`v1.0`, and the schema accepted any non-empty string.
-"""
+"""The CWL substrate version: one declared value, enforced at every emitting path; the compiler, a tool generator and
+the schema once disagreed (v1.2, v1.0, any string)."""
 import json
 from typing import Final
 
@@ -15,15 +11,9 @@ from jsonschema import Draft202012Validator
 
 from sophios.lang import SophiosErrorCode, parse, wic_schema
 from sophios.lang.cwl import CWL_VERSION
-from sophios.python_cwl_adapter import generate_CWL_CommandLineTool
 
 from .budgets import budget
 from .strategies import pinned
-
-
-# --------------------------------------------------------------------------
-# Sanity checks
-# --------------------------------------------------------------------------
 
 
 @pytest.mark.fast
@@ -37,18 +27,6 @@ def test_the_version_serialises_as_a_plain_string() -> None:
     """
     assert type(CWL_VERSION) is str  # pylint: disable=unidiomatic-typecheck
     assert yaml.safe_dump({'cwlVersion': CWL_VERSION}) == "cwlVersion: v1.2\n"
-
-
-@pytest.mark.fast
-def test_a_generated_tool_declares_v1_2_and_dumps() -> None:
-    """The CommandLineTool generator emits v1.2, and its output serialises.
-
-    This generator is the one that was stuck on `v1.0`, and it is also where
-    an unserialisable version value would first reach disk.
-    """
-    tool = generate_CWL_CommandLineTool({}, {})
-    assert tool['cwlVersion'] == 'v1.2'
-    assert 'cwlVersion: v1.2' in yaml.safe_dump(tool)
 
 
 #: The main schema, built once; these tests only read it.

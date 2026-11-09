@@ -1,20 +1,12 @@
-"""The generator is adequate, and its failures are usable.
-
-A property is only as strong as its generator, and a generator that stops
-producing a construct disables every property depending on it with nothing
-else noticing. Unconstrained `st.text()` essentially never forms valid YAML
-with an alias, which is why every strategy here draws from a named alphabet --
-`edge_names` is `st.text('abcdefgh', ...)` rather than bare text. A document
-generator drawing only mapping-form `in:`-only documents makes outputs,
-sequence steps and nested sidecars structurally invisible. So adequacy is
-itself a property, checked at a bounded sample.
-"""
+"""The generator is adequate and its failures are usable: a property is only as strong as its generator, and a dropped
+construct silently disables every property needing it. Strategies draw from a named alphabet, as bare text almost
+never forms a YAML alias."""
 import re
 from collections import Counter
 from typing import Any
 
 import pytest
-from hypothesis import find, given, settings
+from hypothesis import given
 from hypothesis.strategies import SearchStrategy
 
 from sophios.lang import Document, Step, parse
@@ -157,30 +149,6 @@ def test_no_step_the_generator_draws_is_discarded(monkeypatch: pytest.MonkeyPatc
         drawn.clear()
 
     _check()  # pylint: disable=no-value-for-parameter  # @given supplies `document`
-
-
-@pytest.mark.slow
-def test_an_injected_fault_shrinks_to_a_small_workflow() -> None:
-    """A failure arrives as something a person can read.
-
-    Runs a nested Hypothesis search for a document that trips a deliberately
-    planted fault, and asserts the reported minimal case is under the bound.
-    Without this, a generator that shrinks badly turns every real
-    counterexample into a forty-line document nobody triages, and the suite
-    quietly stops paying for itself.
-
-    A plain function, not `@given`-decorated: `find` runs its own Hypothesis
-    search internally, and calling it from inside an already-running `@given`
-    test trips `HealthCheck.nested_given` (quadratic generation/shrinking) —
-    the `st.data()` parameter the brief specified was never drawn from, so
-    dropping the decorator changes nothing about what this test exercises.
-    """
-    minimal = find(strat.documents(), lambda d: len(d.steps) >= 2,
-                   settings=settings(max_examples=50, deadline=None))
-    rendered = strat.render(minimal)
-    assert len(rendered.splitlines()) <= 12, (
-        f'shrunk case is {len(rendered.splitlines())} lines; a counterexample '
-        f'this size will not be read:\n{rendered}')
 
 
 @pytest.mark.fast

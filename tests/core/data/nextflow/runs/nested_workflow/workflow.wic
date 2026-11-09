@@ -1,6 +1,0 @@
-steps:
-- id: write_source
-  in: {message: !ii nested composition}
-  out: [result: !& written]
-- id: child.wic
-  in: {source: !* written}

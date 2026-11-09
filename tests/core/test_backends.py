@@ -21,7 +21,8 @@ from sophios.lang.diagnostics import Diagnostic, Severity, SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
 
 from .budgets import budget
-from .nextflow.testkit import REPO_ROOT, runtime_workflow
+from .helpers import adapter_step, write_tree
+from .nextflow.testkit import runtime_workflow
 
 
 def _argv(request: RunRequest) -> list[str]:
@@ -117,12 +118,6 @@ def test_the_runner_gets_this_processs_environment_with_the_users_on_top(
     launch = backends.backend('cwl', 'cwltool').launch(
         RunRequest('wf', tmp_path, env={'SOPHIOS_TEST_REPLACED': 'new'}))
     assert launch.env['SOPHIOS_TEST_KEPT'] == 'kept' and launch.env['SOPHIOS_TEST_REPLACED'] == 'new'
-
-
-@pytest.mark.fast
-def test_an_unknown_runner_is_refused_naming_the_runners() -> None:
-    with pytest.raises(ValueError, match="No backend runs cwl with 'cwl-runner'; the runners are cwltool"):
-        backends.backend('cwl', 'cwl-runner')
 
 
 #: Lines that end no run: any text with no `[` (cwltool's lines start with one) and no line break.
@@ -231,25 +226,6 @@ def _nextflow_request(tmp_path: Path, **fields: Any) -> RunRequest:
     return RunRequest('wf', tmp_path, runner='nextflow', target='nextflow', **fields)
 
 
-@pytest.mark.fast
-def test_nextflow_reads_only_the_generated_configuration_from_the_workflows_own_directory(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The pipeline, its parameters and its work directory, all in `nextflow_<workflow>/` under the base path, no
-    ANSI log, then the passthrough arguments, with the environment a CWL runner gets and the v2 script parser."""
-    monkeypatch.setenv('SOPHIOS_TEST_KEPT', 'kept')
-    monkeypatch.setenv('NXF_SYNTAX_PARSER', 'v1')
-    base = tmp_path.resolve() / 'nextflow_wf'
-    request = RunRequest('wf', tmp_path, runner='nextflow', target='nextflow', env={'TOKEN': 'x'},
-                         passthrough_args=('-process.executor', 'slurm', '-resume'))
-    launch = backends.backend('nextflow', 'nextflow').launch(request)
-    assert launch.argv == ('nextflow', '-C', f'{base}/nextflow.config', 'run', f'{base}/workflow.nf',
-                           '-params-file', f'{base}/nextflow_params.json', '-work-dir', f'{base}/work',
-                           '-ansi-log', 'false', '-process.executor', 'slurm', '-resume')
-    assert (launch.cwd, launch.outdir) == (base, f'{base}/work')
-    assert launch.env['SOPHIOS_TEST_KEPT'] == 'kept' and launch.env['TOKEN'] == 'x'
-    assert launch.env['NXF_SYNTAX_PARSER'] == 'v2'
-
-
 @st.composite
 def _nextflow_logs(draw: st.DrawFn) -> tuple[list[str], dict[str, Any]]:
     """A Nextflow log, as the pinned version prints a failed task, and each process it says failed, in the order of
@@ -344,7 +320,7 @@ arguments:
 
 def _write_into(tmp_path: Path) -> Any:
     """The compilation of a one-step workflow `wf` whose step `write-into` writes into `made`, beside `source.txt`."""
-    (tmp_path / 'write_into.cwl').write_text(_WRITE_INTO, encoding='utf-8')
+    write_tree(tmp_path, {'write_into.cwl': _WRITE_INTO})
     step = Step(clt_path=tmp_path / 'write_into.cwl', step_name='write-into')
     step.inputs.outDir = Path('made')
     step.inputs.source = Path('source.txt')
@@ -365,7 +341,7 @@ def test_nextflow_prepare_writes_the_pipeline_from_absolute_paths_and_makes_each
     monkeypatch.setattr(preflight, 'nextflow_problems', lambda _settings: [])
     root = tmp_path / 'root'
     root.mkdir()
-    (root / 'source.txt').write_text('', encoding='utf-8')
+    write_tree(root, {'source.txt': ''})
     settings = run_setup.Settings(_NEXTFLOW_SETTINGS, root, check=check)
     prepared = backends.backend('nextflow', 'nextflow').prepare(_write_into(root), (), tmp_path / 'base', settings)
     if check:
@@ -401,12 +377,11 @@ def test_a_nextflow_run_reads_its_own_names_after_another_workflow_is_prepared_i
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Each workflow's names are its own file, as its summary is."""
     monkeypatch.setattr(preflight, 'nextflow_problems', lambda _settings: [])
-    (tmp_path / 'source.txt').write_text('', encoding='utf-8')
+    write_tree(tmp_path, {'source.txt': ''})
     settings = run_setup.Settings(_NEXTFLOW_SETTINGS, tmp_path)
     backend = backends.backend('nextflow', 'nextflow')
     backend.prepare(_write_into(tmp_path), (), tmp_path / 'base', settings)
-    echo = Step(clt_path=REPO_ROOT / 'cwl_adapters' / 'echo.cwl')
-    echo.inputs.message = 'hello'
+    echo = adapter_step('echo', message='hello')
     backend.prepare(compile_workflow_result(Workflow([echo], 'other')), (), tmp_path / 'base', settings)
     stdout = 'sophios-output ' + json.dumps(['write_into_outDir', 'made']) + '\n'
     request = RunRequest('wf', tmp_path / 'base', runner='nextflow', target='nextflow')

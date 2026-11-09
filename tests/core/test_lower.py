@@ -1,14 +1,6 @@
-"""Lowering a resolved document to a graph.
-
-Five claims: lowering is total, a malformed graph cannot be constructed, every
-reference the graph holds names a port that exists, passthrough is never read,
-and the result does not depend on iteration order.
-
-The test-side resolver constructs fully typed phase input without calling the
-production resolver, so these need no registry, filesystem, or config.
-"""
+"""Lowering a resolved document to a graph: total, every reference names an existing port, passthrough is never read,
+iteration order is irrelevant. The test-side resolver needs no registry, filesystem or config."""
 import json
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -38,8 +30,6 @@ from . import ast_strategies as strat
 from .cases import cases, diagnostic, match
 from .hermetic import COVERAGE, ORACLE, compile_hermetic, compile_hermetic_cwl, subworkflow_step
 from .strategies import shapes
-
-REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _declared_inputs(step: Step) -> tuple[str, ...]:
@@ -165,23 +155,6 @@ def test_an_input_and_an_output_of_one_name_are_different_ports() -> None:
 
 
 @pytest.mark.fast
-def test_a_step_may_be_invoked_twice() -> None:
-    """`append` twice is the language, not a mistake.
-
-    Sequence-form `steps:` exists so a tool can be invoked more than once, and
-    a shipped tutorial does it. An IR keyed on the authored id rejects a real
-    document; the occurrence index is what the compiler already means by
-    `{stem}__step__{i}__{key}`.
-    """
-    document = parse((REPO_ROOT / 'docs' / 'tutorials' / 'append_twice.wic')
-                     .read_text(encoding='utf-8'), 'append_twice.wic').document
-    assert document is not None
-    result = lower(_resolved(document))
-    assert result.graph is not None, [d.code.value for d in result.diagnostics]
-    assert [(s.id.index, s.id.name) for s in result.graph.steps] == [(1, 'append'), (2, 'append')]
-
-
-@pytest.mark.fast
 @given(shapes().map(lambda shape: parse(json.dumps(shape), 'recovered.wic').document))
 @example(parse('steps:\n- id: ""\n  in: {}\n', 'recovered.wic').document)
 @example(parse('steps:\n- \n', 'recovered.wic').document)
@@ -278,30 +251,6 @@ def test_link_merge_and_pick_value_on_an_output_are_wic038(extra: dict[str, Any]
         source += f'    {key}: {value}\n'
     result = _lower(source)
     assert SophiosErrorCode.STEP_INPUT_RECORD in {d.code for d in result.diagnostics}
-
-
-@pytest.mark.fast
-def test_a_positional_output_source_addresses_the_occurrence_at_that_index() -> None:
-    """Two `s` steps; `(2, s)/f` is the second one, and nothing else can say so."""
-    result = _lower('steps:\n- id: s\n  out: [f]\n- id: s\n  out: [f]\n'
-                    'outputs:\n  o:\n    type: File\n    outputSource: (2, s)/f\n')
-    assert result.graph is not None, list(result.diagnostics)
-    (_name, source), = result.graph.output_mapping
-    assert source.step.index == 2
-
-
-@pytest.mark.fast
-def test_a_record_binds_an_input_its_process_does_not_declare() -> None:
-    """The input is a port of the step with no declaration; any other value there is `wic028`."""
-    workflow: dict[str, Any] = {'inputs': {'go': 'boolean'}, 'steps': [
-        {'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'a'}, 'go': {'wic_raw_cwl': {'source': 'go'}}}}]}
-    (step,) = compile_hermetic(workflow).graph.steps
-    (port,) = [port for port in step.inputs if port.id.port == 'go']
-    assert port.declaration is None
-    workflow['steps'][0]['in']['go'] = 'go'
-    with pytest.raises(SophiosError) as caught:
-        compile_hermetic(workflow)
-    assert SophiosErrorCode.UNDECLARED_PORT in {d.code for d in caught.value.diagnostics}
 
 
 @pytest.mark.fast

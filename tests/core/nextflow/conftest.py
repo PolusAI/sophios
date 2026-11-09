@@ -7,18 +7,20 @@ from sophios.api.python._workflow_runtime import compile_workflow_result
 from sophios.api.python.workflow import Step, Workflow
 from sophios.ir.artifacts import CompilationResult
 
-from .testkit import REPO_ROOT
+from ..helpers import adapter_step
+
+
+def _copy_step(step_name: str) -> Step:
+    tool = CommandLineTool("copy_file", Inputs(source=Input(cwl.file, position=1)),
+                           Outputs(result=Output(cwl.file, glob="copy.txt")))
+    return Step(tool.base_command("cp").argument("copy.txt", position=2), step_name=step_name)
 
 
 @pytest.fixture(scope="session")
 def real_linear_result() -> CompilationResult:
     """Compile the shipped touch, append and cat tools as one workflow."""
-    touch = Step(clt_path=REPO_ROOT / "cwl_adapters" / "touch.cwl")
-    touch.inputs.filename = "empty.txt"
-    append = Step(clt_path=REPO_ROOT / "cwl_adapters" / "append.cwl")
-    append.inputs.str = "Hello"
-    cat = Step(clt_path=REPO_ROOT / "cwl_adapters" / "cat.cwl")
-    return compile_workflow_result(Workflow([touch, append, cat], "wf"))
+    steps = [adapter_step("touch", filename="empty.txt"), adapter_step("append", str="Hello"), adapter_step("cat")]
+    return compile_workflow_result(Workflow(steps, "wf"))
 
 
 @pytest.fixture(scope="session")
@@ -35,16 +37,7 @@ def real_supported_result() -> CompilationResult:
     touch = Step(touch_tool, step_name="touch")
     touch.inputs.filename = "message.txt"
 
-    copy_tool = (
-        CommandLineTool(
-            "copy_file",
-            Inputs(source=Input(cwl.file, position=1)),
-            Outputs(result=Output(cwl.file, glob="copy.txt")),
-        )
-        .base_command("cp")
-        .argument("copy.txt", position=2)
-    )
-    copy_step = Step(copy_tool, step_name="copy")
+    copy_step = _copy_step("copy")
     copy_step.inputs.source = touch.outputs.result
     return compile_workflow_result(Workflow([touch, copy_step], "wf"))
 
@@ -81,17 +74,7 @@ def real_nested_result() -> CompilationResult:
     )
     write = Step(write_tool, step_name="write")
     write.inputs.message = "nested composition"
-
-    copy_tool = (
-        CommandLineTool(
-            "copy_file",
-            Inputs(source=Input(cwl.file, position=1)),
-            Outputs(result=Output(cwl.file, glob="copy.txt")),
-        )
-        .base_command("cp")
-        .argument("copy.txt", position=2)
-    )
-    inner_copy = Step(copy_tool, step_name="inner_copy")
+    inner_copy = _copy_step("inner_copy")
     child = Workflow([inner_copy], "child")
     inner_copy.inputs.source = child.inputs.source
     child.inputs.source = write.outputs.result

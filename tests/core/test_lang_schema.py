@@ -1,20 +1,5 @@
-"""Properties of the exported JSON Schema.
-
-The claim under test: the exported schema accepts what the AST accepts, and
-rejects the structural mistakes the parser reports.
-
-WHAT THE CLAIM CAN AND CANNOT SAY. The schema is a deliberate over-approximation,
-for two reasons that come from the language rather than from this test:
-
-  * JSON has no YAML tags, so the schema describes the desugared projection.
-  * Passthrough CWL is open by definition (language spec §1), so the schema cannot
-    close any object that might carry it.
-
-So "accepts exactly what the AST accepts" is checked as two separate claims:
-agreement is exact on the structural shapes the parser itself diagnoses, and
-one-directional (schema accepts everything the parser does) elsewhere. Stating
-this here rather than asserting a stronger equivalence that is not true.
-"""
+"""The exported JSON Schema accepts what the AST accepts: exactly on the shapes the parser diagnoses, one way
+elsewhere, since JSON has no tags and passthrough CWL cannot be closed (language spec §1)."""
 import json
 from dataclasses import fields
 from pathlib import Path
@@ -43,11 +28,6 @@ VALIDATOR = jsonschema.Draft202012Validator(SCHEMA)
 def _accepts(data: Any) -> bool:
     """Whether the exported schema accepts this document."""
     return VALIDATOR.is_valid(data)
-
-
-# --------------------------------------------------------------------------
-# The schema is well-formed and derived, not hand-written
-# --------------------------------------------------------------------------
 
 
 @pytest.mark.fast
@@ -113,11 +93,6 @@ def test_generate_schemas_writes_the_ast_schema_and_nothing_else(
     assert '__step__' not in written
 
 
-# --------------------------------------------------------------------------
-# Forward: everything the parser accepts, the schema accepts
-# --------------------------------------------------------------------------
-
-
 @pytest.mark.fast
 @given(documents())
 @FAST
@@ -145,10 +120,6 @@ def test_accepts_the_whole_corpus(path: Path) -> None:
     data = to_json(result.document)
     assert _accepts(data), list(VALIDATOR.iter_errors(data))
 
-
-# --------------------------------------------------------------------------
-# Both ways: the schema refuses exactly the shapes the parser reports
-# --------------------------------------------------------------------------
 
 #: What the parser reports about a document's shape, as distinct from what it says about names, tags and edges.
 _SHAPE_CODES: Final = frozenset({
@@ -237,10 +208,6 @@ def test_the_wic_block_is_closed_and_complete_for_editors() -> None:
         assert SCHEMA['$defs'][form]['additionalProperties'] is False, form
 
 
-# --------------------------------------------------------------------------
-# The AST is the source of truth
-# --------------------------------------------------------------------------
-#
 # The schema is generated from the `Surface` declarations in `nodes.py`. These
 # check that the generation is total — that no field can be added, and no key
 # invented, without one of these failing.
@@ -284,11 +251,6 @@ def test_passthrough_declarations_open_their_objects() -> None:
     assert any(surface_of(Step, f.name).shape is Shape.PASSTHROUGH for f in fields(Step))
     assert SCHEMA['$defs']['sequenceStep']['additionalProperties'] is True
     assert SCHEMA['$defs']['construct']['additionalProperties'] is False
-
-
-# --------------------------------------------------------------------------
-# An export is the caller's to keep, and to edit
-# --------------------------------------------------------------------------
 
 
 @pytest.mark.fast

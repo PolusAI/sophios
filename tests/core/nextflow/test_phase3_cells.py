@@ -1,10 +1,5 @@
-"""The Phase 3 acceptance cells, each authored with the Python API and run under pinned Nextflow.
-
-Cells are defined in the offline Phase 3 design; the lowerings in design_docs/sophios_nextflow_backend.md §6. The
-calculator (A1-A9) and predicate (W1-W7) cells, built here for the import's fixed point (test_import.py), are decided
-by node and the pinned Nextflow in test_subset_differential.py, and S1-S14 are examples of test_runtime.py's scatter
-property. A10, a computed ``valueFrom`` reaching a tool argument, has no runtime test: the backend rejects it.
-"""
+"""The Phase 3 acceptance cells (design §6) under pinned Nextflow. A1-A9, W1-W7 are decided in
+test_subset_differential.py, S1-S14 in test_runtime.py's scatter property; A10 has no runtime test (rejected)."""
 
 # pylint: disable=missing-function-docstring
 
@@ -17,10 +12,9 @@ import pytest
 from sophios.api.python._workflow_runtime import compile_workflow_result
 from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
 from sophios.api.python.workflow import Step, Workflow
-from sophios.input_output_nf import write_nextflow_artifacts
 from sophios.utils_nf import compiled_source_to_nextflow
 
-from .testkit import execute_nextflow
+from .testkit import run_observed
 
 
 def _text_output() -> Output:
@@ -32,23 +26,7 @@ def _run(
     root: Workflow, directory: Path, *emits: str
 ) -> tuple["subprocess.CompletedProcess[str]", dict[str, list[str]]]:
     """Lower, render, observe each named workflow output in arrival order, and run."""
-    workflow = compiled_source_to_nextflow(compile_workflow_result(root))
-    write_nextflow_artifacts(workflow, directory)
-    script = directory / "workflow.nf"
-    text = script.read_text(encoding="utf-8")
-    sinks = "".join(
-        f"\n    {workflow.name}.out.{emit}.toList().subscribe {{ list -> "
-        f"new File('{emit}.sink').text = list.join('\\u0001') }}\n"
-        for emit in emits
-    )
-    script.write_text(text[:-2] + sinks + "}\n", encoding="utf-8")
-    result = execute_nextflow(directory)
-    observed = {
-        emit: (directory / f"{emit}.sink").read_text(encoding="utf-8").split("\x01")
-        for emit in emits
-        if (directory / f"{emit}.sink").exists()
-    }
-    return result, observed
+    return run_observed(compiled_source_to_nextflow(compile_workflow_result(root)), directory, emits=emits)
 
 
 def _ran(directory: Path, name: str) -> bool:

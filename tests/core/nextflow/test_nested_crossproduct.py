@@ -1,8 +1,4 @@
-"""Multi-input nested_crossproduct scatter: one array dimension per scattered input.
-
-design_docs/sophios_nextflow_backend.md §6, Topology, "Multi-input scatter"
-and "Gather".
-"""
+"""Multi-input nested_crossproduct scatter: one array dimension per scattered input (design §6, Topology)."""
 
 # pylint: disable=missing-function-docstring
 
@@ -25,8 +21,10 @@ from sophios.nf_types import (
 from sophios.utils_nf import compiled_source_to_nextflow
 
 from .test_composition import FILES, STRINGS, _tools, _two_gathered_arrays_into_use
-from .test_dotproduct import _sink, _sleep_then_pair, _text_port
-from .testkit import command, execute_nextflow, output_port, step, synthetic_source, workflow_doc
+from .test_dotproduct import _sleep_then_pair, _text_port
+from .testkit import (
+    assert_succeeded, command, execute_nextflow, output_port, run_observed, step, synthetic_source, workflow_doc,
+)
 
 
 @pytest.mark.nextflow
@@ -149,7 +147,6 @@ def test_a_nested_step_over_one_gathered_array_twice_emits_one_array_per_outer_e
     ]
     workflow = ExecutableNextflowWorkflow("PIPELINE", [pair, join], connections, {"items": ["a", "b"], "delays": [
         "1", "0"]}, {"items": "string[]", "delays": "string[]"})
-    result = _sink(workflow, tmp_path / "run", emit_name="all")
-    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
-    assert (tmp_path / "run" / "gathered.txt").read_text(encoding="utf-8").split("\x01") == [
-        "[a-1a-1, a-1b-0]", "[b-0a-1, b-0b-0]"]
+    result, observed = run_observed(workflow, tmp_path / "run", emits=["all"])
+    assert_succeeded(result)
+    assert observed["all"] == ["[a-1a-1, a-1b-0]", "[b-0a-1, b-0b-0]"]

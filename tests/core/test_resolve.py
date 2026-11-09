@@ -1,14 +1,5 @@
-"""Registry resolution and the direct typed front end.
-
-The generated checks compare the typed front door with the live typed compiler.
-Their input filter is an independent model of the scalar
-coercions; it does not call Resolve, Lower, or a production semantic judge.
-
-BLIND SPOTS: generated workflows use the synthetic flat-tool vocabulary.
-Nested workflow source, implementation precedence, generated identities, and
-raw CWL each have pinned examples because they are registry shapes rather than
-choices in that generator.
-"""
+"""Registry resolution and the direct typed front end, compared with the live compiler under an independent model of
+scalar coercions. Blind spot: synthetic flat tools; nested sources, precedence, identities and raw CWL are examples."""
 import builtins
 import copy
 from pathlib import Path

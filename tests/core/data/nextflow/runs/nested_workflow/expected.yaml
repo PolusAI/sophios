@@ -1,3 +1,0 @@
-why: A one-level subworkflow runs the copy its inlined form declares, of the message written outside it.
-outputs: {write_source~result: {class: File, basename: message.txt, contents: "nested composition\n"},
-          child~copy_file~result: {class: File, basename: copy.txt, contents: "nested composition\n"}}

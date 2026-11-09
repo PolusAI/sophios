@@ -1,24 +1,20 @@
 """`Workflow.draw` returns the drawing `--graphviz` makes, on a background of its own, from the same compile."""
 import re
-from pathlib import Path
 from typing import Any
 
 import graphviz
 import pytest
 
-from sophios.api.python.workflow import Inference, Step, Workflow
+from sophios.api.python.workflow import Inference, Workflow
 
-ADAPTERS = Path(__file__).resolve().parents[2] / "cwl_adapters"
+from .helpers import adapter_step
 
 
 def _workflow() -> Workflow:
     """`touch` feeds `append` by an edge written here, and `append` feeds `cat` by an edge inference adds."""
-    touch = Step(clt_path=ADAPTERS / "touch.cwl")
-    touch.inputs.filename = "empty.txt"
-    append = Step(clt_path=ADAPTERS / "append.cwl")
-    append.inputs.str = "Hello"
-    append.inputs.file = touch.outputs.file
-    cat = Step(clt_path=ADAPTERS / "cat.cwl")
+    touch = adapter_step("touch", filename="empty.txt")
+    append = adapter_step("append", str="Hello", file=touch.outputs.file)
+    cat = adapter_step("cat")
     return Workflow([touch, append, cat], "wf")
 
 

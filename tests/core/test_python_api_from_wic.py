@@ -1,18 +1,6 @@
-"""`Workflow.from_wic`: a `.wic` file as Python objects.
-
-The tests build documents beside each other, over the synthetic tools, and say
-what each becomes, or why it is refused. Then two properties over generated
-documents and every corpus workflow, and the in-repo table:
-
-  * **From the file.** A `.wic` the file door compiles is either refused with
-    `api006` and nothing else, or its objects compile to the CWL the file
-    compiles to, with equal job inputs and diagnostics. Equal up to key
-    order and CWL's shorthand for a port type: the Python API writes a step's
-    `in:` in its tool's port order and a port's type in CWL's long form.
-  * **Round trip.** The bundle `write_wic` writes for those objects compiles,
-    through the file door, to exactly what the objects compile to, and reading
-    that bundle back gives the same compilation again.
-"""
+"""`Workflow.from_wic`: a `.wic` file as Python objects. Examples say what a document becomes or why it is refused;
+properties: a file the file door compiles is refused with `api006` alone or compiles to equal output, and `write_wic`
+round-trips."""
 # pylint: disable=redefined-outer-name  # `corpus_registry` is a pytest fixture
 import tempfile
 from dataclasses import replace
@@ -25,7 +13,6 @@ import yaml
 from hypothesis import example, given, strategies as st
 
 import sophios.compiler
-import sophios.plugins
 from sophios.api.python import _workflow_runtime
 from sophios.api.python.workflow import SophiosError, SophiosErrorCode, Workflow
 from sophios.cli import default_compilation_settings
@@ -41,6 +28,7 @@ from .ast_strategies import SUBWORKFLOW_BODIES, compilable_documents
 from .budgets import budget
 from .cases import case_dirs, diagnostic, match
 from .equivalence import Strength, equivalent
+from .helpers import ADAPTERS, REPO_ROOT, shipped_tools
 from .synthetic_tools import SYNTHETIC_NS, SYNTHETIC_TOOLS, clt
 from .test_examples import _is_includer_fragment, yml_paths_tuples_not_large
 from .test_frontdoor import PYTHON_SCRIPT
@@ -48,7 +36,6 @@ from .test_frontdoor import PYTHON_SCRIPT
 from .test_setup import CorpusRegistry, corpus_registry
 from .wic_reading import read_wic
 
-REPO_ROOT: Final = Path(__file__).resolve().parents[2]
 
 WorkflowPaths = dict[str, dict[str, Path]]
 
@@ -110,10 +97,6 @@ def _objects(workflow: Workflow) -> tuple[Json, Json, list[str]]:
     compiled = _workflow_runtime.compiled_workflow_from_result(workflow, result)
     return compiled.cwl_workflow, compiled.cwl_job_inputs, list(map(str, result.diagnostics))
 
-
-# --------------------------------------------------------------------------
-# What each construct becomes
-# --------------------------------------------------------------------------
 
 #: The synthetic tools, with `mk_file` also in a `gpu` plugin namespace, and `pair_sink`, whose `energy_x` and
 #: `energy_y` read `pair_src`'s `edr_x` and `edr_y` only through the shipped renamings.
@@ -281,7 +264,7 @@ def test_a_positional_output_source_becomes_an_object_reference(tmp_path: Path,
 def test_a_real_time_declaration_written_back_stays_a_declaration(tmp_path: Path) -> None:
     """`write_wic` names the adapter as the registry does, so the bundle declares the same analysis
     the objects do, `max_times: !ii '20'` included, and emits no step for it."""
-    adapter = REPO_ROOT / 'cwl_adapters' / 'file_watchers' / 'cwl_subinterpreter.cwl'
+    adapter = ADAPTERS / 'file_watchers' / 'cwl_subinterpreter.cwl'
     tools = {**TOOLS, StepId(adapter.stem, SYNTHETIC_NS): Tool(str(adapter), yaml.safe_load(adapter.read_text()))}
     root = ("steps:\n- id: mk_file\n  in:\n    name: !ii a.txt\n"
             "- id: cwl_subinterpreter\n  in:\n    file_pattern: !ii '*.txt'\n    cwl_tool: !ii count\n"
@@ -303,10 +286,6 @@ def test_a_real_time_declaration_written_back_stays_a_declaration(tmp_path: Path
     assert [step['id'] for step in direct_cwl['steps']] == ['mk_file']
     assert equivalent(direct_cwl, via_file_cwl, Strength.IDENTICAL) is None
 
-
-# --------------------------------------------------------------------------
-# What is refused, dropped, or raised as the file's own error
-# --------------------------------------------------------------------------
 
 ONE_STEP: Final = 'steps:\n- id: mk_file\n  in:\n    name: !ii a\n'
 
@@ -351,11 +330,6 @@ def test_graphviz_and_inlineable_are_dropped_with_a_warning(tmp_path: Path) -> N
     with pytest.warns(UserWarning, match='root.wic: wic: graphviz, inlineable dropped'):
         workflow = _from_wic(tmp_path, root=root)
     _assert_compiles_alike(tmp_path, workflow)
-
-
-# --------------------------------------------------------------------------
-# The two properties, over the corpus, and the in-repo table
-# --------------------------------------------------------------------------
 
 
 def _loaded(path: Path, workflow_paths: WorkflowPaths, tools: Tools) -> Workflow | None:
@@ -433,8 +407,7 @@ IN_REPO: Final = (REPO_ROOT / 'docs' / 'tutorials', REPO_ROOT / 'examples')
 def _in_repo_registry() -> tuple[WorkflowPaths, Tools]:
     """The `.wic` files this repository ships and the tools it ships, read from nothing else."""
     workflow_paths = {'global': {path.stem: path for directory in IN_REPO for path in directory.glob('*.wic')}}
-    tools = sophios.plugins.get_tools_cwl({'search_paths_cwl': {'global': [str(REPO_ROOT / 'cwl_adapters')]}})
-    return workflow_paths, tools
+    return workflow_paths, shipped_tools()
 
 
 @pytest.mark.fast

@@ -2,7 +2,6 @@
 
 import copy
 from functools import partial
-from pathlib import Path
 from typing import Any, Final
 
 import pytest
@@ -20,12 +19,11 @@ from sophios.wic_types import StepId, Tool, Tools, Yaml
 from .synthetic_tools import clt
 
 from .budgets import budget
+from .helpers import REPO_ROOT
 from .hermetic import ORACLE, compile_hermetic
 from .reference_model import ReferenceExpectation, reference_expectation
 from .strategies import cwl_types, pinned
 from .wic_reading import read_wic
-
-REPO_ROOT: Final = Path(__file__).resolve().parents[2]
 
 _CASES: Final = (
     ('same atom', 'string', 'string', ReferenceExpectation.OVERLAPS),

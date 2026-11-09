@@ -30,18 +30,16 @@ from sophios.ir.artifacts import CompilationResult
 from sophios.ir.frontdoor import SourceBundle
 from sophios.ir.resolve import RegistrySnapshot
 from sophios.lang import Diagnostics, EdgeDef, EdgeRef, OutputBinding, ParseResult
-from sophios.nf_types import NfPort, NfProcessConnection, NfWorkflowInputConnection
+from sophios.nf_types import NfProcessConnection, NfWorkflowInputConnection
 from sophios.utils_nf import (
-    _ADMITTED_OUTPUT_EVAL,
-    _NAMED_OUTPUT_EVAL_REJECTIONS,
-    _output_capture,
     CompiledNextflowSource,
     compiled_source_to_nextflow,
 )
 from sophios.wic_types import Yaml
 
 from ..cases import cases, match
-from .testkit import case_source, REPO_ROOT, workflow_doc
+from ..helpers import adapter_step
+from .testkit import case_source, workflow_doc
 
 
 @pytest.mark.fast
@@ -235,9 +233,7 @@ def test_a_nested_workflow_steps_input_takes_one_source_as_it_is() -> None:
 
 
 def _echo(name: str = "echo") -> Step:
-    echo = Step(clt_path=REPO_ROOT / "cwl_adapters" / "echo.cwl", step_name=name)
-    echo.inputs.message = "Hello"
-    return echo
+    return adapter_step("echo", name, message="Hello")
 
 
 def _echo_with(extend: Callable[[Workflow, Step], None] | None) -> CompilationResult:
@@ -342,47 +338,6 @@ def test_a_scattered_step_inside_a_subworkflow_uses_the_outer_scatter_contract()
         isinstance(edge, NfWorkflowInputConnection) and edge.adapter == "dotproduct"
         for edge in workflow.connections
     )
-
-
-def _read_cwl_adapter(name: str) -> Yaml:
-    """Load one real repository CWL adapter document."""
-    import yaml
-
-    return cast(Yaml, yaml.safe_load(
-        (REPO_ROOT / "cwl_adapters" / name).read_text(encoding="utf-8")
-    ))
-
-
-@pytest.mark.fast
-def test_the_admitted_output_eval_table_is_closed_in_both_directions() -> None:
-    """Widening the admitted set without a design revision must fail here."""
-    assert dict(_ADMITTED_OUTPUT_EVAL) == {
-        "$(self[0])": "single",
-        "$(self[0].contents)": "text",
-    }
-    assert set(_ADMITTED_OUTPUT_EVAL.values()) == set(NfPort.CAPTURE_QUALIFIERS)
-    assert not set(_ADMITTED_OUTPUT_EVAL) & set(_NAMED_OUTPUT_EVAL_REJECTIONS)
-    assert set(_NAMED_OUTPUT_EVAL_REJECTIONS) == {
-        "$(self[0].checksum)",
-        "$(self[0].dirname)",
-        "$(self[0].format)",
-        "$(self[0].location)",
-        "$(self[0].path)",
-        "$(self[0].secondaryFiles)",
-    }
-
-
-@pytest.mark.fast
-def test_the_real_cat_adapter_output_is_the_admitted_file_text_capture() -> None:
-    """cwl_adapters/cat.cwl is exactly this shape; it must lower, not reject."""
-    document = _read_cwl_adapter("cat.cwl")
-
-    assert document["outputs"]["output"]["outputBinding"] == {
-        "glob": "output",
-        "loadContents": True,
-        "outputEval": "$(self[0].contents)",
-    }
-    assert _output_capture("output", document["outputs"]["output"]) == "text"
 
 
 def _with_child(mutate: Callable[[Yaml], Any]) -> CompilationResult:

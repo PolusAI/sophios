@@ -123,15 +123,9 @@ def test_a_computed_input_binding_valuefrom_is_rejected_by_name(value_from: str)
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize("value_from", ["7", "--n=$(inputs.a)", "$(inputs.a)"])
-def test_a_literal_or_projection_valuefrom_stays_a_template(value_from: str) -> None:
-    workflow = _calc_workflow([{"valueFrom": value_from}], {"a": 1}, a="int")
-    assert isinstance(workflow.processes[0].command.tokens[-1], NfTemplate)
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize("value_from", ["$(inputs.a)-$(inputs.b)", "$(inputs.a).$(inputs.b)"])
-def test_two_projections_in_one_field_stay_a_template(value_from: str) -> None:
+@pytest.mark.parametrize("value_from", ["7", "--n=$(inputs.a)", "$(inputs.a)", "$(inputs.a)-$(inputs.b)",
+                                        "$(inputs.a).$(inputs.b)"])
+def test_a_valuefrom_of_text_and_projections_stays_a_template(value_from: str) -> None:
     workflow = _calc_workflow([{"valueFrom": value_from}], {"a": 1, "b": 2}, a="int", b="int")
     assert isinstance(workflow.processes[0].command.tokens[-1], NfTemplate)
 

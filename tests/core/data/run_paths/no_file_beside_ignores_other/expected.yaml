@@ -1,3 +1,4 @@
 why: a root's run mk_file.cwl with no file beside it is the registry's, not a child's sub/mk_file.cwl
-steps: [{baseCommand: 'true', inputs: {name: {type: string, inputBinding: {position: 1}}}},
+steps: [{baseCommand: 'true', inputs: {name: {type: string, inputBinding: {position: 1}}},
+    outputs: {file: {type: File, format: 'edam:format_2330', outputBinding: {glob: $(inputs.name)}}}},
     {steps: [{baseCommand: rm, inputs: {a: {type: string}}}]}]

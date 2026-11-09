@@ -1,3 +1,0 @@
-why: touch makes an empty file, inferred into cp, which copies it.
-outputs: {touch_file~result: {class: File, basename: message.txt, contents: ''}, copy_file~result: {class: File,
-          basename: copy.txt, contents: ''}}

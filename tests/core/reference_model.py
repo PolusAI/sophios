@@ -1,11 +1,5 @@
-"""Independent test model for Sophios reference-type judgments.
-
-The production implementation recursively compares raw declarations.  This
-oracle instead lowers them to a small test-only set of structural variants and
-compares the Cartesian product.  Keeping both the representation and the
-algorithm separate prevents generated inputs from asking the system under test
-which cases it should generate.
-"""
+"""Independent test model for reference-type judgments: it lowers declarations to a small set of structural variants and
+compares the Cartesian product, so generated inputs never ask the system under test which cases it should generate."""
 
 from enum import Enum
 from typing import Any, Final

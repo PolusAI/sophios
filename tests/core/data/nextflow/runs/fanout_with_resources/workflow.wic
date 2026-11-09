@@ -1,7 +1,0 @@
-steps:
-- id: produce
-  out: [result: !& data]
-- id: consume_a
-  in: {source: !* data}
-- id: consume_b
-  in: {source: !* data}

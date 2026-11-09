@@ -1,20 +1,5 @@
-"""`sophios.compute` against the compute service itself: the slurm driver, under its own fake Slurm and fake Toil.
-
-The driver runs as it does on a cluster, `node src/main.ts` on a Unix socket, which the tests reach as
-`unix:///socket`, from the checkout `SOPHIOS_SLURM_DRIVER` names: the `packages/slurm-driver` directory of
-vjaganat90/compute, branch vasu_revamp. Its fake `sbatch` runs each leader's job script, whose fake Toil prints an
-output object; what Slurm says of a job is the line a test writes into `<job>.sacct` beside the fakes, as the
-driver's own tests do. Node 26 or later must be on PATH.
-
-The driver's repository is private, so no CI lane runs this file: it is a local lane, run by hand,
-
-    SOPHIOS_SLURM_DRIVER=<checkout>/packages/slurm-driver pytest tests/core/test_compute_service.py -m skip_pypi_ci
-
-and `test_ci_coverage.LOCAL_ONLY` names it. Marked `skip_pypi_ci`, which keeps it out of the packaging lane.
-Without SOPHIOS_SLURM_DRIVER the module is skipped, as the repository's other environment-gated tests are, so a
-plain `pytest tests/core` passes where there is no driver; the lane's command always sets it, so the lane never
-passes by skipping.
-"""
+"""`sophios.compute` against the slurm driver (vjaganat90/compute, vasu_revamp; Node 26+) under fake Slurm and Toil.
+A local lane (`test_ci_coverage.LOCAL_ONLY`): `SOPHIOS_SLURM_DRIVER=<checkout>/packages/slurm-driver pytest <file>`."""
 import getpass
 import json
 import os
@@ -77,9 +62,8 @@ class Cluster:
         raise AssertionError(f'the job script of {run.id} did not end')
 
     def leader(self, run: compute.Run, state: str) -> None:
-        """Make Slurm say `run`'s leader is `state`: an end only once its job script has ended, with the status it
-        ended with, as Slurm does. The driver cancels what a run left in Slurm's queue once it records the end, so an
-        end said earlier would cancel the job script before it has written what the test reads."""
+        """Make Slurm say `run`'s leader is `state`; an end only once its job script has ended, since the driver cancels
+        what a run left queued once it records the end, cutting the script before it wrote what the test reads."""
         status = '0' if state in ('PENDING', 'RUNNING') else self.exit_of(run)
         self.says(run.slurm_job, f'{run.id}|{state}|{status}:0|2026-10-26T10:00:00|2026-10-26T10:05:00|1-00:00:00')
 
@@ -91,9 +75,8 @@ def _get(cluster: Cluster, path: str) -> requests.Response:
 
 @contextmanager
 def _serving(root: Path, toil_env: Path) -> Iterator[Cluster]:
-    """The driver of `SOPHIOS_SLURM_DRIVER`, over the fakes copied into `root` and the Toil env `toil_env`,
-    listening on a socket in a directory of its own, whose path is short enough for a Unix socket's; its log is
-    `root/driver.log`."""
+    """The driver of `SOPHIOS_SLURM_DRIVER` over the fakes copied into `root` and the Toil env `toil_env`, on a socket
+    in a directory of its own (a Unix socket path must be short); its log is `root/driver.log`."""
     driver = Path(os.environ['SOPHIOS_SLURM_DRIVER']).resolve()
     node = shutil.which('node')
     assert node is not None, 'the slurm driver needs Node 26 or later on PATH'
@@ -132,9 +115,8 @@ def _cluster(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Cluster]:
 
 @pytest.fixture(scope='module', name='toil_cluster')
 def _toil_cluster(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Cluster]:
-    """The driver under fake Slurm with real Toil: this Python's own env, which has Toil and cwltool as Sophios
-    does. Each job script is run on this machine, as the driver's own real-Toil lane runs it: Toil's single_machine
-    batch system instead of Slurm's, and no containers."""
+    """The driver under fake Slurm with real Toil from this Python's own env; each job script runs on this machine
+    under Toil's single_machine batch system, as the driver's real-Toil lane runs it, with no containers."""
     toil_env = Path(sys.prefix)
     assert (toil_env / 'bin' / 'toil-cwl-runner').exists(), f'{toil_env} has no toil-cwl-runner, which Sophios needs'
     root = tmp_path_factory.mktemp('toil_cluster')

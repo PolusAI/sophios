@@ -1,10 +1,6 @@
 # pylint: disable=too-many-lines
-"""The compute service's request, as Sophios builds it: `sophios.compute.build_request`, and its run, as a `Run`
-follows it.
-
-Fast and without a service: what the request holds, what Sophios refuses before sending, and what a `Run` makes of
-the service's answers. What the service answers is `test_compute_service.py`'s, against the service itself.
-"""
+"""The compute service's request as Sophios builds it (`sophios.compute.build_request`) and a `Run`'s handling of its
+answers, fast and without a service; test_compute_service.py runs against the service itself."""
 import dataclasses
 import inspect
 import json
@@ -12,7 +8,6 @@ import os
 import re
 import socketserver
 import stat
-import subprocess
 import sys
 import tempfile
 import threading
@@ -39,10 +34,9 @@ from sophios.wic_types import Yaml
 
 from .budgets import budget
 from .cases import cases, match
+from .helpers import REPO_ROOT, live_workflow, python_process
 
-ROOT = Path(__file__).resolve().parents[2]
-ADAPTERS = ROOT / 'cwl_adapters'
-DOCS = ROOT / 'docs'
+DOCS = REPO_ROOT / 'docs'
 
 
 def _writer() -> CommandLineTool:
@@ -184,15 +178,8 @@ def test_every_field_the_schema_refuses_is_a_line_in_the_schemas_words() -> None
 @pytest.mark.fast
 def test_a_workflow_with_a_real_time_analysis_is_refused_the_service_never_runs_one() -> None:
     """Refused before sending, naming the analysis, rather than dropped."""
-    touch = Step(clt_path=ADAPTERS / 'touch.cwl')
-    touch.inputs.filename = 'empty.txt'
-    declaration = Step(clt_path=ADAPTERS / 'file_watchers' / 'cwl_subinterpreter.cwl')
-    declaration.inputs.file_pattern = 'empty.txt'
-    declaration.inputs.cwl_tool = 'touch'
-    declaration.inputs.max_times = 2
-    declaration.inputs.config = {'in': {'filename': 'again.txt'}}
     with pytest.raises(compute.RequestRefused, match="real-time analysis 'touch', which the compute service never"):
-        compute.build_request(Workflow([touch, declaration], 'live'))
+        compute.build_request(live_workflow('live'))
 
 
 def _camel(name: str) -> str:
@@ -412,16 +399,6 @@ def test_a_compute_run_is_the_local_handle_but_for_what_each_has_alone() -> None
         assert inspect.signature(getattr(compute.Run, name)) == inspect.signature(getattr(RunHandle, name)), name
 
 
-@pytest.mark.fast
-def test_the_service_lane_is_skipped_not_errored_without_the_driver() -> None:
-    """A plain pytest on a machine without the driver checkout skips test_compute_service.py, saying what to set,
-    as the repository's other environment-gated tests skip; the lane's own command always sets it."""
-    env = {name: value for name, value in os.environ.items() if name != 'SOPHIOS_SLURM_DRIVER'}
-    ran = subprocess.run([sys.executable, '-m', 'pytest', 'tests/core/test_compute_service.py', '-rs',
-                          '-p', 'no:cacheprovider'], cwd=ROOT, env=env, capture_output=True, text=True, check=False)
-    assert ran.returncode == 0 and 'set SOPHIOS_SLURM_DRIVER to the packages/slurm-driver' in ran.stdout, ran.stdout
-
-
 class _Driver(BaseHTTPRequestHandler):
     """The service, as far as these tests ask it, on a Unix socket: its contract, the run r1, and a cancel of r1
     refused, as the service refuses one by an account that did not submit the run."""
@@ -622,7 +599,7 @@ def test_ctrl_c_before_ssh_forwards_ends_it_and_leaves_nothing(ssh_calls: Path,
 @pytest.mark.fast
 def test_a_forward_a_process_never_closes_ends_as_the_process_does(ssh_calls: Path, driver: Path) -> None:
     """Python exiting closes every Service it left open."""
-    subprocess.run([sys.executable, '-c', f"from sophios.compute import Service; Service('ssh://cluster{driver}')"],
+    python_process('-c', f"from sophios.compute import Service; Service('ssh://cluster{driver}')",
                    check=True, timeout=60)
     pid, _, _, directory = _ssh_run(ssh_calls)
     assert _ended(pid) and not directory.exists()

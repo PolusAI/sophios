@@ -1,0 +1,247 @@
+- id: basename_derived_output
+  why: An output name derived from a staged input's basename names the copy the command made.
+  tools:
+    write_source: &tool_write_source {baseCommand: echo, inputs: {message: {type: string, inputBinding: {position: 1}}},
+      stdout: lines.txt, outputs: {result: {type: File, outputBinding: {glob: lines.txt}}}}
+    copy_named_after_source: {baseCommand: cp, inputs: {source: {type: File, inputBinding: {position: 1}}},
+      arguments: [{position: 2, valueFrom: $(inputs.source.basename).copy}], outputs: {result: {type: File,
+      outputBinding: {glob: $(inputs.source.basename).copy}}}}
+  steps: |
+    - id: write_source
+      in: {message: !ii basename derived}
+    - id: copy_named_after_source
+  outputs: {write_source~result: {class: File, basename: lines.txt, contents: "basename derived\n"},
+    copy_named_after_source~result: {class: File, basename: lines.txt.copy, contents: "basename derived\n"}}
+- id: brace_glob_literal
+  why: 'A CWL glob has no brace expansion: `a{b,c}.txt` names one file, not the decoy `ab.txt`.'
+  tools: {produce: {baseCommand: [sh, -c, 'echo literal > ''a{b,c}.txt''; echo decoy > ab.txt'],
+    outputs: {result: {type: File, outputBinding: {glob: 'a{b,c}.txt'}}}}}
+  outputs: {produce~result: {class: File, basename: 'a{b,c}.txt', contents: "literal\n"}}
+- id: entry_name_collision-entry-and-staged-input
+  why: &why_entry_name_collision cp and ln would make the entry inside the directory holding its name, so the task
+    stops, saying so.
+  tools: {mix: {requirements: {InitialWorkDirRequirement: {listing: [{entry: $(inputs.a), writable: true}]}},
+    baseCommand: ls, inputs: {a: {type: Directory}, b: {type: Directory, inputBinding: {position: 1}}},
+    stdout: listing.txt, outputs: {listing: {type: File, outputBinding: {glob: listing.txt}}}}}
+  steps: &steps_entry_name_collision |
+    - id: mix
+      in: {a: !ii one/data, b: !ii two/data}
+  files: &files_entry_name_collision {one/data/one.txt: one, two/data/two.txt: two}
+  fails: 'InitialWorkDirRequirement entry already exists in the task directory: data'
+- id: entry_name_collision-two-entries
+  why: *why_entry_name_collision
+  tools: {mix: {requirements: {InitialWorkDirRequirement: {listing: [{entry: $(inputs.a), writable: true},
+    $(inputs.b)]}}, baseCommand: ls, inputs: {a: {type: Directory}, b: {type: Directory, inputBinding: {position: 1}}},
+    stdout: listing.txt, outputs: {listing: {type: File, outputBinding: {glob: listing.txt}}}}}
+  steps: *steps_entry_name_collision
+  files: *files_entry_name_collision
+  fails: 'InitialWorkDirRequirement entry already exists in the task directory: data'
+- id: fanout_with_resources
+  why: One output feeds two steps, each of which cats it whole, under a process that requests cpus and memory.
+  tools:
+    produce: {requirements: {ResourceRequirement: {coresMin: 2, ramMin: 64}}, baseCommand: [printf, '%s', fanout],
+      stdout: data.txt, outputs: {result: {type: File, outputBinding: {glob: data.txt}}}}
+    consume_a: {baseCommand: cat, inputs: {source: {type: File, inputBinding: {position: 1}}}, stdout: a.txt,
+      outputs: {result: {type: File, outputBinding: {glob: a.txt}}}}
+    consume_b: {baseCommand: cat, inputs: {source: {type: File, inputBinding: {position: 1}}}, stdout: b.txt,
+      outputs: {result: {type: File, outputBinding: {glob: b.txt}}}}
+  steps: |
+    - id: produce
+      out: [result: !& data]
+    - id: consume_a
+      in: {source: !* data}
+    - id: consume_b
+      in: {source: !* data}
+  rendered: {contains: [cpus 2, memory "64 MB"]}
+  outputs: {produce~result: {class: File, basename: data.txt, contents: fanout}, consume_a~result: {class: File,
+    basename: a.txt, contents: fanout}, consume_b~result: {class: File, basename: b.txt, contents: fanout}}
+- id: four_step_adapters
+  why: The checked-in echo adapters print their message, and echo_3 its three joined into one word, each to its stdout.
+  steps: |
+    - {id: emit_single_1, run: echo, in: {message: !ii Sophios reaches Nextflow}}
+    - {id: emit_triplet_1, run: echo_3, in: {message1: !ii spaces remain, message2: !ii one, message3: !ii argument}}
+    - {id: emit_single_2, run: echo, in: {message: !ii a literal costs $5}}
+    - {id: emit_triplet_2, run: echo_3, in: {message1: !ii literal, message2: !ii '&&',
+        message3: !ii text is not shell syntax}}
+  outputs: {emit_single_1~stdout: {class: File, basename: stdout, contents: "Sophios reaches Nextflow\n"},
+    emit_triplet_1~stdout: {class: File, basename: stdout, contents: "spaces remain one argument\n"},
+    emit_single_2~stdout: {class: File, basename: stdout, contents: "a literal costs $5\n"},
+    emit_triplet_2~stdout: {class: File, basename: stdout, contents: "literal && text is not shell syntax\n"}}
+- id: gathered_rescatter_broadcast_file
+  why: A workflow input is one value, passed to every job of a scattered step, in the order CWL scatters.
+  tools:
+    echo_item: {baseCommand: echo, inputs: {item: {type: string, inputBinding: {position: 1}}}, stdout: a.txt,
+      outputs: {out: {type: File, outputBinding: {glob: a.txt}}}}
+    cat_pair: {baseCommand: cat, inputs: {f: {type: File, inputBinding: {position: 1}}, r: {type: File,
+      inputBinding: {position: 2}}}, stdout: b.txt, outputs: {out: {type: File, outputBinding: {glob: b.txt}}}}
+  steps: |
+    - id: echo_item
+      scatter: [item]
+      scatterMethod: dotproduct
+      in: {item: !ii ['1', '2', '3']}
+      out: [out: !& items]
+    - id: cat_pair
+      scatter: [f]
+      scatterMethod: dotproduct
+      in: {f: !* items, r: !ii ref.txt}
+  files: {ref.txt: "REF\n"}
+  outputs: {echo_item~out: [{class: File, basename: a.txt, contents: "1\n"}, {class: File, basename: a.txt,
+    contents: "2\n"}, {class: File, basename: a.txt, contents: "3\n"}], cat_pair~out: [{class: File, basename: b.txt,
+    contents: "1\nREF\n"}, {class: File, basename: b.txt, contents: "2\nREF\n"}, {class: File, basename: b.txt,
+    contents: "3\nREF\n"}]}
+- id: golden_path
+  why: touch makes an empty file, inferred into cp, which copies it.
+  tools:
+    touch_file: {baseCommand: touch, inputs: {filename: {type: string, inputBinding: {position: 1}}},
+      outputs: {result: {type: File, outputBinding: {glob: $(inputs.filename)}}}}
+    copy_file: &tool_copy_file {baseCommand: cp, arguments: [{position: 2, valueFrom: copy.txt}],
+      inputs: {source: {type: File, inputBinding: {position: 1}}}, outputs: {result: {type: File,
+      outputBinding: {glob: copy.txt}}}}
+  steps: |
+    - id: touch_file
+      in: {filename: !ii message.txt}
+    - id: copy_file
+  outputs: {touch_file~result: {class: File, basename: message.txt, contents: ''}, copy_file~result: {class: File,
+    basename: copy.txt, contents: ''}}
+- id: iwdr_own_basename
+  why: The bare $(inputs.<name>) listing makes the entry, which the command reads.
+  tools:
+    write_source: *tool_write_source
+    stage_own_basename: {requirements: {InitialWorkDirRequirement: {listing: [$(inputs.source)]}}, baseCommand: cat,
+      inputs: {source: {type: File, inputBinding: {position: 1}}}, stdout: out.txt, outputs: {result: {type: File,
+      outputBinding: {glob: out.txt}}}}
+  steps: |
+    - id: write_source
+      in: {message: !ii own basename staging}
+    - id: stage_own_basename
+  outputs: {write_source~result: {class: File, basename: lines.txt, contents: "own basename staging\n"},
+    stage_own_basename~result: {class: File, basename: out.txt, contents: "own basename staging\n"}}
+- id: iwdr_rename
+  why: A literal entryname stages the file under the name the command hard-codes.
+  tools:
+    write_source: {baseCommand: echo, inputs: {message: {type: string, inputBinding: {position: 1}}},
+      stdout: original_name.txt, outputs: {result: {type: File, outputBinding: {glob: original_name.txt}}}}
+    stage_and_read: {requirements: {InitialWorkDirRequirement: {listing: [{entry: $(inputs.source),
+      entryname: renamed_by_iwdr.txt}]}}, baseCommand: cat, arguments: [renamed_by_iwdr.txt],
+      inputs: {source: {type: File}}, stdout: out.txt, outputs: {result: {type: File, outputBinding: {glob: out.txt}}}}
+  steps: |
+    - id: write_source
+      in: {message: !ii iwdr staged content}
+    - id: stage_and_read
+  outputs: {write_source~result: {class: File, basename: original_name.txt, contents: "iwdr staged content\n"},
+    stage_and_read~result: {class: File, basename: out.txt, contents: "iwdr staged content\n"}}
+- id: literal_dollar_and_backtick_globs
+  why: A `$` before no `(` or `{` is text, and a backtick beside a reference is text, so each glob names the file made.
+    A plain input reference can carry a pattern, so globbing stays on.
+  tools:
+    literal: {baseCommand: [touch, out$name.txt], outputs: {result: {type: File, outputBinding: {glob: out$name.txt}}}}
+    mixed: {baseCommand: touch, inputs: {name: {type: string}}, arguments: ['`$(inputs.name).txt'],
+      outputs: {result: {type: File, outputBinding: {glob: '`$(inputs.name).txt'}}}}
+  steps: |
+    - id: literal
+    - id: mixed
+      in: {name: !ii report}
+  rendered: {contains: ['path ''out$name.txt'', emit: result', 'path "`${name}.txt", arity: ''1'', emit: result']}
+  outputs: {literal~result: {class: File, basename: out$name.txt, contents: ''}, mixed~result: {class: File,
+    basename: '`report.txt', contents: ''}}
+- id: nested_workflow
+  why: A one-level subworkflow runs the copy its inlined form declares, of the message written outside it.
+  tools:
+    write_source: {baseCommand: echo, inputs: {message: {type: string, inputBinding: {position: 1}}},
+      stdout: message.txt, outputs: {result: {type: File, outputBinding: {glob: message.txt}}}}
+    copy_file: *tool_copy_file
+  steps: |
+    - id: write_source
+      in: {message: !ii nested composition}
+      out: [result: !& written]
+    - id: child.wic
+      in: {source: !* written}
+  children:
+    child: |
+      inputs: {source: {type: File}}
+      steps:
+      - id: copy_file
+        in: {source: source}
+  outputs: {write_source~result: {class: File, basename: message.txt, contents: "nested composition\n"},
+    child~copy_file~result: {class: File, basename: copy.txt, contents: "nested composition\n"}}
+- id: optional_output-absent
+  why: &why_optional_output A File? output is null for no match and the file for one; more fail the run, as in CWL.
+  tools: {maybe: {baseCommand: 'true', outputs: {o: {type: 'File?', outputBinding: {glob: maybe.txt}}}}}
+  outputs: {maybe~o: null}
+- id: optional_output-pattern-none
+  why: *why_optional_output
+  tools: {maybe: {baseCommand: [touch, unmatched.txt], outputs: {o: {type: 'File?', outputBinding: {glob: '*.log'}}}}}
+  outputs: {maybe~o: null}
+- id: optional_output-pattern-one
+  why: *why_optional_output
+  tools: {maybe: {baseCommand: [touch, unmatched.txt, a.log], outputs: {o: {type: 'File?',
+    outputBinding: {glob: '*.log'}}}}}
+  outputs: {maybe~o: {class: File, basename: a.log, contents: ''}}
+- id: optional_output-pattern-two
+  why: *why_optional_output
+  tools: {maybe: {baseCommand: [touch, unmatched.txt, a.log, b.log], outputs: {o: {type: 'File?',
+    outputBinding: {glob: '*.log'}}}}}
+  fails: matched 2 files; it takes at most one
+- id: optional_output-present
+  why: *why_optional_output
+  tools: {maybe: {baseCommand: [touch, maybe.txt], outputs: {o: {type: 'File?', outputBinding: {glob: maybe.txt}}}}}
+  outputs: {maybe~o: {class: File, basename: maybe.txt, contents: ''}}
+- id: shell_redirect_literal
+  why: An approved shellQuote false literal reaches the shell as real redirect syntax; printf writes its one quoted
+    word.
+  tools: {shell_redirect: {requirements: {ShellCommandRequirement: {}}, baseCommand: printf, arguments: [{position: 1,
+    valueFrom: '%s'}, {position: 2, valueFrom: payload; not a separate command}, {position: 3, valueFrom: '>>',
+    shellQuote: false}, {position: 4, valueFrom: redirected.txt}], outputs: {result: {type: File,
+    outputBinding: {glob: redirected.txt}}}}}
+  outputs: {shell_redirect~result: {class: File, basename: redirected.txt, contents: payload; not a separate command}}
+- id: single_capture_literal_braces
+  why: A CWL glob has no brace expansion, so the one capture is the file named with braces.
+  tools: {write_one: {baseCommand: echo, inputs: {message: {type: string, inputBinding: {position: 1}}},
+    stdout: 'out{1,2}.txt', outputs: {result: {type: File, outputBinding: {glob: 'out{1,2}.txt',
+    outputEval: '$(self[0])'}}}}}
+  steps: |
+    - id: write_one
+      in: {message: !ii one match only}
+  outputs: {write_one~result: {class: File, basename: 'out{1,2}.txt', contents: "one match only\n"}}
+- id: single_capture_missing_fails
+  why: Zero matches of a declared single output fail the run, naming the glob, never an empty channel.
+  tools: {write_nothing: {baseCommand: 'true', inputs: {message: {type: string, inputBinding: {position: 1}}},
+    outputs: {result: {type: File, outputBinding: {glob: out.txt, outputEval: '$(self[0])'}}}}}
+  steps: |
+    - id: write_nothing
+      in: {message: !ii nothing is written}
+  fails: out.txt
+- id: stdout_of_every_shell_command
+  why: CWL redirects stdout for the whole shell command, not its last part, so both echoes land in out.txt.
+  tools: {two_commands: {requirements: {ShellCommandRequirement: {}}, baseCommand: echo, arguments: [{position: 1,
+    valueFrom: first}, {position: 2, valueFrom: ;, shellQuote: false}, {position: 3, valueFrom: echo}, {position: 4,
+    valueFrom: second}], stdout: out.txt, outputs: {result: {type: File, outputBinding: {glob: out.txt}}}}}
+  outputs: {two_commands~result: {class: File, basename: out.txt, contents: "first\nsecond\n"}}
+- id: wildcard_output-one
+  why: A scalar File output whose glob matches one file is that file; the tool declares its input in `T[]` shorthand.
+  tools: &tools_wildcard_output {make: {baseCommand: touch, inputs: {names: {type: 'string[]',
+    inputBinding: {position: 1}}}, outputs: {result: {type: File, outputBinding: {glob: '*.txt'}}}}}
+  steps: |
+    - id: make
+      in: {names: !ii [a.txt]}
+  outputs: {make~result: {class: File, basename: a.txt, contents: ''}}
+- id: wildcard_output-several
+  why: A scalar File output whose glob matches several files fails the run, as cwltool does.
+  tools: *tools_wildcard_output
+  steps: |
+    - id: make
+      in: {names: !ii [a.txt, b.txt]}
+  fails: true
+- id: writable_out_dir_entry
+  why: 'The image-workflows plugin shape: a writable entry is a copy the tool writes into, which its own-basename glob
+    captures, and the input it was copied from is left as it was.'
+  tools: {plugin: {requirements: {InitialWorkDirRequirement: {listing: [{entry: $(inputs.outDir), writable: true}]}},
+    baseCommand: [sh, -c, printf written > "$2/result.txt", plugin], inputs: {outDir: {type: Directory,
+    inputBinding: {position: 1, prefix: --outDir}}}, outputs: {outDir: {type: Directory,
+    outputBinding: {glob: $(inputs.outDir.basename)}}}}}
+  steps: |
+    - id: plugin
+      in: {outDir: !ii plugin_out}
+  files: {plugin_out/keep.txt: "kept\n"}
+  outputs: {plugin~outDir: {class: Directory, basename: plugin_out, link: false, contents: {keep.txt: "kept\n",
+    result.txt: written}}}

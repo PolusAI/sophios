@@ -47,10 +47,8 @@ def _rich_tool(default: str = "hello") -> CommandLineTool:
         settings=Input(settings_type).load_listing("shallow_listing"),
         message=Input(cwl.string, default=default),
     )
-    outputs = Outputs(sam=Output.stdout())
-
     return (
-        CommandLineTool("aligner", inputs, outputs)
+        CommandLineTool("aligner", inputs, Outputs(sam=Output.stdout()))
         .label("Align reads")
         .doc(["Toy CLT", "for serialization coverage"])
         .namespace("edam")
@@ -201,6 +199,12 @@ def test_tool_builder_covers_common_clt_surface() -> None:
     assert hints["WorkReuse"] == {"enableReuse": False}
 
 
+def _custom_tool() -> CommandLineTool:
+    """A small tool for the raw-extension tests."""
+    return CommandLineTool("custom-tool", Inputs(message=Input(cwl.string)),
+                           Outputs(out=Output(cwl.file, glob="out.txt")))
+
+
 @pytest.mark.fast
 def test_tool_builder_accepts_raw_extensions() -> None:
     """Unmodelled CWL can be injected, and says so when it is.
@@ -208,17 +212,9 @@ def test_tool_builder_accepts_raw_extensions() -> None:
     `extra` is the escape hatch for vendor keys the builder does not model. It
     warns because content that bypasses the builder also bypasses its checks.
     """
-    tool = CommandLineTool(
-        "custom-tool",
-        Inputs(message=Input(cwl.string)),
-        Outputs(out=Output(cwl.file, glob="out.txt")),
-    )
-
     with pytest.warns(UserWarning, match="raw CWL injection"):
-        rendered = tool.time_limit(60).extra(
-            sbol_intent="example:custom",
-            customExtension={"enabled": True},
-        ).to_cwl_document()
+        rendered = _custom_tool().time_limit(60).extra(
+            sbol_intent="example:custom", customExtension={"enabled": True}).to_cwl_document()
 
     assert _by_class(rendered["requirements"])["ToolTimeLimit"] == {"timelimit": 60}
     assert rendered["sbol_intent"] == "example:custom"
@@ -233,12 +229,7 @@ def test_tool_builder_rejects_reserved_or_salad_raw_keys() -> None:
     and a SALAD assembly key like `$import` changes how the document is loaded
     rather than what it says.
     """
-    tool = CommandLineTool(
-        "custom-tool",
-        Inputs(message=Input(cwl.string)),
-        Outputs(out=Output(cwl.file, glob="out.txt")),
-    )
-
+    tool = _custom_tool()
     with pytest.raises(ValueError, match="builder-managed keys"):
         tool.extra(inputs={"bad": "idea"})
 

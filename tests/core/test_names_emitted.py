@@ -1,9 +1,8 @@
 """Compiled CWL calls each step what its author wrote, and spells nothing of its own."""
-import copy
 import json
 import re
 from pathlib import Path
-from typing import Any, Final
+from typing import Any, Final, cast
 
 import pytest
 import yaml
@@ -15,15 +14,13 @@ from sophios.compiler import compile_source
 from sophios.input_output import write_artifacts_to_disk
 from sophios.ir.artifacts import CompilationArtifact
 from sophios.ir.frontdoor import bundle_from_disk
-from sophios.lang.diagnostics import SophiosError
-from sophios.lang.error_codes import SophiosErrorCode
-from sophios.wic_types import StepId, Tool, Yaml
+from sophios.wic_types import Yaml
 
 from . import ast_strategies as strat
 from .budgets import budget
 from .hermetic import compile_hermetic, subworkflow_step
 from .strategies import pinned
-from .synthetic_tools import SYNTHETIC_NS, SYNTHETIC_TOOLS, clt, inputs_of
+from .synthetic_tools import SYNTHETIC_TOOLS, clt, inputs_of, registered
 
 
 def _steps(cwl: dict) -> list[str]:
@@ -42,20 +39,15 @@ def _nested() -> CompilationArtifact:
 
 @pytest.mark.fast
 def test_a_step_is_called_by_its_id_and_a_call_without_its_wic() -> None:
-    """No workflow prefix, no position, no `.wic`: `child.wic` runs as `child`, from `root~child.cwl`."""
+    """No workflow prefix, no position, no `.wic`: `child.wic` runs as `child`, from `root~child.cwl`. A lifted input
+    and a promoted output are `<step>~<port>`, nested once per call."""
     root = _nested()
     child, = (artifact for artifact in root.children if artifact.graph is not None)
     assert _steps(root.cwl) == ['child', 'count']
     assert root.cwl['steps'][0]['run'] == 'root~child.cwl'
     assert (child.namespace, child.name) == (('child',), 'root~child')
-
-
-@pytest.mark.fast
-def test_a_generated_name_joins_its_step_and_port_with_a_tilde() -> None:
-    """A lifted input and a promoted output are `<step>~<port>`, nested once per call."""
-    root = _nested().cwl
-    assert 'child~mk_file~name' in root['inputs']
-    assert root['outputs']['child~mk_file~file']['outputSource'] == 'child/mk_file~file'
+    assert 'child~mk_file~name' in root.cwl['inputs']
+    assert root.cwl['outputs']['child~mk_file~file']['outputSource'] == 'child/mk_file~file'
 
 
 @pytest.mark.fast
@@ -89,16 +81,9 @@ def test_a_step_is_numbered_exactly_when_another_id_has_its_name(
 
 
 def _clashes() -> CompilationArtifact:
-    """`greeting`, with every clash a document's names can have.
-
-    Two calls to `child.wic` and a step `child`; a step named like the input `echo`; `Touch` beside
-    `touch`; `xform` twice; an authored input spelled like the name the compiler makes for `mk_file`'s
-    `name` in the old spelling; a tool port `a~b`; and in `child`, an input and an output both `file`
-    and a call to `inner.wic`, which `flatten_subworkflows` dissolves into `child@1~inner~mk_file`.
-    """
-    tools = copy.deepcopy(SYNTHETIC_TOOLS)
-    tools[StepId('probe', SYNTHETIC_NS)] = Tool(
-        '/synthetic/probe.cwl', clt({'a~b': {'type': 'string', 'inputBinding': {'position': 1}}}, {}))
+    """`greeting`, with every clash a document's names can have: repeated calls and steps, case, an authored input
+    spelled like a generated name, an `a~b` port, and an inner call that `flatten_subworkflows` dissolves."""
+    tools = registered({'probe': clt({'a~b': {'type': 'string', 'inputBinding': {'position': 1}}}, {})})
     child = {'inputs': {'file': {'type': 'File'}}, 'outputs': {'file': {'outputSource': 'xform/file'}},
              'steps': [subworkflow_step('inner.wic', {'steps': [{'id': 'mk_file'}]}),
                        {'id': 'xform', 'in': {'file': 'file'}}]}
@@ -157,15 +142,6 @@ def test_an_id_that_looks_generated_is_just_an_id() -> None:
     assert cwl['outputs']['f']['outputSource'] == 'root__step__1__mk_file/file'
 
 
-@pytest.mark.fast
-def test_the_old_generated_spelling_of_a_step_names_nothing() -> None:
-    """`<workflow>__step__<n>__<id>` used to be read as step n; now it is an unknown name like any other."""
-    with pytest.raises(SophiosError) as raised:
-        compile_hermetic({'steps': [{'id': 'mk_file'}],
-                          'outputs': {'f': {'outputSource': 'root__step__1__mk_file/file'}}}, 'root')
-    assert [diagnostic.code for diagnostic in raised.value.diagnostics] == [SophiosErrorCode.UNTYPED_OUTPUT]
-
-
 def _tool(path: Path, command: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(f'cwlVersion: v1.2\nclass: CommandLineTool\nbaseCommand: {command}\n'
@@ -182,8 +158,7 @@ def _runs(written: Path) -> list[str]:
 
 
 def _command(written: Path) -> str:
-    command: str = yaml.safe_load(written.read_text(encoding='utf-8'))['baseCommand']
-    return command
+    return cast(str, yaml.safe_load(written.read_text(encoding='utf-8'))['baseCommand'])
 
 
 @pytest.mark.fast

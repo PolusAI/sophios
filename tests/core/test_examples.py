@@ -34,30 +34,22 @@ from sophios.ir.types import WorkflowGraph
 from sophios.wic_types import Json
 
 # pylint: disable-next=unused-import  # `corpus_registry` is a pytest fixture
-from .test_setup import CorpusRegistry, corpus_registry, workflow_paths, yml_path_is_workflow
+from .test_setup import CorpusRegistry, corpus_registry, workflow_paths
 from .cwl_validation import validate_cwl
 from .equivalence import Strength, equivalent, flatten_model
 from .test_metadata_emitted import DECLARATIONS, declared_beneath
 
 yml_paths = workflow_paths()
 
-# Look in each directory of search_paths_wic tag in global_config.json
-# for separate config_ci.json files and combine them.
+# Each directory of search_paths_wic may hold a config_ci.json; their lists concatenate. `//` lines are comments,
+# which JSON has none of.
 config_ci: Json = {}
 global_config = sophios.input_output.get_config(get_args().config_file, Path(get_args().homedir))
-search_paths_wic_tag = global_config['search_paths_wic']
-for _yml_namespaces in search_paths_wic_tag:
-    yml_dirs = search_paths_wic_tag[_yml_namespaces]
-    for yml_dir in yml_dirs:
-        config_ci_json = Path(yml_dir) / 'config_ci.json'
-        if config_ci_json.exists():
-            with open(config_ci_json, encoding='utf-8') as f:
-                contents = f.read().splitlines()
-                # Strip out comments. (Comments are not allowed in JSON)
-                contents = [line for line in contents if not line.strip().startswith('//')]
-                config_ci_tmp = json.loads('\n'.join(contents))
-            # Use the Additive Strategy to e.g. concatenate lists
-            config_ci = merge(config_ci, config_ci_tmp, strategy=Strategy.TYPESAFE_ADDITIVE)
+for yml_dir in (directory for directories in global_config['search_paths_wic'].values() for directory in directories):
+    if (config_ci_json := Path(yml_dir) / 'config_ci.json').exists():
+        lines = config_ci_json.read_text(encoding='utf-8').splitlines()
+        config_ci = merge(config_ci, json.loads('\n'.join(line for line in lines if not line.strip().startswith('//'))),
+                          strategy=Strategy.TYPESAFE_ADDITIVE)
 
 # Each stops with an error on purpose, which the page showing it explains, so no lane compiles or runs it.
 refused: list[str] = config_ci.get("refused", [])
@@ -71,11 +63,8 @@ large_workflows: list[str] = config_ci.get("large_workflows", [])
 
 
 def _is_workflow_document(yml_path: Path) -> bool:
-    """Whether the file has steps or a `wic: implementations:` block, as `parse` reads it.
-
-    `parse` rather than `read_wic`: an includer fragment carries diagnostics
-    and is still a workflow document.
-    """
+    """Whether the file has steps or a `wic: implementations:` block, as `parse` reads it (not `read_wic`: an includer
+    fragment carries diagnostics and is still a workflow document)."""
     document = parse(yml_path.read_text(encoding='utf-8'), str(yml_path)).document
     if document is None:
         return False
@@ -84,7 +73,7 @@ def _is_workflow_document(yml_path: Path) -> bool:
 
 
 yml_paths_tuples_not_large = [(s, p) for (s, p) in yml_paths_tuples
-                              if s not in large_workflows and _is_workflow_document(p) and yml_path_is_workflow(p)]
+                              if s not in large_workflows and _is_workflow_document(p)]
 
 # Library workflows: each reads an input or an edge that a parent workflow supplies,
 # so none of them runs alone ("Missing required input parameter").
@@ -102,31 +91,20 @@ yml_paths_partial_failure = [(s, p) for (s, p) in yml_paths_tuples if s in run_p
 
 
 def is_isomorphic_with_timeout(g_m: isomorphism.GraphMatcher, yml_path_str: str) -> None:
-    """Calls the .is_isomorphic() method with a timeout of 10 seconds.
-
-    Args:
-        gm (isomorphism.GraphMatcher): The graph isomorphism object.
-        yml_path_str (str): The root yml workflow file for error reporting.
-    """
+    """`g_m.is_isomorphic()` under a 10 s alarm, naming the workflow to add to large_workflows when it times out."""
     def handler(_signum, _frame):  # type: ignore
         line1 = 'Graph isomorphism check timed out after 10 seconds.'
         line2 = f'Consider adding {yml_path_str} to the large_workflows list.'
         raise Exception(f'{line1}\n{line2}')
 
-    # See https://github.com/bokeh/bokeh/issues/11627#issuecomment-921576787
-    if sys.platform == 'win32':
-        # Windows does not support alarm, so just use a regular call here.
-        # Note that there is a backup timeout in the github action workflow
-        assert g_m.is_isomorphic()  # See top-level comment above!
+    if sys.platform == 'win32':   # No SIGALRM on Windows: a plain call; the CI job has its own timeout.
+        assert g_m.is_isomorphic()
     else:
-        # See https://docs.python.org/3/library/signal.html#examples
-        # NOTE: You CANNOT use `pytest --workers 8 ...` with this. Otherwise:
-        # "ValueError: signal only works in main thread of the main interpreter"
+        # SIGALRM works only in the main thread, so not under --workers.
         signal.signal(signal.SIGALRM, handler)
-
-        signal.alarm(10)  # timeout after 10 seconds
-        assert g_m.is_isomorphic()  # See top-level comment above!
-        signal.alarm(0)  # Disable the alarm
+        signal.alarm(10)
+        assert g_m.is_isomorphic()
+        signal.alarm(0)
 
 
 def _artifacts(root: CompilationArtifact) -> list[CompilationArtifact]:
@@ -276,16 +254,8 @@ def run_workflows(
     docker_pull_only: bool = False,
     expect_success: bool = True,
 ) -> None:
-    """Runs all of the given workflows.
-
-    `basepath` separates one lane's artifacts from another's, and one inline
-    form's from another's. The weekly job runs several of these steps in
-    sequence in one working directory, and an
-    artifact is named for the workflow rather than for how it was compiled --
-    inlining changes where a child is written, not which workflow this is --
-    so two steps would otherwise write one path and only the last would
-    survive for anyone reading the directory afterwards.
-    """
+    """Compile, prepare and run one corpus workflow; `basepath` keeps each lane's and inline form's artifacts apart,
+    since an artifact is named for its workflow and the weekly job runs several steps in one directory."""
     Path(basepath).mkdir(parents=True, exist_ok=True)
     compilation = _compiled_for_run(yml_path, args, registry)
     if args.partial_failure_enable:
@@ -305,26 +275,17 @@ def run_workflows(
     # NOTE: Do not use --cachedir; we want to actually test everything.
     retval = sophios.run_local.run(backends.RunRequest(prepared.artifact.name, Path(basepath), runner=cwl_runner,
                                                        container_engine=args.container_engine))
-    if expect_success:
-        assert retval == 0
-    else:
-        assert retval != 0
+    assert (retval == 0) is expect_success, retval
 
 
 def _discover(yml_paths: dict[str, dict[str, Path]], stem: str) -> Path | None:
     """The file a discovered workflow stem names, in whichever namespace holds it."""
-    for paths in yml_paths.values():
-        if stem in paths:
-            return paths[stem]
-    return None
+    return next((paths[stem] for paths in yml_paths.values() if stem in paths), None)
 
 
 def _is_includer_fragment(error: SophiosError) -> bool:
-    """Whether a document failed only for edges an includer would supply.
-
-    Such a document has no standalone compilation, so comparing one against
-    an embedded one compares nothing.
-    """
+    """Whether a document failed only for edges an includer would supply: it has no standalone compilation, so
+    comparing it against an embedded one compares nothing."""
     return bool(error.diagnostics) and all(
         item.code is SophiosErrorCode.UNDEFINED_EDGE for item in error.diagnostics)
 
@@ -589,14 +550,9 @@ def test_embedding_keeps_meaning(yml_path_str: str, yml_path: Path,
 
 
 def _kept_calls(artifact: CompilationArtifact) -> list[str]:
-    """The ids of the steps anywhere in the tree that run a workflow and carry more than `in` and `out`,
-    or run one that says `wic: inlineable: false`.
-
-    Decided here from the nested document, not read back from the code under
-    test: these are the calls `--cwl_inline_subworkflows` is expected to leave
-    nested. (No corpus workflow is compiled with `--partial_failure_enable`,
-    which would keep every call nested with its `when`.)
-    """
+    """The ids of the steps anywhere in the tree that run a workflow and carry more than `in` and `out`, or say
+    `wic: inlineable: false`: the calls `--cwl_inline_subworkflows` should leave nested, decided from the document and
+    not read back from the code under test. (No corpus workflow uses `--partial_failure_enable`, which keeps all.)"""
     return [step['id'] for document in _artifacts(artifact)
             for step, child in zip(document.cwl.get('steps', []), document.children)
             if child.cwl.get('class') == 'Workflow'

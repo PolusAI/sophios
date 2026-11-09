@@ -1,15 +1,5 @@
-"""The completed typed pipeline, end to end.
-
-The end-to-end property composes the independently tested phases over the full
-generator and uses the established equivalence relation. ``UP_TO_EMBEDDING``
-is the compatibility contract: generated paths may move, while workflow
-structure, ports, types, bindings, requirements, and opaque payloads may not.
-
-Nothing here asserts that a retired name has stayed retired. Those scans were
-removed deliberately: a symbol that no longer exists cannot come back by
-accident, so such a check restates its own deletion and fails only when someone
-retypes the name on purpose -- which review catches and a test does not.
-"""
+"""The completed typed pipeline, end to end: the independently tested phases composed over the full generator and
+compared by ``UP_TO_EMBEDDING``. No test checks a retired name stays retired: such a scan only restates its deletion."""
 import copy
 from typing import Any
 

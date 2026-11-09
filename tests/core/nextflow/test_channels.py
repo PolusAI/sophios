@@ -1,8 +1,4 @@
-"""Channels and pipeline safety under installed, pinned Nextflow.
-
-design_docs/sophios_nextflow_backend.md §5.2 and §6, Inputs and channels and
-Topology; §7 for the stub every process carries.
-"""
+"""Channels and pipeline safety under installed, pinned Nextflow (design §5.2, §6, §7 the stub)."""
 
 # pylint: disable=missing-function-docstring
 
@@ -20,12 +16,11 @@ from sophios.api.python._workflow_runtime import compile_workflow_result
 from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
 from sophios.api.python.workflow import Step, Workflow
 from sophios.input_output_nf import NF_INPUT_FUNCTION, NF_PARSER_MESSAGE, NF_STUB_MESSAGE, write_nextflow_artifacts
-from sophios.nf_types import (
-    NF_INPUT_HELPER, ExecutableNextflowWorkflow, NfWorkflowInputConnection, NfWorkflowOutputConnection,
-)
+from sophios.nf_types import NF_INPUT_HELPER, ExecutableNextflowWorkflow, NfWorkflowInputConnection
 from sophios.utils_nf import compilation_result_source, compiled_source_to_nextflow
 
-from .testkit import execute_nextflow, flag_workflow, runtime_workflow
+from ..helpers import write_tree
+from .testkit import execute_nextflow, flag_workflow, run_observed, runtime_workflow
 
 
 def _lower(flow: Workflow, params: dict[str, Any] | None = None) -> ExecutableNextflowWorkflow:
@@ -37,29 +32,9 @@ def _lower(flow: Workflow, params: dict[str, Any] | None = None) -> ExecutableNe
 def _run(
     flow: Workflow | ExecutableNextflowWorkflow, directory: Path, *arguments: str, params: dict[str, Any] | None = None
 ) -> tuple["subprocess.CompletedProcess[str]", dict[str, list[str]]]:
-    """Lower ``flow`` with ``params`` as its workflow input values, run it, and read each workflow output.
-
-    Each output is the text of every value it emits, a file's contents for a path.
-    """
+    """Lower `flow` with `params` as its workflow input values, run it, and read each workflow output (run_observed)."""
     workflow = flow if isinstance(flow, ExecutableNextflowWorkflow) else _lower(flow, params)
-    write_nextflow_artifacts(workflow, directory)
-    script = directory / "workflow.nf"
-    emits = [
-        connection.to_port for connection in workflow.connections if isinstance(connection, NfWorkflowOutputConnection)
-    ]
-    sinks = "".join(
-        f"\n    {workflow.name}.out.{emit}.toList().subscribe {{ list -> new File('{emit}.sink').text = "
-        f"list.collect {{ it instanceof java.nio.file.Path ? it.text : it.toString() }}.join('\\u0001') }}\n"
-        for emit in emits
-    )
-    script.write_text(script.read_text(encoding="utf-8")[:-2] + sinks + "}\n", encoding="utf-8")
-    result = execute_nextflow(directory, *arguments)
-    observed = {
-        emit: (directory / f"{emit}.sink").read_text(encoding="utf-8").split("\x01")
-        for emit in emits
-        if (directory / f"{emit}.sink").exists()
-    }
-    return result, observed
+    return run_observed(workflow, directory, *arguments)
 
 
 @pytest.mark.nextflow
@@ -185,8 +160,7 @@ workflow {{
         f"[{value if isinstance(value, _JsonNumber) else json.dumps(value)}, {json.dumps(declared)}]"
         for value, declared, _ in _ENTRY_CASES
     )
-    (tmp_path / "nextflow_params.json").write_text(f'{{"cases": [{cases}]}}', encoding="utf-8")
-    (tmp_path / "nextflow.config").write_text("", encoding="utf-8")
+    write_tree(tmp_path, {"nextflow_params.json": f'{{"cases": [{cases}]}}', "nextflow.config": ""})
     result = execute_nextflow(tmp_path)
     assert result.returncode == 0, result.stdout + result.stderr
     checked = json.loads((tmp_path / "checked.json").read_text(encoding="utf-8"))

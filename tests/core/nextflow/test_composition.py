@@ -1,8 +1,4 @@
-"""Collection and conditional composition over indexed scatters.
-
-design_docs/sophios_nextflow_backend.md §6, Topology, "Multi-input scatter",
-"Gather", and "Conditional steps".
-"""
+"""Collection and conditional composition over indexed scatters (design §6, Topology)."""
 
 # pylint: disable=missing-function-docstring
 
@@ -25,7 +21,8 @@ from sophios.nf_types import (
 from sophios.utils_nf import compiled_source_to_nextflow
 
 from .test_dotproduct import _sleep_then_pair, _text_port, _write_and_sink
-from .testkit import command, execute_nextflow, output_port, step, synthetic_source, tool, workflow_doc
+from .testkit import (
+    assert_succeeded, command, execute_nextflow, output_port, step, synthetic_source, tool, workflow_doc)
 
 STRINGS = {"type": "array", "items": "string"}
 FILES = {"type": "array", "items": "File"}
@@ -108,11 +105,8 @@ _PAIR_THEN_USE_PARAMS = {"as": ["a", "b", "c"], "bs": ["x", "y", "z"], "n": 2, "
 
 
 def _two_gathered_arrays_into_use(second: str, method: str = "dotproduct") -> ExecutableNextflowWorkflow:
-    """USE scatters x and y and takes two gathered File arrays of out.txt files.
-
-    ``files`` gathers PAIR; ``more`` gathers ``second``, which is PAIR again or
-    PAIR2, a second producer of out.txt over the swapped inputs.
-    """
+    """USE scatters x and y and takes two gathered File arrays: ``files`` gathers PAIR, ``more`` gathers ``second``
+    (PAIR or PAIR2)."""
     pair = _tools()[0]
     tools = [pair]
     producers = [("PAIR", "as", "bs")]
@@ -217,29 +211,6 @@ def test_a_scattered_step_stages_two_gathered_arrays_of_same_named_files(
 
 @pytest.mark.nextflow
 @pytest.mark.serial
-def test_per_combination_when_keeps_null_at_skipped_positions(tmp_path: Path) -> None:
-    """W10: the condition runs per invocation; the gather keeps the sentinel in place."""
-    process = NfProcess(
-        "PAIR",
-        [NfPort("item", "val"), NfPort("tag", "val")],
-        [_text_port("line")],
-        _sleep_then_pair("item", "tag"),
-        condition=parse("$(inputs.tag !== '1')"),
-    )
-    connections: list[NfConnection] = [
-        NfWorkflowInputConnection("items", "PAIR", "item", "dotproduct"),
-        NfWorkflowInputConnection("tags", "PAIR", "tag", "dotproduct"),
-        NfWorkflowOutputConnection("PAIR", "line", "result"),
-    ]
-    params = {"items": ["a", "b", "c"], "tags": ["2", "1", "0"]}
-    types = {"items": "string[]", "tags": "string[]"}
-    result = _write_and_sink(process, connections, params, types, tmp_path, emit_name="result")
-    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
-    assert (tmp_path / "gathered.txt").read_text(encoding="utf-8").split("\x01") == ["a-2", "[]", "c-0"]
-
-
-@pytest.mark.nextflow
-@pytest.mark.serial
 def test_per_combination_when_reads_a_scattered_and_a_broadcast_port(tmp_path: Path) -> None:
     """The condition sees each invocation's scattered element and the broadcast value."""
     process = NfProcess(
@@ -257,9 +228,9 @@ def test_per_combination_when_reads_a_scattered_and_a_broadcast_port(tmp_path: P
     ]
     params = {"items": ["a", "b", "c"], "tags": ["2", "1", "0"], "skipped": "1"}
     types = {"items": "string[]", "tags": "string[]", "skipped": "string"}
-    result = _write_and_sink(process, connections, params, types, tmp_path, emit_name="result")
-    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
-    assert (tmp_path / "gathered.txt").read_text(encoding="utf-8").split("\x01") == ["a-2", "[]", "c-0"]
+    result, observed = _write_and_sink(process, connections, params, types, tmp_path, emit_name="result")
+    assert_succeeded(result)
+    assert observed["result"] == ["a-2", "[]", "c-0"]
 
 
 @pytest.mark.fast

@@ -1,0 +1,96 @@
+# Edges across a call: cases.yaml's shape plus `tools` (stem -> {inputs, outputs}, added to the synthetic tools),
+# and `port`, the port its one diagnostic's locator names.
+# A step with a `subtree` is a call: `parentargs` are its own keys, the subtree its document. Expectations are
+# derived by hand from docs/wic-reference.md section 4 (Edges), never filled from a run.
+- id: call-after-definition
+  why: "'A child may consume what its includer has already defined': legal across a call as flat."
+  codes: []
+  sources: [[1, mk_file~name, string_source/value]]
+  tools: &string_source {string_source: {outputs: {value: {type: string}}}}
+  steps:
+  - &string_source_step {id: string_source, out: [{value: {wic_anchor: shared}}]}
+  - &consumer_call {id: child.wic, subtree: {steps: [{id: mk_file, in: {name: {wic_alias: shared}}}]}}
+- id: call-before-definition
+  why: "A call does not exempt a reference from document order: wic025 flat, so wic025 once split into a subworkflow."
+  codes: [wic025]
+  tools: *string_source
+  steps: [*consumer_call, *string_source_step]
+- id: call-obligation-without-producer
+  why: "An obligation no scope defines is an undefined edge, not silently promoted to an input."
+  codes: [wic025]
+  steps: [{id: child.wic, subtree: {steps: [{id: mk_file, in: {name: {wic_alias: nowhere}}}]}}]
+- id: unrelated-ancestor-scatter
+  why: "outer.wic defines and consumes the edge; root scatters it over `gate`, which the edge never touches, so that
+    rank belongs to neither side and a string stays a string."
+  codes: []
+  tools: *string_source
+  steps:
+  - id: outer.wic
+    parentargs: {scatter: [gate], in: {gate: {wic_inline_input: [a, b]}}}
+    subtree: {inputs: {gate: {type: string}}, steps: [*string_source_step, *consumer_call]}
+- id: consuming-scatter
+  why: "A scattered scalar input consumes an array, so a scalar source is disjoint from it."
+  codes: [wic023]
+  tools: *string_source
+  steps:
+  - *string_source_step
+  - {id: child.wic, subtree: {steps: [{id: mk_file, in: {name: {wic_alias: shared}}, scatter: name}]}}
+- id: producing-scatter
+  why: "A scattered producer yields an array, which cannot feed a scalar sink."
+  codes: [wic023]
+  steps:
+  - {id: mk_file, in: {name: {wic_inline_input: [a, b]}}, scatter: name, out: [{file: {wic_anchor: files}}]}
+  - {id: count, in: {file: {wic_alias: files}}}
+- id: edge-inside-scattered-call
+  why: "An edge wholly inside a subworkflow is judged in its scope: the caller's scatter over `gate` lies between the
+    call and its ports, not between two internal steps, so File is not disjoint from File."
+  codes: []
+  tools: &file_pair {mk_a: {outputs: {value: {type: File}}}, mk_b: {inputs: {value: {type: File}}}}
+  steps:
+  - id: child.wic
+    parentargs: {scatter: [gate], in: {gate: {wic_inline_input: [a, b]}}}
+    subtree:
+      inputs: {gate: {type: string}}
+      steps: [{id: mk_a, out: [{value: {wic_anchor: shared}}]}, {id: mk_b, in: {value: {wic_alias: shared}}}]
+- id: scatter-over-callee-internal-name
+  why: "A caller scatters only over what its callee declares; mk_b~value is the compiler's spelling of an inner input."
+  codes: [wic032]
+  says: "declares in `inputs:`"
+  tools: *file_pair
+  steps:
+  - {id: mk_a, out: [{value: {wic_anchor: shared}}]}
+  - id: child.wic
+    parentargs: {scatter: [mk_b~value]}
+    subtree: {steps: [{id: mk_b, in: {value: {wic_alias: shared}}}]}
+- id: scatter-over-unbound-callee-input
+  why: "The callee declares an optional input and threads it on; scattering it without binding it names it as
+    `scatter:` spells it."
+  codes: [wic032]
+  says: "scatters over 'x', but nothing binds it"
+  port: x
+  tools: {opt_in: {inputs: {x: {type: "string?"}}}}
+  steps:
+  - id: child.wic
+    parentargs: {scatter: [x]}
+    subtree: {inputs: {x: "string?"}, steps: [{id: opt_in, in: {x: x}}]}
+- id: undeclared-call-argument
+  why: "Authored call keys cannot widen the callee's interface: binding `ghost` is an undeclared port."
+  codes: [wic028]
+  steps:
+  - id: child.wic
+    parentargs: {in: {ghost: {wic_inline_input: x}}}
+    subtree: {inputs: {name: {type: string}}, steps: [{id: mk_file, in: {name: name}}]}
+- id: record-passes-disjoint-source
+  why: "A record handing its one source on unchanged is judged as a bare reference is: int into string."
+  codes: [wic023]
+  tools: &int_source {int_source: {outputs: {value: {type: int}}}}
+  steps:
+  - &int_source_v {id: int_source, out: [{value: {wic_anchor: v}}]}
+  - {id: mk_file, in: {name: {wic_raw_cwl: {source: {wic_alias: v}}}}}
+- id: record-transforms-source
+  why: "valueFrom makes the value the step receives, so the source's type is not the input's."
+  codes: []
+  tools: *int_source
+  steps:
+  - *int_source_v
+  - {id: mk_file, in: {name: {wic_raw_cwl: {source: {wic_alias: v}, valueFrom: $(String(self))}}}}

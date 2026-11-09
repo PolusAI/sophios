@@ -1,22 +1,16 @@
-"""An edge reference names a definition, and a name is defined once.
-
-Both were enforced already, as bare `ValueError`s a caller could not match on,
-suppress, or tell from a bug. They carry codes now.
-
-Everything here compiles through `compile_production`, which is `testing=False`.
-`compile_hermetic` passes `testing=True`, and that branch absorbs an undefined
-edge into a workflow input, so these diagnostics are unreachable through it.
-"""
+"""An edge reference names a definition, and a name is defined once; each fault carries a code.
+Compiles through `compile_production` (`testing=False`): `compile_hermetic` absorbs an undefined edge into an input."""
 import pytest
 from hypothesis import given, strategies as st
 
 from sophios.lang.diagnostics import Diagnostic, SophiosError
-from sophios.wic_types import Yaml
+from sophios.wic_types import Tools, Yaml
 
 from .budgets import budget
 from .cases import cases
 from .hermetic import compile_production
 from .strategies import pinned
+from .synthetic_tools import clt, registered
 
 
 def _step(kind: str, name: str | None) -> Yaml:
@@ -57,17 +51,24 @@ def _documents(draw: st.DrawFn) -> Yaml:
     return {'steps': [_step(*step) for step in steps], 'codes': codes, 'says': says}
 
 
+def _with_tools(specs: Yaml) -> Tools:
+    """The synthetic tools and a case's own, each a tool spec; an unknown key of a spec still raises."""
+    return registered({stem: clt(**{'inputs': {}, 'outputs': {}, **spec}) for stem, spec in specs.items()})
+
+
 @pytest.mark.fast
 @budget(50)
 @given(_documents())
-@pinned(*(case.values[0] for case in cases('edge-binding', 'steps', 'codes', 'says', 'sources')))
+@pinned(*(case.values[0] for case in cases('edge-binding', 'steps', 'codes', 'says', 'sources', 'tools', 'port')))
 def test_an_edge_reference_names_one_earlier_definition(case: Yaml) -> None:
-    """Each case of data/edge-binding, and generated ones: the codes it raises, each message holding `says`; and,
-    when it compiles, the source of each reference in the root is the port that defines its edge, and of each input
-    `sources` names, as [step index, input, source]."""
+    """Each case of data/edge-binding, and generated ones: the codes it raises, each message holding `says`, and
+    given `port` its one diagnostic placed at that port; and, when it compiles, the source of each reference in the
+    root is the port that defines its edge, and of each input `sources` names, as [step index, input, source]. A
+    case's `tools` are added to the synthetic ones."""
+    tools = _with_tools(case.get('tools', {}))
     raised: list[Diagnostic] = []
     try:
-        compiled = compile_production({'steps': case['steps']}, 'root').artifact.cwl
+        compiled = compile_production({'steps': case['steps']}, 'root', tools=tools).artifact.cwl
     except SophiosError as error:
         raised = list(error.diagnostics)
     else:
@@ -79,3 +80,5 @@ def test_an_edge_reference_names_one_earlier_definition(case: Yaml) -> None:
             assert compiled['steps'][index]['in'][key]['source'] == source
     assert [found.code.value for found in raised] == case['codes']
     assert all(case.get('says', '') in found.message for found in raised)
+    if 'port' in case:
+        assert [found.locator and found.locator.port for found in raised] == [case['port']]

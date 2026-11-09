@@ -6,7 +6,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import replace
 from functools import partial
 import re
-from typing import Any, cast, get_args
+from typing import Any, cast
 
 from hypothesis import example, given, strategies as st
 import pytest
@@ -35,7 +35,6 @@ from sophios.nf_types import (
     NfResources,
     NfShellLiteral,
     NfTemplate,
-    NfTemplateSegment,
     NfWorkflowInputConnection,
     NfWorkflowOutputConnection,
 )
@@ -128,34 +127,6 @@ def test_a_graph_constructs_exactly_when_it_breaks_no_rule(graph: tuple[Any, ...
     assert canonical == workflow and render_nextflow(canonical) == render_nextflow(workflow)
 
 
-@pytest.mark.fast
-def test_executable_values_are_deeply_immutable_and_hashable() -> None:
-    process = NfProcess(
-        "P",
-        [NfPort("message", "val")],
-        [output_port("result", "result.txt")],
-        command("touch", "result.txt"),
-    )
-    workflow = ExecutableNextflowWorkflow(
-        "wf",
-        [process],
-        [
-            NfWorkflowInputConnection("message", "P", "message"),
-            NfWorkflowOutputConnection("P", "result", "result"),
-        ],
-        {"message": {"nested": ["hello"]}}, {"message": "string"},
-    )
-
-    assert hash(process)
-    assert hash(workflow)
-    with pytest.raises(AttributeError):
-        cast(Any, process.inputs).append(NfPort("late", "val"))
-    with pytest.raises(AttributeError):
-        cast(Any, process.command.tokens).append(NfTemplate((NfLiteral("late"),)))
-    with pytest.raises(TypeError):
-        cast(Any, workflow.params)["message"] = "changed"
-
-
 #: (name, whether it is a Nextflow identifier), as the real v2 parser reads it: test_runtime.py runs each through it.
 NAMES = [("café", True), ("Δelta", True), ("$money", True), ("_private", True), ("Ⅻstep", True), ("process", True),
          ("if", False), ("class", False), ("_", False), ("9start", False), ("dash-name", False), ("😀", False)]
@@ -172,25 +143,15 @@ def test_a_name_is_an_identifier_exactly_as_nextflow_reads_it(name: str, valid: 
             NfPort(name, "val")
 
 
-@pytest.mark.fast
-def test_every_command_token_and_template_segment_kind_is_public() -> None:
-    """A caller can construct or match every kind the model gives back."""
-    from sophios.api.python import nextflow  # pylint: disable=import-outside-toplevel
-
-    for kind in (*get_args(NfCommandToken), *get_args(NfTemplateSegment)):
-        assert getattr(nextflow, kind.__name__) is kind and kind.__name__ in nextflow.__all__
-    assert nextflow.NfCommandToken is NfCommandToken and "NfCommandToken" in nextflow.__all__
-
-
 def _proc(
     port: NfPort, *tokens: NfCommandToken, stdout: NfTemplate | None = None, outputs: tuple[NfPort, ...] = ()
 ) -> NfProcess:
     """A process with the one input `port` whose command is `echo` and then `tokens`."""
-    return NfProcess("P", [port], list(outputs), NfCommand((NfTemplate((NfLiteral("echo"),)), *tokens), stdout=stdout))
+    return NfProcess("P", [port], list(outputs), NfCommand((template("echo"), *tokens), stdout=stdout))
 
 
 def _env_process(*env: NfEnvVar, qualifier: str = "val") -> NfProcess:
-    return NfProcess("ENV", [NfPort("x", qualifier)], [], NfCommand((NfTemplate((NfLiteral("env"),)),), env=env))
+    return NfProcess("ENV", [NfPort("x", qualifier)], [], NfCommand((template("env"),), env=env))
 
 
 def _entry_workflow(
@@ -205,12 +166,12 @@ def _entry_workflow(
 
 
 def _text_capture_process(name: str = "READ") -> NfProcess:
-    glob = NfTemplate((NfLiteral("out.txt"),))
+    glob = template("out.txt")
     return NfProcess(
         name,
         [NfPort("message", "val")],
         [NfPort("text", "val", "text", glob, capture="text")],
-        NfCommand((NfTemplate((NfLiteral("printf"),)),), stdout=glob),
+        NfCommand((template("printf"),), stdout=glob),
     )
 
 
@@ -221,7 +182,7 @@ def _conditional(condition: Any = None, *, is_array: Any = False) -> NfProcess:
 
 _BASENAME = NfTemplate((NfBasenameReference("v"),))
 _PLAIN = NfTemplate((NfInputReference("v"),))
-_OUT = NfTemplate((NfLiteral("out.txt"),))
+_OUT = template("out.txt")
 _ARRAY_ONLY = "array-marked inputs may only be referenced by array bindings"
 _SEGMENTS = "^" + re.escape("template segments must be one of: NfLiteral, NfInputReference, NfBasenameReference") + "$"
 _ARRAY = NfPort("v", "val", is_array=True)

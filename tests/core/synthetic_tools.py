@@ -1,34 +1,16 @@
-"""Tools with known signatures, owned by the suite.
-
-`get_tools_cwl` globs `search_paths_cwl`, so the tools a property sees depend
-on which plugin repositories a machine has checked out. That cannot be an
-oracle. These stems are the whole vocabulary, so a counterexample
-reproduces from this repository alone.
-
-The signatures are chosen to reach the compiler's branches rather than to model
-anything real; `_SPECS` below gives each stem's reason. They are real CWL v1.2
-and never executed — `baseCommand` is `true` — so nothing pulls a container.
-"""
-from typing import Final
+"""Tools with known signatures, owned by the suite: get_tools_cwl depends on what a machine has checked out, so a
+counterexample reproduces from this repository alone. Each stem reaches a compiler branch; none runs (`true`)."""
+from collections.abc import Mapping
+from typing import Final, cast
 
 from sophios.lang.cwl import CWL_VERSION
 from sophios.utils_cwl import desugar_into_canonical_normal_form
-from sophios.wic_types import Cwl, StepId, Tool, Tools
+from sophios.wic_types import Cwl, StepId, Tool, Tools, Yaml
 
-#: The plugin namespace tools must be registered under.
-#:
-#: `'global'`, not `'synthetic'`, and this is not a naming preference. The
-#: compiler resolves a step's tool as `StepId(stem, plugin_ns_i)` where
-#: `plugin_ns_i = wic_step_i.get('wic', {}).get('namespace', 'global')`
-#: (src/sophios/compiler.py:500-502) — so a tool registered under any other
-#: namespace is invisible unless every step declares that namespace in a `wic:`
-#: sidecar entry of its own. Verified by execution: registering under
-#: `'synthetic'` fails with "Error! Neither mk_file nor  found!".
+#: 'global', because the compiler looks a step's tool up under its `wic: namespace:`, which defaults to 'global'.
 SYNTHETIC_NS: Final = 'global'
 
-#: The URI each format prefix this suite uses expands to. `clt` declares only
-#: the prefixes a tool's own formats mention, so a builder shared by every
-#: module does not stamp `edam` onto tools that never reference it.
+#: Each format prefix's URI; `clt` declares only the prefixes a tool's formats use.
 _NAMESPACE_URIS: Final = {'edam': 'https://edamontology.org/'}
 _TXT: Final = 'edam:format_2330'
 _CSV: Final = 'edam:format_3752'
@@ -48,29 +30,8 @@ def _declared_prefixes(ports: dict[str, Cwl]) -> set[str]:
 def clt(inputs: dict[str, Cwl], outputs: dict[str, Cwl], *,
         javascript: bool = False, requirements: dict[str, Cwl] | None = None,
         canonical: bool = False) -> Cwl:
-    """One stub CommandLineTool. `true` succeeds and produces nothing, which is
-    all a compile-only registry needs.
-
-    `$namespaces` carries the prefixes this tool's own formats use, and is
-    absent when none do. Emitting a fixed `edam` instead would put it on every
-    tool in every module sharing this builder, several of which never mention a
-    format -- a difference that is invisible today, because the compiler adds
-    the namespace itself and format matching does not read it, and is exactly
-    the kind of silent fixture drift a shared builder is supposed to end.
-
-    Args:
-        inputs (dict[str, Cwl]): The tool's declared inputs.
-        outputs (dict[str, Cwl]): The tool's declared outputs.
-        javascript (bool): Add `InlineJavascriptRequirement`.
-        requirements (dict[str, Cwl] | None): Further requirements, keyed by
-            class, beside the `javascript` one.
-        canonical (bool): Return canonical normal form, which the inference and
-            explicit-edge paths read. `plugins.py` applies it when it loads a
-            tool, so only a caller building one directly has to ask.
-
-    Returns:
-        Cwl: The tool document.
-    """
+    """One stub CommandLineTool (`true` succeeds and makes nothing), `$namespaces` only for prefixes its formats use;
+    `canonical` gives the normal form plugins.py applies on load."""
     tool: Cwl = {
         'cwlVersion': CWL_VERSION,
         'class': 'CommandLineTool',
@@ -87,8 +48,7 @@ def clt(inputs: dict[str, Cwl], outputs: dict[str, Cwl], *,
     return desugar_into_canonical_normal_form(tool) if canonical else tool
 
 
-#: The named types `schemed` declares in its `SchemaDefRequirement`, by name,
-#: so a literal strategy can draw a value for a port that only names one.
+#: The named types `schemed` declares, so a literal strategy can draw a value for a port that only names one.
 SCHEMA_TYPES: Final[dict[str, Cwl]] = {
     'Coords': {'name': 'Coords', 'type': 'record',
                'fields': [{'name': 'x', 'type': 'float'}, {'name': 'y', 'type': 'float'}]},
@@ -140,8 +100,7 @@ _SPECS: Final[dict[str, Cwl]] = {
          'extras': {'type': 'File[]', 'default': [], 'inputBinding': {'position': 3}}},
         {},
     ),
-    # The one Directory input, and the one tool with several outputs (File,
-    # File and int): a step promotes each, and a scatter wraps each alike.
+    # The one Directory input, and the one tool with several outputs (File, File and int).
     'split': clt(
         {'dir': {'type': 'Directory', 'inputBinding': {'position': 1}},
          'name': {'type': 'string', 'inputBinding': {'position': 2}}},
@@ -150,8 +109,7 @@ _SPECS: Final[dict[str, Cwl]] = {
          'n': {'type': 'int', 'outputBinding': {'outputEval': '$(2)'}}},
         javascript=True,
     ),
-    # A record input and an enum input: the two structured types a tool
-    # author writes most, and the two no generator could draw.
+    # A record input and an enum input: the two structured types no generator could draw.
     'typed': clt(
         {'pair': {'type': {'type': 'record', 'name': 'pair',
                            'fields': [{'name': 'left', 'type': 'string'}, {'name': 'right', 'type': 'int'}]},
@@ -177,9 +135,8 @@ _SPECS: Final[dict[str, Cwl]] = {
     # A captured stream as an output: the one tool-only type.
     'captured': {**clt({'name': {'type': 'string', 'inputBinding': {'position': 1}}},
                        {'out': {'type': 'stdout'}}), 'stdout': 'captured.txt'},
-    # List-form inputs, outputs, requirements and hints, as cwl_utils renders
-    # them. The desugaring below lifts only `inputs` and `outputs`, so the
-    # compiler has to read `requirements` and `hints` in list form itself.
+    # List-form ports, requirements and hints: desugaring lifts only `inputs` and `outputs`, so the compiler reads the
+    # rest in list form itself.
     'listed': {
         'cwlVersion': CWL_VERSION, 'class': 'CommandLineTool', 'baseCommand': 'true',
         'inputs': [{'id': 'name', 'type': 'string', 'inputBinding': {'position': 1}}],
@@ -191,10 +148,7 @@ _SPECS: Final[dict[str, Cwl]] = {
     },
 }
 
-#: Desugared exactly as `get_tools_cwl` desugars real adapters
-#: (src/sophios/plugins.py:117), so the compiler sees the same shape either way.
-#: `run_path` names a file that does not exist: nothing reads it — the emitted
-#: `run:` is a string, and the validity property embeds emitted child artifacts.
+#: Desugared as get_tools_cwl desugars real adapters; the run path names no file, since nothing reads it.
 SYNTHETIC_TOOLS: Final[Tools] = {
     StepId(stem, SYNTHETIC_NS): Tool(f'/synthetic/{stem}.cwl',
                                      desugar_into_canonical_normal_form(dict(cwl)))
@@ -204,42 +158,40 @@ SYNTHETIC_TOOLS: Final[Tools] = {
 STEMS: Final[tuple[str, ...]] = tuple(sorted(_SPECS))
 
 
-def _cwl(stem: str) -> Cwl:
-    return SYNTHETIC_TOOLS[StepId(stem, SYNTHETIC_NS)].cwl
+def registered(tools: Mapping[str, Cwl], base: Tools = SYNTHETIC_TOOLS) -> Tools:
+    """`base` plus each of `tools` under its stem, as `get_tools_cwl` registers a plugin's."""
+    return {**base, **{StepId(stem, SYNTHETIC_NS): Tool(f'/synthetic/{stem}.cwl', cwl) for stem, cwl in tools.items()}}
+
+
+def insertion_registry() -> tuple[Yaml, Tools]:
+    """Two branches, each needing exactly one whitelisted-converter insertion: the O(2^n) speculative path."""
+    specs: dict[str, Cwl] = {}
+    for k in (1, 2):
+        source, sink = f'edam:format_src{k}', f'edam:format_dst{k}'
+        specs |= {f'mk_{k}': clt({}, {'file': {'type': 'File', 'format': source}}, canonical=True),
+                  f'use_{k}': clt({'file': {'type': 'File', 'format': sink}}, {}, canonical=True),
+                  f'insert_steps_automatically_conv_{k}': clt({'file': {'type': 'File', 'format': source}},
+                                                              {'file': {'type': 'File', 'format': sink}},
+                                                              canonical=True)}
+    return {'steps': [{'id': f'{kind}_{k}'} for k in (1, 2) for kind in ('mk', 'use')]}, registered(specs, {})
 
 
 def inputs_of(stem: str) -> dict[str, Cwl]:
     """The tool's declared inputs, after desugaring."""
-    found: dict[str, Cwl] = _cwl(stem)['inputs']
-    return found
+    return cast(dict[str, Cwl], SYNTHETIC_TOOLS[StepId(stem, SYNTHETIC_NS)].cwl['inputs'])
 
 
 def outputs_of(stem: str) -> dict[str, Cwl]:
     """The tool's declared outputs, after desugaring."""
-    found: dict[str, Cwl] = _cwl(stem)['outputs']
-    return found
+    return cast(dict[str, Cwl], SYNTHETIC_TOOLS[StepId(stem, SYNTHETIC_NS)].cwl['outputs'])
+
+
+def _nullable(kind: Cwl) -> bool:
+    return kind.endswith('?') if isinstance(kind, str) else isinstance(kind, list) and 'null' in kind
 
 
 def required_inputs_of(stem: str) -> tuple[str, ...]:
-    """Inputs the compiler will demand a value or an inferred edge for.
-
-    Deliberately a second implementation rather than an import: a generator that
-    asked the compiler which inputs are required, and then a property that
-    checked the compiler honoured them, would be asking one implementation to
-    grade itself.
-
-    A default satisfies an input when it is present and not null: a falsy
-    value like `0`, `false`, `''` or `[]` is still a value the tool author
-    chose, while `null` is the one value that cannot satisfy a non-nullable
-    input. `sink.extras` is the `default: []` case, so
-    `test_required_inputs_agree_with_the_compilers_own_rule` exercises the
-    place where truthiness and presence give different answers.
-    """
-    required = []
-    for name, spec in inputs_of(stem).items():
-        arg_type = spec['type']
-        optional = (isinstance(arg_type, str) and arg_type.endswith('?')) or (
-            isinstance(arg_type, list) and 'null' in arg_type)
-        if not (spec.get('default') is not None or optional):
-            required.append(name)
-    return tuple(required)
+    """Inputs the compiler must bind or infer, computed here so the generator never asks the compiler to grade itself;
+    a non-null default satisfies an input, a falsy one (sink.extras: []) included."""
+    return tuple(name for name, spec in inputs_of(stem).items()
+                 if spec.get('default') is None and not _nullable(spec['type']))

@@ -1,8 +1,4 @@
-"""Shared builders and the real-Nextflow harness for the backend test suites.
-
-Builders are deliberately thin: they remove repetition, never behavior. Tests
-that exercise validation failure construct invalid values directly.
-"""
+"""Shared builders and the real-Nextflow harness for the backend suites: thin, removing repetition, never behavior."""
 
 from collections.abc import Sequence
 import os
@@ -26,8 +22,6 @@ from sophios.nf_types import (
 )
 from sophios.utils_nf import CompiledNextflowSource
 from sophios.wic_types import Yaml
-
-REPO_ROOT = Path(__file__).resolve().parents[3]
 
 ref = NfInputReference
 
@@ -122,10 +116,8 @@ def workflow_doc(
 
 
 def one_step(run: Yaml, out: Sequence[str] = (), **values: Any) -> CompiledNextflowSource:
-    """The tool `run` as a workflow's only step, each input wired from a same-named workflow input.
-
-    Each name in `out` is forwarded as a same-named workflow output, and `values` are the workflow's inputs.
-    """
+    """The tool `run` as a workflow's only step: each input wired from a same-named workflow input, each `out` name
+    forwarded."""
     name = run["id"]
     return synthetic_source(
         workflow_doc(
@@ -139,14 +131,12 @@ def one_step(run: Yaml, out: Sequence[str] = (), **values: Any) -> CompiledNextf
 
 
 def case_source(data: Yaml) -> CompiledNextflowSource:
-    """A data case's source: `{tool, out, job}` as one_step takes them, or `{workflow, tools, job}`.
-
-    Each tool, the workflow and each entry of its `steps` list takes tool()'s, workflow_doc()'s or step()'s value
-    only for a key it leaves out, so a malformed document stays as written; a step without an `id` is taken as is.
-    """
+    """A data case's source: `{tool, out, job}` as one_step takes them, or `{workflow, tools, job}` (a `tool` without an
+    `id` is `make`); a key left out takes the builder's default, so a malformed document stays as written."""
     job = data.get("job", {})
     if "tool" in data:
-        return one_step({**tool(data["tool"]["id"]), **data["tool"]}, data.get("out", ()), **job)
+        run = {"id": "make", **data["tool"]}
+        return one_step({**tool(run["id"]), **run}, data.get("out", ()), **job)
     workflow = {**workflow_doc([]), **data["workflow"]}
     workflow["steps"] = [{**step(entry["id"]), **entry} if "id" in entry else entry for entry in workflow["steps"]]
     tools = [{**tool(run["id"]), **run} for run in data.get("tools", [])]
@@ -219,9 +209,12 @@ def single_process_workflow(
         for port in process.inputs
     ]
     output_connection = NfWorkflowOutputConnection(process.name, output_port_name, "result")
-    return ExecutableNextflowWorkflow(
-        "PIPELINE", [process], [*connections, output_connection], params, param_types
-    )
+    return ExecutableNextflowWorkflow("PIPELINE", [process], [*connections, output_connection], params, param_types)
+
+
+def assert_succeeded(result: "subprocess.CompletedProcess[str]") -> None:
+    """Fail with the process's whole output unless it exited 0."""
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
 
 
 def execute_nextflow(
@@ -230,32 +223,11 @@ def execute_nextflow(
     timeout: int = 90,
 ) -> "subprocess.CompletedProcess[str]":
     """Run the generated artifacts in ``directory`` under pinned harness rules, with extra ``arguments``."""
-    run_env = dict(os.environ)
-    run_env.update({
-        "NXF_ANSI_LOG": "false",
-        "NXF_HOME": str(directory / ".nxf-home"),
-        "NXF_OFFLINE": "true",
-    })
-    run_command = [
-        "nextflow",
-        "run",
-        "workflow.nf",
-        "-params-file",
-        "nextflow_params.json",
-        "-c",
-        "nextflow.config",
-        "-work-dir",
-        str(directory / "work"),
-        *arguments,
-    ]
+    env = {**os.environ, "NXF_ANSI_LOG": "false", "NXF_HOME": str(directory / ".nxf-home"), "NXF_OFFLINE": "true"}
     return subprocess.run(
-        run_command,
-        cwd=directory,
-        env=run_env,
-        text=True,
-        capture_output=True,
-        timeout=timeout,
-        check=False,
+        ["nextflow", "run", "workflow.nf", "-params-file", "nextflow_params.json", "-c", "nextflow.config",
+         "-work-dir", str(directory / "work"), *arguments],
+        cwd=directory, env=env, text=True, capture_output=True, timeout=timeout, check=False,
     )
 
 
@@ -266,3 +238,27 @@ def run_nextflow(
     """Write the four artifacts and execute them."""
     write_nextflow_artifacts(workflow, directory)
     return execute_nextflow(directory)
+
+
+def run_observed(
+    workflow: ExecutableNextflowWorkflow, directory: Path, *arguments: str, emits: Sequence[str] | None = None
+) -> tuple["subprocess.CompletedProcess[str]", dict[str, list[str]]]:
+    """Write and run `workflow`, observing each of `emits` (default all) in arrival order (collectFile loses it):
+    a value's text, a path's contents, joined on U+0001 as a value may hold a newline."""
+    write_nextflow_artifacts(workflow, directory)
+    names = (list(emits) if emits is not None
+             else [c.to_port for c in workflow.connections if isinstance(c, NfWorkflowOutputConnection)])
+    script = directory / "workflow.nf"
+    text = script.read_text(encoding="utf-8")
+    assert text.endswith("}\n")  # the entry workflow's closing brace: sinks go before it, where `.out` is in scope
+    sinks = "".join(
+        f"\n    {workflow.name}.out.{emit}.toList().subscribe {{ list -> new File('{emit}.sink').text = "
+        f"list.collect {{ it instanceof java.nio.file.Path ? it.text : it.toString() }}.join('\\u0001') }}\n"
+        for emit in names
+    )
+    script.write_text(text[:-2] + sinks + "}\n", encoding="utf-8")
+    result = execute_nextflow(directory, *arguments)
+    return result, {
+        emit: (directory / f"{emit}.sink").read_text(encoding="utf-8").split("\x01")
+        for emit in names if (directory / f"{emit}.sink").exists()
+    }

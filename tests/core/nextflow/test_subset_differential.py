@@ -1,14 +1,5 @@
-"""The safe JavaScript subset: a when decides under Nextflow as JavaScript decides it.
-
-design_docs/sophios_nextflow_backend.md §6, Expressions, requires the two
-authorities to agree over generated expressions. node evaluates each one with
-its step's input values; the step's when is that expression, or, for a number,
-the expression `=== ` the number node prints, so the step runs under the pinned
-Nextflow exactly when node gives true. node drops an expression with a
-non-finite subexpression, which fails by design (A11, test_phase3_cells.py).
-The generated grammar leaves out `Math.pow` and `Math.sqrt`, as the sample of
-the frozen table this replaces did; the pinned edges and cells hold them.
-"""
+"""The safe JavaScript subset: a when decides under Nextflow as node decides it (design §6, Expressions). The grammar
+leaves out Math.pow and Math.sqrt, which the pinned edges and cells hold; node drops non-finite expressions (A11)."""
 
 # pylint: disable=missing-function-docstring
 

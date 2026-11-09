@@ -1,18 +1,5 @@
-"""Multi-step workflows written in Sophios and run by Nextflow.
-
-Each test builds one workflow in Python, writes the generated pipeline, runs it
-under the pinned Nextflow, and compares the one report it writes with a literal.
-The features: multi-input dotproduct and flat_crossproduct scatters over lists
-built in Python; a scatter over an empty list, gathered downstream; an
-unscattered step's output read by every task of a scattered step; same-named
-files from several steps merged by linkMerge merge_flattened into one input;
-same-named files from different directories in one File[] workflow input; and a
-boolean parameter set in the params file and cleared on the command line.
-
-Every task list is enumerated in Python when the workflow is built, and every
-dependency is data that a task reads. Each workflow is built by a function of its
-own, which the import's fixed point (test_import.py) reads as well.
-"""
+"""Multi-step workflows written in Sophios and run by pinned Nextflow, each report compared with a literal; every
+workflow has its own builder function, which test_import.py's fixed point reads too."""
 
 # pylint: disable=missing-function-docstring
 
@@ -156,10 +143,8 @@ _LANES = {"lane_a": [(2001, 11), (2001, 12), (2002, 1), (2002, 2)], "lane_b": [(
 
 # Modelled on Matthew's repo, satellite.nf.
 def months_workflow(headers: Path) -> Workflow:
-    """Each lane's step is a dotproduct over (year, month) pairs written in Python; the report reads lane headers.
-
-    One workflow input holds each lane's header, `<headers>/<lane>/header.txt`, every one named header.txt.
-    """
+    """Each lane's step is a dotproduct over (year, month) pairs; the report reads lane headers,
+    `<headers>/<lane>/header.txt`."""
     per_month = _sh("per_month", 'printf "%s %04d-%02d\\n" "$1" "$2" "$3"', "piece",
                     lane=Input(cwl.string, position=1), year=Input(cwl.int, position=2),
                     month=Input(cwl.int, position=3))

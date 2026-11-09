@@ -1,3 +1,0 @@
-steps:
-- id: write_one
-  in: {message: !ii one match only}

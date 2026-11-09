@@ -1,11 +1,9 @@
-"""`--cwl_inline_runtag` changes how a compiled workflow is packaged: one file,
-every step's `run:` carrying its process. Packaging must not change meaning, so
-a tool embedded in a newer document keeps the defaults its own version gave it.
-"""
+"""`--cwl_inline_runtag` packages a compiled workflow as one file with every step's `run:` carrying its process, without
+changing meaning: a tool embedded in a newer document keeps the defaults its own version gave it."""
 import sys
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 import yaml
@@ -63,14 +61,9 @@ def test_inline_runtag_embeds_a_tool_with_the_defaults_it_was_written_for(
     assert step['run']['hints']['NetworkAccess'] == {'networkAccess': True}
 
 
-# --------------------------------------------------------------------------
-# Flattening
-# --------------------------------------------------------------------------
-
 def _document(written: Path, name: str) -> Yaml:
     """The root document the CLI wrote into `written`."""
-    loaded: Yaml = yaml.safe_load((written / f'{name}.cwl').read_text(encoding='utf-8'))
-    return loaded
+    return cast(Yaml, yaml.safe_load((written / f'{name}.cwl').read_text(encoding='utf-8')))
 
 
 NESTED_IDS = ['touch', 'append_twice', 'cat']
@@ -168,8 +161,7 @@ def _stays(artifact: CompilationArtifact, capsys: pytest.CaptureFixture[str]) ->
     assert [step['id'] for step in flat.cwl['steps']] == [step['id'] for step in artifact.cwl['steps']]
     assert flat.children[1].cwl['class'] == 'Workflow'
     assert flat.cwl['requirements']['SubworkflowFeatureRequirement'] == {}
-    said: str = capsys.readouterr().err
-    return said
+    return capsys.readouterr().err
 
 
 @pytest.mark.fast
@@ -224,27 +216,20 @@ def test_a_kept_call_does_not_stop_the_others_from_flattening(capsys: pytest.Cap
 
 @pytest.mark.fast
 def test_flattening_moves_what_the_subworkflow_required_onto_the_steps_that_ran_under_it() -> None:
-    """Requirements move with the steps they applied to; the engine's own features go to the root."""
-    child = {'requirements': {'EnvVarRequirement': {'envDef': {'FOO': 'bar'}}},
+    """Requirements move with the steps they applied to, and the step's own entry wins over the subworkflow's, as in
+    CWL; the engine's own features go to the root."""
+    child = {'requirements': {'EnvVarRequirement': {'envDef': {'FOO': 'bar'}}, 'ResourceRequirement': {'ramMin': 100}},
              'steps': [{**XFORM, 'when': '$(inputs.name != null)'}]}
-    flat = post_compile.flatten_subworkflows(
-        compile_hermetic({'steps': [MK_FILE, _called(child)]}).artifact).cwl
-    mk_file, xform = flat['steps']
-    assert 'requirements' not in mk_file
-    assert xform['requirements'] == {'EnvVarRequirement': {'envDef': {'FOO': 'bar'}}}
-    assert flat['requirements'] == {'InlineJavascriptRequirement': {}}, (
-        'the engine reads `when` against the root, so the feature goes there, and the call is gone')
-
-
-@pytest.mark.fast
-def test_a_step_keeps_its_own_requirement_over_the_subworkflows() -> None:
-    """The most specific entry wins, as in CWL."""
-    nested = compile_hermetic({'steps': [MK_FILE, _called({
-        'requirements': {'ResourceRequirement': {'ramMin': 100}}, 'steps': [XFORM]})]}).artifact
+    nested = compile_hermetic({'steps': [MK_FILE, _called(child)]}).artifact
     inner = next(c for c in nested.children if c.cwl['class'] == 'Workflow')
     inner.cwl['steps'][0]['requirements'] = {'ResourceRequirement': {'ramMin': 5}}
-    assert post_compile.flatten_subworkflows(nested).cwl['steps'][1]['requirements'] == {
-        'ResourceRequirement': {'ramMin': 5}}
+    flat = post_compile.flatten_subworkflows(nested).cwl
+    mk_file, xform = flat['steps']
+    assert 'requirements' not in mk_file
+    assert xform['requirements'] == {'EnvVarRequirement': {'envDef': {'FOO': 'bar'}},
+                                     'ResourceRequirement': {'ramMin': 5}}
+    assert flat['requirements'] == {'InlineJavascriptRequirement': {}}, (
+        'the engine reads `when` against the root, so the feature goes there, and the call is gone')
 
 
 @pytest.mark.fast

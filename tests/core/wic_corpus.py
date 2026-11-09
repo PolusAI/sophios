@@ -1,17 +1,5 @@
-"""The Sophios conformance corpus: every workflow the compiler can reach
-
-There is no discovery mechanism here — Sophios already has one. The config's
-`search_paths_wic` defines where workflows live, `plugins.get_yml_paths` finds
-them (excluding generated `*_inputs*` files), and CI provisions the config to
-reach `docs/tutorials`, `docs/cookbook`, `mm-workflows/examples`, and
-`image-workflows/workflows` (`.github/update_sophios_config.py`). The corpus
-is exactly that reachable set, so the corpus and the compiler can never
-disagree about what exists.
-
-Whatever the corpus repositories' `main` contains, those are the tests, for
-better or worse. Locally you test what your config reaches; CI reaches
-everything and is the arbiter.
-"""
+"""The Sophios conformance corpus: every workflow the compiler's own discovery (`get_yml_paths`) reaches, so corpus and
+compiler cannot disagree. CI's config reaches every corpus repository and is the arbiter; locally you test yours."""
 from pathlib import Path
 from typing import Final
 
@@ -31,14 +19,8 @@ _IN_REPO_DIRS: Final = (
 
 
 def _discover() -> tuple[Path, ...]:
-    """Every reachable workflow, without side effects.
-
-    When a config exists, discovery is the compiler's own (`get_yml_paths`
-    reads `search_paths_wic`), so the corpus and the compiler cannot disagree.
-    When none exists — a fresh checkout — the in-repo directories are read
-    directly rather than provisioning the user's home to ask the config; CI
-    always provisions a config first and remains the arbiter of full coverage.
-    """
+    """Every reachable workflow, without side effects: the compiler's discovery when a config exists, else the in-repo
+    directories, never provisioning the user's home."""
     args = get_args()
     config_path = args.config_file or io.default_config_file(Path(args.homedir))
     if config_path.exists():

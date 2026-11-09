@@ -25,9 +25,10 @@ validation_*.txt
 .env
 run.sh
 
-# test_compile_python_workflows writes the compiled .wic and a config_ci.json
-# beside each discovered Python workflow.
+# test_compile_python_workflows writes each discovered Python workflow's .wic, its tools' .cwl and a config_ci.json
+# beside it, for the corpus lanes that run them.
 examples/workflows/*.wic
+examples/workflows/*.cwl
 examples/workflows/config_ci.json
 
 # import-linter graph cache (lint-imports, pre-commit)

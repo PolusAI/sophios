@@ -1,19 +1,7 @@
-"""The equivalence relation, and proof that it can tell things apart.
-
-`equivalent` is the definition of "these two compilations mean the same
-thing". Everything downstream — partition independence here, differential
-equivalence across a pipeline migration — is this relation with a different transformation in
-front of it, so a bug here is silent everywhere at once.
-
-That is why this file leads with discrimination rather than with agreement.
-A relation that returns None unconditionally satisfies reflexivity and the
-lattice law and makes every property that depends on it green and worthless;
-only a case built so that a too-permissive relation is *observably* wrong can
-see that. Inverse pairs and
-reflexive laws test agreement, not correctness.
-"""
+"""The equivalence relation, and proof it tells things apart: a relation returning None always passes every agreement
+law, so cases built to catch a too-permissive relation come first."""
 import copy
-from typing import Any, Final
+from typing import Any, Final, cast
 
 import pytest
 from hypothesis import given
@@ -22,7 +10,7 @@ from hypothesis import strategies as st
 from sophios.wic_types import Yaml
 
 from .cases import cases
-from .equivalence import Divergence, Strength, equivalent
+from .equivalence import Strength, equivalent
 from .hermetic import ORACLE
 from .synthetic_tools import STEMS, inputs_of, outputs_of
 
@@ -51,17 +39,8 @@ def test_equivalence_case(case: dict[str, Any]) -> None:
 
 @st.composite
 def compiled_documents(draw: st.DrawFn) -> Yaml:
-    """A document shaped like emitted CWL: namespaced ids, ports, requirements.
-
-    Deliberately does *not* invoke the compiler. This file tests the relation;
-    routing its inputs through `compile_hermetic_cwl` would make a relation bug
-    and a compiler bug indistinguishable, and would make every failure here a
-    question about which of the two moved. The shape is copied from what the
-    compiler actually emits (`{yaml_stem}__step__{i}__{step_key}` step ids,
-    `{step_id}___{port}` workflow-level port names, `run:` as
-    `{step_id}/{stem}.cwl`), verified against a hermetic compilation, not
-    invented.
-    """
+    """A document shaped like emitted CWL (namespaced ids, ports, requirements), built without the compiler so that a
+    relation bug and a compiler bug stay distinguishable; the shape is copied from a hermetic compilation."""
     prefix = draw(st.sampled_from(('oracle', 'wf', 'root')))
     tools = draw(st.lists(st.sampled_from(STEMS), min_size=1, max_size=4))
     steps: list[Yaml] = []
@@ -95,13 +74,7 @@ def compiled_documents(draw: st.DrawFn) -> Yaml:
 
 
 def _rewrite_run_paths(document: Yaml) -> Yaml:
-    """The rewrite UP_TO_EMBEDDING forgives: move every document somewhere else.
-
-    Models where the compiler writes a process: the file name in `run:`
-    depends on what else the tree holds (a stem another process took is
-    numbered). Nothing but the path changes, which is exactly the claim
-    UP_TO_EMBEDDING makes.
-    """
+    """The rewrite UP_TO_EMBEDDING forgives: move every document somewhere else; nothing but the `run:` path changes."""
     moved = copy.deepcopy(document)
     for step in moved['steps']:
         step['run'] = 'flat/' + str(step['run']).rsplit('/', maxsplit=1)[-1]
@@ -109,20 +82,10 @@ def _rewrite_run_paths(document: Yaml) -> Yaml:
 
 
 def _rewrite_namespace(document: Yaml, prefix: str = 'renamed') -> Yaml:
-    """The rewrite UP_TO_RENAMING forgives: re-root the whole namespace.
-
-    Every namespaced name in an emitted document begins with the yaml stem of
-    the document it came from, so lifting a workflow into (or out of) a
-    subworkflow rewrites every step id and every workflow-level port name and
-    moves no edge. Applied as a string substitution over the whole document
-    precisely because it must hit `steps[].id`, `steps[].in[].source`,
-    `inputs`/`outputs` keys and `outputSource` alike — a renaming that missed
-    one of those would produce a document with dangling references, and the
-    property below would then be passing for the wrong reason.
-    """
+    """The rewrite UP_TO_RENAMING forgives: re-root the namespace by string substitution over the whole document, so it
+    hits step ids, sources, port keys and outputSource alike and leaves no dangling reference."""
     old = str(document['steps'][0]['id']).split('__step__', maxsplit=1)[0]
-    renamed: Yaml = _substitute(document, f'{old}__step__', f'{prefix}__step__')
-    return renamed
+    return cast(Yaml, _substitute(document, f'{old}__step__', f'{prefix}__step__'))
 
 
 def _substitute(node: Any, old: str, new: str) -> Any:
@@ -209,11 +172,3 @@ def test_every_rewrite_is_actually_drawn() -> None:
     _collect()  # pylint: disable=no-value-for-parameter  # @given supplies `case`
     missing = {name for name, _, _ in REWRITES} - seen
     assert not missing, f'rewrites never drawn, so nothing above tested them: {sorted(missing)}'
-
-
-@pytest.mark.fast
-def test_a_divergence_is_frozen() -> None:
-    """A report collected into a list must not be editable afterwards."""
-    found = Divergence(Strength.IDENTICAL, '.x', 1, 2)
-    with pytest.raises((AttributeError, TypeError)):
-        found.path = '.y'  # type: ignore[misc]

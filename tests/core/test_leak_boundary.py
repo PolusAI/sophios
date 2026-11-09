@@ -1,29 +1,9 @@
-"""The leak boundary, checked against the real compiler.
-
-Four claims, each a property below: passthrough keys survive compilation
-byte-identically; no key is both interpreted and passed through; the
-interpreted set is exhaustive, so the compiler is inert to everything else;
-and the stripped residue validates as CWL v1.2 under cwltool.
-
-These run the actual `compile_workflow`, not the syntax layer, because the
-boundary being specified is the compiler's behaviour. The syntax layer's
-partition is checked exhaustively over the declared set as well, since
-that is what the schema and the language spec derive from.
-
-The keys the compiler owns are the documented exceptions. Their normative
-statement lives in language spec §1.2 — the single home. How `requirements`
-is merged into, and `hints` read in either form, is a property of its own
-(`test_emit.py`), over a model of that statement. The rest are pinned one at a
-time below: a list of either holding an `$import` or `$include` is emitted as
-written, `inputs` and `outputs` are merged into, `$schemas` is append-only,
-`$namespaces` reserves the `edam` and `sophios` prefixes, and `class` and
-`cwlVersion` are written. The properties here generate `hints` only as the
-mapping, and quantify over the keys that really are untouched.
-"""
+"""The leak boundary against the real compiler: passthrough keys survive byte-identically, none is both interpreted
+and passed through, the interpreted set is exhaustive and the residue validates; owned keys are pinned one by one."""
 import copy
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from functools import partial
 
@@ -62,17 +42,9 @@ _hermetic = partial(compile_hermetic_cwl, name='leak')
 
 
 def _step(cwl: Yaml) -> Yaml:
-    """The single step of a compiled one-step workflow.
-
-    Always a list: the compiler normalises mapping-form `steps:` away before
-    emitting (`yaml_tree.update({'steps': steps_list})`), so the emitted
-    document has only one shape whatever the source had.
-
-    Returns the live sub-dict, not a copy — callers compare documents after
-    mutating what they get back.
-    """
-    found: Yaml = cwl['steps'][0]
-    return found
+    """The single step of a compiled one-step workflow, as the live sub-dict (callers mutate it); `steps` is always a
+    list."""
+    return cast(Yaml, cwl['steps'][0])
 
 
 def _touch_workflow(extra_step_keys: dict[str, Any], extra_top_keys: dict[str, Any]) -> Yaml:
@@ -89,11 +61,6 @@ def _mk_file_workflow(extra_step_keys: dict[str, Any], extra_top_keys: dict[str,
     """The synthetic mk_file, for `_hermetic`; `_touch_workflow` is the real registry's tool, for `_compile`."""
     return {**extra_top_keys, 'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'empty.txt'}},
                                          **extra_step_keys}]}
-
-
-# --------------------------------------------------------------------------
-# Passthrough fidelity: unclaimed keys survive byte-identically
-# --------------------------------------------------------------------------
 
 
 @pytest.mark.slow
@@ -229,19 +196,6 @@ def test_class_is_written_while_inputs_outputs_and_version_are_not() -> None:
     assert compiled['cwlVersion'] == CWL_VERSION, 'a supplied cwlVersion must not win'
 
 
-@pytest.mark.skip_pypi_ci
-@pytest.mark.fast
-def test_user_schemas_are_kept_and_appended_to() -> None:
-    """`$schemas` is append-only: user entries survive, Sophios adds its own."""
-    compiled = _compile(_touch_workflow({}, {'$schemas': ['https://mine/schema.owl']}))
-    assert 'https://mine/schema.owl' in compiled['$schemas']
-
-
-# --------------------------------------------------------------------------
-# The interpreted/passthrough partition really is a partition
-# --------------------------------------------------------------------------
-
-
 @pytest.mark.fast
 @pytest.mark.parametrize('key', sorted(Grammar.INTERPRETED_STEP_KEYS))
 def test_every_declared_key_is_interpreted(key: str) -> None:
@@ -267,11 +221,6 @@ def test_no_key_lands_on_both_sides(key: str) -> None:
     assert not set(interpreted) & set(passthrough)
 
 
-# --------------------------------------------------------------------------
-# The compiler is inert outside the declared set
-# --------------------------------------------------------------------------
-
-
 @pytest.mark.slow
 @given(passthrough_keys, passthrough_values)
 @COMPILED
@@ -291,10 +240,6 @@ def test_unknown_keys_change_nothing_else(key: str, value: Any) -> None:
     assert _step(with_key).pop(key) == value
     assert with_key == without, f'{key} altered more than itself'
 
-
-# --------------------------------------------------------------------------
-# The residue is real CWL v1.2
-# --------------------------------------------------------------------------
 
 #: Passthrough spelled in CWL vocabulary, because CWL v1.2 itself rejects
 #: unknown step fields — arbitrary keys are covered by the fidelity properties
@@ -358,11 +303,6 @@ def test_an_authored_output_source_validates() -> None:
         target = Path(workdir) / 'authored_output_source.cwl'
         target.write_text(yaml.safe_dump(inlined, sort_keys=False), encoding='utf-8')
         assert validate_cwl(str(target)) == 0
-
-
-# --------------------------------------------------------------------------
-# The --allow_raw_cwl escape hatch still works
-# --------------------------------------------------------------------------
 
 
 @pytest.mark.skip_pypi_ci
