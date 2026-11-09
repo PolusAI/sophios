@@ -23,7 +23,7 @@ from collections.abc import Mapping
 from typing import IO, Final
 
 from sophios.wic_types import Json
-from . import auto_gen_header, backends, preflight, realtime
+from . import auto_gen_header, preflight, realtime, targets
 from .backends import Backend, Launch, RunRequest
 from .run_status import RunResult, RunState, RunStatus, StepStatus, WorkflowRunError
 from .plugins import logging_filters
@@ -480,7 +480,7 @@ def start(request: RunRequest) -> RunHandle:
     """
     if request.generate_run_script:
         raise ValueError('a run script is written by run(), not started')
-    backend = backends.backend(request.target, request.runner)
+    backend = targets.backend(request.target, request.runner)
     request, analysis = _realtime(request, backend)
     return RunHandle(request, backend, backend.launch(request), request.realtime_plans, analysis)
 
@@ -495,7 +495,7 @@ def run(request: RunRequest) -> int:
         KeyboardInterrupt: On Ctrl-C, after the runner was stopped.
         ValueError: No backend runs the request's target with its runner.
     """
-    backend = backends.backend(request.target, request.runner)
+    backend = targets.backend(request.target, request.runner)
     if request.generate_run_script:
         _realtime(request, backend)
         generate_run_script(shlex.join(backend.launch(request).argv))

@@ -55,8 +55,7 @@ from ._workflow_runtime import (
     RunPolicy,
     check_workflow as _check_workflow,
     coerce_path as _coerce_path,
-    compiled_nextflow_workflow as _compiled_nextflow_workflow,
-    compiled_workflow as _compiled_workflow,
+    compiled as _compiled,
     draw_workflow as _draw_workflow,
     load_clt_document as _load_clt_document,
     load_clt as _load_clt,
@@ -1155,13 +1154,8 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
                 lower, every refusal at once; a ``ValueError``, importable from
                 ``sophios.api.python.nextflow``.
         """
-        if target == "cwl":
-            return _compiled_workflow(self, tool_registry=tool_registry, lang_version=lang_version,
-                                      inference=inference, policy=policy)
-        if target == "nextflow":
-            return _compiled_nextflow_workflow(self, tool_registry=tool_registry, lang_version=lang_version,
-                                               inference=inference, policy=policy)
-        raise ValueError(f"unsupported compilation target {target!r}")
+        return _compiled(self, target=target, tool_registry=tool_registry, lang_version=lang_version,
+                         inference=inference, policy=policy)
 
     def check(  # pylint: disable=too-many-arguments
         self,
@@ -1197,18 +1191,18 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
             policy (RunPolicy): As :meth:`compile` takes it.
 
         Returns:
-            tuple[Diagnostic, ...]: Every note the compile, the target's checks and, for Nextflow, the
-            lowering made: the ``diagnostics`` :meth:`compile` would return. Nothing is printed, so
-            ``check()`` and then ``run()`` show each note once.
+            tuple[Diagnostic, ...]: Every note the compile, the target's checks and,
+            for Nextflow, the lowering made: the ``diagnostics`` :meth:`compile` would
+            return; and every construct the target cannot run, each an error with its
+            code (an ``nf-sNNN`` code for Nextflow), where :meth:`compile` raises
+            ``NotLowered``. It prints nothing, the compile's own warning lines included,
+            so ``check()`` and then ``compile()`` show each note once.
 
         Raises:
             SophiosError: The workflow does not compile, or this machine cannot run it: one diagnostic
                 for each problem, all at once, as :meth:`run` raises them and ``--check`` exits 1 on them.
-            ValueError: As :meth:`run` raises it.
-            NotLowered: Under ``target="nextflow"``, as :meth:`compile` raises it.
+            ValueError: No target has that name, or as :meth:`run` raises it.
         """
-        if target not in ("cwl", "nextflow"):
-            raise ValueError(f"unsupported compilation target {target!r}")
         return _check_workflow(self, _RunOptions(run_args_dict, None, basepath, tool_registry, workflow_paths,
                                                  inference, target, policy, lang_version))
 

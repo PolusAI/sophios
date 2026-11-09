@@ -20,7 +20,7 @@ import sophios.input_output
 import sophios.run_local
 import sophios.utils
 from sophios.ir import frontdoor
-from sophios import backends, post_compile, preflight, realtime, run_setup
+from sophios import backends, post_compile, preflight, realtime, run_setup, targets
 from sophios import auto_gen_header
 from sophios.cli import get_args
 from sophios.utils_yaml import Key
@@ -171,7 +171,8 @@ def test_inline_flags_change_nothing_for_a_workflow_that_calls_none(
     which is why `INLINE_CASES` runs no `flat` form of it."""
     def compiled(flags: list[str]) -> list[tuple[Any, ...]]:
         """Everything in the tree but the drawings, which are new objects each compile."""
-        tree = _compiled_for_run(yml_path, get_args(str(yml_path), flags), corpus_registry).artifact
+        args = get_args(str(yml_path), flags)
+        tree = _inlined(_compiled(yml_path, args, corpus_registry).artifact, args)
         return [(item.namespace, item.name, item.run_path, item.cwl, item.job_inputs, item.graph)
                 for item in _artifacts(tree)]
 
@@ -231,13 +232,16 @@ def test_cwl_docker_extract(yml_path_str: str, yml_path: Path,
     run_workflows(yml_path_str, yml_path, 'cwltool', args, corpus_registry, docker_pull_only=True)
 
 
-def _compiled_for_run(yml_path: Path, args: argparse.Namespace, registry: CorpusRegistry) -> CompilationResult:
-    """The compilation `run_workflows` writes and runs for `yml_path`: its artifact tree shaped by the inline flags."""
+def _compiled(yml_path: Path, args: argparse.Namespace, registry: CorpusRegistry) -> CompilationResult:
+    """`yml_path` compiled for `args`, before the inline flags shape its artifact tree."""
     bundle = frontdoor.bundle_from_disk(Path(yml_path), yml_paths, registry.tools)
     compiler_options, _graph_settings = sophios.cli.get_dicts_for_compilation(args)
-    result = sophios.compiler.compile_source(bundle, compiler_options, quiet=True)
-    return replace(result, artifact=apply_inline_options(result.artifact, subworkflows=args.cwl_inline_subworkflows,
-                                                         runtag=args.cwl_inline_runtag))
+    return sophios.compiler.compile_source(bundle, compiler_options, quiet=True)
+
+
+def _inlined(artifact: CompilationArtifact, args: argparse.Namespace) -> CompilationArtifact:
+    """`artifact`'s tree as the inline flags in `args` shape it: what `run_workflows` writes and runs."""
+    return apply_inline_options(artifact, subworkflows=args.cwl_inline_subworkflows, runtag=args.cwl_inline_runtag)
 
 
 # pylint: disable-next=too-many-arguments,too-many-locals
@@ -255,19 +259,22 @@ def run_workflows(
     """Compile, prepare and run one corpus workflow; `basepath` keeps each lane's and inline form's artifacts apart,
     since an artifact is named for its workflow and the weekly job runs several steps in one directory."""
     Path(basepath).mkdir(parents=True, exist_ok=True)
-    compilation = _compiled_for_run(yml_path, args, registry)
-    backend = backends.backend('cwl', cwl_runner)
+    compilation = _compiled(yml_path, args, registry)
+    backend = targets.backend('cwl', cwl_runner)
     settings = preflight.RunSettings(args.container_engine, args.pull_dir, ignore_install=args.ignore_docker_install,
                                      ignore_processes=args.ignore_docker_processes, runner=cwl_runner)
     # As the CLI prepares it: a relative path is read beside the workflow. The pull lane pulls; the run
     # lanes run on the images it pulled.
-    prepared = backend.prepare(compilation, (), Path(basepath), run_setup.Settings(
+    # The view is read from the compiled tree, before the inline flags reshape it.
+    lowered = targets.target('cwl').lower(compilation, sophios.compiler.resolved_view(compilation))
+    lowered = replace(lowered, model=_inlined(lowered.model, args))
+    prepared = backend.prepare(lowered, (), Path(basepath), run_setup.Settings(
         settings, Path(args.yaml).parent.absolute(), args.inputs_file, pull=docker_pull_only,
         remove_entrypoints=args.docker_remove_entrypoints))
     if docker_pull_only:
         return
     # NOTE: Do not use --cachedir; we want to actually test everything.
-    retval = sophios.run_local.run(backends.RunRequest(prepared.artifact.name, Path(basepath), runner=cwl_runner,
+    retval = sophios.run_local.run(backends.RunRequest(prepared.name, Path(basepath), runner=cwl_runner,
                                                        container_engine=args.container_engine))
     assert (retval == 0) is expect_success, retval
 
