@@ -2,7 +2,7 @@
 # references, Outputs). `lowered` is the replaced test's IR literal in payload form.
 - id: every_iwdr_entry_is_one_the_task_makes-a-bare-reference
   why: &entries 'design §6, Inputs and channels: under its own basename or a literal name, linked or copied.'
-  tool: &stage {id: STAGE, inputs: {source: {type: File}}, outputs: {result: {type: File, outputBinding: {glob:
+  tool: &stage {inputs: {source: {type: File}}, outputs: {result: {type: File, outputBinding: {glob:
          out.txt}}}, arguments: [cat, renamed.txt], stdout: out.txt, requirements: {InitialWorkDirRequirement: {listing:
          [$(inputs.source)]}}}
   out: &out [result]
@@ -25,7 +25,7 @@
    writable: true}]}}}, lowered: {processes: [{inputs: [{entry: {name: reads*.fq, copy: true}}]}]}}
 - id: an_entry_under_its_own_basename_may_be_referenced-$(inputs.source)
   why: &plugin 'The plugin shape: --outDir $(inputs.outDir) and glob: $(inputs.outDir.basename) name the entry.'
-  tool: &out_dir {id: STAGE, inputs: {source: {type: Directory, inputBinding: {prefix: --outDir}}}, outputs: {result:
+  tool: &out_dir {inputs: {source: {type: Directory, inputBinding: {prefix: --outDir}}}, outputs: {result:
          {type: Directory, outputBinding: {glob: $(inputs.source.basename)}}}, requirements: {InitialWorkDirRequirement:
          {listing: [$(inputs.source)]}}, arguments: [$(inputs.source)]}
   out: *out
@@ -47,7 +47,7 @@
   why: &stands 'design §6, Basename references: a basename names a new file a glob collects, an entry is under the
     output directory, and stdin reads a staged File by its whole `.path`. Each case is a cell of cwltool''s own run of
     the tool.'
-  tool: &ref {id: REF, inputs: {f: {type: File}}, outputs: {result: {type: File, outputBinding: {glob:
+  tool: &ref {inputs: {f: {type: File}}, outputs: {result: {type: File, outputBinding: {glob:
          $(inputs.f.basename).out}}}}
   out: *out
   job: &f {f: {class: File, path: in}}
@@ -55,23 +55,22 @@
    *ref, outputs: {result: {type: File, outputBinding: {glob: $(inputs.f.basename)}}}, requirements: &linked_f {
    InitialWorkDirRequirement: {listing: [$(inputs.f)]}}}}
 - {id: a_reference_where_it_stands-glob-Directory-$(inputs.f.basename)/keep.txt-linked, why: *stands, out: *out, job: &d
-   {f: {class: Directory, path: in}}, tool: {id: REF, inputs: {f: {type: Directory}}, outputs: {result: {type:
+   {f: {class: Directory, path: in}}, tool: {inputs: {f: {type: Directory}}, outputs: {result: {type:
    Directory, outputBinding: {glob: $(inputs.f.basename)/keep.txt}}}, requirements: *linked_f}}
 - {id: a_reference_where_it_stands-glob-Directory-$(inputs.f.path)-writable, why: *stands, out: *out, job: *d, tool: {
-   id: REF, inputs: {f: {type: Directory}}, outputs: {result: {type: Directory,
+   inputs: {f: {type: Directory}}, outputs: {result: {type: Directory,
        outputBinding: {glob: $(inputs.f.path)}}},
    requirements: &writable_f {InitialWorkDirRequirement: {listing: [{entry: $(inputs.f), writable: true}]}}}}
 - {id: a_reference_where_it_stands-glob-File-$(inputs.f.path).out-linked, why: *stands, out: *out, job: *f, tool: {<<:
    *ref, outputs: {result: {type: File, outputBinding: {glob: $(inputs.f.path).out}}}, requirements: *linked_f}}
 - {id: a_reference_where_it_stands-stdin-File-$(inputs.f.path), why: *stands, out: *out, job: *f,
-    tool: &stream {id: REF,
-   inputs: {f: {type: File}}, outputs: {result: {type: File, outputBinding: {glob: done.txt}}}, stdin:
+    tool: &stream {inputs: {f: {type: File}}, outputs: {result: {type: File, outputBinding: {glob: done.txt}}}, stdin:
    $(inputs.f.path)}}
-- {id: a_reference_where_it_stands-stdout-File-$(inputs.f.basename).log, why: *stands, out: *out, job: *f, tool: {id:
-   REF, inputs: {f: {type: File}}, outputs: {result: {type: File, outputBinding: {glob: done.txt}}}, stdout:
+- {id: a_reference_where_it_stands-stdout-File-$(inputs.f.basename).log, why: *stands, out: *out, job: *f, tool:
+   {inputs: {f: {type: File}}, outputs: {result: {type: File, outputBinding: {glob: done.txt}}}, stdout:
    $(inputs.f.basename).log}}
 - {id: a_reference_where_it_stands-stdout-File-$(inputs.f.basename)-writable, why: *stands, out: *out, job: *f, tool: {
-   id: REF, inputs: {f: {type: File}}, outputs: {result: {type: File, outputBinding: {glob: done.txt}}}, stdout:
+   inputs: {f: {type: File}}, outputs: {result: {type: File, outputBinding: {glob: done.txt}}}, stdout:
    $(inputs.f.basename), requirements: *writable_f}}
 - id: an_output_whose_name_no_link_is_known_to_share-another-name
   why: &no_link A copy is the task's own; a workflow input's or a pattern's name is known only when the task runs; a
@@ -104,7 +103,7 @@
    {listing: [{entry: $(inputs.src)}]}}}]}
 - id: the_admitted_cardinality_declaration_lowers_to_a_capture_marker
   why: &capture An admitted outputEval lowers to its capture marker.
-  tool: &make {id: make, inputs: {message: {type: string, inputBinding: {position: 1}}}, outputs: {result: {type: File,
+  tool: &make {inputs: {message: {type: string, inputBinding: {position: 1}}}, outputs: {result: {type: File,
          outputBinding: {glob: out.txt, outputEval: '$(self[0])'}}}}
   out: *out
   job: &hi {message: hi}
@@ -122,5 +121,5 @@
    outputs: {result: {type: string, outputBinding: {glob: out.txt, loadContents: true, outputEval:
    '$(self[0].contents)'}}}}, lowered: {processes: [{outputs: [{name: result, qualifier: val, capture: text}]}]}}
 - {id: an_optional_output_with_a_pattern_glob_reaching_a_workflow_output, why: An optional output of a pattern glob is
-   checked at its workflow output., out: [o], tool: {id: LOGS, baseCommand: 'true', outputs: {o: {type: 'File?',
+   checked at its workflow output., out: [o], tool: {baseCommand: 'true', outputs: {o: {type: 'File?',
    outputBinding: {glob: '*.log'}}}}, lowered: {processes: [{outputs: [{optional: true}]}]}}

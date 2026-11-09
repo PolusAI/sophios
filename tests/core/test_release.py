@@ -11,11 +11,8 @@ import sophios.cli
 
 
 def _import_copy(root: Path, built_as: str | None) -> subprocess.CompletedProcess[str]:
-    """Import a copy of the package from `root`, built as `built_as` if given.
-
-    The environment has its own `sophios` installed, with its own metadata, so the
-    copy reports a version of its own only if it reads it from beside its code.
-    """
+    """Import a copy of the package from `root`, built as `built_as` if given; it reports a version of its own only if
+    it reads it from beside its code."""
     package = root / 'sophios'
     package.mkdir()
     shutil.copy(Path(sophios.__file__), package / '__init__.py')

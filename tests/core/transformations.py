@@ -1,31 +1,9 @@
-"""Rewrites that must not change what a workflow means.
-
-Each carries the strength it preserves and the reason. The rationale is a
-field rather than a comment because it is the load-bearing claim: a
-transformation on this list asserts that Sophios's semantics are invariant
-under it, and that assertion is exactly what the property checks. A
-transformation nobody can justify is a test that will one day fail for a good
-reason and be "fixed" by weakening the property.
-
-Deliberately NOT on this list, and worth recording because it looks like it
-belongs: **reordering independent steps.** Sophios's inference scans backwards
-over previous steps (`for j in range(0, i)[::-1]`, src/sophios/inference.py:216)
-and takes the most recent match, so step order is part of the meaning of a
-workflow, not an accident of how it was written. A "reorder independent steps"
-transformation would be a property asserting something false about this
-language.
-
-The four, with their strengths, are `identity`, `text_roundtrip`, `split`,
-and `rename_workflow`. `split` needs a drawn argument (which
-steps go in which file), so it is built by a strategy rather than being a
-constant: `TRANSFORMATIONS` holds the other three, and `split_transformations()`
-builds a `split` from `ast_strategies.partitionings`. The property parametrises
-over all four rather than drawing one, so each gets the whole budget.
-"""
+"""Rewrites that must not change what a workflow means, each with the strength it preserves and why (a field: it is
+the claim the property checks). Not here: reordering steps, since inference takes the most recent match."""
 import copy
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Final
+from typing import Any, Callable, Final, cast
 
 import yaml
 from hypothesis.strategies import SearchStrategy
@@ -43,56 +21,22 @@ class Transformation:
     """A rewrite of a `.wic` document, and the claim it makes about it."""
 
     name: str
-    #: The strongest `equivalence.Strength` a compilation of `apply(w)` is
-    #: claimed to share with a compilation of `w`.
+    #: The strongest `Strength` a compilation of `apply(w)` shares with one of `w`.
     preserves: Strength
     apply: Callable[[Yaml], Yaml]
-    #: Why the claim is true. Not a comment: see the module docstring.
+    #: Why the claim is true: the claim the property checks, so a field.
     rationale: str
 
 
-def _identity(document: Yaml) -> Yaml:
-    """A deep copy, not the same object.
-
-    Not `lambda w: w`. Returning the very object the caller handed in would
-    make `compile_hermetic(yml, ...)` and `compile_hermetic(rewrite.apply(yml), ...)`
-    share one mutable dict, and the compiler mutates its input
-    (`yaml_tree`) in place — so a bare identity function would make the second
-    compile a test of whatever the first compile left behind, not a test of
-    compiling the same input twice. A deep copy is a second, independent input
-    with the same value, which is the actual claim.
-    """
-    copied: Yaml = copy.deepcopy(document)
-    return copied
-
-
 def _text_roundtrip(document: Yaml) -> Yaml:
-    """Serialise, then read back with `yaml.SafeLoader`.
-
-    This is what every user does between writing a `.wic` file and running
-    `sophios --graph`. The document is in the desugared spelling, which is
-    plain YAML with no tags, so YAML alone reads it back.
-
-    `sort_keys=False`: `yaml.safe_dump`'s default sorts mapping keys
-    alphabetically, which is a real reordering — the IDENTICAL strength this
-    rewrite claims compares key order (`equivalence.Strength.IDENTICAL`) — and
-    would make this rewrite fail its own claim regardless of the compiler,
-    for a reason that has nothing to do with what it is testing. Matches the
-    convention this suite already uses for a faithful dump
-    (`test_hermeticity.py`'s `yaml.safe_dump(_cwl(stem), sort_keys=False)`).
-    """
-    dumped = yaml.safe_dump(document, sort_keys=False)
-    loaded: Yaml = yaml.safe_load(dumped)
-    return loaded
+    """`safe_dump` then `safe_load`, as a user writes a file and compiles it; `sort_keys=False`, since sorting reorders
+    keys and IDENTICAL compares key order."""
+    return cast(Yaml, yaml.safe_load(yaml.safe_dump(document, sort_keys=False)))
 
 
 def _bare_sources(inputs: Yaml, name: str) -> list[tuple[Any, Any]]:
-    """The bare-name references `inputs[name]` spells, as (container, key) slots.
-
-    A bare string is one, held by `inputs` itself; a step-input record
-    (`{wic_raw_cwl: {source: ...}}`) names its sources in `source`, as one
-    string or a list of them.
-    """
+    """The bare-name references `inputs[name]` spells, as (container, key) slots: the string, or each string in a
+    wic_raw_cwl record's `source`."""
     value = inputs[name]
     if isinstance(value, str):
         return [(inputs, name)]
@@ -123,11 +67,7 @@ def _declared_input_references(document: Yaml, steps: list[Yaml]) -> set[str]:
 
 
 def _rewrite_workflow_input_references(steps: list[Yaml], formals: dict[str, str]) -> None:
-    """Rename bare workflow-input references in the new child scope.
-
-    This is deliberately test-side code rather than a call into the production
-    inliner: the split generator must be capable of exposing a broken inverse.
-    """
+    """Rename bare workflow-input references in the new child scope; test-side, so a broken inverse can show."""
     for step in steps:
         candidates = [step.get('in')]
         parentargs = step.get('parentargs')
@@ -143,17 +83,8 @@ def _rewrite_workflow_input_references(steps: list[Yaml], formals: dict[str, str
 
 
 def _subtree_for(document: Yaml, steps: list[Yaml], formals: dict[str, str]) -> Yaml:
-    """A subworkflow body carrying `steps`, plus whatever declared top-level
-    `inputs:` those steps themselves reference by bare name.
-
-    A step may reference a bare declared name (`UnresolvedName`,
-    `ast_strategies.py`), and that resolves against the *immediately
-    enclosing* workflow's own `inputs:` mapping (`arg_var_is_input`,
-    src/sophios/compiler.py:878) — a subworkflow does not inherit its
-    parent's, so the reference needs the declaration repeated here to resolve
-    at all. See `_wrap_steps` for how the *outer* level keeps the same
-    reference resolvable too.
-    """
+    """A subworkflow body of `steps`, redeclaring the top-level inputs they name bare: a bare name resolves against the
+    enclosing workflow's own `inputs:` only."""
     declared = document.get('inputs') or {}
     _rewrite_workflow_input_references(steps, formals)
     subtree: Yaml = {'steps': steps}
@@ -164,35 +95,9 @@ def _subtree_for(document: Yaml, steps: list[Yaml], formals: dict[str, str]) -> 
 
 
 def _wrap_steps(document: Yaml, groups: list[list[Yaml]], stems: list[str]) -> Yaml:
-    """One new subworkflow step per group of `document`'s own steps, replacing
-    `document['steps']` outright — the shared engine behind `split` and
-    `rename_workflow`.
-
-    Each wrapper is wired to whichever of `document`'s own declared `inputs:`
-    its own group references, via `parentargs['in']` rather than a plain
-    `in:` key on the step dict: compilation builds a subworkflow
-    step's final `in:` by merging `parentargs` over any `wic:`-supplied
-    overrides (src/sophios/compiler.py:560-567), discarding whatever the step
-    dict already had — checked directly, an `in:` set any other way is simply
-    gone by the time the step is compiled. Left unwired instead, the compiler
-    auto-fills a missing formal parameter as a same-named bare reference of
-    its own (`args_required`, src/sophios/compiler.py:665-671), and *that*
-    reference is not the explicit one this function writes: checked directly,
-    an unwired wrapper argument can get backward-inferred to a preceding
-    sibling group's output instead, whenever their types happen to unify —
-    silently rewiring an argument that named a specific declared input in the
-    unsplit document to a different producer entirely once split. `split`
-    wiring every reference explicitly is what keeps that inference path from
-    ever being reached for an argument this function already knows the answer
-    to.
-
-    `document`'s own `inputs:` stays in place at the outer level too,
-    unconditionally: a referenced name needs it there for the bare reference
-    above to resolve, and an unreferenced one is still a real port in an
-    unsplit compilation regardless — the compiler copies a document's
-    `inputs:` into its compiled `inputs:` regardless of use (checked
-    directly) — so dropping either kind would be its own extra divergence.
-    """
+    """`document`'s steps replaced by one subworkflow step per group, each wired through `parentargs['in']` (compilation
+    drops an `in:` on the step) to the inputs its group names: left unwired, inference may feed it from a sibling."""
+    # `inputs:` stays outside too: the compiler emits a document's inputs whether used or not.
     outer = {key: value for key, value in document.items() if key != 'steps'}
     new_steps = []
     for stem, steps in zip(stems, groups):
@@ -207,23 +112,15 @@ def _wrap_steps(document: Yaml, groups: list[list[Yaml]], stems: list[str]) -> Y
 
 
 def _rename_workflow(document: Yaml) -> Yaml:
-    """Wrap every step in one new subworkflow, under a fixed, different stem.
-
-    The root's own stem is supplied to `compile_hermetic` as the `name`
-    argument, outside the `Yaml` this function receives, so there is nothing
-    in the document itself that *is* "the root's stem" to edit in place.
-    Introducing one level of nesting is the mechanism available at this level
-    for giving a group of steps a stem other than the one they would
-    otherwise inherit, and it is the same claim: everything under
-    `renamed.wic` now has `renamed` as the first segment of its namespace
-    instead of the root's name, and that must move no edge.
-    """
+    """Wrap every step in one subworkflow `renamed.wic`: the root's stem is outside the document, so nesting is how a
+    group of steps gets another first namespace segment."""
     return _wrap_steps(document, [copy.deepcopy(document.get('steps', []))], ['renamed.wic'])
 
 
 TRANSFORMATIONS: Final[tuple[Transformation, ...]] = (
+    # A copy, not the object: the compiler mutates its input, so a second compile would see what the first left.
     Transformation(
-        name='identity', preserves=Strength.IDENTICAL, apply=_identity,
+        name='identity', preserves=Strength.IDENTICAL, apply=copy.deepcopy,
         rationale=(
             'Compiling the same input twice must give the same answer. Trivial to state and not '
             'trivial to satisfy: the compiler mutates yaml_tree, inputs_workflow, '
@@ -242,28 +139,10 @@ TRANSFORMATIONS: Final[tuple[Transformation, ...]] = (
 )
 
 
-def _cut_points(partitioning: tuple[tuple[int, ...], ...]) -> tuple[int, ...]:
-    """The boundary before every group but the first, as plain indices.
-
-    `partitionings(n)` is shaped for a document with exactly `n` steps, but
-    `split_transformations()` has no document in hand when it builds a `split`
-    — it hands out `Transformation`s, and only the property that calls `apply`
-    knows how many steps the drawn workflow actually has. Reducing a
-    partitioning to its boundary *positions* (rather than its groups) is what
-    lets `split.apply` rebuild groups for whatever length it is actually
-    given, by clamping and deduplicating these positions against that length.
-    """
-    return tuple(group[0] for group in partitioning[1:])
-
-
 def split(cuts: tuple[tuple[int, ...], ...]) -> Transformation:
-    """A `split` transformation for one drawn set of cut points.
-
-    Every group, including a group of one, becomes its own subworkflow via
-    `hermetic.subworkflow_step` — a subworkflow is the steps written in one
-    file, and a one-step file is still a file.
-    """
-    points = _cut_points(cuts)
+    """A `split` for one drawn partitioning: each group, one step included, becomes its own subworkflow."""
+    # Boundaries, not groups: `apply` rebuilds groups for the length of the document it gets.
+    points = tuple(group[0] for group in cuts[1:])
 
     def apply(document: Yaml) -> Yaml:
         steps: list[Yaml] = document.get('steps', [])
@@ -282,30 +161,12 @@ def split(cuts: tuple[tuple[int, ...], ...]) -> Transformation:
             'them differently renames every port and moves no edge.'))
 
 
-#: How many steps `partitionings` is asked to cut. `workflows()` generates at
-#: most 4 ordinary steps plus one optional subworkflow step (`ast_strategies.documents`),
-#: so 5 covers the widest document `test_a_meaning_preserving_rewrite_preserves_meaning`
-#: can draw; `split.apply` clamps its cut points to whatever length it is
-#: actually given, so this bound only needs to be generous, not exact.
+#: The widest document `workflows()` draws (4 tool steps and a subworkflow); `apply` clamps cuts, so generous will do.
 _SPLIT_STEP_BOUND: Final = 5
 
 
 def split_transformations() -> SearchStrategy[Transformation]:
-    """A freshly drawn `split`, the one transformation that is not a constant.
-
-    Replaces a `transformations()` strategy that drew all five, which the
-    property then had to hope was even. It was not: `st.one_of` weights its
-    branches by Hypothesis's heuristics and `st.sampled_from` favours its first
-    element, so at the property's own fifty examples `identity` took about half
-    the budget — the one rewrite whose subject is the compiler's idempotence
-    rather than any rewrite — while the thinnest real one came out at 1 example
-    in 50, and at none at all in about one run in five.
-
-    No amount of reordering fixes that, because the bias is the engine
-    preferring simpler choices, by design. So the property parametrises over
-    the five kinds instead and each gets the whole budget, which is both
-    stronger and one less thing to measure.
-    """
-    # pylint cannot see through `@st.composite` in `ast_strategies` and reads
-    # partitionings() as returning its element type rather than a strategy.
+    """A freshly drawn `split`. The property parametrises over the kinds instead of drawing one: Hypothesis favours
+    simple draws, so `identity` took half the budget and the thinnest rewrite about one example in fifty."""
+    # pylint cannot see through `@st.composite`: it reads partitionings() as its element type, not a strategy.
     return partitionings(_SPLIT_STEP_BOUND).map(split)  # pylint: disable=no-member

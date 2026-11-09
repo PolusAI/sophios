@@ -1,7 +1,6 @@
 """Test cases held as data under tests/core/data, and the forms their expectations are written in.
 
-A case list is a YAML list of mappings, each with an `id`: the layout of data/cwl-v1.2/cases.yaml. A case
-directory holds a case's files beside its expected.yaml. Each case is one pytest parameter.
+A case list is a YAML list of mappings with an `id`; a case directory holds its files beside expected.yaml.
 
 `match(expected, actual)` reads an expectation:
 - `{re: pattern}`: text in which re.search finds the pattern

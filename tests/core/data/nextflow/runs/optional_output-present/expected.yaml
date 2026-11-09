@@ -1,2 +1,0 @@
-why: A File? output is null for no match and the file for one; more fail the run, as in CWL.
-outputs: {maybe~o: {class: File, basename: maybe.txt, contents: ''}}

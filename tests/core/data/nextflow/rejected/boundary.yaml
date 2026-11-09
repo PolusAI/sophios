@@ -48,10 +48,10 @@
    workflow: {steps: [{id: ECHO}], inputs: {a: string}, outputs: {a_out: {type: string, outputSource: a}}}, tools: [{id:
    ECHO}], job: {a: x}, findings: ["workflow: workflow output 'a_out' directly forwards a workflow input; boundary
    passthrough is not executable on the Nextflow target"]}
-- {id: tool_requirement_without_class-requirements, why: &classless A requirement or hint names its class., tool: {id:
-   CLASSLESS, requirements: [{directive: '${System.exit(3)}'}]}, findings: ['steps[0].run.requirements.0: a requirement
+- {id: tool_requirement_without_class-requirements, why: &classless A requirement or hint names its class., tool:
+   {requirements: [{directive: '${System.exit(3)}'}]}, findings: ['steps[0].run.requirements.0: a requirement
    or hint needs a string `class`']}
-- {id: tool_requirement_without_class-hints, why: *classless, tool: {id: CLASSLESS, hints: [{directive:
+- {id: tool_requirement_without_class-hints, why: *classless, tool: {hints: [{directive:
    '${System.exit(3)}'}]}, findings: ['steps[0].run.hints.0: a requirement or hint needs a string `class`']}
 - {id: a_long_input_with_a_default_has_only_the_type_finding, why: The type's finding names a long; its default is not
    judged against it., workflow: {steps: [{id: N}]}, tools: [{id: N, inputs: {n: {type: long, default: 1}}}], findings:
@@ -94,46 +94,46 @@
 - {id: double_in_a_workflow_output, why: *long, tools: [{<<: *produce, inputs: *int_input}], workflow: {<<: *produce_wf,
    inputs: *int, outputs: {out: {type: double, outputSource: PRODUCE/out}}}, error: {contains:
    ['workflow.outputs.out.type: double is not supported']}}
-- {id: fractional_cpus, why: A cpu count is whole., tool: {id: RESOURCES, requirements: {ResourceRequirement: {coresMax:
+- {id: fractional_cpus, why: A cpu count is whole., tool: {requirements: {ResourceRequirement: {coresMax:
    2.5}}}, error: {re: coresMax.*whole number}}
-- {id: a_cuda_field_cwltool_does_not_declare, why: A field nothing lowers is refused naming itself., tool: {id: GPU,
-   hints: [{class: 'cwltool:CUDARequirement', cudaComputeCapabilityMin: '3.0'}]}, findings:
+- {id: a_cuda_field_cwltool_does_not_declare, why: A field nothing lowers is refused naming itself., tool: {hints:
+   [{class: 'cwltool:CUDARequirement', cudaComputeCapabilityMin: '3.0'}]}, findings:
    ['steps[0].run.hints.0.cudaComputeCapabilityMin: cudaComputeCapabilityMin is not consumed by the Nextflow lowering']}
-- {id: cuda_device_count_min-0, why: &count A CUDA device count is a positive whole number., tool: {id: GPU, hints:
+- {id: cuda_device_count_min-0, why: &count A CUDA device count is a positive whole number., tool: {hints:
    {'cwltool:CUDARequirement': {cudaDeviceCountMin: 0}}}, findings:
    ['steps[0].run.hints.cwltool:CUDARequirement.cudaDeviceCountMin: a CUDA device count must be a positive whole number,
    got 0']}
-- {id: cuda_device_count_min--1, why: *count, tool: {id: GPU, hints: {'cwltool:CUDARequirement': {cudaDeviceCountMin:
+- {id: cuda_device_count_min--1, why: *count, tool: {hints: {'cwltool:CUDARequirement': {cudaDeviceCountMin:
    -1}}}, findings: ['steps[0].run.hints.cwltool:CUDARequirement.cudaDeviceCountMin: a CUDA device count must be a
    positive whole number, got -1']}
-- {id: cuda_device_count_min-true, why: *count, tool: {id: GPU, hints: {'cwltool:CUDARequirement': {cudaDeviceCountMin:
+- {id: cuda_device_count_min-true, why: *count, tool: {hints: {'cwltool:CUDARequirement': {cudaDeviceCountMin:
    true}}}, findings: ['steps[0].run.hints.cwltool:CUDARequirement.cudaDeviceCountMin: a CUDA device count must be a
    positive whole number, got True']}
-- {id: cuda_device_count_min-1.5, why: *count, tool: {id: GPU, hints: {'cwltool:CUDARequirement': {cudaDeviceCountMin:
+- {id: cuda_device_count_min-1.5, why: *count, tool: {hints: {'cwltool:CUDARequirement': {cudaDeviceCountMin:
    1.5}}}, findings: ['steps[0].run.hints.cwltool:CUDARequirement.cudaDeviceCountMin: a CUDA device count must be a
    positive whole number, got 1.5']}
-- {id: cuda_device_count_min-text, why: *count, tool: {id: GPU, hints: {'cwltool:CUDARequirement': {cudaDeviceCountMin:
+- {id: cuda_device_count_min-text, why: *count, tool: {hints: {'cwltool:CUDARequirement': {cudaDeviceCountMin:
    '2'}}}, findings: ['steps[0].run.hints.cwltool:CUDARequirement.cudaDeviceCountMin: a CUDA device count must be a
    positive whole number, got ''2''']}
-- {id: cuda_device_count_min-expression, why: *count, tool: {id: GPU, hints: {'cwltool:CUDARequirement':
+- {id: cuda_device_count_min-expression, why: *count, tool: {hints: {'cwltool:CUDARequirement':
    {cudaDeviceCountMin: $(inputs.n)}}}, findings: ['steps[0].run.hints.cwltool:CUDARequirement.cudaDeviceCountMin: a
    CUDA device count must be a positive whole number, got ''$(inputs.n)''']}
-- {id: cuda_device_count_max-0, why: *count, tool: {id: GPU, hints: {'cwltool:CUDARequirement': {cudaDeviceCountMin: 1,
+- {id: cuda_device_count_max-0, why: *count, tool: {hints: {'cwltool:CUDARequirement': {cudaDeviceCountMin: 1,
    cudaDeviceCountMax: 0}}}, findings: ['steps[0].run.hints.cwltool:CUDARequirement.cudaDeviceCountMax: a CUDA device
    count must be a positive whole number, got 0']}
-- {id: cuda_device_count_max--1, why: *count, tool: {id: GPU, hints: {'cwltool:CUDARequirement': {cudaDeviceCountMin: 1,
+- {id: cuda_device_count_max--1, why: *count, tool: {hints: {'cwltool:CUDARequirement': {cudaDeviceCountMin: 1,
    cudaDeviceCountMax: -1}}}, findings: ['steps[0].run.hints.cwltool:CUDARequirement.cudaDeviceCountMax: a CUDA device
    count must be a positive whole number, got -1']}
-- {id: cuda_device_count_max-true, why: *count, tool: {id: GPU, hints: {'cwltool:CUDARequirement': {cudaDeviceCountMin:
+- {id: cuda_device_count_max-true, why: *count, tool: {hints: {'cwltool:CUDARequirement': {cudaDeviceCountMin:
    1, cudaDeviceCountMax: true}}}, findings: ['steps[0].run.hints.cwltool:CUDARequirement.cudaDeviceCountMax: a CUDA
    device count must be a positive whole number, got True']}
-- {id: cuda_device_count_max-1.5, why: *count, tool: {id: GPU, hints: {'cwltool:CUDARequirement': {cudaDeviceCountMin:
+- {id: cuda_device_count_max-1.5, why: *count, tool: {hints: {'cwltool:CUDARequirement': {cudaDeviceCountMin:
    1, cudaDeviceCountMax: 1.5}}}, findings: ['steps[0].run.hints.cwltool:CUDARequirement.cudaDeviceCountMax: a CUDA
    device count must be a positive whole number, got 1.5']}
-- {id: cuda_device_count_max-text, why: *count, tool: {id: GPU, hints: {'cwltool:CUDARequirement': {cudaDeviceCountMin:
+- {id: cuda_device_count_max-text, why: *count, tool: {hints: {'cwltool:CUDARequirement': {cudaDeviceCountMin:
    1, cudaDeviceCountMax: '2'}}}, findings: ['steps[0].run.hints.cwltool:CUDARequirement.cudaDeviceCountMax: a CUDA
    device count must be a positive whole number, got ''2''']}
-- {id: cuda_device_count_max-expression, why: *count, tool: {id: GPU, hints: {'cwltool:CUDARequirement':
+- {id: cuda_device_count_max-expression, why: *count, tool: {hints: {'cwltool:CUDARequirement':
    {cudaDeviceCountMin: 1, cudaDeviceCountMax: $(inputs.n)}}}, findings:
    ['steps[0].run.hints.cwltool:CUDARequirement.cudaDeviceCountMax: a CUDA device count must be a positive whole number,
    got ''$(inputs.n)''']}

@@ -1,12 +1,5 @@
-"""Behavioural coverage for `sophios.plugins` transforms that reach emitted CWL.
-
-`sophios.plugins` is FORBIDDEN to the oracle (`test_hermeticity.py`),
-because importing it reads the config and walks the adapter search paths. That
-makes the oracle unable to check the plugin transforms directly, so the ones
-whose output lands in an emitted document are covered here instead.
-
-Discovery is covered here too: which files are plugins, and which file a stem resolves to.
-"""
+"""Behavioural coverage for `sophios.plugins` transforms that reach emitted CWL, and for discovery; the oracle cannot
+import it (FORBIDDEN in test_hermeticity.py), as importing reads the config."""
 import copy
 import glob
 import os

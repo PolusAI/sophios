@@ -1,35 +1,17 @@
-"""Claims about a single compilation.
-
-These are the properties that are *not* equivalences. An equivalence
-compares two compilations and needs a relation to say what may differ between
-them; a predicate examines one compilation and needs none. Grouping them by
-that fact rather than by which register row they came from is the point — a
-reader can tell at a glance which properties compare two runs and which read
-one.
-
-One claim lives here, **made-name injectivity**: distinct authored steps and
-ports never get the same made name. Edge soundness is `cwltool --validate`'s,
-over the same generator (`test_emit.test_emit_validates_as_cwl_v1_2`); the
-fixed-point guard's is `test_infer_phase.test_iteration_exhaustion_is_exactly_wic022`'s.
-"""
+"""Claims about a single compilation, which need no relation between two: **made-name injectivity**, that distinct
+authored steps and ports never get one made name. Edge soundness and the fixed-point guard are tested elsewhere."""
 import copy
 import pytest
 from hypothesis import example, given
 from hypothesis import strategies as st
 
 from sophios.ir.artifacts import CompilationArtifact
-from sophios.utils_cwl import desugar_into_canonical_normal_form
-from sophios.wic_types import Cwl, StepId, Tool, Tools, Yaml
+from sophios.wic_types import Tools, Yaml
 
 from .hermetic import ORACLE, compile_hermetic, subworkflow_step
-from .synthetic_tools import SYNTHETIC_NS, clt
+from .synthetic_tools import clt, registered
 
-# --------------------------------------------------------------------------
-# Made-name injectivity
-# --------------------------------------------------------------------------
-
-#: Authored names (wic045 admits `[A-Za-z0-9_.-]`) over a small alphabet, so
-#: that one name is often another's prefix.
+#: Authored names (wic045 admits `[A-Za-z0-9_.-]`) over a small alphabet, so one is often another's prefix.
 _NAMES = st.from_regex(r'[ab][ab_.-]{0,3}', fullmatch=True)
 _SEPARATORS = st.sampled_from('_.-')
 
@@ -39,13 +21,10 @@ _Signature = tuple[frozenset[str], frozenset[str]]
 
 def _tools(signatures: dict[str, _Signature]) -> Tools:
     """A registry with one stub tool per stem, every port a string."""
-    def tool(inputs: frozenset[str], outputs: frozenset[str]) -> Cwl:
-        return clt({port: {'type': 'string', 'inputBinding': {'position': 1}} for port in inputs},
-                   {port: {'type': 'string', 'outputBinding': {'outputEval': '$("x")'}} for port in outputs},
-                   javascript=True)
-    return {StepId(stem, SYNTHETIC_NS): Tool(f'/synthetic/{stem}.cwl',
-                                             desugar_into_canonical_normal_form(tool(*signature)))
-            for stem, signature in signatures.items()}
+    return registered({stem: clt({port: {'type': 'string', 'inputBinding': {'position': 1}} for port in inputs},
+                                 {port: {'type': 'string', 'outputBinding': {'outputEval': '$("x")'}}
+                                  for port in outputs}, javascript=True, canonical=True)
+                       for stem, (inputs, outputs) in signatures.items()}, {})
 
 
 def _workflow(stems: list[str], signatures: dict[str, _Signature], calls: list[str],
@@ -73,16 +52,9 @@ def _signatures(draw: st.DrawFn) -> dict[str, _Signature]:
 
 @st.composite
 def _trees(draw: st.DrawFn) -> tuple[str, Yaml, dict[str, _Signature]]:
-    """A root name, a workflow, and the signatures of the tools it runs.
-
-    The root runs every tool at least once, so names built to meet do meet,
-    and may repeat a step `x` beside a step named `x·n`, `n` being the
-    position of one copy of `x`. Steps repeat, a subworkflow may be called
-    more than once, and a call may be named like a tool; subworkflows nest up
-    to two levels below the root.
-    A subworkflow name keeps one body throughout, since the registry holds
-    one body per name.
-    """
+    """A root name, a workflow and its tools' signatures. The root runs every tool, so names built to meet do; steps
+    repeat (even `x` beside `x·n`), subworkflows nest two levels and may be called twice or named like a tool, and
+    keep one body per name, as the registry holds one."""
     signatures = draw(_signatures())
     stems = st.lists(st.sampled_from(sorted(signatures)), min_size=1, max_size=3)
     callees = draw(st.lists(_NAMES, max_size=2, unique=True))
@@ -102,9 +74,8 @@ def _trees(draw: st.DrawFn) -> tuple[str, Yaml, dict[str, _Signature]]:
 
 
 def _exposed(yml: Yaml, signatures: dict[str, _Signature]) -> tuple[int, int]:
-    """How many inputs and outputs `yml` exposes: one per literal and one per
-    tool output, through every subworkflow call. Counted from the source, so
-    a made name that two of them share shows as a missing key."""
+    """How many inputs and outputs `yml` exposes: one per literal and tool output, through every subworkflow call,
+    counted from the source so a made name two share shows as a missing key."""
     inputs = outputs = 0
     for step in yml['steps']:
         if 'subtree' in step:

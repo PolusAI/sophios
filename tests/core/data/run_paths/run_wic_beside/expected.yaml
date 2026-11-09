@@ -1,2 +1,3 @@
 why: a run .wic path is read from beside the document, not looked up in the search paths
-steps: [{steps: [{baseCommand: 'true', inputs: {name: {type: string, inputBinding: {position: 1}}}}]}]
+steps: [{steps: [{baseCommand: 'true', inputs: {name: {type: string, inputBinding: {position: 1}}},
+    outputs: {file: {type: File, format: 'edam:format_2330', outputBinding: {glob: $(inputs.name)}}}}]}]

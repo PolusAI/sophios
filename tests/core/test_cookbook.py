@@ -1,22 +1,13 @@
-"""Every cookbook pair compiles to one CWL from both surfaces.
-
-`docs/cookbook/<stem>.wic` and `docs/cookbook/<stem>.py` are the two spellings
-the documentation shows side by side. Each pair is compiled through both doors,
-the file the CLI reads and `Workflow.compile()`, and the emitted CWL, the job
-inputs and the codes of the notes the compile made must agree. A pair that
-drifts apart is a cookbook entry that tells one surface's reader something
-false.
-"""
+"""Every cookbook pair (`docs/cookbook/<stem>.wic` and `.py`) compiles to one CWL, job inputs and note codes from both
+surfaces, or a docs page tells one surface's reader something false."""
 import re
 import warnings
 from collections.abc import Iterable
-from functools import lru_cache
 from pathlib import Path
 
 import pytest
 
 import sophios.compiler
-import sophios.plugins
 from sophios.api.python.workflow import Inference
 from sophios.lang import SophiosErrorCode
 from sophios.lang.diagnostics import Severity, SophiosError, lines, report
@@ -26,12 +17,12 @@ from sophios.ir.frontdoor import bundle_from_disk
 from sophios.post_compile import inline_artifact_runs
 from sophios.python_cwl_adapter import import_python_file
 from sophios.runtime_inputs import normalize_artifact_cwl, normalize_artifact_job_inputs
-from sophios.wic_types import CompilerOptions, Json, Tools
+from sophios.wic_types import CompilerOptions, Json
 
+from .helpers import REPO_ROOT, shipped_tools
 from .test_setup import home_with_shipped_tools, use_home
 from .wic_reading import read_wic
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
 COOKBOOK = REPO_ROOT / 'docs' / 'cookbook'
 #: A pair is a `.py` beside a `.wic` of the same stem. A `.wic` without a `.py`
 #: is a subworkflow a pair calls; its Python lives in the caller's script.
@@ -48,17 +39,9 @@ def _shipped_tools_home(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 @pytest.fixture(autouse=True)
 def _with_the_shipped_tools_at_home(monkeypatch: pytest.MonkeyPatch, shipped_tools_home: Path) -> None:
-    """The scripts name their tools under `Path.home() / 'wic' / 'cwl_adapters'`, as the documentation
-    tells a reader to run them after `sophios --generate_config`; here that home holds this checkout's
-    tools, whatever the real home holds, so the test passes in an empty home and in CI."""
+    """The scripts name their tools under `Path.home() / 'wic' / 'cwl_adapters'`, as the docs tell a reader after
+    `sophios --generate_config`; here that home holds this checkout's tools, so an empty home and CI pass alike."""
     use_home(monkeypatch, shipped_tools_home)
-
-
-@lru_cache(maxsize=1)
-def _shipped_tools() -> Tools:
-    """The tools this checkout ships, by stem, as a `.wic` step finds them after
-    `sophios --generate_config`: read from the repository, not from whatever the home holds."""
-    return sophios.plugins.get_tools_cwl({'search_paths_cwl': {'global': [str(REPO_ROOT / 'cwl_adapters')]}})
 
 
 def _codes(diagnostics: Iterable[object]) -> list[str]:
@@ -67,12 +50,8 @@ def _codes(diagnostics: Iterable[object]) -> list[str]:
 
 
 def _as_compile_returns(cwl: Json, wic_path: Path) -> Json:
-    """`cwl` with the outputs `Workflow.compile()` returns for the same workflow.
-
-    A workflow that names outputs returns only those from `compile()`; the CLI
-    also exposes every step output under its generated name. That is the one
-    place the two doors differ, and `docs/connecting-steps.md` says so.
-    """
+    """`cwl` with the outputs `Workflow.compile()` returns: only the named ones, where the CLI also exposes every step
+    output (docs/connecting-steps.md)."""
     named = read_wic(wic_path.read_text(encoding='utf-8'), wic_path.name).get('outputs')
     if not named:
         return cwl
@@ -88,7 +67,7 @@ def _compile_wic(root: Path, settings: CompilerOptions | None = None) -> Compila
     """`root` compiled as the CLI reads it, with the shipped tools and the `.wic` files beside it, a `run:` path read
     from beside the document."""
     return sophios.compiler.compile_source(
-        bundle_from_disk(root, {'global': {path.stem: path for path in root.parent.glob('*.wic')}}, _shipped_tools()),
+        bundle_from_disk(root, {'global': {path.stem: path for path in root.parent.glob('*.wic')}}, shipped_tools()),
         settings or default_compilation_settings(), testing=True)
 
 

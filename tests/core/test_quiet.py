@@ -1,22 +1,19 @@
-"""`--quiet` and `run(run_args_dict={'quiet': ...})`: cwltool's own log hidden, and nothing else.
-
-The compiled CWL is the same with or without it, each tool's messages print as the run goes, and
-a failed step is named with how it ended."""
+"""`--quiet` and `run(run_args_dict={'quiet': ...})` hide cwltool's own log and nothing else: the compiled CWL is
+unchanged, each tool's messages print as the run goes, and a failed step is named with how it ended."""
 import json
-import os
 import shlex
-import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Final, Iterator
+from typing import Any, Final, Iterator, cast
 
 import pytest
 import yaml
 
-import sophios
-from sophios import main, preflight, run_local
+from sophios import run_local
 from sophios.api.python import _workflow_runtime as python_runtime
 from sophios.api.python.workflow import Step, Workflow
+
+from .helpers import EACH_RUNNER, no_preflight, run_cli, run_local_process, search_config, write_tree
 
 #: Prints a line on each stream, and fails when told to.
 SAY: Final = '''cwlVersion: v1.2
@@ -64,13 +61,10 @@ ADDRESSES: Final = ('say', 'local', 'inline', 'pair~say', 'pair~local', 'own')
 def _project(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     """`w.wic` and the tools it runs, with a config that searches `tools/`. Nothing is pulled."""
     root = tmp_path / 'project'
-    for name, text in (('tools/say.cwl', SAY), ('tools/own.cwl', OWN), ('local/local.cwl', SAY),
-                       ('pair.wic', PAIR), ('w.wic', WORKFLOW)):
-        (root / name).parent.mkdir(parents=True, exist_ok=True)
-        (root / name).write_text(text, encoding='utf-8')
-    (root / 'config.json').write_text(json.dumps({'search_paths_cwl': {'global': [str(root / 'tools')]},
-                                                  'search_paths_wic': {'global': [str(root)]}}), encoding='utf-8')
-    monkeypatch.setattr(preflight, 'prepare', lambda *_a, **_k: None)
+    write_tree(root, {'tools/say.cwl': SAY, 'tools/own.cwl': OWN, 'local/local.cwl': SAY,
+                      'pair.wic': PAIR, 'w.wic': WORKFLOW})
+    search_config(root / 'config.json', [root / 'tools'], [root])
+    no_preflight(monkeypatch)
     monkeypatch.chdir(root)
     return root
 
@@ -79,8 +73,7 @@ def _sophios(monkeypatch: pytest.MonkeyPatch, *flags: str) -> list[str]:
     """`sophios --yaml w.wic <flags>`; the runner commands it would run."""
     commands: list[str] = []
     monkeypatch.setattr(run_local, 'generate_run_script', commands.append)
-    monkeypatch.setattr('sys.argv', ['sophios', '--yaml', 'w.wic', '--config_file', 'config.json', *flags])
-    main.main()
+    assert run_cli(monkeypatch, '--yaml', 'w.wic', '--config_file', 'config.json', *flags) is None
     return commands
 
 
@@ -95,8 +88,7 @@ def _tools(document: dict[str, Any], address: str = '') -> Iterator[tuple[str, d
 
 
 def _read(path: Path) -> dict[str, Any]:
-    loaded: dict[str, Any] = yaml.safe_load(path.read_text(encoding='utf-8'))
-    return loaded
+    return cast(dict[str, Any], yaml.safe_load(path.read_text(encoding='utf-8')))
 
 
 def _tree(basepath: Path) -> dict[str, Any]:
@@ -139,7 +131,7 @@ def test_a_quiet_python_run_writes_what_compile_returns(project: Path, monkeypat
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize('runner', ['cwltool', 'toil-cwl-runner'])
+@EACH_RUNNER
 @pytest.mark.parametrize('quiet', [True, False])
 def test_only_a_quiet_cwltool_run_is_given_quiet(project: Path, monkeypatch: pytest.MonkeyPatch,
                                                  runner: str, quiet: bool) -> None:
@@ -157,26 +149,15 @@ def test_only_a_quiet_cwltool_run_is_given_quiet(project: Path, monkeypatch: pyt
         assert '--log-dir' not in words
 
 
-def _run(workflow: Path, *flags: str) -> subprocess.CompletedProcess[str]:
-    """`sophios --run_local --quiet` on `workflow` from the current directory, in its own process as on the
-    command line."""
-    package = str(Path(sophios.__file__).resolve().parents[1])
-    env = {**os.environ, 'PYTHONPATH': os.pathsep.join(filter(None, (package, os.environ.get('PYTHONPATH'))))}
-    return subprocess.run([sys.executable, '-m', 'sophios.main', '--yaml', str(workflow), '--run_local', '--quiet',
-                           '--ignore_docker_install', '--ignore_docker_processes', *flags],
-                          check=False, env=env, capture_output=True, text=True)
-
-
 @pytest.mark.needs_cwltool
 def test_a_failing_step_is_named_with_its_status_below_its_own_messages(monkeypatch: pytest.MonkeyPatch,
                                                                         tmp_path: Path) -> None:
     """A quiet run still prints what the step wrote, and the summary names the step and how it ended."""
-    (tmp_path / 'say.cwl').write_text(SAY, encoding='utf-8')
-    (tmp_path / 'fail.wic').write_text('steps:\n- id: say\n  run: say.cwl\n  in: {word: !ii boom, status: !ii 3}\n',
-                                       encoding='utf-8')
+    write_tree(tmp_path, {'say.cwl': SAY,
+                          'fail.wic': 'steps:\n- id: say\n  run: say.cwl\n  in: {word: !ii boom, status: !ii 3}\n'})
     monkeypatch.chdir(tmp_path)
 
-    ran = _run(tmp_path / 'fail.wic')
+    ran = run_local_process(tmp_path / 'fail.wic', '--quiet', capture_output=True)
 
     assert ran.returncode != 0
     assert 'boom err\n' in ran.stderr
@@ -189,17 +170,16 @@ def test_a_quiet_run_keeps_a_file_the_tool_names_as_its_stdout(monkeypatch: pyte
                                                                tmp_path: Path) -> None:
     """A tool that writes `system.pdb` itself and also names it as its empty stdout gets the file it wrote."""
     write = "import sys; open(sys.argv[1], 'w').write('ATOM 1\\\\n')"
-    (tmp_path / 'probe.cwl').write_text(f'''cwlVersion: v1.2
+    write_tree(tmp_path, {'probe.cwl': f'''cwlVersion: v1.2
 class: CommandLineTool
 baseCommand: [{json.dumps(sys.executable)}, -c, "{write}"]
 inputs: {{output_pdb_path: {{type: string, default: system.pdb, inputBinding: {{position: 1}}}}}}
 outputs: {{output_pdb_path: {{type: File, outputBinding: {{glob: $(inputs.output_pdb_path)}}}}}}
 stdout: $(inputs.output_pdb_path)
-''', encoding='utf-8')
-    (tmp_path / 'probe.wic').write_text('steps:\n- id: probe\n  run: probe.cwl\n', encoding='utf-8')
+''', 'probe.wic': 'steps:\n- id: probe\n  run: probe.cwl\n'})
     monkeypatch.chdir(tmp_path)
 
-    ran = _run(tmp_path / 'probe.wic')
+    ran = run_local_process(tmp_path / 'probe.wic', '--quiet', capture_output=True)
 
     assert ran.returncode == 0, ran.stdout + ran.stderr
     (output,) = (tmp_path / 'autogenerated').glob('outdir_*/**/system.pdb')

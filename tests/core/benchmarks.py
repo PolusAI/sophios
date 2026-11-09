@@ -1,14 +1,5 @@
-"""Compile-cost cases, run weekly; their timings gate nothing.
-
-Not a property suite and not hermetic: the corpus half is the point — a trend
-over the workflows people actually compile — so it imports `wic_corpus` and is
-excluded from the oracle's module list.
-
-No thresholds: however slow a week is, no number fails anything. A case that
-raises is reported in the table, the other cases still run, and `main` then
-returns 1. `parse_only` deliberately does not compile for real, which is what
-lets a slow week be pinned to the parser or to the compiler.
-"""
+"""Compile-cost cases, run weekly; no timing fails anything. Not hermetic, since the corpus trend is the point: a
+case that raises is reported, the others still run, and `main` returns 1."""
 import sys
 import time
 from dataclasses import dataclass
@@ -16,30 +7,21 @@ from functools import partial
 from pathlib import Path
 from typing import Callable, Final
 
-
-# `tests/` has no `__init__.py` (test_hermeticity.py's own comment explains
-# why), so a bare `python tests/core/benchmarks.py` runs this file with no
-# package context and a relative import would fail immediately. `core/` does
-# have one, so the fix is an absolute `core.*` import plus making sure `core`'s
-# parent is on `sys.path` — which pytest already does for every other test in
-# this package, so this is a no-op under `pytest`. Every import below is
-# consequently pushed past the top of the module, hence the blanket disable.
+# Run as `python tests/core/benchmarks.py`, outside any package: `core.*` is imported absolutely with its parent on
+# sys.path (pytest puts it there already), so the imports follow; hence the blanket disable.
 # pylint: disable=wrong-import-position
 if __package__ in (None, ''):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from core.hermetic import compile_hermetic, nested_workflow
-from core.synthetic_tools import clt, SYNTHETIC_TOOLS
+from core.synthetic_tools import SYNTHETIC_TOOLS, insertion_registry
+from core.test_setup import load_test_registry
 from core.wic_corpus import CORPUS, corpus_id
 
 from sophios.ir import frontdoor
 import sophios.cli
 import sophios.compiler
-import sophios.input_output as io
-import sophios.plugins
 from sophios.lang import parse
-from sophios.utils_cwl import desugar_into_canonical_normal_form
-from sophios.wic_types import Cwl, StepId, Tool, Tools, Yaml
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,124 +32,23 @@ class Case:
     run: Callable[[], object]
 
 
-# --------------------------------------------------------------------------
-# Case 1: the corpus, compiled for real.
-
-@dataclass
-class _CorpusEnv:
-    """The real plugin registry, discovered once and shared by every corpus
-    case. Discovering it per file would multiply a filesystem walk
-    (`get_tools_cwl` globs `search_paths_cwl`) by the corpus size for no
-    benefit — nothing about it varies per file."""
-    tools: Tools
-    yml_paths: dict[str, dict[str, Path]]
-
-
-_corpus_env: _CorpusEnv | None = None
-
-
-def _get_corpus_env() -> _CorpusEnv:
-    """Build (once, lazily) the environment the corpus case compiles against.
-
-    Lazy rather than built at import time: importing this module to run only
-    `parse_only` or the synthetic cases should not pay for plugin discovery.
-    """
-    global _corpus_env  # pylint: disable=global-statement
-    if _corpus_env is None:
-        args = sophios.cli.get_args()
-        config_path = args.config_file or io.default_config_file(Path(args.homedir))
-        config = io.read_config_from_disk(config_path) if config_path.exists() else io.get_basic_config()
-        tools = sophios.plugins.get_tools_cwl(config)
-        yml_paths = sophios.plugins.get_yml_paths(config)
-        _corpus_env = _CorpusEnv(tools, yml_paths)
-    return _corpus_env
-
-
 def _compile_corpus_file(path: Path) -> None:
-    """Compile one corpus workflow for real, from disk, against the real
-    plugin registry. Mirrors `tests/core/test_examples.py::run_workflows`'s
-    compile-only half — the only pattern in this repository for compiling a
-    `.wic` file from disk rather than an in-memory dict."""
-    env = _get_corpus_env()
-    args = sophios.cli.get_args(str(path))
-    bundle = frontdoor.bundle_from_disk(path, env.yml_paths, env.tools)
-    compiler_options, _graph_settings = sophios.cli.get_dicts_for_compilation(args)
+    """Compile one corpus workflow from disk against the real registry, as test_examples.run_workflows does."""
+    registry = load_test_registry()
+    bundle = frontdoor.bundle_from_disk(path, registry.workflows, registry.tools)
+    compiler_options, _graph_settings = sophios.cli.get_dicts_for_compilation(sophios.cli.get_args(str(path)))
     sophios.compiler.compile_source(bundle, compiler_options, testing=True)
 
 
-# --------------------------------------------------------------------------
-# Case 2: speculative insertion.
-
-
-def _speculative_insertion_registry() -> tuple[Yaml, Tools]:
-    """Two branches, each needing exactly one whitelisted-format-converter
-    insertion. Two or more whitelisted converter tools put a compilation on
-    this path, whose cost is `O(2^n)`.
-
-    Formats may be written either way here: `inference.declared_formats`
-    normalises a bare string to a one-element list at every point of entry, so
-    the single-element lists below carry no constraint and are just what the
-    fixture happened to be written with.
-    """
-    plugin_ns = 'global'
-    specs: dict[str, Cwl] = {}
-    steps: list[Yaml] = []
-    for k in (1, 2):
-        src_fmt, dst_fmt = f'edam:format_src{k}', f'edam:format_dst{k}'
-        specs[f'mk_{k}'] = clt(
-            {}, {'file': {'type': 'File', 'format': src_fmt, 'outputBinding': {'glob': f'src{k}.txt'}}})
-        specs[f'use_{k}'] = clt(
-            {'file': {'type': 'File', 'format': [dst_fmt], 'inputBinding': {'position': 1}}}, {})
-        specs[f'insert_steps_automatically_conv_{k}'] = clt(
-            {'file': {'type': 'File', 'format': [src_fmt], 'inputBinding': {'position': 1}}},
-            {'file': {'type': 'File', 'format': dst_fmt, 'outputBinding': {'glob': f'dst{k}.txt'}}})
-        steps.append({'id': f'mk_{k}', 'in': {}})
-        steps.append({'id': f'use_{k}'})
-    tools: Tools = {
-        StepId(stem, plugin_ns): Tool(f'/synthetic/{stem}.cwl', desugar_into_canonical_normal_form(dict(cwl)))
-        for stem, cwl in specs.items()
-    }
-    return {'steps': steps}, tools
-
-
-_SPECULATIVE_YML, _SPECULATIVE_TOOLS = _speculative_insertion_registry()
-
-
-def _run_speculative_insertion() -> None:
-    compile_hermetic(_SPECULATIVE_YML, 'oracle', tools=_SPECULATIVE_TOOLS, insert_steps_automatically=True)
-
-
-# --------------------------------------------------------------------------
-# Case 3: deep nesting.
-
+_SPECULATIVE_YML, _SPECULATIVE_TOOLS = insertion_registry()
 _DEEP_NESTING_YML: Final = nested_workflow(15)
+_WIDE_INFERENCE_YML: Final = {'steps': [{'id': 'mk_file'} for _ in range(100)]}
 
-
-# --------------------------------------------------------------------------
-# Case 4: wide inference.
-
-def _wide_inference_yml() -> Yaml:
-    """One hundred `mk_file` steps, each with its one `name` input left
-    unspecified. `name` is a string and every prior output is a `File`, so
-    `types_match` never accepts — Infer's backward scan
-    always runs to completion instead of returning at the first match, which
-    is what makes this case pay for the full quadratic scan rather than the
-    linear common case."""
-    return {'steps': [{'id': 'mk_file'} for _ in range(100)]}
-
-
-_WIDE_INFERENCE_YML: Final = _wide_inference_yml()
-
-
-# --------------------------------------------------------------------------
-# Case 5: parse only.
 
 def _parse_corpus() -> None:
     for path in CORPUS:
         parse(path.read_text(encoding='utf-8'), filename=path.name)
 
-
-# --------------------------------------------------------------------------
 
 CASES: Final[tuple[Case, ...]] = tuple(
     Case(f'corpus/{corpus_id(path)}',
@@ -185,7 +66,8 @@ CASES: Final[tuple[Case, ...]] = tuple(
          "two real insertions and the fixed-point passes they force, so it is "
          "the one number on this list that moves with the insertion search "
          "rather than with per-step cost.",
-         run=_run_speculative_insertion),
+         run=lambda: compile_hermetic(_SPECULATIVE_YML, 'oracle', tools=_SPECULATIVE_TOOLS,
+                                      insert_steps_automatically=True)),
     Case('deep_nesting',
          "A workflow partitioned fifteen levels deep with "
          "hermetic.subworkflow_step. Namespacing cost grows with depth and "
@@ -207,10 +89,7 @@ CASES: Final[tuple[Case, ...]] = tuple(
 
 def main() -> int:
     """Time every case and print a table. Returns 1 if a case raised, else 0."""
-    # Discovery is shared setup, not a property of whichever corpus path sorts
-    # first. Keep it lazy when a caller selects only synthetic cases.
-    if any(case.name.startswith('corpus/') for case in CASES):
-        _get_corpus_env()
+    load_test_registry()  # Discovery is shared setup, not the first corpus case's cost.
 
     print('| case | seconds |')
     print('|---|---:|')
@@ -224,8 +103,6 @@ def main() -> int:
             elapsed_seconds = time.perf_counter() - start
             elapsed = f'{elapsed_seconds:.3f}'
         except Exception as exc:  # pylint: disable=broad-except
-            # A case that raises is reported and the rest still run, so one
-            # broken case does not hide the other numbers; the run then fails.
             elapsed_seconds = time.perf_counter() - start
             elapsed = f'error: {type(exc).__name__}'
             failed += 1

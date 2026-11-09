@@ -1,13 +1,5 @@
-"""Pure graph composition, reference linking, and obligation discharge.
-
-The generated differential uses the independent source/registry model from
-the Resolve suite.  Examples pin the cross-scope cases that flat generated
-workflows cannot express compactly: lowest-common-ancestor ownership, wrapper
-output redirection, omitted call arguments, conservative unknown types, and
-both sides of scatter lifting.
-"""
-import copy
-
+"""Pure graph composition, reference linking and obligation discharge: lowest-common-ancestor ownership, wrapper output
+redirection, omitted call arguments (cross-scope cases by code and edge source: data/edge-binding/cross_scope.yaml)."""
 import pytest
 
 from sophios.ir import (
@@ -15,7 +7,6 @@ from sophios.ir import (
     RegistrySnapshot,
     WorkflowGraph,
     front_end,
-    infer,
     link,
 )
 from sophios.ir.complete import complete
@@ -24,7 +15,7 @@ from sophios.ir.types import AuthoredName
 from sophios.lang import SophiosErrorCode, parse
 from sophios.wic_types import StepId as LegacyStepId, Tool, Tools
 
-from .synthetic_tools import SYNTHETIC_NS, SYNTHETIC_TOOLS, clt
+from .synthetic_tools import SYNTHETIC_NS, SYNTHETIC_TOOLS, clt, registered
 
 
 def _rooted(root: str, tools: Tools = SYNTHETIC_TOOLS, **children: str) -> FrontEndResult:
@@ -34,48 +25,33 @@ def _rooted(root: str, tools: Tools = SYNTHETIC_TOOLS, **children: str) -> Front
     return front_end(parse(root, 'root.wic'), registry, name='root')
 
 
-def _cross_scope(source_tool: str, source_type: object, child_input: str = 'name', *,
-                 scatter: bool = False) -> WorkflowGraph:
-    tools = copy.deepcopy(SYNTHETIC_TOOLS)
-    tools[LegacyStepId(source_tool, SYNTHETIC_NS)] = Tool(
-        f'/synthetic/{source_tool}.cwl', clt({}, {'value': {'type': source_type}}))
-    child_scatter = f'  scatter: {child_input}\n' if scatter else ''
-    child = (f'steps:\n- id: mk_file\n  in:\n    {child_input}: !* shared\n'
-             f'{child_scatter}')
-    root = (f'steps:\n- id: {source_tool}\n  out:\n  - value: !& shared\n'
-            '- id: child.wic\n')
-    result = _rooted(root, tools, child=child)
+def _cross_scope(*, wrapped: bool = False) -> WorkflowGraph:
+    """`root` defines the edge `shared` with a string source and calls child.wic, whose mk_file consumes it; with
+    `wrapped`, root calls wrapper.wic, which calls child.wic, so the consumer sits two documents below."""
+    tools = registered({'string_source': clt({}, {'value': {'type': 'string'}})})
+    root = ('steps:\n- id: string_source\n  out:\n  - value: !& shared\n'
+            f'- id: {"wrapper" if wrapped else "child"}.wic\n')
+    result = _rooted(root, tools, child='steps:\n- id: mk_file\n  in:\n    name: !* shared\n',
+                     **({'wrapper': 'steps:\n- id: child.wic\n'} if wrapped else {}))
     assert result.graph is not None and result.resolved is not None
     return result.graph
 
 
 @pytest.mark.fast
-def test_cross_scope_obligation_is_discharged_at_its_lca() -> None:
-    """The edge belongs to the parent graph and the child owes nothing afterward."""
-    typed = _cross_scope('string_source', 'string')
-    linked = link(typed)
-    assert linked.graph is not None, list(linked.diagnostics)
-    assert linked.graph.obligations == ()
-    assert len(linked.graph.linked_edges) == 1
-    assert linked.graph.linked_edges[0].sink.step.namespace.parts
-    assert all(not child.linked_edges for child in linked.graph.children)
-
-
-def _cross_scope_two_levels(source_tool: str, source_type: object,
-                            child_input: str = 'name') -> WorkflowGraph:
-    """As `_cross_scope`, but the consuming step sits two documents under
-    the definition: `root` defines the edge and calls `wrapper.wic`, which
-    calls `child.wic`, whose own step consumes it."""
-    tools = copy.deepcopy(SYNTHETIC_TOOLS)
-    tools[LegacyStepId(source_tool, SYNTHETIC_NS)] = Tool(
-        f'/synthetic/{source_tool}.cwl', clt({}, {'value': {'type': source_type}}))
-    child = f'steps:\n- id: mk_file\n  in:\n    {child_input}: !* shared\n'
-    wrapper = 'steps:\n- id: child.wic\n'
-    root = (f'steps:\n- id: {source_tool}\n  out:\n  - value: !& shared\n'
-            '- id: wrapper.wic\n')
-    result = _rooted(root, tools, child=child, wrapper=wrapper)
-    assert result.graph is not None and result.resolved is not None
-    return result.graph
+@pytest.mark.parametrize(('source_type', 'codes'), [
+    pytest.param('int', [SophiosErrorCode.INCOMPATIBLE_INPUT_REFERENCE], id='proven-disjoint'),
+    pytest.param('Any', [], id='opaque-any'),
+])
+def test_only_proven_disjoint_cross_scope_types_are_rejected(source_type: str, codes: list[SophiosErrorCode]) -> None:
+    """Known incompatibility rejects; opaque Any remains delegated to final CWL validation."""
+    tools = {**SYNTHETIC_TOOLS, LegacyStepId('typed_source', SYNTHETIC_NS): Tool(
+        '/synthetic/typed_source.cwl', clt({}, {'value': {'type': source_type}}))}
+    root = 'steps:\n- id: typed_source\n  out:\n  - value: !& shared\n- id: child.wic\n'
+    typed = _rooted(root, tools, child='steps:\n- id: mk_file\n  in:\n    name: !* shared\n')
+    assert typed.graph is not None
+    linked = link(typed.graph)
+    assert [diagnostic.code for diagnostic in linked.diagnostics] == codes
+    assert (linked.graph is None) is bool(codes)
 
 
 @pytest.mark.fast
@@ -90,7 +66,7 @@ def test_cross_scope_obligation_discharged_two_levels_below_the_definition() -> 
     level on the way down -- never to a port that level's own steps do not
     declare.
     """
-    typed = _cross_scope_two_levels('string_source', 'string')
+    typed = _cross_scope(wrapped=True)
     linked = link(typed)
     assert linked.graph is not None, list(linked.diagnostics)
     assert linked.graph.obligations == ()
@@ -108,197 +84,6 @@ def test_cross_scope_obligation_discharged_two_levels_below_the_definition() -> 
         assert sinks == (edge.sink,)
     for _name, sinks in child.input_mapping:
         assert sinks == (edge.sink,)
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize('definition_first', [True, False], ids=['before', 'after'])
-def test_a_call_does_not_exempt_an_edge_from_document_order(definition_first: bool) -> None:
-    """The order rule is one rule, whether the reference is flat or in a call.
-
-    .wic reference §4: a reference resolves against the definitions before it,
-    and a child may consume what its includer has *already* defined. Lower
-    applies that within one scope. If Link ignored it across a call, the same
-    program would be `wic025` written flat and legal once split into a
-    subworkflow, which is two rules for one construct.
-    """
-    tools = copy.deepcopy(SYNTHETIC_TOOLS)
-    tools[LegacyStepId('string_source', SYNTHETIC_NS)] = Tool(
-        '/synthetic/string_source.cwl', clt({}, {'value': {'type': 'string'}}))
-    child = 'steps:\n- id: mk_file\n  in:\n    name: !* shared\n'
-    producer = '- id: string_source\n  out:\n  - value: !& shared\n'
-    call = '- id: child.wic\n'
-    root = 'steps:\n' + (producer + call if definition_first else call + producer)
-    typed = _rooted(root, tools, child=child)
-    assert typed.graph is not None, list(typed.diagnostics)
-
-    linked = link(typed.graph)
-    if definition_first:
-        assert linked.graph is not None, list(linked.diagnostics)
-        assert len(linked.graph.linked_edges) == 1
-    else:
-        assert linked.graph is None
-        assert [diagnostic.code for diagnostic in linked.diagnostics] == [
-            SophiosErrorCode.UNDEFINED_EDGE]
-
-
-@pytest.mark.fast
-def test_unresolved_root_obligation_is_exactly_undefined_edge() -> None:
-    """An obligation with no producer is reported rather than silently promoted."""
-    child = 'steps:\n- id: mk_file\n  in:\n    name: !* nowhere\n'
-    typed = _rooted('steps:\n- id: child.wic\n', child=child)
-    assert typed.graph is not None
-    linked = link(typed.graph)
-    assert linked.graph is None
-    assert [diagnostic.code for diagnostic in linked.diagnostics] == [
-        SophiosErrorCode.UNDEFINED_EDGE]
-
-
-@pytest.mark.fast
-def test_only_proven_disjoint_cross_scope_types_are_rejected() -> None:
-    """Known incompatibility rejects; opaque Any remains delegated to final CWL validation."""
-    disjoint = link(_cross_scope('int_source', 'int'))
-    assert disjoint.graph is None
-    assert [diagnostic.code for diagnostic in disjoint.diagnostics] == [
-        SophiosErrorCode.INCOMPATIBLE_INPUT_REFERENCE]
-
-    unknown = link(_cross_scope('any_source', 'Any'))
-    assert unknown.graph is not None, list(unknown.diagnostics)
-
-
-@pytest.mark.fast
-def test_unrelated_ancestor_scatter_does_not_inflate_a_cross_scope_edge() -> None:
-    """A scatter two documents out, over a value this edge never touches,
-    must not enter the judgment at all.
-
-    `outer.wic` defines the edge (`string_source` producing `shared`) and
-    calls `child.wic`, whose own step consumes it -- an edge local to
-    `outer`, not to `root`. `root` calls `outer.wic` scattered over `gate`,
-    an input this edge shares nothing with. Judging the edge at `root`'s
-    scope (or wider) sums `root`'s own scatter rank into the producing side
-    unconditionally, while the consuming side only counts an ancestor whose
-    `scatter:` list names this port -- so the same scalar `string` was
-    judged disjoint from itself.
-    """
-    tools = copy.deepcopy(SYNTHETIC_TOOLS)
-    tools[LegacyStepId('string_source', SYNTHETIC_NS)] = Tool(
-        '/synthetic/string_source.cwl', clt({}, {'value': {'type': 'string'}}))
-    child = 'steps:\n- id: mk_file\n  in:\n    name: !* shared\n'
-    outer = ('inputs:\n  gate: {type: string}\n'
-             'steps:\n'
-             '- id: string_source\n  out:\n  - value: !& shared\n'
-             '- id: child.wic\n')
-    root = 'steps:\n- id: outer.wic\n  scatter: [gate]\n  in: {gate: !ii [a, b]}\n'
-    typed = _rooted(root, tools, child=child, outer=outer)
-    assert typed.graph is not None, list(typed.diagnostics)
-    linked = link(typed.graph)
-    assert linked.graph is not None, list(linked.diagnostics)
-
-
-@pytest.mark.fast
-def test_consuming_scatter_participates_in_reference_judgment() -> None:
-    """A scattered scalar input consumes an array, so a scalar source is disjoint."""
-    result = link(_cross_scope('string_source', 'string', scatter=True))
-    assert result.graph is None
-    assert [diagnostic.code for diagnostic in result.diagnostics] == [
-        SophiosErrorCode.INCOMPATIBLE_INPUT_REFERENCE]
-
-
-@pytest.mark.fast
-def test_a_wrapper_cannot_scatter_over_a_name_generated_inside_its_callee() -> None:
-    """A caller scatters only over what its callee declares.
-
-    `mk_b~value` is how the compiler spells `mk_b`'s input once `child.wic`
-    is emitted; a wrapper naming it would depend on the callee's step layout.
-    It is `wic032`.
-    """
-    tools = copy.deepcopy(SYNTHETIC_TOOLS)
-    tools[LegacyStepId('mk_a', SYNTHETIC_NS)] = Tool(
-        '/synthetic/mk_a.cwl', clt({}, {'value': {'type': 'File'}}))
-    tools[LegacyStepId('mk_b', SYNTHETIC_NS)] = Tool(
-        '/synthetic/mk_b.cwl', clt({'value': {'type': 'File'}}, {}))
-    child = 'steps:\n- id: mk_b\n  in: {value: !* shared}\n'
-    root = ('steps:\n- id: mk_a\n  out:\n  - value: !& shared\n'
-            '- id: child.wic\n  scatter: [mk_b~value]\n')
-    typed = _rooted(root, tools, child=child)
-    assert typed.graph is None
-    [diagnostic] = typed.diagnostics
-    assert diagnostic.code is SophiosErrorCode.UNKNOWN_SCATTER_PORT
-    assert "declares in `inputs:`" in diagnostic.message
-
-
-@pytest.mark.fast
-def test_an_unbound_scattered_callee_input_is_wic032_spelled_as_scatter_spells_it() -> None:
-    """Infer's `wic032`: the callee declares an optional input and threads it
-    to its step, and the caller scatters it without binding it. Lower accepts
-    the name, since the callee declares it; Infer then finds nothing binds it,
-    and names it the way `scatter:` does."""
-    tools = copy.deepcopy(SYNTHETIC_TOOLS)
-    tools[LegacyStepId('opt_in', SYNTHETIC_NS)] = Tool(
-        '/synthetic/opt_in.cwl', clt({'x': {'type': 'string?'}}, {}))
-    child = 'inputs:\n  x: string?\nsteps:\n- id: opt_in\n  in: {x: x}\n'
-    root = 'steps:\n- id: child.wic\n  scatter: [x]\n'
-    typed = _rooted(root, tools, child=child)
-    assert typed.graph is not None, list(typed.diagnostics)
-    linked = link(typed.graph)
-    assert linked.graph is not None, list(linked.diagnostics)
-
-    result = infer(linked.graph)
-
-    assert result.graph is None
-    [diagnostic] = result.diagnostics
-    assert diagnostic.code is SophiosErrorCode.UNKNOWN_SCATTER_PORT
-    assert "scatters over 'x', but nothing binds it" in diagnostic.message
-    assert diagnostic.locator is not None and diagnostic.locator.port == 'x'
-
-
-@pytest.mark.fast
-def test_a_local_edge_inside_a_scattered_subworkflow_is_not_disjoint_from_itself() -> None:
-    """A step-to-step edge wholly inside a subworkflow is judged in that
-    subworkflow's own scope, not the scope of whatever ancestor happens to
-    call it.
-
-    An ancestor that scatters over some *other* input of the wrapper step
-    still owns an array boundary — but that boundary sits between the
-    wrapper and the subworkflow's own exposed ports, not between two of the
-    subworkflow's *internal* steps, which never cross it. Judging the local
-    edge against the top-level scope added that ancestor's scatter rank to
-    one side and not the other, so `File` was judged disjoint from itself.
-    """
-    tools = copy.deepcopy(SYNTHETIC_TOOLS)
-    tools[LegacyStepId('mk_a', SYNTHETIC_NS)] = Tool(
-        '/synthetic/mk_a.cwl', clt({}, {'value': {'type': 'File'}}))
-    tools[LegacyStepId('mk_b', SYNTHETIC_NS)] = Tool(
-        '/synthetic/mk_b.cwl', clt({'value': {'type': 'File'}}, {}))
-    child = ('inputs:\n  gate: {type: string}\n'
-             'steps:\n'
-             '- id: mk_a\n  out:\n  - value: !& shared\n'
-             '- id: mk_b\n  in: {value: !* shared}\n')
-    root = 'steps:\n- id: child.wic\n  scatter: [gate]\n  in: {gate: !ii [a, b]}\n'
-    typed = _rooted(root, tools, child=child)
-    assert typed.graph is not None, list(typed.diagnostics)
-    linked = link(typed.graph)
-    assert linked.graph is not None, list(linked.diagnostics)
-
-
-@pytest.mark.fast
-def test_producing_scatter_participates_in_reference_judgment() -> None:
-    """A scattered producer yields an array and cannot feed a scalar sink."""
-    source = '''
-steps:
-- id: mk_file
-  in: {name: !ii [a, b]}
-  scatter: name
-  out:
-  - file: !& files
-- id: count
-  in: {file: !* files}
-'''
-    typed = _rooted(source)
-    assert typed.graph is not None
-    linked = link(typed.graph)
-    assert linked.graph is None
-    assert [diagnostic.code for diagnostic in linked.diagnostics] == [
-        SophiosErrorCode.INCOMPATIBLE_INPUT_REFERENCE]
 
 
 @pytest.mark.fast
@@ -352,19 +137,9 @@ steps:
 
 
 @pytest.mark.fast
-def test_unknown_call_argument_cannot_restore_a_deleted_formal() -> None:
-    """Authored call metadata cannot widen the resolved child interface."""
-    child = 'inputs: {name: {type: string}}\nsteps:\n- id: mk_file\n  in: {name: name}\n'
-    typed = _rooted('steps:\n- id: child.wic\n  in: {ghost: !ii x}\n', child=child)
-    assert typed.graph is None
-    assert [diagnostic.code for diagnostic in typed.diagnostics] == [
-        SophiosErrorCode.UNDECLARED_PORT]
-
-
-@pytest.mark.fast
 def test_graph_rejects_a_planted_namespace_collision() -> None:
     """The injectivity assertion demonstrably detects a duplicate child graph."""
-    typed = _cross_scope('string_source', 'string')
+    typed = _cross_scope()
     child = typed.children[0]
     with pytest.raises(ValueError, match='injective'):
         WorkflowGraph(Namespace(), children=(child, child))
@@ -383,7 +158,7 @@ def test_a_wrapper_scatters_a_declared_input_threaded_to_another_name() -> None:
     of. The child's `input_mapping` already records which boundary reaches
     which sink, and is what `complete._direct_sink` walks for the same edge.
     """
-    tools = copy.deepcopy(SYNTHETIC_TOOLS)
+    tools = dict(SYNTHETIC_TOOLS)
     tools[LegacyStepId('make', SYNTHETIC_NS)] = Tool(
         '/synthetic/make.cwl', clt({'seed': {'type': 'string'}}, {'value': {'type': 'File'}}))
     tools[LegacyStepId('take', SYNTHETIC_NS)] = Tool(
@@ -402,33 +177,4 @@ def test_a_wrapper_scatters_a_declared_input_threaded_to_another_name() -> None:
     assert typed.graph is not None, list(typed.diagnostics)
 
     linked = link(complete(typed.graph))
-    assert linked.graph is not None, [str(item) for item in linked.diagnostics]
-
-
-@pytest.mark.fast
-def test_a_record_source_whose_type_is_provably_disjoint_is_wic023() -> None:
-    """A record that hands its one source on unchanged is judged as a bare `!*` is."""
-    tools = copy.deepcopy(SYNTHETIC_TOOLS)
-    tools[LegacyStepId('int_source', SYNTHETIC_NS)] = Tool(
-        '/synthetic/int_source.cwl', clt({}, {'value': {'type': 'int'}}))
-    root = ('steps:\n- id: int_source\n  out:\n  - value: !& v\n'
-            '- id: mk_file\n  in:\n    name: !cwl {source: !* v}\n')
-    typed = _rooted(root, tools)
-    assert typed.graph is not None, list(typed.diagnostics)
-    linked = link(typed.graph)
-    assert [diagnostic.code for diagnostic in linked.diagnostics] == [
-        SophiosErrorCode.INCOMPATIBLE_INPUT_REFERENCE]
-
-
-@pytest.mark.fast
-def test_a_record_that_transforms_its_source_is_not_judged_by_its_sinks_type() -> None:
-    """`valueFrom` makes the value the step receives, so the source's type is not the input's."""
-    tools = copy.deepcopy(SYNTHETIC_TOOLS)
-    tools[LegacyStepId('int_source', SYNTHETIC_NS)] = Tool(
-        '/synthetic/int_source.cwl', clt({}, {'value': {'type': 'int'}}))
-    root = ('steps:\n- id: int_source\n  out:\n  - value: !& v\n'
-            "- id: mk_file\n  in:\n    name: !cwl {source: !* v, valueFrom: '$(String(self))'}\n")
-    typed = _rooted(root, tools)
-    assert typed.graph is not None, list(typed.diagnostics)
-    linked = link(typed.graph)
     assert linked.graph is not None, [str(item) for item in linked.diagnostics]

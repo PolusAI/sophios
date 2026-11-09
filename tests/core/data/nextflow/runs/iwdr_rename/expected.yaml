@@ -1,3 +1,0 @@
-why: A literal entryname stages the file under the name the command hard-codes.
-outputs: {write_source~result: {class: File, basename: original_name.txt, contents: "iwdr staged content\n"},
-          stage_and_read~result: {class: File, basename: out.txt, contents: "iwdr staged content\n"}}

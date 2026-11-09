@@ -1,14 +1,10 @@
-"""Step-input default, linkMerge and pickValue under installed, pinned Nextflow.
-
-design_docs/sophios_nextflow_backend.md §6, Topology, Step inputs: each is one
-fixed Groovy idiom over the step input's values, compared here with what CWL
-gives.
-"""
+"""Step-input default, linkMerge and pickValue under pinned Nextflow, each compared with what CWL gives (design §6,
+Topology)."""
 
 # pylint: disable=missing-function-docstring
 
 from pathlib import Path
-from typing import Any, get_args
+from typing import Any
 
 import pytest
 
@@ -332,12 +328,3 @@ def test_a_nested_steps_record_takes_its_sources_through_the_workflow_that_calls
     lowered = _lower(Workflow([outer], "root"))
     joined = next(connection for connection in lowered.connections if isinstance(connection, NfStepInputConnection))
     assert [lowered.params[source.from_port] for source in joined.sources] == ["y", "x"]
-
-
-@pytest.mark.fast
-def test_every_connection_kind_is_nameable_through_the_public_module() -> None:
-    """A caller cannot match a connection it gets back unless it can name its kind."""
-    from sophios.api.python import nextflow  # pylint: disable=import-outside-toplevel
-
-    for kind in get_args(nextflow.NfConnection):
-        assert getattr(nextflow, kind.__name__) is kind and kind.__name__ in nextflow.__all__

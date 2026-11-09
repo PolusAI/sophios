@@ -1,16 +1,6 @@
-"""Every document the compiler manufactures is one the language accepts.
-
-The corpus is not the interesting input: documents a *user* wrote already have
-a parse property. What nothing checked is the documents the compiler *makes* —
-the Python API's output and the one-step workflow a real-time analysis is
-compiled as. Those
-are built rather than parsed, so the grammar has no opinion about them unless
-asked, and three defects in a row lived exactly there: step ids spelled
-from the wrong stem, a producer still emitting a step form the grammar had
-removed, and scatter readable from two places with no owner.
-"""
+"""Every document the compiler manufactures (the Python API's, a real-time analysis's one-step workflow) is one the
+language accepts: built rather than parsed, the grammar has no say over them unless asked."""
 import importlib
-from pathlib import Path
 from typing import Any, Final
 
 import pytest
@@ -21,10 +11,10 @@ from sophios.cli import default_compilation_settings
 from sophios.input_output import NoAliasDumper
 from sophios.ir.realtime import Declaration
 from sophios.lang import Document, parse, to_json
-from sophios.api.python.workflow import Step, Workflow
+from sophios.api.python.workflow import Workflow
 from sophios.wic_types import StepId, Tool
 
-REPO_ROOT: Final = Path(__file__).resolve().parents[2]
+from .helpers import ADAPTERS, HELLOWORLD, adapter_step
 
 #: What each site builds. Only `DOCUMENT` is a `.wic` document the language owns.
 DOCUMENT: Final = 'DOCUMENT'
@@ -52,11 +42,8 @@ MANUFACTURING_SITES: Final[dict[str, str]] = {
 
 
 def _documents_in(value: Any, depth: int = 0) -> list[dict[str, Any]]:
-    """Every document-shaped mapping reachable from `value`.
-
-    Bounded depth: a compiled tree is deep and self-referential in places, and
-    an unbounded walk over one is a way to hang a test rather than to fail it.
-    """
+    """Every document-shaped mapping reachable from `value`, to a bounded depth: compiled trees are deep and self-
+    referential."""
     if depth > 6:
         return []
     if isinstance(value, dict) and 'steps' in value:
@@ -75,12 +62,8 @@ def _documents_in(value: Any, depth: int = 0) -> list[dict[str, Any]]:
 
 def _instrument(monkeypatch: pytest.MonkeyPatch, site: str,
                 seen: list[tuple[str, dict[str, Any]]]) -> None:
-    """Record every document-shaped object that passes through one site.
-
-    Arguments are recorded as well as return values: several of these sites
-    rewrite a document in place and return nothing, and the rewritten document
-    is the thing worth checking.
-    """
+    """Record every document-shaped object that passes through one site, arguments as well as returns: some sites
+    rewrite in place."""
     module_path, _, qualname = site.partition('::')
     module = importlib.import_module(module_path[:-len('.py')].replace('/', '.'))
     holder: Any = module
@@ -100,23 +83,8 @@ def _instrument(monkeypatch: pytest.MonkeyPatch, site: str,
 
 
 def _parses(document: dict[str, Any]) -> tuple[bool, list[str]]:
-    """Whether `sophios.lang` accepts this document, and what it said if not.
-
-    Dumping and re-parsing is a fair test rather than a round-trip through a
-    lossy form, because the tags desugar on load -- `!& e` becomes
-    `{'wic_anchor': 'e'}` -- so a manufactured document is already in the
-    desugared spelling, which the language spec (§2) says the parser
-    accepts equally.
-
-    The desugared spelling carries no tags, but every construct position is
-    closed, so a manufactured mistake cannot pass silently. In input position a
-    single-key mapping such as `{'wic_not_a_thing': 1}` is reported as a
-    misspelled construct and a correctly spelled `wic_anchor` as a misplaced
-    one; in `out:`, a mapping value must be an edge definition and every other
-    shape is reported. A `wic_`-prefixed key anywhere else stays ordinary
-    passthrough by design -- language spec §1 makes that vocabulary open -- and is not read
-    as a failed construct.
-    """
+    """Whether `sophios.lang` accepts this document, and what it said if not, re-parsed in the desugared spelling (§2):
+    construct positions stay closed, a `wic_*` key elsewhere is open passthrough (§1)."""
     text = yaml.dump(document, sort_keys=False, line_break='\n', indent=2, Dumper=NoAliasDumper)
     result = parse(text, 'manufactured.wic')
     return result.ok, [f'{d.code} at {d.span.start_line}:{d.span.start_column}'
@@ -154,16 +122,10 @@ def test_every_manufactured_document_is_one_the_language_accepts() -> None:
 
 
 def _drive_everything() -> None:
-    """Run every entry point these drivers can reach, instrumentation in place:
-    the Python API, whose `workflow_document` is the site that spelled step ids
-    from the wrong stem.
-    """
-    adapters = REPO_ROOT / 'cwl_adapters'
-    touch = Step(clt_path=adapters / 'touch.cwl')
-    touch.inputs.filename = 'empty.txt'
-    append = Step(clt_path=adapters / 'append.cwl')
-    append.inputs.file = touch.outputs.file
-    append.inputs.str = 'Hello'
+    """Run every entry point these drivers reach, instrumentation in place: the Python API's `workflow_document` once
+    spelled step ids from the wrong stem."""
+    touch = adapter_step('touch', filename='empty.txt')
+    append = adapter_step('append', file=touch.outputs.file, str='Hello')
     # A declared workflow output, so the step's `out:` is built from a bound
     # port rather than left empty: `Step._as_workflow_step` spells it as an edge, and
     # an edge written there in the wrong spelling is the likeliest way this
@@ -173,11 +135,11 @@ def _drive_everything() -> None:
     workflow.compile()
     # A real-time analysis of each kind: a tool configured by its `in:`, and a
     # `.wic` configured by its steps' sidecar, each with a file named by basename.
-    tools = {StepId(stem, 'global'): Tool(str(adapters / f'{stem}.cwl'),
-                                          yaml.safe_load((adapters / f'{stem}.cwl').read_text(encoding='utf-8')))
+    tools = {StepId(stem, 'global'): Tool(str(ADAPTERS / f'{stem}.cwl'),
+                                          yaml.safe_load((ADAPTERS / f'{stem}.cwl').read_text(encoding='utf-8')))
              for stem in ('append', 'echo')}
     realtime.compile_analyses((
         Declaration('wf', 'append', '*.txt', 2, 60, {'in': {'file': 'empty.txt', 'str': 'Hello'}}),
         Declaration('wf', 'helloworld.wic', '*.txt', 2, 60, {'(1, echo)': {'in': {'message': 'Hi'}}}),
-    ), {'global': {'helloworld': REPO_ROOT / 'docs' / 'tutorials' / 'helloworld.wic'}},
+    ), {'global': {'helloworld': HELLOWORLD}},
         tools, default_compilation_settings())

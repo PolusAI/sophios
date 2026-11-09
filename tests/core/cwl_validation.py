@@ -1,11 +1,5 @@
-"""`cwltool --validate` for the tests, without cwltool's per-call schema reload.
-
-`cwltool.main.main` rebuilds the CWL schema salad on every call unless it is
-told to use the standard one, and, given a `$schemas` entry, parses EDAM with
-rdflib. `--skip-schemas` drops the second cost; `custom_schema_callback` keeps
-the standard schema cache for the first. Each call still builds its own loader
-and id index, so one document's names cannot mask another's errors.
-"""
+"""`cwltool --validate` without cwltool's per-call schema reload (`--skip-schemas`, a kept schema cache); each call
+builds its own loader and id index, so one document's names cannot mask another's errors."""
 from cwltool.process import custom_schemas, use_standard_schema
 
 

@@ -1,19 +1,15 @@
-"""The shipped `append.cwl` appends the message as written, under Nextflow and under cwltool alike.
-
-The tutorials and most cookbook workflows build on it. The message reaches `printf` as one quoted argument, so
-shell syntax and backslashes in it are text, and the tool appends to its own copy of the file, so the file it
-was given keeps its contents.
-"""
+"""The shipped `append.cwl` appends the message as written, under Nextflow and cwltool alike: shell syntax and
+backslashes in it are text, and the file it was given keeps its contents."""
 
 from functools import partial
 from pathlib import Path
 
 import pytest
 
-from sophios.api.python.workflow import Step, Workflow
+from sophios.api.python.workflow import Workflow
 
+from ..helpers import adapter_step
 from .test_reference_differential import _run_cwltool, _run_nextflow
-from .testkit import REPO_ROOT
 
 #: What an unquoting shell would act on: a separator, a run of spaces, a quote, a substitution, a glob.
 MESSAGE = "Hello;  it's $(echo substituted) * a\\tb\\nc 100%s"
@@ -30,9 +26,7 @@ def test_the_shipped_append_tool_appends_the_message_as_written_under_both_runne
         given = tmp_path / runner / "inputs" / "greeting.txt"
         given.parent.mkdir(parents=True)
         given.write_text("first line\n", encoding="utf-8")
-        append = Step(clt_path=REPO_ROOT / "cwl_adapters" / "append.cwl")
-        append.inputs.file = given
-        append.inputs.str = MESSAGE
+        append = adapter_step("append", file=given, str=MESSAGE)
         workflow = Workflow([append], "append_as_written")
         workflow.outputs.appended = append.outputs.file
 

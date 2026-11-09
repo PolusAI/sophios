@@ -1,12 +1,5 @@
-"""Properties of the Sophios renderer.
-
-Rendering is the inverse of parsing. Having both is what makes the syntax layer
-checkable, because a round-trip either reproduces the document or proves one of
-the two wrong about the language.
-
-Properties covered:
-  parse(render(ast)) == ast
-"""
+"""Properties of the Sophios renderer: it inverts parsing, so a round trip, parse(render(ast)) == ast, proves one of the
+two wrong."""
 import math
 from pathlib import Path
 from typing import Any
@@ -47,21 +40,14 @@ FAST = budget(200)
 unquoted_spellings = scalar_payload_texts.filter(lambda text: not text.startswith("'"))
 
 
-# --------------------------------------------------------------------------
-# Span-insensitive comparison
-# --------------------------------------------------------------------------
-#
 # A round-tripped document cannot carry the original spans: rendering produces
 # new text, so positions legitimately move. The property is therefore about
 # structure, and comparison strips spans rather than pretending they survive.
 
 
 def _shape(node: Any) -> Any:  # pylint: disable=too-many-return-statements,too-many-branches
-    """Reduce an AST to its structure, discarding source positions.
-
-    One return per node kind. Collapsing them into a lookup would hide which
-    fields each kind contributes, which is the only thing this function says.
-    """
+    """Reduce an AST to its structure, discarding source positions; one return per node kind, so each kind's fields stay
+    visible."""
     match node:
         case Document():
             return ('doc',
@@ -105,10 +91,6 @@ def _shape(node: Any) -> Any:  # pylint: disable=too-many-return-statements,too-
             return node
 
 
-# --------------------------------------------------------------------------
-# Strategies
-# --------------------------------------------------------------------------
-
 identifiers = st.text('abcdefghijklmnopqrstuvwxyz_', min_size=1, max_size=8)
 
 # Literals are drawn as YAML source text rather than converted from Python
@@ -128,14 +110,8 @@ literal_texts = st.sampled_from([
 
 @st.composite
 def awkward_literal_documents(draw: st.DrawFn) -> str:
-    """Documents whose `!ii` payloads are the renderer's hard cases.
-
-    A narrow, deliberate complement to the shared `documents()` strategy: it
-    exists only to hammer quoting. The structural round-trip quantifies over
-    the full language via the parser suite's generator — a second, narrower
-    `documents()` here is exactly how outputs and nested sidecars once became
-    invisible to the round-trip property.
-    """
+    """Documents whose `!ii` payloads are the renderer's hard cases, to hammer quoting; the structural round trip uses
+    the parser suite's `documents()`, as a second narrower one once made outputs and nested sidecars invisible to it."""
     lines = ['steps:']
     for _ in range(draw(st.integers(min_value=1, max_value=3))):
         lines.append(f'- id: {draw(identifiers)}')
@@ -143,11 +119,6 @@ def awkward_literal_documents(draw: st.DrawFn) -> str:
         for name in draw(st.lists(identifiers, min_size=1, max_size=3, unique=True)):
             lines.append(f'    {name}: !ii {draw(literal_texts)}')
     return '\n'.join(lines) + '\n'
-
-
-# --------------------------------------------------------------------------
-# Properties
-# --------------------------------------------------------------------------
 
 
 @pytest.mark.fast
@@ -293,11 +264,6 @@ def test_empty_sidecar_renders_as_mapping_not_null() -> None:
     assert document is not None
     rendered = render(document)
     assert 'null' not in rendered and '~' not in rendered
-
-
-# --------------------------------------------------------------------------
-# Transcription: a parsed literal is emitted as it was written
-# --------------------------------------------------------------------------
 
 
 @pytest.mark.fast

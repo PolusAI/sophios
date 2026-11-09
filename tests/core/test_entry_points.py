@@ -1,15 +1,5 @@
-"""Declared entry points must resolve to real modules and attributes.
-
-Entry points are module paths written as strings — in `pyproject.toml` console
-scripts, and in container `CMD`/`command` lines. Nothing type-checks a string,
-so a module rename silently invalidates them and the failure only appears when
-someone runs the CLI or starts the container.
-
-This has already happened twice in this repository: `sophios.api.http.restapi`
-survived in the REST image long after the module was removed, and the contrib
-relocation briefly left the same image pointing at `sophios.api.rest.api`.
-Both were rename-without-updating-the-string.
-"""
+"""Declared entry points must resolve to real modules and attributes: nothing type-checks the strings, so a rename
+silently invalidates them (it has happened twice, in the REST image's CMD)."""
 import importlib
 import re
 import tomllib
@@ -41,13 +31,8 @@ def _in_contrib(module: str) -> bool:
 
 
 def _container_targets() -> list[Any]:
-    """Return a parameter per container entry point, zoned by its target.
-
-    A case whose target is a contrib module carries the `contrib` marker, so
-    `pytest tests/ -m "not contrib"` really does avoid importing contrib —
-    otherwise the marker would promise a core-only run while still requiring
-    fastapi and uvicorn to be installed.
-    """
+    """A parameter per container entry point, zoned by its target; a contrib target carries `contrib`, so `-m "not
+    contrib"` imports no fastapi."""
     out: list[Any] = []
     for path in sorted(DOCKER_DIR.glob('*')):
         if not path.is_file():

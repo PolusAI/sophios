@@ -1,14 +1,5 @@
-"""Generators for Sophios source text.
-
-Shared because more than one suite quantifies over the same language: the
-parser's properties, the renderer's round trip, and the schema's forward
-direction all need documents, and a second generator beside the first is how
-outputs and nested sidecars once became invisible to every property fed by it.
-
-The alphabets here are deliberate. Each was widened in response to a class of
-finding — spellings whose text differs from their value, keys carrying `$`,
-empty names — and narrowing one narrows every property downstream.
-"""
+"""Generators for Sophios source text, shared so parser, renderer and schema properties quantify over one language; each
+alphabet was widened after a finding, so narrowing one narrows every property downstream."""
 import json
 from calendar import monthrange
 from collections.abc import Callable
@@ -28,31 +19,21 @@ def pinned(*examples: Any) -> Callable[[Any], Any]:
 
 
 identifiers = st.text('abcdefghijklmnopqrstuvwxyz_', min_size=1, max_size=8)
-#: Scalar payloads as YAML source text, spelled to include exactly what a
-#: [a-z_]-only alphabet can never produce: type-ambiguous quoted strings,
-#: exponent floats and specials, null, dates. Four round-trip defects traced to
-#: the old alphabet's blind spot; this list is its complement.
+#: Scalar payloads as YAML source text, including what a [a-z_] alphabet never produces: ambiguous quoted strings,
+#: exponent floats, specials, null, dates; four round-trip defects traced to that blind spot.
 scalar_payload_texts = st.sampled_from([
     'x', '0', '-3', '1.5', '1.0e+300', '.inf', '.nan',
     'true', 'false', 'null', 'on', '2020-01-01',
     "'0'", "'true'", "'null'", "'on'", "''", "'a b'",
-    # Spellings YAML normalises away: the value no longer knows how it was
-    # written, so anything that re-serialises the value instead of emitting
-    # the source text loses them. They are the only spellings that can tell
-    # transcription apart from reconstruction, and none of the above can.
+    # Spellings YAML normalises away: only they tell transcribing the source text from reconstructing the value.
     '0777', '1.50', 'yes', '0x1f', '1:30', '+5', '00',
 ])
 
-#: Construct leaves that may appear nested inside an `!ii` payload.
-#: Neither spelling of an edge definition appears here. An edge is defined on
-#: an `out:` entry and nowhere else (.wic reference §3.6), so `!& d` and
-#: `{wic_anchor: n}` both earn wic019 in a payload — `_out_lines` below
-#: generates both spellings in the one position they are legal.
+#: Construct leaves allowed inside an `!ii` payload; an edge definition is legal on an `out:` entry only (wic019
+#: elsewhere), so neither spelling is here.
 construct_payload_texts = st.sampled_from(['!* e', '!cwl a/b', '{wic_alias: n}'])
 
-#: Recursive payload text over the closed OpaqueCwl union: scalars, nested
-#: constructs, and flow collections of both. Derived from what the type
-#: admits, not from what the tests happened to imagine.
+#: Recursive payload text over the closed OpaqueCwl union: scalars, nested constructs, flow collections of both.
 _payload_collections = st.recursive(
     st.one_of(scalar_payload_texts, construct_payload_texts),
     lambda children: st.one_of(
@@ -63,29 +44,19 @@ _payload_collections = st.recursive(
     max_leaves=6,
 ).filter(lambda s: s.startswith(('[', '{')))
 
-#: Direct payload of a tagged `!ii`: a scalar or a collection — a construct
-#: leaf cannot be the whole payload, since two tags on one node is not YAML.
+#: A tagged `!ii` payload: a scalar or a collection, never a bare construct (two tags on one node is not YAML).
 opaque_payload_texts = st.one_of(scalar_payload_texts, _payload_collections)
 
-#: Desugared payloads can additionally carry a construct directly:
-#: `{wic_inline_input: !* e}` is well-formed, and the writer must respell it.
+#: Desugared payloads can also carry a construct directly: `{wic_inline_input: !* e}` is well-formed.
 desugared_payload_texts = st.one_of(opaque_payload_texts, construct_payload_texts)
 
 
 @st.composite
 def input_lines(draw: st.DrawFn, name: str | None = None, indent: str = '      ') -> str:
-    """One `in:` binding, in any of the forms the language admits.
-
-    Both spellings of each construct are generated — the tagged form people
-    write and the desugared form tooling emits — so the properties quantify
-    over the language, not over the half of it the tests happened to spell.
-    """
+    """One `in:` binding in any admitted form, tagged as people write it and desugared as tooling emits it."""
     # pylint: disable=too-many-return-statements  # one return per surface form
     name = draw(identifiers) if name is None else name
-    # No 'anchor' form: `!&` defines an edge and is legal only on an `out:`
-    # entry (.wic reference §3.6), so an input carrying one is not a well-formed
-    # document. `_out_lines` below still generates both of its spellings, so
-    # edge definitions stay covered where they belong.
+    # No 'anchor' form: `!&` is legal only on an `out:` entry, where `_out_lines` generates both spellings.
     form = draw(st.sampled_from(['ii', 'alias', 'cwl', 'bare',
                                  'ii_desugared', 'alias_desugared', 'cwl_desugared']))
     match form:
@@ -105,10 +76,7 @@ def input_lines(draw: st.DrawFn, name: str | None = None, indent: str = '      '
             return f'{indent}{name}: {draw(identifiers)}'
 
 
-#: Output names as source text, including the empty one. `out: ['']` parses
-#: without a diagnostic, so it is inside the language — and a generator whose
-#: names were all non-empty is why a schema constraint that rejected it went
-#: unnoticed. The alphabet has to reach the edges of what the parser admits.
+#: Output names as source text, including the empty one: `out: ['']` parses, so a schema rejecting it went unnoticed.
 output_name_texts = st.one_of(identifiers, st.just("''"))
 
 
@@ -130,15 +98,8 @@ def _out_lines(draw: st.DrawFn, indent: str) -> list[str]:
 
 @st.composite
 def documents(draw: st.DrawFn) -> str:
-    """A syntactically well-formed Sophios document.
-
-    Generates both step surface forms (mapping and sequence-with-id), inputs
-    in every admitted spelling, `out:` blocks, and nested `wic: steps:`
-    sidecars. Every one of those is load-bearing: a generator drawing only
-    mapping-form `in:`-only documents leaves outputs, sequence steps and
-    depth-2 sidecars structurally invisible to every property fed by it, which
-    no property downstream can report because none of them ever sees one.
-    """
+    """A syntactically well-formed document: both step forms, every input spelling, `out:` blocks and nested sidecars,
+    since a generator without one leaves it invisible to every property it feeds."""
     lines = ['steps:']
     sequence_form = draw(st.booleans())
     names = draw(st.lists(identifiers, min_size=1, max_size=4, unique=True))
@@ -150,15 +111,13 @@ def documents(draw: st.DrawFn) -> str:
             lines.append(f'  {step}:')
             body_indent = '    '
         lines.append(f'{body_indent}in:')
-        # Unique: binding the same input twice is a diagnosed error, not a
-        # well-formed document (see wic010).
+        # Unique: binding an input twice is wic010.
         for name in draw(st.lists(identifiers, min_size=1, max_size=3, unique=True)):
             lines.append(draw(input_lines(name, indent=body_indent + '  ')))
         if draw(st.booleans()):
             lines.extend(draw(_out_lines(body_indent)))
     if draw(st.booleans()):
-        # Quoted: a label is a string (.wic reference §7), and `null`, `no` or `on` would
-        # load as something else.
+        # Quoted: a label is a string, and `null`, `no` or `on` would load as something else.
         lines += ['wic:', '  graphviz:', f"    label: '{draw(identifiers)}'"]
         if draw(st.booleans()):
             # A nested sidecar: the (index, name) key wraps a wic: block.
@@ -170,9 +129,8 @@ def documents(draw: st.DrawFn) -> str:
 
 @st.composite
 def scalar_spellings(draw: st.DrawFn) -> tuple[str, str | None]:
-    """A scalar as YAML text, and the tag YAML resolves it to but cannot construct, or None where YAML reads it:
-    integers in each YAML 1.1 base and form, floats, booleans, nulls, the shared payloads, dates with month 0-14 and
-    day 0-40, `0x_` and `0b_`. Any of them quoted, escaped, is text."""
+    """A scalar as YAML text, and the tag YAML resolves it to but cannot construct (None where YAML reads it): integers
+    in each 1.1 base, floats, booleans, nulls, dates with month 0-14 and day 0-40, `0x_`, `0b_`. Quoted, it is text."""
     n, year, month, day = (draw(st.integers(-2**70, 2**70)), draw(st.integers(1, 9999)), draw(st.integers(0, 14)),
                            draw(st.integers(0, 40)))
     text, tag = draw(st.sampled_from([
@@ -234,12 +192,10 @@ def _wic(depth: int) -> SearchStrategy[Any]:
 
 
 def shapes() -> SearchStrategy[dict[str, Any]]:
-    """A tag-free document over the parser's own keys, as YAML loads it: each place holds the shape the language
-    gives it or another, so most are malformed and some are well-formed. JSON writes it as YAML the parser reads.
-
-    Not drawn, the four places the two readers disagree, each pinned where it is tested: a name YAML types, as `1`,
-    which the parser reads as its text and the schema refuses; and an `out:` entry binding anything but an edge
-    definition, a construct around a collection, and `out:` under `wic: steps:`, which the parser refuses alone."""
+    """A tag-free document over the parser's own keys, as YAML loads it: each place holds its shape or another, so most
+    are malformed. Not drawn, where the two readers disagree (each pinned where tested): a name YAML types, as `1`;
+    an `out:` entry binding anything but an edge definition, a construct around a collection, `out:` under
+    `wic: steps:`."""
     return st.fixed_dictionaries({}, optional={'steps': _STEPS, 'wic': _wic(2), 'label': _ANY})
 
 

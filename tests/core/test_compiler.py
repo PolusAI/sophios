@@ -3,7 +3,6 @@ import copy
 
 import pytest
 
-from sophios.lang.diagnostics import SophiosError
 from sophios.wic_types import StepId, Yaml
 
 from .hermetic import compile_hermetic_cwl, subworkflow_step
@@ -64,27 +63,19 @@ def test_a_generated_step_name_in_output_source_is_an_unknown_step(steps: list[Y
 
 
 @pytest.mark.fast
-def test_an_untyped_output_naming_a_generated_step_name_is_wic036() -> None:
-    """With no `type:` to fall back on, the unknown step is reported."""
-    with pytest.raises(SophiosError) as caught:
-        compile_hermetic_cwl({'outputs': {'o': {'outputSource': 'oracle__step__1__mk_file/file'}},
-                              'steps': [_mk_file()]})
-    [diagnostic] = caught.value.diagnostics
-    assert "`outputSource: oracle__step__1__mk_file/file` names no output of a step" in diagnostic.message
-
-
-@pytest.mark.fast
 @pytest.mark.parametrize(('source', 'names', 'resolved', 'said'), [
     ('mk_file/file', 'xy', 'mk_file@1/file',
      ["Warning! oracle.wic: output 'o' has outputSource 'mk_file/file', but 2 steps have the id 'mk_file' and it "
       "means the first. Write '(1, mk_file)/file' to say so."]),
     ('mk_file/file', 'x', 'mk_file/file', []),
-    ('(2, mk_file)/file', 'xy', 'mk_file@2/file', [])], ids=['shared-bare-id', 'authored', 'positional'])
+    ('(2, mk_file)/file', 'xy', 'mk_file@2/file', []),
+    ('(1, mk_file)/file', 'x', 'mk_file/file', [])],
+    ids=['shared-bare-id', 'authored', 'positional', 'positional-unique'])
 def test_an_output_source_names_the_spelling_the_compiler_generated_and_only_that(
         capsys: pytest.CaptureFixture[str], source: str, names: str, resolved: str, said: list[str]) -> None:
     """A bare id shared by two steps still means the first, and the line gives `(index, id)`; it is for the generated
     spelling only, so an authored one prints nothing; and the `(index, name)/port` spelling is what the line
-    recommends, so it is never reported."""
+    recommends, so it is never reported; a position naming a step whose id is unique resolves to that plain id."""
     compiled = compile_hermetic_cwl({'outputs': {'o': {'type': 'File', 'outputSource': source}},
                                      'steps': [_mk_file(name) for name in names]})
     assert compiled['outputs']['o']['outputSource'] == resolved

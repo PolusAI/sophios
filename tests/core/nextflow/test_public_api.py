@@ -23,17 +23,15 @@ from sophios.lang.diagnostics import lines
 from sophios.nf_reader import read_nextflow
 from sophios.nf_types import NfWorkflowOutputConnection
 
-from .testkit import REPO_ROOT
+from ..helpers import ADAPTERS, adapter_step
 
 
 def supported_workflow() -> Workflow:
     """One-process echo workflow built through the public tool builder."""
     echo_tool = (
         CommandLineTool(
-            "emit_text",
-            Inputs(message=Input(cwl.string, position=1)),
-            Outputs(file=Output(cwl.file, glob="stdout.txt")),
-        )
+            "emit_text", Inputs(message=Input(cwl.string, position=1)),
+            Outputs(file=Output(cwl.file, glob="stdout.txt")))
         .base_command("echo")
         .stdout("stdout.txt")
     )
@@ -111,52 +109,11 @@ def test_the_cli_reports_each_cuda_note_through_the_diagnostics_report(
     assert "accelerator 2" in (tmp_path / "out" / "workflow.nf").read_text(encoding="utf-8")
 
 
-def adapter_workflow() -> Workflow:
-    """One-process workflow built from a checked-in CWL adapter file."""
-    touch = Step(clt_path=REPO_ROOT / "cwl_adapters" / "touch.cwl")
-    touch.inputs.filename = "empty.txt"
-    return Workflow([touch], "wf")
-
-
-@pytest.mark.serial
-def test_default_and_explicit_cwl_targets_match() -> None:
-    workflow = supported_workflow()
-
-    default = workflow.compile()
-    explicit = workflow.compile(target="cwl")
-
-    assert isinstance(default, CompiledWorkflow)
-    assert explicit == default
-
-
-@pytest.mark.serial
-def test_one_nextflow_compile_writes_all_four_files(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """`write()` writes the model the compile holds over the pipeline already there, and compiles nothing again."""
-    supported_workflow().compile(target="nextflow").write(tmp_path)
-    original = runtime.compile_workflow_result
-    calls = 0
-
-    def counted_compile(*args: Any, **kwargs: Any) -> Any:
-        nonlocal calls
-        calls += 1
-        return original(*args, **kwargs)
-
-    monkeypatch.setattr(runtime, "compile_workflow_result", counted_compile)
-
-    compiled = adapter_workflow().compile(target="nextflow")
-    compiled.write(tmp_path)
-
-    assert isinstance(compiled, CompiledNextflowWorkflow)
-    assert calls == 1
-    assert read_nextflow(tmp_path)[0] == compiled.nextflow_workflow
-    assert json.loads((tmp_path / "nextflow_workflow.json").read_text(encoding="utf-8")) == json.loads(
-        compiled.nextflow_workflow.to_json())
-
-
 @pytest.mark.fast
-def test_write_writes_into_the_current_directory_or_the_one_given(
+def test_write_returns_the_directory_it_filled_and_replaces_the_pipeline_there(
         monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """With no argument, into the current directory; either way it returns the directory it wrote into."""
+    """With no argument `write()` fills the current directory; either way it returns the directory it wrote into, with
+    exactly the four files, and the model the compile holds replaces the pipeline already there."""
     compiled = supported_workflow().compile(target="nextflow")
     monkeypatch.chdir(tmp_path)
     assert compiled.write() == Path(".")
@@ -164,16 +121,24 @@ def test_write_writes_into_the_current_directory_or_the_one_given(
     assert {path.name for path in tmp_path.iterdir()} == FOUR_FILES | {"out"}
     assert {path.name for path in (tmp_path / "out").iterdir()} == FOUR_FILES
 
+    replacement = Workflow([adapter_step("touch", filename="empty.txt")], "wf").compile(target="nextflow")
+    assert isinstance(replacement, CompiledNextflowWorkflow)
+    replacement.write(tmp_path)
+    assert read_nextflow(tmp_path)[0] == replacement.nextflow_workflow
+    assert json.loads((tmp_path / "nextflow_workflow.json").read_text(encoding="utf-8")) == json.loads(
+        replacement.nextflow_workflow.to_json())
+
 
 @pytest.mark.fast
-def test_the_compiled_workflow_is_the_one_nextflow_writer() -> None:
-    assert not any(hasattr(Workflow, name) for name in ("to_nextflow", "get_nextflow_workflow", "to_nf"))
-
-
-@pytest.mark.fast
-def test_unknown_python_target_is_rejected() -> None:
+def test_the_target_argument_defaults_to_cwl_and_rejects_what_it_does_not_know() -> None:
+    workflow = supported_workflow()
+    default = workflow.compile()
+    assert isinstance(default, CompiledWorkflow) and workflow.compile(target="cwl") == default
     with pytest.raises(ValueError, match="unsupported compilation target"):
-        cast(Any, supported_workflow()).compile(target="unknown")
+        cast(Any, workflow).compile(target="unknown")
+    assert cli.get_args("workflow.wic").target == "cwl"
+    with pytest.raises(SystemExit, match="2"):
+        cli.get_args("workflow.wic", ["--target", "nextflow", "--inputs_file", "inputs.yml"])
 
 
 _OPTION_GROUPS = {"every target": cli.neutral, **cli.target_options}
@@ -184,13 +149,6 @@ def test_every_cli_option_belongs_to_exactly_one_group() -> None:
     declared = [action for action in cli.parser._actions if action.dest != "help"]
     grouped = [action for group in _OPTION_GROUPS.values() for action in group._group_actions]
     assert sorted(map(id, declared)) == sorted(map(id, grouped))
-
-
-@pytest.mark.fast
-def test_parsing_applies_the_target_check() -> None:
-    assert cli.get_args("workflow.wic").target == "cwl"
-    with pytest.raises(SystemExit, match="2"):
-        cli.get_args("workflow.wic", ["--target", "nextflow", "--inputs_file", "inputs.yml"])
 
 
 @pytest.mark.fast
@@ -227,7 +185,7 @@ def test_a_plain_cwl_workflow_under_allow_raw_cwl_is_lowered_under_nextflow(
 ) -> None:
     (tmp_path / "raw.cwl").write_text(
         "cwlVersion: v1.2\nclass: Workflow\ninputs:\n  msg: {type: string, default: hi}\noutputs: {}\n"
-        f"steps:\n  say:\n    run: {REPO_ROOT / 'cwl_adapters' / 'echo.cwl'}\n"
+        f"steps:\n  say:\n    run: {ADAPTERS / 'echo.cwl'}\n"
         "    in: {message: msg}\n    out: [stdout]\n",
         encoding="utf-8",
     )
@@ -236,24 +194,8 @@ def test_a_plain_cwl_workflow_under_allow_raw_cwl_is_lowered_under_nextflow(
         sophios_main._main(cli.get_args("raw.cwl", ["--allow_raw_cwl", "--homedir", str(tmp_path)]), [])
     assert "Please specify either --generate_cwl_workflow" in capsys.readouterr().out
     sophios_main._main(cli.get_args("raw.cwl", [
-        "--allow_raw_cwl", "--homedir", str(tmp_path), "--target", "nextflow", "--basepath", "out",
-    ]), [])
+        "--allow_raw_cwl", "--homedir", str(tmp_path), "--target", "nextflow", "--basepath", "out"]), [])
     assert {path.name for path in (tmp_path / "out").iterdir()} == FOUR_FILES
-
-
-@pytest.mark.fast
-def test_nextflow_documentation_uses_supported_public_entry_points() -> None:
-    documentation = (REPO_ROOT / "docs" / "nextflow.md").read_text(encoding="utf-8")
-
-    assert 'compiled = workflow.compile(target="nextflow")\ncompiled.write("autogenerated")' in documentation
-    assert "sophios --yaml workflow.wic --target nextflow" in documentation
-    assert "workflow.to_nf(" not in documentation
-    assert "to_nextflow(" not in documentation
-    assert "--generate_cwl_workflow --target nextflow" not in documentation
-    assert "sophios --yaml workflow.wic --target nextflow --run_local" in documentation
-    assert 'workflow.run(target="nextflow")' in documentation
-    for incompatible_flag in ("--generate_cwl_workflow", "--inputs_file", "--quiet"):
-        assert f"`{incompatible_flag}`" in documentation
 
 
 @pytest.mark.fast

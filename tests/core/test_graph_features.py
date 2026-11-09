@@ -1,21 +1,20 @@
-"""The graph Sophios draws: what each graph setting and the CLI's `--graphviz` do to it.
-
-These compile in memory and read the DOT source `drawing.draw` makes of the result, or
-run the CLI and read the `.gv` it writes. None of them renders an image.
-"""
+"""The graph Sophios draws: what each graph setting and the CLI's `--graphviz` do to its DOT source; no image is
+rendered."""
 import re
 import sys
 from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 import yaml
 
-from sophios import compiler, drawing, main, preflight
+from sophios import compiler, drawing, main
 from sophios.cli import default_compilation_settings, get_args, get_dicts_for_compilation
 from sophios.wic_types import Yaml
 
+from .helpers import no_preflight, run_cli, write_tree
 from .hermetic import bundle, subworkflow_step
 from .synthetic_tools import SYNTHETIC_TOOLS
 
@@ -30,6 +29,8 @@ _DOCUMENT: Yaml = {'steps': [
             {'id': 'mk_text', 'in': {'name': {'wic_inline_input': 'c'}}}]}),
     ]}),
 ]}
+#: The ids `_DOCUMENT`'s steps are written with.
+_AUTHORED_IDS = {'mk_file', 'sub.wic', 'xform', 'count', 'inner.wic', 'mk_text'}
 
 
 def _draw(document: Yaml = _DOCUMENT, *, label_edges: bool = False, label_stepname: bool = False,
@@ -42,8 +43,7 @@ def _draw(document: Yaml = _DOCUMENT, *, label_edges: bool = False, label_stepna
     settings['graph_label_stepname'] = label_stepname
     settings['graph_inline_depth'] = inline_depth
     settings['graph_dark_theme'] = dark_theme
-    dot: str = drawing.draw(compiled, source, settings, 'oracle', background=None).source
-    return dot
+    return cast(str, drawing.draw(compiled, source, settings, 'oracle', background=None).source)
 
 
 #: A node or edge name in DOT: quoted, or a bare word.
@@ -85,25 +85,19 @@ def _ranks(dot: str) -> list[tuple[int, list[str]]]:
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize(('labelled', 'expected'), [(True, 'file'), (False, None)])
-def test_graph_label_edges_names_the_output_each_edge_carries(labelled: bool, expected: str | None) -> None:
-    """With `--graph_label_edges` an edge is labelled with the output it carries."""
-    dot = _draw(label_edges=labelled)
-    edges = _edges(dot)
-    assert len(edges) == 2
-    assert [attrs.get('label') for _source, _sink, attrs in edges] == [expected] * 2
-    assert ('label=file' in dot) is labelled
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize(('qualified', 'labels'), [
-    (False, {'mk_file', 'sub.wic', 'xform', 'count', 'inner.wic', 'mk_text'}),
-    (True, {'mk_file', 'sub', 'xform', 'count', 'inner', 'mk_text'}),
-])
-def test_graph_label_stepname_labels_a_node_with_the_generated_step_name(qualified: bool, labels: set[str]) -> None:
-    """A node is labelled with the id the document wrote; with `--graph_label_stepname` it is the generated
-    step name instead, which a subworkflow's steps carry relative to the subworkflow."""
-    assert {attrs['label'] for attrs in _nodes(_draw(label_stepname=qualified)).values()} == labels
+@pytest.mark.parametrize(('flag', 'edge', 'nodes'), [
+    ({}, None, _AUTHORED_IDS),
+    ({'label_edges': True}, 'file', _AUTHORED_IDS),
+    ({'label_stepname': True}, None, {'mk_file', 'sub', 'xform', 'count', 'inner', 'mk_text'}),
+], ids=['neither', 'graph_label_edges', 'graph_label_stepname'])
+def test_each_graph_label_flag_labels_what_it_names(flag: dict[str, Any], edge: str | None, nodes: set[str]) -> None:
+    """With `--graph_label_edges` an edge is labelled with the output it carries. A node is labelled with the id the
+    document wrote; with `--graph_label_stepname` it is the generated step name instead, which a subworkflow's steps
+    carry relative to the subworkflow."""
+    dot = _draw(**flag)
+    assert [attrs.get('label') for *_, attrs in _edges(dot)] == [edge] * 2
+    assert ('label=file' in dot) is (edge is not None)
+    assert {attrs['label'] for attrs in _nodes(dot).values()} == nodes
 
 
 @pytest.mark.fast
@@ -123,53 +117,19 @@ def test_graph_inline_depth_draws_that_many_levels_of_subworkflow(depth: int, cl
     assert ('sub~inner~mk_text' in drawn) is (depth >= 2)
 
 
-@pytest.mark.fast
-@pytest.mark.parametrize(('dark_theme', 'font_colour', 'blue'),
-                         [(False, 'black', 'blue'), (True, 'white', 'lightskyblue')])
-def test_the_graph_draws_inferred_edges_in_the_font_colour_and_the_rest_in_blue(
-        dark_theme: bool, font_colour: str, blue: str) -> None:
-    """An edge the document wrote is blue, whether it joins two steps of one
-    document or reaches into a subworkflow, and a lighter blue on a dark theme; an
-    edge the compiler inferred takes the foreground colour, which is black, or white
-    on a dark theme.
-    """
-    document: Yaml = {'steps': [
-        {'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'a'}}, 'out': [{'file': {'wic_anchor': 'f'}}]},
-        {'id': 'xform', 'in': {'file': {'wic_alias': 'f'}, 'name': {'wic_inline_input': 'b'}}},
-        subworkflow_step('sub.wic', {'steps': [
-            {'id': 'xform', 'in': {'file': {'wic_alias': 'f'}, 'name': {'wic_inline_input': 'c'}}},
-            {'id': 'count'},                                       # file inferred from xform
-        ]}),
-    ]}
-    colours = {(source, sink): attrs.get('color')
-               for source, sink, attrs in _edges(_draw(document, dark_theme=dark_theme))}
-    assert colours == {
-        ('mk_file', 'xform'): blue,
-        ('mk_file', 'sub~xform'): blue,
-        ('sub~xform', 'sub~count'): font_colour,
-    }
-
-
 @pytest.fixture(name='cli_graph')
 def _cli_graph(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Callable[..., str]:
-    """Run the CLI on a workflow in `tmp_path` and return the `.gv` it wrote.
-
-    `dot` is reported present and the commands that would run it are swallowed: what is under
-    test is the DOT source Sophios writes, not the image Graphviz makes of it.
-    """
-    monkeypatch.setattr(preflight, 'prepare', lambda *_a, **_k: None)
+    """Run the CLI on a workflow in `tmp_path` and return the `.gv` it wrote, with `dot` reported present and its
+    commands swallowed."""
+    no_preflight(monkeypatch)
     monkeypatch.setattr(main.shutil, 'which', lambda _name: '/usr/bin/dot')
     monkeypatch.setattr(main, 'sub', SimpleNamespace(run=lambda *_a, **_k: SimpleNamespace(stdout=b'')))
     monkeypatch.chdir(tmp_path)
 
     def run(source: str, *flags: str, sub: str | None = None) -> str:
-        workflow = tmp_path / 'w.wic'
-        workflow.write_text(source, encoding='utf-8')
-        if sub is not None:
-            (tmp_path / 'sub.wic').write_text(sub, encoding='utf-8')
-        monkeypatch.setattr('sys.argv', ['sophios', '--yaml', str(workflow), '--generate_cwl_workflow',
-                                         '--graphviz', *flags])
-        main.main()
+        write_tree(tmp_path, {'w.wic': source, **({} if sub is None else {'sub.wic': sub})})
+        assert run_cli(monkeypatch, '--yaml', tmp_path / 'w.wic', '--generate_cwl_workflow', '--graphviz',
+                       *flags) is None
         return (tmp_path / 'autogenerated' / 'w.wic.gv').read_text(encoding='utf-8')
     return run
 
@@ -192,19 +152,6 @@ def test_graphviz_writes_the_graph_of_the_compiled_workflow(cli_graph: Callable[
     assert re.findall(r'^\s*(\w+) -> (\w+) \[', drawn, re.MULTILINE) == [('touch', 'cat')]
 
 
-_EXPLICIT_EDGE = """\
-steps:
-- id: touch
-  in:
-    filename: !ii empty.txt
-  out:
-  - file: !& f
-- id: cat
-  in:
-    file: !* f
-"""
-
-
 @pytest.mark.fast
 @pytest.mark.parametrize(('flags', 'font', 'blue'), [((), 'black', 'blue'),
                                                      (('--graph_dark_theme',), 'white', 'lightskyblue')])
@@ -212,8 +159,9 @@ def test_the_drawing_takes_its_palette_from_the_theme(
         cli_graph: Callable[..., str], flags: tuple[str, ...], font: str, blue: str) -> None:
     """The drawing's text, its box outlines, its inferred edges and an edge's label take one colour: black, or white
     with `--graph_dark_theme`. The background is transparent either way, so a slide gives it its colour; a box is
-    not filled, so it takes that colour too. An edge the document wrote is `blue`, which does not read on a dark
-    background, so the dark theme draws it in a lighter blue."""
+    not filled, so it takes that colour too. An edge the document wrote is `blue`, whether it joins two steps of one
+    document or reaches into a subworkflow; that does not read on a dark background, so the dark theme draws it in a
+    lighter blue."""
     drawn = cli_graph(_TWO_STEPS, '--graph_label_edges', *flags)
     assert 'bgcolor=transparent\n' in drawn
     assert f'fontcolor={font}\n' in drawn
@@ -221,7 +169,19 @@ def test_the_drawing_takes_its_palette_from_the_theme(
     assert {(attrs['color'], attrs['fontcolor']) for attrs in boxes.values()} == {(font, font)}
     assert not any('filled' in attrs['style'] or 'fillcolor' in attrs for attrs in boxes.values())
     assert [(attrs['color'], attrs['fontcolor']) for *_, attrs in _edges(drawn)] == [(font, font)]
-    assert [attrs['color'] for *_, attrs in _edges(cli_graph(_EXPLICIT_EDGE, *flags))] == [blue]
+    nested = _draw({'steps': [
+        {'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'a'}}, 'out': [{'file': {'wic_anchor': 'f'}}]},
+        {'id': 'xform', 'in': {'file': {'wic_alias': 'f'}, 'name': {'wic_inline_input': 'b'}}},
+        subworkflow_step('sub.wic', {'steps': [
+            {'id': 'xform', 'in': {'file': {'wic_alias': 'f'}, 'name': {'wic_inline_input': 'c'}}},
+            {'id': 'count'},                                       # file inferred from xform
+        ]}),
+    ]}, dark_theme='--graph_dark_theme' in flags)
+    assert {(source, sink): attrs.get('color') for source, sink, attrs in _edges(nested)} == {
+        ('mk_file', 'xform'): blue,
+        ('mk_file', 'sub~xform'): blue,
+        ('sub~xform', 'sub~count'): font,
+    }
 
 
 @pytest.mark.fast
@@ -276,18 +236,24 @@ def test_a_step_style_is_appended_to_the_style_of_its_box(cli_graph: Callable[..
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize(('own', 'call', 'title'), [
-    (None, None, 'sub.wic'),
-    ({'label': 'Own'}, None, 'Own'),
-    (None, {'label': 'Called'}, 'Called'),
-    ({'label': 'Own'}, {'label': 'Called'}, 'Called'),
-])
-def test_a_subworkflow_cluster_is_titled_by_its_label_else_by_the_id_that_calls_it(
-        cli_graph: Callable[..., str], own: Yaml | None, call: Yaml | None, title: str) -> None:
+@pytest.mark.parametrize(('own', 'call', 'cluster', 'box'), [
+    (None, None, ('label', 'sub.wic'), 'rounded'),
+    ({'label': 'Own'}, None, ('label', 'Own'), 'rounded'),
+    (None, {'label': 'Called'}, ('label', 'Called'), 'rounded'),
+    ({'label': 'Own'}, {'label': 'Called'}, ('label', 'Called'), 'rounded'),
+    ({'style': 'invis'}, None, ('style', 'invis'), 'rounded, invis'),
+    (None, {'style': 'invis'}, ('style', 'invis'), 'rounded, invis'),
+], ids=['call-id', 'own-label', 'call-label', 'call-wins', 'own-invis', 'call-invis'])
+def test_a_subworkflow_cluster_takes_the_label_and_style_of_its_call_else_its_own(
+        cli_graph: Callable[..., str], own: Yaml | None, call: Yaml | None, cluster: tuple[str, str], box: str) -> None:
     """The subworkflow's own `wic: graphviz: label` titles its cluster, and the calling step's entry wins
-    over it; without either the cluster is titled with the calling step's id."""
+    over it; without either the cluster is titled with the calling step's id. `style: invis`, in its own file or
+    at the call, hides the whole subworkflow: its cluster and the box that calls it."""
     drawn = cli_graph(_with(_CALLS_SUB, entries={'sub.wic': call} if call else None), sub=_with(_TWO_STEPS, own))
-    assert _cluster(drawn, _SUB_CLUSTER)['label'] == title
+    attr, value = cluster
+    assert _cluster(drawn, _SUB_CLUSTER)[attr] == value
+    nodes = _nodes(drawn)
+    assert (nodes['sub']['style'], nodes['touch']['style']) == (box, 'rounded')
 
 
 @pytest.mark.fast
@@ -301,18 +267,6 @@ def test_two_calls_to_one_subworkflow_are_two_clusters_each_with_its_own_look(
     first, second = _cluster(drawn, 'cluster_sub@2'), _cluster(drawn, 'cluster_sub@3')
     assert (first['label'], first.get('style'), second['label'], second['style']) == ('First', None, 'Second', 'invis')
     assert _nodes(drawn)['sub@2']['style'] == 'rounded'
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize(('own', 'call'), [({'style': 'invis'}, None), (None, {'style': 'invis'})])
-def test_an_invisible_subworkflow_hides_its_cluster_and_the_box_that_calls_it(
-        cli_graph: Callable[..., str], own: Yaml | None, call: Yaml | None) -> None:
-    """`style: invis` on a subworkflow, in its own file or at the call, hides the whole subworkflow."""
-    drawn = cli_graph(_with(_CALLS_SUB, entries={'sub.wic': call} if call else None), sub=_with(_TWO_STEPS, own))
-    assert _cluster(drawn, _SUB_CLUSTER)['style'] == 'invis'
-    nodes = _nodes(drawn)
-    assert nodes['sub']['style'] == 'rounded, invis'
-    assert nodes['touch']['style'] == 'rounded'
 
 
 @pytest.mark.fast

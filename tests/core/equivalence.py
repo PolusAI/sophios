@@ -1,16 +1,5 @@
-"""What it means for two compilations to mean the same thing.
-
-Three strengths, because there is no single honest answer. Each names what it
-may ignore and why that is legitimate rather than convenient — a normalisation
-without a reason is a place for a real difference to hide.
-
-    IDENTICAL          nothing is ignored.
-    UP_TO_ORDER        mapping key order is ignored.
-    UP_TO_EMBEDDING    `run:` paths, `$namespaces` and `$schemas` are ignored.
-    UP_TO_RENAMING     namespaced names are ignored; the DAG must match.
-
-A lattice. What each strength forgives is declared on `equivalent`.
-"""
+"""When two compilations mean the same thing, at four strengths: IDENTICAL, UP_TO_ORDER, UP_TO_EMBEDDING,
+UP_TO_RENAMING. Each forgives only what it names, with a reason: a normalisation without one hides real differences."""
 import copy
 from dataclasses import dataclass
 from enum import IntEnum
@@ -26,45 +15,20 @@ from sophios.wic_types import Yaml
 
 
 class Strength(IntEnum):
-    """How much two compilations are allowed to differ.
+    """How much two compilations may differ; an IntEnum, so the lattice is `<=` and higher is stricter."""
 
-    `IntEnum` so the lattice is expressible as `<=`. Higher is stricter.
-    """
-
-    #: Namespaced names may differ; the DAG and the tools at each node may not.
-    #: Legitimate because a namespace encodes *nesting depth*
-    #: (`{stem}__step__{i}__{key}`, joined with `'___'`, docs/dev/architecture.md),
-    #: so splitting a workflow into subworkflows renames every port and moves
-    #: no edge. This is the only strength partitioning can preserve.
+    #: Names may differ (step ids, port keys, `source` names, kept as shape-typed edges) and top-level keys beyond
+    #: steps, inputs, outputs and requirements; the DAG and each node's tool may not: a split moves no edge.
     UP_TO_RENAMING = 1
 
-    #: `run:` paths may differ; nothing else may. Legitimate because `run:`
-    #: names the file a process is written to, which depends on what else the
-    #: tree holds (a stem another process took is numbered) — embedding, not
-    #: meaning.
+    #: `run:` paths may differ: `run:` names the file a process is written to, which depends on the tree.
     UP_TO_EMBEDDING = 2
 
-    #: Mapping key order may differ; nothing else may. Legitimate because a
-    #: YAML mapping is unordered by its own specification and CWL reads these
-    #: documents as mappings. The compatibility gate for emitted CWL: every
-    #: name, value, list order and `run:` path is compared.
+    #: Mapping key order may differ: a YAML mapping is unordered and CWL reads these documents as mappings.
     UP_TO_ORDER = 3
 
-    #: Byte-for-byte, after nothing — mapping *key order* included. Available
-    #: as a real strength only because emission is canonical (see the
-    #: canonical-emission predicate): while `requirements` key order came from
-    #: a set, two compilations of one input could differ here and IDENTICAL
-    #: would have been unusable.
-    #:
-    #: Order is compared *only* here, and that asymmetry is the point. Emitted
-    #: key order is the whole subject of canonical emission — `requirements` built from a set,
-    #: eight hash seeds giving eight orders — so a relation that normalised
-    #: order away would make an emission-order regression invisible to the
-    #: predicate written to catch it. Below IDENTICAL order is forgiven,
-    #: legitimately: a YAML mapping is unordered by its own specification and
-    #: CWL reads these documents as mappings, so two orderings are the same
-    #: workflow. IDENTICAL is not a claim about the workflow, it is a claim
-    #: about the bytes, and it is the only strength that makes one.
+    #: Byte for byte, key order included, usable only because emission is canonical; order is compared here alone so an
+    #: emission-order regression stays visible.
     IDENTICAL = 4
 
 
@@ -84,62 +48,15 @@ class Divergence:
 
 
 def equivalent(left: Yaml, right: Yaml, strength: Strength) -> Divergence | None:
-    """Whether two compiled workflows agree at the given strength.
-
-    Returns None when they agree, and the first divergence otherwise — never a
-    bare bool. "Not equivalent" is not an actionable report when a migration
-    runs this over thousands of inputs.
-
-    CANNOT DETECT (declared). Everything here is forgiven by UP_TO_RENAMING and
-    nothing else in a step is, because `_step_body` compares a step's keys by
-    *exclusion*: a key this module has never heard of is compared, not ignored.
-    The stronger strengths forgive only what their own docstrings name.
-
-      * `steps[].id`, a namespaced name, and the directory of a `steps[].run`
-        path, which is embedding. The process `run:` names is compared
-        (`_process`).
-      * `steps[].in[].source` and `outputs[].outputSource`, which name a
-        producing step or a workflow input. Forgiven as names, but not
-        dropped: `_dataflow` re-expresses each as a labelled edge carrying the
-        endpoint's declared shape, so rewiring a port onto a differently-typed
-        one diverges while permuting two identically-typed ones does not —
-        a renaming being a bijection on names. Dropped instead, the pairing is
-        invisible, and a sorted multiset of shapes cannot see a permutation of
-        itself.
-      * the keys of `inputs` and `outputs`, which a hermetic compilation
-        namespaces. Their count and their `type`/`format` are compared.
-      * every top-level key but `steps`, `inputs`, `outputs`, `requirements`.
-        Nothing yet says which parts of them a renaming may touch; ask for
-        UP_TO_EMBEDDING when the claim is about the whole document.
-      * mapping key *order*, below IDENTICAL.
-
-    A key compared that should not be is a false divergence, which is loud; a
-    key forgiven that should not be is silent. This list is the second kind,
-    kept short with a reason each.
-
-    Takes no graphs. Letting a caller supply the compiler's own
-    graph-view pair in place of the graph derived here would be
-    strictly worse in three ways: nothing in the suite passes them,
-    so the branch was untested; the compiler's nodes are namespaced strings
-    carrying no tool label, so they can only be matched with a bare
-    `DiGraphMatcher` — the exact weak check this module exists to replace,
-    blind to a graph whose every step was swapped for a different tool of the
-    same arity; and the report told a consumer to use them, which would have
-    routed every downstream consumer onto the unverified path. If a
-    restructuring rewrite (partitioning or embedding) later needs supplied
-    graphs, they come back labelled and tested, as a deliberate change.
-    """
+    """Whether two compiled workflows agree at `strength`: None, or the first `Divergence`, never a bare bool.
+    Each strength forgives only what its member says; step keys are compared by exclusion, so an unknown key counts."""
     match strength:
         case Strength.IDENTICAL:
             return _first_difference(left, right, strength, '', ordered=True)
         case Strength.UP_TO_ORDER:
             return _first_difference(left, right, strength, '', ordered=False)
         case Strength.UP_TO_EMBEDDING:
-            # `$namespaces` and `$schemas` go with `run:`: a prefix and an
-            # ontology are declared in the document that uses them, so embedding
-            # moves a child's up into its parent (`inline_artifact_runs`), and
-            # deleting `run:` alone would leave what the child brought. A root
-            # sees only its own, so a caller holding the tree checks `$schemas`.
+            # `$namespaces` and `$schemas` go with `run:`: embedding moves a child's into its parent.
             return _first_difference(_without_embedding(left),
                                      _without_embedding(right),
                                      strength, '', ordered=False)
@@ -155,22 +72,9 @@ def _without_embedding(document: Any) -> Any:
 
 def _first_difference(left: Any, right: Any, strength: Strength, path: str, *,
                       ordered: bool) -> Divergence | None:
-    """Structural walk reporting where two documents first disagree.
-
-    A plain `!=` would be correct and useless: the caller learns that two
-    documents differ and nothing about where, which is the whole reason
-    `test_cwl_embedding_independence` writes both sides to disk and shells out
-    to `diff` (tests/core/test_examples.py:336-355). Walking here means the
-    failure message is already the diff.
-
-    `ordered` decides whether two mappings with the same entries in a different
-    sequence are the same mapping. Only IDENTICAL passes True — see that
-    member's docstring for why the asymmetry is legitimate and why canonical
-    emission needs it.
-    """
-    # pylint: disable=too-many-return-statements  # one per node kind and per
-    # way that kind can disagree; collapsing them costs the path, which is the
-    # whole point of walking rather than writing `left != right`.
+    """Where two documents first disagree, so the failure message is the diff; `ordered` (IDENTICAL only) also compares
+    mapping key order."""
+    # pylint: disable=too-many-return-statements  # one per node kind and way it differs
     if type(left) is not type(right):
         return Divergence(strength, path or '<root>', left, right)
     if isinstance(left, dict):
@@ -181,9 +85,7 @@ def _first_difference(left: Any, right: Any, strength: Strength, path: str, *,
                                       ordered=ordered)
             if found is not None:
                 return found
-        # Order last, so a mapping that is missing a key is reported as missing
-        # that key rather than as a reordering — the entries have to agree
-        # before their sequence is the interesting thing about them.
+        # Order last: a missing key is reported as missing, not as a reordering.
         if ordered and list(left) != list(right):
             return Divergence(strength, f'{path or "<root>"} (key order)',
                               list(left), list(right))
@@ -199,33 +101,17 @@ def _first_difference(left: Any, right: Any, strength: Strength, path: str, *,
     return None if left == right else Divergence(strength, path or '<root>', left, right)
 
 
-#: The fields of a workflow-level port that a renaming cannot touch. `type` and
-#: `format` are values, not names; `outputSource` and the port's own key are
-#: names and are deliberately absent — see `_port_shapes`.
+#: The fields of a workflow-level port a renaming cannot touch; its key and `outputSource` are names.
 _SHAPE_KEYS: Final[tuple[str, ...]] = ('type', 'format')
 
-#: Prefixes distinguishing a workflow-level port's node in `_dataflow` from a
-#: step's, and from each other. Emitted step ids are `{stem}__step__{i}__{key}`
-#: and emitted port names are `{step_id}___{port}`, so none of them can contain
-#: a space or an angle bracket; without the prefix a port and a step sharing a
-#: name would silently become one node.
+#: Prefixes no emitted step or port name can hold, so a port and a step sharing a name stay two nodes.
 _INPUT_NODE: Final = '<input> '
 _OUTPUT_NODE: Final = '<output> '
 
 
 def _process(step: Yaml) -> Any:
-    """The process a step runs, read from its `run:` and never from its id.
-
-    A path contributes its final segment. The compiler names that file by the
-    root and the step's address, which is embedding, so a document compared up
-    to renaming is first given its tools embedded (`flatten_model`). An
-    embedded process contributes the whole of itself. Neither is a decoding of
-    an id, so an id's spelling can change without this moving.
-
-    So a path and an embedded copy of the same process label differently:
-    `UP_TO_RENAMING` does not forgive embedding, and a document compared
-    with its own inlined form belongs at `UP_TO_EMBEDDING`.
-    """
+    """The process a step runs, from its `run:` (a path's last segment, or the embedded process), never from its id;
+    a path and an embedded copy label differently, which UP_TO_EMBEDDING forgives."""
     run = step.get('run')
     if isinstance(run, str):
         return PurePosixPath(run).name
@@ -233,26 +119,8 @@ def _process(step: Yaml) -> Any:
 
 
 def _steps_of(document: Yaml) -> list[Yaml]:
-    """The document's steps, in the one surface form the compiler emits.
-
-    WILL NOT READ what the compiler does not emit. Read by `_dataflow`, whose
-    labelled graph is the part of a document UP_TO_RENAMING compares, so a shape
-    misread here is a difference that strength was meant to catch and does not.
-    A list, every entry a mapping carrying `id`; anything else raises rather
-    than being coerced. CWL admits
-    `steps:` as a mapping keyed by step name and Sophios emits neither it nor an
-    array-form `in:`, and treating an unhandled shape as "nothing here" turns a
-    non-list `steps:` into `[]`, so two documents differing *only* in their
-    steps become two empty graphs that compare equal. The one verdict a
-    comparison oracle must never invent is "no difference", so a shape it cannot
-    read has to be loud.
-
-    A step without `id` raises for the same reason rather than being filtered
-    out. It has no node in the dataflow graph, so filtering made
-    `{'steps': [{'out': ['f']}]}` and `{'steps': []}` equivalent at
-    UP_TO_RENAMING — silently, and only ever reachable from a hand-written
-    fixture, which is precisely who needs to be told.
-    """
+    """The document's list-form steps; any other shape, or a step without `id`, raises: read as no steps, two documents
+    differing only in their steps would compare equal."""
     steps = document.get('steps', [])
     if not isinstance(steps, list):
         raise TypeError(
@@ -269,15 +137,7 @@ def _steps_of(document: Yaml) -> list[Yaml]:
 
 
 def _in_of(step: Yaml) -> Yaml:
-    """A step's `in:` mapping — the form the compiler emits, or nothing.
-
-    Array-form `in: [{id: n, source: s}]` raises rather than being read as an
-    absent `in:`, for the reason `_steps_of` gives. It is otherwise forgiven
-    twice over: `_FORGIVEN_STEP_KEYS` drops `in` unconditionally, and neither
-    this reader nor `_bindings` put a non-mapping back, so every binding's
-    `default`, `valueFrom` and `linkMerge` went uncompared along with its
-    source.
-    """
+    """A step's mapping-form `in:`, or {}; the array form raises, as in `_steps_of`, or its bindings go uncompared."""
     bindings = step.get('in')
     if bindings is None:
         return {}
@@ -290,12 +150,7 @@ def _in_of(step: Yaml) -> Yaml:
 
 
 def _bindings(step: Yaml) -> Iterator[tuple[str, str]]:
-    """Every `(input name, source)` pair a step declares.
-
-    Both binding forms the compiler emits: `in: {name: 'src'}` and
-    `in: {name: {source: 'src'}}`, the latter with `source` possibly a list
-    (CWL's multiple-inbound-links form).
-    """
+    """Every (input name, source) pair a step declares, `source` one string or a list."""
     for name, value in _in_of(step).items():
         inner = value.get('source') if isinstance(value, dict) else value
         for source in (inner if isinstance(inner, list) else [inner]):
@@ -304,14 +159,8 @@ def _bindings(step: Yaml) -> Iterator[tuple[str, str]]:
 
 
 def _canonical(node: Any) -> Any:
-    """A hashable, order-normalised rendering of a YAML fragment.
-
-    Mapping key order is normalised away here because this feeds
-    UP_TO_RENAMING, which forgives order (see `Strength.IDENTICAL` for why
-    only the top strength does not). List order is kept: a list in CWL is a
-    sequence, and `scatter: [a, b]` is not `scatter: [b, a]` to a reader who
-    has not proved otherwise.
-    """
+    """A hashable rendering of a YAML fragment, key order normalised (UP_TO_RENAMING forgives it) and list order kept:
+    `scatter: [a, b]` is not `scatter: [b, a]`."""
     if isinstance(node, dict):
         return tuple(sorted((str(k), _canonical(v)) for k, v in node.items()))
     if isinstance(node, list):
@@ -319,29 +168,16 @@ def _canonical(node: Any) -> Any:
     return repr(node)
 
 
-#: Keys inside a step that UP_TO_RENAMING forgives, and the only ones. `id` is
-#: what a renaming renames; `run` is read only through `_process`, because the
-#: rest of a path is embedding, forgiven a strength lower down; `in` is handled separately because only the `source`
-#: inside a binding is a name — the binding's own key and everything else under
-#: it is compared. Written as an exclusion so that a step key nobody here has
-#: heard of is *compared*: a wrongly-compared key is a loud false divergence, a
-#: wrongly-forgiven one is silent, and this file's thesis is that silent
-#: forgiveness is where a real difference hides.
+#: The step keys UP_TO_RENAMING forgives, as an exclusion so an unknown key is compared: a wrongly compared key is a
+#: loud false divergence, a wrongly forgiven one silent. Of `in`, only each binding's `source` is forgiven.
 _FORGIVEN_STEP_KEYS: Final[tuple[str, ...]] = ('id', 'run', 'in')
 
 
 def _step_body(step: Yaml) -> Any:
-    """Everything in a step that a renaming cannot change.
-
-    Covers `out`, `scatter`, `scatterMethod`, `when`, `label`, `doc`, a
-    binding's `default` and `valueFrom` — all of which are name-stable and
-    meaning-carrying, and none of which the forgiven set covers. Compared
-    nowhere, flipping `when` from `$(true)` to `$(false)` would be equivalence.
-    """
+    """Everything in a step a renaming cannot change: `out`, `scatter`, `when`, a binding's `default`."""
     body = {k: v for k, v in step.items() if k not in _FORGIVEN_STEP_KEYS}
     if 'in' in step:
-        # Only when the key is present, so a step with `in: {}` stays distinct
-        # from a step with no `in:` at all.
+        # Only when present: `in: {}` differs from no `in:`.
         body['in'] = {str(name): {k: v for k, v in value.items() if k != 'source'}
                       if isinstance(value, dict) else {}
                       for name, value in _in_of(step).items()}
@@ -349,61 +185,9 @@ def _step_body(step: Yaml) -> Any:
 
 
 def _dataflow(document: Yaml) -> nx.DiGraph:
-    """The document's dataflow DAG, in a form renaming cannot change.
-
-    Nodes are steps, labelled with the process they run (`_process`) *and the
-    whole step body* (`_step_body`); edges are `producer/port` references out of `in:`,
-    labelled with the `(output port, input name)` pairs that justify them.
-    Every one of those labels is built from tool port names and literal
-    values, which a namespace re-rooting does not touch, so the labelled graph
-    is exactly the part of the document UP_TO_RENAMING is willing to compare.
-
-    Folding the step body into the *node* label rather than comparing step
-    bodies as a separate multiset is what keeps a body attached to its
-    position in the graph: a workflow where the scattered step is the first
-    and one where it is the third are then not equivalent, which a multiset
-    could not see.
-
-    A separate multiset-of-tools check used to sit alongside this and has
-    been deleted. It discriminated nothing: a process-labelled node isomorphism
-    already implies equal process multisets, so the only thing the check
-    contributed was the string in the `Divergence.path` — and the test that
-    named it was asserting on that string rather than on a verdict, which is
-    this project's recurring failure, in the artifact everything imports.
-
-    A reference to a step this document does not contain becomes a node of its
-    own rather than being dropped. Dropping it is what makes the "an edge
-    points somewhere else" case in `data/equivalence/` invisible: with the target
-    discarded, a document whose edge went nowhere looks the same as one with
-    no edge at all. Such a node is labelled `('external', name)` with the whole
-    name it is referenced by — it has no `run:` to read, and the whole name is
-    the stricter label: two different absent producers can never be lumped
-    together — so it can never match a step the document really declares.
-
-    A source that names no step at all — no `producer/port` split — is a
-    workflow-level input, and it too becomes a node rather than being dropped.
-    Dropping it made a whole class of rewiring invisible: the compiler emits
-    `in: {n: {source: oracle__step__2__sink___n}}` for every unbound argument,
-    so with those sources discarded a document feeding `sink.n` from the `int`
-    input and `mk_file.name` from the `string` one was UP_TO_RENAMING-equal to
-    the document that fed each from the other. The node carries the *shape*
-    the document declares for that input, never its name, which is what keeps
-    the forgiveness honest in both directions: differently-typed inputs cannot
-    be swapped silently, and swapping two identically-shaped ones stays
-    equivalent, because that swap is exactly what re-rooting a namespace does.
-
-    A workflow-level *output* is the mirror image and gets the same treatment:
-    a node labelled with its declared shape and never its name, with an edge
-    out of the step its `outputSource` names. The argument above was standing
-    uncorrected on this side for a while, and the consequence was worse,
-    because for an output the name is the only thing tying a declared shape to
-    a producer: with `outputSource` dropped, `_port_shapes` reduced the outputs
-    to a *sorted multiset* that no permutation of the pairing can change, and
-    `_same_dag` never saw them at all. A document whose every output had been
-    rewired to the wrong producer was UP_TO_RENAMING-equal to the correct one.
-    An output with no `outputSource` gets no node: there is no edge to draw,
-    and its shape is compared by `_port_shapes` already.
-    """
+    """The labelled DAG a renaming cannot change: steps carry process and body, edges their port pairs; a workflow port
+    is labelled by its shape, an absent producer by its whole name (never lumped), so a moved body or rewire
+    diverges."""
     graph = nx.DiGraph()
     input_shapes = _declared_shapes(document, 'inputs')
     output_shapes = _declared_shapes(document, 'outputs')
@@ -424,27 +208,15 @@ def _dataflow(document: Yaml) -> nx.DiGraph:
         consumer = _OUTPUT_NODE + name
         if consumer not in graph:
             graph.add_node(consumer, label=('output', output_shapes.get(name)))
-        # A workflow output binds no name of its own, so the input half of the
-        # edge label is empty. What it does carry is the producing *port*,
-        # which is what separates two outputs fed by the same step.
+        # An output binds no name: the producing port alone tells two outputs of one step apart.
         _connect(graph, found, consumer, '')
     return graph
 
 
 def _producer_of(graph: nx.DiGraph, source: str,
                  input_shapes: dict[str, str]) -> tuple[str, str] | None:
-    """The `(node, output port)` a `source:` reference comes out of.
-
-    Adds the node when the source names something that is not a declared step:
-    a step this document does not contain, or a workflow-level input. Shared by
-    the two callers in `_dataflow` — a step's bindings and a workflow output's
-    `outputSource` — because the reference is the same reference in both
-    positions, and the second having read it differently is what let the output
-    side keep a defect the input side had already fixed.
-
-    Returns None for a source that names nothing (`in: {name: ''}`), which has
-    no edge.
-    """
+    """The (node, port) a `source:` comes out of, adding a node for an absent step or a workflow input; None for ''.
+    Shared by step bindings and `outputSource`, so both read a reference alike."""
     producer, separator, port = source.partition('/')
     if separator and port and producer:
         if producer not in graph:
@@ -467,46 +239,28 @@ def _connect(graph: nx.DiGraph, producer: tuple[str, str], consumer: str, name: 
         graph.add_edge(node, consumer, ports={(port, name)})
 
 
-def _output_sources(document: Yaml) -> Iterator[tuple[str, str]]:
-    """Every `(workflow output name, source)` pair the document declares.
-
-    Both surface forms, for the same reason `_declared_shapes` reads both, and
-    `outputSource` possibly a list — CWL's multiple-inbound-links form, exactly
-    as a step binding's `source` can be.
-    """
-    node = document.get('outputs') or {}
+def _named_ports(document: Yaml, key: str) -> dict[str, Any]:
+    """The ports under `key` by name, in either form CWL admits: a mapping, or records carrying `id`."""
+    node = document.get(key)
     if isinstance(node, dict):
-        ports = [(str(name), port) for name, port in node.items()]
-    elif isinstance(node, list):
-        ports = [(str(port['id']), port) for port in node
-                 if isinstance(port, dict) and 'id' in port]
-    else:
-        return
-    for name, port in ports:
-        if not isinstance(port, dict):
-            continue
-        inner = port.get('outputSource')
+        return {str(name): port for name, port in node.items()}
+    if isinstance(node, list):
+        return {str(port['id']): port for port in node if isinstance(port, dict) and 'id' in port}
+    return {}
+
+
+def _output_sources(document: Yaml) -> Iterator[tuple[str, str]]:
+    """Every (workflow output name, source) pair, `outputSource` one string or a list."""
+    for name, port in _named_ports(document, 'outputs').items():
+        inner = port.get('outputSource') if isinstance(port, dict) else None
         for source in (inner if isinstance(inner, list) else [inner]):
             if isinstance(source, str) and source:
                 yield name, source
 
 
 def _port_shapes(document: Yaml, key: str) -> list[str]:
-    """The multiset of workflow-level port shapes under `key`, names dropped.
-
-    Verified against a hermetic compilation rather than assumed: the compiler
-    emits workflow-level `inputs`/`outputs` keys as `{step_id}___{port}` —
-    `oracle__step__1__mk_file___name` — so those keys are namespaced and are
-    *not* stable under renaming. This is the correction to the brief's
-    expectation that they would be. What renaming cannot change is how many
-    ports there are (a renaming is a bijection on names) and what type each
-    one has, so that is what is compared. `outputSource` is excluded here for
-    the same reason the key is — it is a name — and is not thereby forgiven:
-    `_dataflow` re-expresses it as an edge into a node carrying this port's
-    shape, which is what makes the multiset reduction below safe. Reduced
-    without that edge, a permutation of which producer feeds which output was
-    invisible, a sorted multiset being unable to see a permutation of itself.
-    """
+    """The sorted shapes of the workflow-level ports under `key`, names dropped (the compiler namespaces them);
+    safe since `_dataflow` carries which producer feeds which output."""
     node = document.get(key)
     ports = list(node.values()) if isinstance(node, dict) else (node if isinstance(node, list) else [])
     return sorted(_shape(port) for port in ports)
@@ -519,31 +273,12 @@ def _shape(port: Any) -> str:
 
 
 def _declared_shapes(document: Yaml, key: str) -> dict[str, str]:
-    """Every declared port under `key`, by name, mapped to its shape.
-
-    The name is the lookup key and never the compared value — `_dataflow` uses
-    this only to answer "what shape is the input this source names?", which is
-    the part of a workflow-level reference that survives a renaming. Both
-    surface forms, for the same reason `_port_shapes` reads both: the compiler
-    emits the mapping form, and CWL admits the array-of-records form.
-    """
-    node = document.get(key)
-    if isinstance(node, dict):
-        return {str(name): _shape(port) for name, port in node.items()}
-    if isinstance(node, list):
-        return {str(port['id']): _shape(port) for port in node
-                if isinstance(port, dict) and 'id' in port}
-    return {}
+    """Each declared port under `key`, by name, mapped to its shape; the name is only the lookup key."""
+    return {name: _shape(port) for name, port in _named_ports(document, key).items()}
 
 
 def _requirement_names(document: Yaml) -> list[str]:
-    """The requirement class names, which renaming genuinely cannot touch.
-
-    Unlike port names these are CWL class names — `ScatterFeatureRequirement`,
-    `SubworkflowFeatureRequirement` — fixed by the CWL specification and never
-    namespaced by the compiler. So here, and only here, the *names* are
-    compared as a set rather than reduced to a count.
-    """
+    """The requirement class names, compared as names: CWL fixes them and the compiler never namespaces them."""
     node = document.get('requirements') or {}
     if isinstance(node, dict):
         return sorted(node)
@@ -553,29 +288,8 @@ def _requirement_names(document: Yaml) -> list[str]:
 
 
 def _same_dag(left: Yaml, right: Yaml) -> Divergence | None:
-    """Whether two workflows have the same shape under renaming.
-
-    Isomorphism alone is too weak: the retired source-inlining regression used
-    a bare `DiGraphMatcher`, which accepts a graph
-    in which every step has been replaced by a *different tool of the same
-    arity*, which is precisely the kind of thing an IR migration could get
-    wrong. The answer here is a *labelled* matcher — see `_dataflow` — not a
-    second check bolted on beside a bare one.
-
-    Two checks live outside the graph, because neither subject is a node:
-
-      * `requirements` class names, compared as a set. These come from the CWL
-        specification, not from the namespace, so unlike everything else at
-        this strength their names really are comparable.
-      * `inputs`/`outputs`, compared by count and by `type`/`format` with
-        names dropped. A hermetic compilation shows those keys are namespaced
-        (`oracle__step__1__mk_file___name`), so comparing them by name would
-        reject every renaming this strength exists to forgive.
-
-    Which producer feeds which workflow output is *not* one of those two: it is
-    an edge in the graph, for the reason `_dataflow` gives. Compared out here
-    as part of the port multiset it could not be seen at all.
-    """
+    """Same shape under renaming: port shapes and requirement names, then a labelled isomorphism, since a bare one
+    accepts every step swapped for another tool of the same arity."""
     for key in ('inputs', 'outputs'):
         left_ports, right_ports = _port_shapes(left, key), _port_shapes(right, key)
         if left_ports != right_ports:
@@ -599,8 +313,7 @@ def _same_dag(left: Yaml, right: Yaml) -> Divergence | None:
 
 
 def _source_of(value: Any) -> str | None:
-    """The `source` one `in:` binding names, in whichever of the two surface
-    forms the compiler emitted (`{name: source}` or `{name: {source: ...}}`)."""
+    """The `source` one `in:` binding names, in either surface form the compiler emits."""
     source = value.get('source') if isinstance(value, dict) else value
     return source if isinstance(source, str) else None
 
@@ -616,11 +329,8 @@ def _set_source(bindings: Yaml, name: str, source: str) -> None:
 
 def _inlined_steps(wrapper_id: str, inner: Yaml, formal_to_actual: dict[str, str | None],
                    step_requirements: Yaml) -> list[Yaml]:
-    """The steps of the flattened subworkflow `inner`, as the call `wrapper_id` inlines them.
-
-    Ids are unique in a document only: two subworkflows may each call a step `captured`, so an
-    inlined step takes its wrapper's id in front of its own, as the compiler's flattening does.
-    """
+    """The steps of flattened `inner` as call `wrapper_id` inlines them, ids prefixed by the wrapper's: an id is unique
+    in its document only."""
     inner_ids = {str(inner_step['id']) for inner_step in inner.get('steps', [])}
     inlined: list[Yaml] = []
     for inner_step in inner.get('steps', []):
@@ -640,80 +350,47 @@ def _inlined_steps(wrapper_id: str, inner: Yaml, formal_to_actual: dict[str, str
 
 
 def flatten_model(artifact: CompilationArtifact) -> Yaml:
-    """The compiled document with every subworkflow step inlined whose boundary
-    is proved removable, so a split and an unsplit compilation of the same
-    steps can be compared directly.
-
-    This is an independent test oracle, scoped to what `equivalent()` at
-    UP_TO_RENAMING actually forgives: it needs the DAG's topology and every
-    step's body right, and it does not need `run:` paths, `steps[].id`, or
-    workflow-level port *names* right at all, because those are exactly what
-    that strength already ignores (`equivalence.py`). A tool step's `run:` is
-    the tool it runs, embedded: its file is named by the step's address, which
-    is embedding.
-
-    Recognising a subworkflow step by its own sub-tree's `class` (`Workflow`,
-    not `CommandLineTool`) rather than by an `id` suffix: `rose.sub_trees` has
-    one entry per step regardless of kind (verified directly — a flat,
-    two-`CommandLineTool` compile still has two leaf sub-trees, one per step),
-    so the id is not what marks a step as needing to be inlined here; its own
-    compiled class is.
-    """
+    """The document with each subworkflow call whose boundary is proved removable inlined: an independent oracle for a
+    split against an unsplit compilation at UP_TO_RENAMING; a call is known by its sub-tree's `class`."""
     document: Yaml = copy.deepcopy(artifact.cwl)
     steps: list[Yaml] = document.get('steps', [])
     children = artifact.children
     flat_steps: list[Yaml] = []
-    #: `{wrapper_id}/{wrapper_out_port} -> real producer's own source string`,
-    #: for every subworkflow step this pass inlines away.
+    #: `{wrapper}/{port}` -> the real producer's source, for each call inlined away.
     redirects: dict[str, str] = {}
-    #: Requirements the inlined subworkflows themselves declared (their own
-    #: `SubworkflowFeatureRequirement` already stripped, recursively, by the
-    #: nested `flatten_model` call below) — e.g. `ScatterFeatureRequirement`, for a
-    #: `scatter:` that lived inside the subworkflow and is now a step directly
-    #: in *this* document. A CWL document declares only the features its own
-    #: `steps:` uses, so once a step moves in here, whatever requirement it
-    #: needed moves with it.
+    #: What the inlined subworkflows required (SubworkflowFeatureRequirement already stripped): a document declares the
+    #: features its own steps use, so a requirement moves with its step.
     inherited_requirements: dict[str, Yaml] = {}
     inlined_any = False
     kept_any = False
 
     for step, child in zip(steps, children):
         if child.cwl.get('class') != 'Workflow':
-            # A tool's file is named by where its step sits, which a split moves; the step is
-            # labelled with the process itself.
+            # A tool's file is named by where its step sits, which a split moves: label the step with the process.
             flat_steps.append({**step, 'run': copy.deepcopy(child.cwl)})
             continue
         if set(step) - {'id', 'in', 'run', 'out'} or (child.graph is not None and not child.graph.inlineable):
-            # The author wrote more on the call than `in` and `out` (a scatter, a `when`...), or the
-            # workflow it runs says `wic: inlineable: false`: its boundary is not proved removable,
-            # so it stays a call.
+            # More than `in` and `out` on the call, or `inlineable: false`: the boundary is not proved removable.
             kept_any = True
             flat_steps.append(step)
             continue
         inlined_any = True
         inner = flatten_model(child)
         kept_any = kept_any or 'SubworkflowFeatureRequirement' in (inner.get('requirements') or {})
-        # What the subworkflow required applied to every step under it. The few the workflow engine
-        # reads against the document move to this one; the rest go onto each step, the step's own
-        # entry winning.
+        # The engine reads a few requirements against the document; the rest go onto each step, its own entry winning.
         declared = dict(inner.get('requirements') or {})
         declared.pop('SubworkflowFeatureRequirement', None)
         document_features = ('InlineJavascriptRequirement', 'ScatterFeatureRequirement',
                              'StepInputExpressionRequirement', 'MultipleInputFeatureRequirement')
         inherited_requirements.update({k: v for k, v in declared.items() if k in document_features})
         step_requirements = {k: v for k, v in declared.items() if k not in document_features}
-        # The wrapper's own `in:` maps the subworkflow's formal parameter
-        # names (its inner workflow-level `inputs:` keys) to the sources that
-        # actually feed them at *this* level.
+        # The wrapper's `in:` maps the subworkflow's formal inputs to their sources at this level.
         wrapper_id = step['id']
         inner_ids = {str(inner_step['id']) for inner_step in inner.get('steps', [])}
         flat_steps.extend(_inlined_steps(
             wrapper_id, inner, {name: _source_of(value) for name, value in step.get('in', {}).items()},
             step_requirements))
-        # The subworkflow's own `outputs:` map its output port names to
-        # `outputSource: '<inner step>/<port>'`; anything outside referred to
-        # `{wrapper_id}/{that port name}`, so redirect that reference straight
-        # to the real producer, which is now itself one of `flat_steps`.
+        # References to `{wrapper}/{port}` go straight to the real producer, now one of `flat_steps`.
         for out_name, out_value in inner.get('outputs', {}).items():
             producer, _, port = out_value['outputSource'].partition('/')
             redirects[f'{wrapper_id}/{out_name}'] = (
@@ -732,13 +409,7 @@ def flatten_model(artifact: CompilationArtifact) -> Yaml:
             out_value['outputSource'] = redirects[out_source]
 
     if inlined_any:
-        # Unless a call stayed, a flattened document contains no subworkflow
-        # step, so the requirement that declares one no longer applies — left in place, it
-        # would make `_requirement_names` (equivalence.py) diverge on every
-        # split for a reason that has nothing to do with the workflow's
-        # meaning. What each inlined subworkflow's *own* requirements needed
-        # does still apply, now that their steps are directly in `steps:`
-        # here, so those are merged in rather than dropped with the rest.
+        # No call left, so no SubworkflowFeatureRequirement; what the inlined subworkflows needed still applies.
         requirements = document.get('requirements')
         merged = dict(requirements) if isinstance(requirements, dict) else {}
         if not kept_any:

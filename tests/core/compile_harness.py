@@ -1,8 +1,4 @@
-"""One way to compile an in-memory workflow in tests.
-
-The split below is the only distinction call sites need: some want the typed
-result and most want only emitted CWL.
-"""
+"""One way to compile an in-memory workflow with the real registry: the typed result, or only the emitted CWL."""
 import sophios.cli
 import sophios.compiler
 from sophios.ir.artifacts import CompilationResult
@@ -12,8 +8,7 @@ from .budgets import budget
 from .hermetic import bundle
 from .test_setup import load_test_registry
 
-#: Shared Hypothesis budgets. Compiled properties are an order of magnitude
-#: slower than parse-only ones, so they get their own, smaller, count.
+#: Shared Hypothesis budgets; compiled properties are far slower than parse-only ones, so COMPILED gets a smaller count.
 FAST = budget(200)
 COMPILED = budget(100)
 
@@ -24,11 +19,7 @@ TOUCH: Yaml = {'steps': [{'id': 'touch', 'in': {'filename': {'wic_inline_input':
 def compile_info(yml: Yaml, name: str = 'harness', *,
                  lang_version: str | None = None,
                  allow_raw_cwl: bool | None = None) -> CompilationResult:
-    """Compile one in-memory workflow and return the whole compiler result.
-
-    The two overrides are named rather than taken as `**options` so that a
-    typo is a type error instead of a silently ignored setting.
-    """
+    """Compile one in-memory workflow; the overrides are named so a typo is a type error."""
     compiler_options = sophios.cli.default_compilation_settings()
     if lang_version is not None:
         compiler_options['lang_version'] = lang_version
@@ -43,6 +34,4 @@ def compile_cwl(yml: Yaml, name: str = 'harness', *,
                 lang_version: str | None = None,
                 allow_raw_cwl: bool | None = None) -> Yaml:
     """Compile one in-memory workflow and return the emitted CWL."""
-    info = compile_info(yml, name, lang_version=lang_version, allow_raw_cwl=allow_raw_cwl)
-    compiled: Yaml = info.artifact.cwl
-    return compiled
+    return compile_info(yml, name, lang_version=lang_version, allow_raw_cwl=allow_raw_cwl).artifact.cwl

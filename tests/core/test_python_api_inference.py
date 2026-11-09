@@ -1,11 +1,10 @@
 """`Inference` configures the Python API's edge inference as the command-line flags configure the CLI's."""
 import io
-import json
 import tempfile
 from contextlib import redirect_stderr
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 import yaml
@@ -21,6 +20,7 @@ from sophios.nf_types import NfProcessConnection
 from sophios.wic_types import Json, StepId, Tool
 
 from .budgets import budget
+from .helpers import search_config
 from .synthetic_tools import clt
 
 RENAMINGS = (("data", "file"),)
@@ -68,17 +68,13 @@ def _cli(workflow: Workflow, directory: Path, monkeypatch: pytest.MonkeyPatch, *
     bundle = directory / "bundle"
     bundle.mkdir()
     wic = workflow.write_wic(bundle)
-    config = directory / "config.json"
-    settings: Json = {"search_paths_cwl": {"global": [str(bundle)]}, "search_paths_wic": {"global": [str(bundle)]}}
-    if renamings is not None:
-        settings["renaming_conventions"] = [list(pair) for pair in renamings]
-    config.write_text(json.dumps(settings), encoding="utf-8")
+    config = search_config(directory / "config.json", [bundle], [bundle], **(
+        {} if renamings is None else {"renaming_conventions": [list(pair) for pair in renamings]}))
     monkeypatch.chdir(directory)
     monkeypatch.setattr("sys.argv", ["sophios", "--yaml", str(wic), "--config_file", str(config),
                                      "--generate_cwl_workflow", "--basepath", "out", *flags])
     cli.main()
-    written: Json = yaml.safe_load((directory / "out" / "wf.cwl").read_text(encoding="utf-8"))
-    return written
+    return cast(Json, yaml.safe_load((directory / "out" / "wf.cwl").read_text(encoding="utf-8")))
 
 
 @pytest.mark.fast
@@ -273,31 +269,22 @@ def _step_ids(compiled: Any) -> list[str]:
 @pytest.mark.fast
 def test_insert_steps_inserts_a_converter_from_the_tool_registry(tmp_path: Path) -> None:
     """With `insert_steps=True` the converter in `tool_registry=` joins the workflow; without it, or without the
-    registry, `need_b`'s input is left unbound, a workflow input."""
+    registry, `need_b`'s input is left unbound, a workflow input. `break` on format B stops `need_a`'s search at the
+    inserted converter, so it is left a workflow input where the default connects it."""
     workflow, registry = _converting_workflow(tmp_path)
 
     inserted = workflow.compile(tool_registry=registry, inference=Inference(insert_steps=True))
     plain = workflow.compile(tool_registry=registry)
     unregistered = workflow.compile(inference=Inference(insert_steps=True))
+    stopped = workflow.compile(tool_registry=registry, inference=Inference(
+        insert_steps=True, format_rules={"edam:format_2": "break"}))
 
     assert any("insert_steps_automatically_a_to_b" in name for name in _step_ids(inserted))
     for compiled in (plain, unregistered):
         assert not any("insert_steps_automatically" in name for name in _step_ids(compiled))
         assert any("need_b" in name for name in compiled.cwl_workflow["inputs"])
     assert not any("need_b" in name for name in inserted.cwl_workflow["inputs"])
-
-
-@pytest.mark.fast
-def test_format_rules_reach_the_inserted_step(tmp_path: Path) -> None:
-    """`break` on format B stops `need_a`'s search at the inserted converter, so it no longer finds `make`'s
-    output; the default continues past the converter and connects."""
-    workflow, registry = _converting_workflow(tmp_path)
-
-    continued = workflow.compile(tool_registry=registry, inference=Inference(insert_steps=True))
-    stopped = workflow.compile(tool_registry=registry, inference=Inference(
-        insert_steps=True, format_rules={"edam:format_2": "break"}))
-
-    assert not any("need_a" in name for name in continued.cwl_workflow["inputs"])
+    assert not any("need_a" in name for name in inserted.cwl_workflow["inputs"])
     assert any("need_a" in name for name in stopped.cwl_workflow["inputs"])
 
 

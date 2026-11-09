@@ -1,23 +1,5 @@
-"""The canonical path: two front ends, one submittable payload.
-
-Three claims about the compatibility contract the two front ends advertise:
-
-  * **Path agreement.** A workflow built through the Python API and compiled
-    directly must equal the same workflow written with `write_wic` and
-    compiled from the file, given as its inputs file the values bound on the
-    workflow's own inputs, which the file leaves open. Two spellings of one
-    DAG, one compiled result.
-  * **Compute-payload conformance.** Every compiled workflow makes a request
-    the compute service's schema takes (`sophios.compute.request_for`). No
-    network: build and check, never send.
-  * **Passthrough fidelity over workflows the narrower generators miss** — a
-    step that scatters beside its own passthrough, which one-step documents
-    cannot express.
-
-Nothing here is `skip_pypi_ci`, and no job names this file, so that marker
-would mean "runs nowhere" rather than "excluded from one lane". CWL validity
-is `test_emit.test_emit_validates_as_cwl_v1_2`'s.
-"""
+"""Two front ends, one payload: the Python API and `write_wic`'s file compile to one result, every compiled workflow
+makes a request the compute schema takes, and passthrough survives beside a scatter."""
 import json
 import tempfile
 from dataclasses import dataclass
@@ -44,10 +26,6 @@ from .hermetic import ORACLE, PARTITION, compile_hermetic, compile_hermetic_cwl
 from .synthetic_tools import SYNTHETIC_NS, SYNTHETIC_TOOLS
 from .wic_reading import read_wic
 
-# --------------------------------------------------------------------------
-# Path agreement
-# --------------------------------------------------------------------------
-
 
 def _tool_document(stem: str) -> Yaml:
     """The tool's own CWL document, as `SYNTHETIC_TOOLS` holds it."""
@@ -56,21 +34,9 @@ def _tool_document(stem: str) -> Yaml:
 
 @dataclass(frozen=True, slots=True)
 class _BundleSpec:
-    """Enough to build one small, Python-API-buildable workflow twice: two
-    independent File sources feeding one `join` step, exposed as a single
-    workflow output. `rename` names the `join` step apart from its tool, so
-    the written document carries `run: join.cwl`; `nest` calls `mk_text`
-    through a nested workflow; `bound` gives `join` its name through a
-    workflow input, with `join_name` bound on it in Python.
-
-    Not `ast_strategies.documents()`: the Python API is a *stricter* front
-    end than the `.wic` language — `Workflow._validate_graph_shape` rejects
-    duplicate step names, links to non-children, and links to later siblings
-    — so reusing that generator would draw documents this front end refuses
-    to build before path agreement is ever tested. This is that narrower
-    generator, declared as this property's own blind spot rather than left
-    implicit.
-    """
+    """A small workflow the Python API can build twice: two File sources feeding a `join` step; `rename`, `nest` and
+    `bound` vary its name, a nested call and a bound name. Narrower than ast_strategies.documents(): the API refuses
+    duplicate names and links to later siblings."""
 
     file_name: str
     text_name: str
@@ -81,12 +47,8 @@ class _BundleSpec:
 
 
 def _build_workflow(spec: _BundleSpec) -> Workflow:
-    """Build one fresh `Workflow` from `spec`.
-
-    Called twice per example, once per arm, rather than once and reused:
-    sharing one `Workflow` object across both arms would make the property
-    partly a claim about aliasing rather than about the two front ends.
-    """
+    """Build one fresh `Workflow` from `spec`, once per arm: a shared object would make the property a claim about
+    aliasing."""
     mk_file = Step.from_cwl_document(_tool_document('mk_file'), process_name='mk_file',
                                      tool_registry=SYNTHETIC_TOOLS)
     mk_file.inputs.name = spec.file_name
@@ -116,14 +78,8 @@ def _build_workflow(spec: _BundleSpec) -> Workflow:
 
 
 def _compile_bundle(root: Path) -> CompilationResult:
-    """Compile a written bundle through the file door, as the CLI reads it.
-
-    `run:` paths resolve beside the document; nested `.wic` documents are found
-    the way the CLI finds them, with the bundle's directory on the search
-    paths. Mirrors the compiler call `compile_workflow_result` makes for the
-    direct path, `testing=False` included, so the only variable between the
-    two arms is where the document came from.
-    """
+    """Compile a written bundle through the file door as the CLI reads it, mirroring compile_workflow_result's call
+    (`testing=False` included) so the only variable between the arms is where the document came from."""
     yml_paths = {'global': {path.stem: path for path in root.parent.glob('*.wic')}}
     return sophios.compiler.compile_source(
         bundle_from_disk(root, yml_paths, SYNTHETIC_TOOLS), default_compilation_settings(),
@@ -214,11 +170,6 @@ def test_the_two_front_ends_compile_to_the_same_cwl(spec: _BundleSpec) -> None:
         f'--- written .wic ---\n{written_text}')
 
 
-# --------------------------------------------------------------------------
-# Compute-payload conformance
-# --------------------------------------------------------------------------
-
-
 @pytest.mark.fast
 @given(strat.workflows())
 @ORACLE
@@ -233,11 +184,6 @@ def test_every_compiled_workflow_makes_a_request_the_compute_service_schema_take
     request = compute.request_for('oracle', info.artifact.cwl, info.artifact.job_inputs)
     assert (request['workflow'], request['inputs']) == (info.artifact.cwl, info.artifact.job_inputs)
     assert json.loads(json.dumps(request)) == request
-
-
-# --------------------------------------------------------------------------
-# Passthrough fidelity, re-quantified over multi-step workflows
-# --------------------------------------------------------------------------
 
 
 @pytest.mark.slow

@@ -1,9 +1,5 @@
-"""A stand-in for cwltool and Toil: a program that prints what it is told, records how it was started, and exits.
-
-`install` puts it where a run finds its runner, so a test drives the whole run path,
-a real child process included, without a CWL runner or a container engine. It is a
-script with a shebang, so it runs on POSIX only.
-"""
+"""A stand-in for cwltool and Toil that prints what it is told, records how it was started and exits, so tests drive
+the whole run path without a runner or container engine; `install` puts it where a run finds it. POSIX only."""
 import json
 import sys
 import time

@@ -1,10 +1,5 @@
-"""Ask pytest what each of several invocations collects, in one interpreter.
-
-`test_ci_coverage` runs this as a script: argv lists arrive as JSON on stdin,
-and the report (exit code, node ids, output tail per invocation) is written to
-the path given as the only argument. Each collection is still `pytest.main`'s
-own answer; sharing the process only shares the imports.
-"""
+"""Ask pytest what each of several invocations collects, in one interpreter: `test_ci_coverage` runs it as a script,
+argv lists as JSON on stdin, the report written to the path argument."""
 import contextlib
 import io
 import json

@@ -3,7 +3,7 @@
 # that rule, copied verbatim; nothing here was read off a run.
 - id: absent_optional_flag_that_is_also_dereferenced
   why: A flag only tests its value, but a template dereferences it, so absence would render `--label=[]`.
-  tool: {id: BOTH, inputs: {verbose: {type: ['null', boolean], inputBinding: {position: 1, prefix: --verbose}}},
+  tool: {inputs: {verbose: {type: ['null', boolean], inputBinding: {position: 1, prefix: --verbose}}},
     arguments: [{position: 2, valueFrom: '--label=$(inputs.verbose)'}]}
   job: {verbose: null}
   findings: ['steps[0].run.inputs.verbose: absent optional values are supported only for a val input whose absence
@@ -34,7 +34,7 @@
    inputs: {message: {type: string}}}], error: {re: absent required}}
 - id: absent_optional_array_input
   why: Absence (no array at all) is out of scope for the array lowering; empty is not absence.
-  tool: {id: ARRAY, inputs: {values: {type: ['null', {type: array, items: string}], inputBinding: {position: 1, prefix:
+  tool: {inputs: {values: {type: ['null', {type: array, items: string}], inputBinding: {position: 1, prefix:
     --value}}}}
   job: {values: null}
   error: {re: 'steps\[0\].run.inputs.values: absent optional'}
@@ -80,7 +80,7 @@
    string envValue'}]}
 - {id: an_env_def_entry_that_is_not_a_mapping, why: *env_value, job: *env_job, tool: {<<: *env, requirements:
    {EnvVarRequirement: {envDef: [A=x]}}}, findings: *env_entry}
-- {id: loadContents_on_an_arguments_entry, why: A binding's loadContents has no lowering., tool: {id: ARGS, arguments:
+- {id: loadContents_on_an_arguments_entry, why: A binding's loadContents has no lowering., tool: {arguments:
    [{valueFrom: x, loadContents: true}]}, findings: ["steps[0].run.arguments[0].loadContents: a binding's loadContents
    is not supported"]}
 - id: shell_mode_in_a_container
@@ -109,11 +109,11 @@
 - {id: separate_false_on_an_array_binding, why: An array binding's separate false is deferred., tool: {id: ARRAY,
    inputs: {values: {type: {type: array, items: string}, inputBinding: {position: 1, separate: false}}}}, job: {values:
    [a, b]}, error: {re: 'separate: false on an array-typed inputBinding.*deferred'}}
-- {id: array_value_with_a_mismatched_item_type, why: A value has the shape of its declared type., tool: {id: ARRAY,
-   inputs: {values: {type: {type: array, items: string}, inputBinding: {position: 1}}}}, job: {values: [a, 1]}, error:
+- {id: array_value_with_a_mismatched_item_type, why: A value has the shape of its declared type., tool: {inputs:
+   {values: {type: {type: array, items: string}, inputBinding: {position: 1}}}}, job: {values: [a, 1]}, error:
    {re: does not match its supported CWL type}}
 - {id: a_boolean_argument_position, why: 'A position is an integer, and true is none, though Python reads it as 1.',
-   tool: {id: ECHO, arguments: [{valueFrom: x, position: true}]}, error: {re: non-integer CWL command position}}
+   tool: {arguments: [{valueFrom: x, position: true}]}, error: {re: non-integer CWL command position}}
 - {id: a_boolean_array_binding-prefix, why: &booleans 'cwltool renders [true, false] bound with prefix -x as -x alone,
    and with no prefix as nothing.', job: &true_false {values: [true, false]}, tool: {id: ARRAY, inputs: {values: {type:
    {type: array, items: boolean}, inputBinding: {position: 1, prefix: -x}}}}, error: &boolean_array {re:
@@ -135,7 +135,7 @@
 - {id: shell_quote_false_with_a_prefix, why: *unquoted, out: *out, error: &prefixed {re: does not support a prefix},
    tool: {<<: *shell, arguments: [{valueFrom: '>>', shellQuote: false, prefix: -x}]}}
 - {id: shell_quote_false_input_binding_with_no_value_from, why: 'shellQuote: false on a plain, no-valueFrom
-   inputBinding.', out: *out, error: *prefixed, job: {text: Hello}, tool: {id: APPEND, outputs: *result, requirements:
+   inputBinding.', out: *out, error: *prefixed, job: {text: Hello}, tool: {outputs: *result, requirements:
    {ShellCommandRequirement: {}}, inputs: {text: {type: string, inputBinding: {shellQuote: false, position: 1, prefix:
    echo}}}}}
 - {id: shell_quote_false_referencing_an_input-bare, out: *out, job: &hi {message: hi}, error: &references {re:
@@ -152,17 +152,17 @@
 - {id: a_dollar_in_a_shell_quote_false_literal-escaped_substitution, why: *expand, out: *out, error: *dollar, tool: {<<:
    *shell, arguments: [{valueFrom: '\$(date)', shellQuote: false}]}}
 - {id: value_from_aliasing_a_different_input_on_a_boolean_binding, job: {verbose: true, other: false}, why: Aliasing a
-   different input's presence onto this flag has no approved lowering., tool: {id: FLAGS, inputs: {verbose: {type:
+   different input's presence onto this flag has no approved lowering., tool: {inputs: {verbose: {type:
    boolean, inputBinding: {position: 1, prefix: --verbose, valueFrom: $(inputs.other)}}, other: {type: boolean}}},
    error: &boolean_value_from {re: valueFrom on a boolean inputBinding is supported only as}}
 - {id: literal_value_from_on_a_boolean_binding, why: A literal string is not a provably-boolean valueFrom result., job:
-   &verbose {verbose: true}, error: *boolean_value_from, tool: {id: FLAGS, inputs: {verbose: {type: boolean,
+   &verbose {verbose: true}, error: *boolean_value_from, tool: {inputs: {verbose: {type: boolean,
    inputBinding: {position: 1, prefix: --verbose, valueFrom: 'true'}}}}}
 - {id: basename_suffixed_value_from_on_a_boolean_binding, why: 'A .basename suffix is never boolean-shaped, even on a
-   self-reference.', job: *verbose, error: *boolean_value_from, tool: {id: FLAGS, inputs: {verbose: {type: boolean,
+   self-reference.', job: *verbose, error: *boolean_value_from, tool: {inputs: {verbose: {type: boolean,
    inputBinding: {position: 1, prefix: --verbose, valueFrom: $(inputs.verbose.basename)}}}}}
 - {id: a_boolean_valuefrom_on_an_optional_input, why: An optional input would render its absence., job: {b: true, s: x},
-   tool: {id: FLAG, baseCommand: echo, arguments: [], inputs: {b: {type: boolean}, s: {type: 'string?', inputBinding:
+   tool: {baseCommand: echo, arguments: [], inputs: {b: {type: boolean}, s: {type: 'string?', inputBinding:
    {valueFrom: $(inputs.b), prefix: --flag}}}}, error: {re: "a boolean valueFrom on optional input 's' is not
    supported"}}
 - {id: file_output_wired_into_a_boolean_flag, why: 'A staged path is always truthy in Groovy, so the flag would never
@@ -183,8 +183,9 @@
 - {id: a_flag_input_wired_to_an_unrecognized_source_shape-int, why: *fail_closed, error: {re: ''}, tools: [*flags],
    workflow: {steps: [{id: FLAGS, in: {verbose: 42}}]}}
 - {id: a_dollar_starting_a_runtime_expression, why: &expression 'design §6, Commands: a `$` followed by `(` or `{`
-   starts an expression, and only an input reference is one the target reads.', job: &x {x: v}, tool: &args {id: ARGS,
-   baseCommand: echo, inputs: {x: {type: string}}, arguments: [$(runtime.cores)]}, error: &unsupported {re: unsupported
+   starts an expression, and only an input reference is one the target reads.', job: &x {x: v}, tool:
+   &args {baseCommand: echo, inputs: {x: {type: string}}, arguments: [$(runtime.cores)]}, error: &unsupported {re:
+   unsupported
    CWL expression}}
 - {id: a_dollar_starting_javascript, why: *expression, job: *x, error: *unsupported, tool: {<<: *args, arguments:
    ['${return 1}']}}
@@ -200,42 +201,42 @@
   job: {label: input}
   findings: ["steps[0].run.outputs.result.outputBinding.glob: $(inputs.label.basename) requires a File or Directory
     input, and label is declared 'string'"]
-- {id: path_of_a_string, why: *path_of_value, job: {value: x}, tool: {id: SUFFIXED, stdout: $(inputs.value.path).log,
+- {id: path_of_a_string, why: *path_of_value, job: {value: x}, tool: {stdout: $(inputs.value.path).log,
    inputs: {value: {type: string, inputBinding: {prefix: -v, valueFrom: $(inputs.value.path)}}}}, findings: {contains: [
    "steps[0].run.inputs.value.inputBinding.valueFrom: $(inputs.value.path) requires a File or Directory input, and value
    is declared 'string'", "steps[0].run.stdout: $(inputs.value.path) requires a File or Directory input, and value is
    declared 'string'"]}}
-- {id: path_of_an_int, why: *path_of_value, job: {value: 1}, tool: {id: SUFFIXED, stdout: $(inputs.value.path).log,
+- {id: path_of_an_int, why: *path_of_value, job: {value: 1}, tool: {stdout: $(inputs.value.path).log,
    inputs: {value: {type: int, inputBinding: {prefix: -v, valueFrom: $(inputs.value.path)}}}}, findings: {contains: [
    "steps[0].run.inputs.value.inputBinding.valueFrom: $(inputs.value.path) requires a File or Directory input, and value
    is declared 'int'", "steps[0].run.stdout: $(inputs.value.path) requires a File or Directory input, and value is
    declared 'int'"]}}
-- {id: path_of_a_float, why: *path_of_value, job: {value: 1.5}, tool: {id: SUFFIXED, stdout: $(inputs.value.path).log,
+- {id: path_of_a_float, why: *path_of_value, job: {value: 1.5}, tool: {stdout: $(inputs.value.path).log,
    inputs: {value: {type: float, inputBinding: {prefix: -v, valueFrom: $(inputs.value.path)}}}}, findings: {contains: [
    "steps[0].run.inputs.value.inputBinding.valueFrom: $(inputs.value.path) requires a File or Directory input, and value
    is declared 'float'", "steps[0].run.stdout: $(inputs.value.path) requires a File or Directory input, and value is
    declared 'float'"]}}
-- {id: path_of_a_boolean, why: *path_of_value, job: {value: true}, tool: {id: SUFFIXED, stdout:
+- {id: path_of_a_boolean, why: *path_of_value, job: {value: true}, tool: {stdout:
    $(inputs.value.path).log, inputs: {value: {type: boolean, inputBinding: {prefix: -v, valueFrom:
    $(inputs.value.path)}}}}, findings: {contains: [ "steps[0].run.inputs.value.inputBinding.valueFrom:
    $(inputs.value.path) requires a File or Directory input, and value is declared 'boolean'", "steps[0].run.stdout:
    $(inputs.value.path) requires a File or Directory input, and value is declared 'boolean'"]}}
-- {id: basename_of_a_string, why: *path_of_value, job: {value: x}, tool: {id: SUFFIXED, stdout:
+- {id: basename_of_a_string, why: *path_of_value, job: {value: x}, tool: {stdout:
    $(inputs.value.basename).log, inputs: {value: {type: string, inputBinding: {prefix: -v, valueFrom:
    $(inputs.value.basename)}}}}, findings: {contains: ["steps[0].run.inputs.value.inputBinding.valueFrom:
    $(inputs.value.basename) requires a File or Directory input, and value is declared 'string'", "steps[0].run.stdout:
    $(inputs.value.basename) requires a File or Directory input, and value is declared 'string'"]}}
-- {id: basename_of_an_int, why: *path_of_value, job: {value: 1}, tool: {id: SUFFIXED, stdout:
+- {id: basename_of_an_int, why: *path_of_value, job: {value: 1}, tool: {stdout:
    $(inputs.value.basename).log, inputs: {value: {type: int, inputBinding: {prefix: -v, valueFrom:
    $(inputs.value.basename)}}}}, findings: {contains: ["steps[0].run.inputs.value.inputBinding.valueFrom:
    $(inputs.value.basename) requires a File or Directory input, and value is declared 'int'", "steps[0].run.stdout:
    $(inputs.value.basename) requires a File or Directory input, and value is declared 'int'"]}}
-- {id: basename_of_a_float, why: *path_of_value, job: {value: 1.5}, tool: {id: SUFFIXED, stdout:
+- {id: basename_of_a_float, why: *path_of_value, job: {value: 1.5}, tool: {stdout:
    $(inputs.value.basename).log, inputs: {value: {type: float, inputBinding: {prefix: -v, valueFrom:
    $(inputs.value.basename)}}}}, findings: {contains: ["steps[0].run.inputs.value.inputBinding.valueFrom:
    $(inputs.value.basename) requires a File or Directory input, and value is declared 'float'", "steps[0].run.stdout:
    $(inputs.value.basename) requires a File or Directory input, and value is declared 'float'"]}}
-- {id: basename_of_a_boolean, why: *path_of_value, job: {value: true}, tool: {id: SUFFIXED, stdout:
+- {id: basename_of_a_boolean, why: *path_of_value, job: {value: true}, tool: {stdout:
    $(inputs.value.basename).log, inputs: {value: {type: boolean, inputBinding: {prefix: -v, valueFrom:
    $(inputs.value.basename)}}}}, findings: {contains: ["steps[0].run.inputs.value.inputBinding.valueFrom:
    $(inputs.value.basename) requires a File or Directory input, and value is declared 'boolean'", "steps[0].run.stdout:
@@ -246,22 +247,22 @@
    object as JSON in CWL; use $(inputs.f.path) or $(inputs.f.basename), or the reference alone']}
 - id: an_empty_boolean_prefix
   why: &lowering_only A rejection only the lowering finds is a finding at its step, beside the rest.
-  tool: {id: REJECTED, inputs: {b: {type: boolean, inputBinding: {prefix: ''}}}}
+  tool: {inputs: {b: {type: boolean, inputBinding: {prefix: ''}}}}
   job: &b {b: true}
   findings: &bad_prefix [{re: '^steps\[0\]: .*prefix for ''b'' must be a non-empty string'}]
 - {id: a_blank_boolean_prefix, why: 'A blank prefix hits the named diagnostic, not the flag''s own invariant.', job: *b,
-   tool: {id: REJECTED, inputs: {b: {type: boolean, inputBinding: {prefix: '   '}}}}, findings: *bad_prefix}
-- {id: separate_without_a_prefix, why: cwltool rejects separate without a prefix., job: {s: x}, tool: {id: REJECTED,
-   inputs: {s: {type: string, inputBinding: {separate: false}}}}, findings: &no_prefix [{re: '^steps\[0\]: .*separate
+   tool: {inputs: {b: {type: boolean, inputBinding: {prefix: '   '}}}}, findings: *bad_prefix}
+- {id: separate_without_a_prefix, why: cwltool rejects separate without a prefix., job: {s: x}, tool: {inputs: {s:
+   {type: string, inputBinding: {separate: false}}}}, findings: &no_prefix [{re: '^steps\[0\]: .*separate
    cannot be specified without a prefix'}]}
-- {id: boolean_separate_without_a_prefix, why: cwltool rejects separate without a prefix., job: *b, tool: {id: REJECTED,
-   inputs: {b: {type: boolean, inputBinding: {separate: false}}}}, findings: *no_prefix}
+- {id: boolean_separate_without_a_prefix, why: cwltool rejects separate without a prefix., job: *b, tool: {inputs: {b:
+   {type: boolean, inputBinding: {separate: false}}}}, findings: *no_prefix}
 - {id: boolean_separate_null, why: &null_separate 'cwltool''s .get("separate", True) defaults only an absent key, so
-   separate: null rejects too.', job: *b, tool: {id: REJECTED, inputs: {b: {type: boolean, inputBinding: {separate:
+   separate: null rejects too.', job: *b, tool: {inputs: {b: {type: boolean, inputBinding: {separate:
    null}}}}, findings: *no_prefix}
-- {id: string_separate_null, why: *null_separate, job: {s: x}, findings: *no_prefix, tool: {id: REJECTED, inputs: {s:
+- {id: string_separate_null, why: *null_separate, job: {s: x}, findings: *no_prefix, tool: {inputs: {s:
    {type: string, inputBinding: {separate: null}}}}}
-- {id: a_value_from_on_an_array_binding, why: *lowering_only, job: {xs: [x]}, tool: {id: REJECTED, inputs: {xs: {type:
+- {id: a_value_from_on_an_array_binding, why: *lowering_only, job: {xs: [x]}, tool: {inputs: {xs: {type:
    {type: array, items: string}, inputBinding: {valueFrom: $(inputs.xs)}}}}, findings: [{re: '^steps\[0\]: .*valueFrom
    on an array-typed inputBinding'}]}
 - id: lowering_rejections_aggregate_with_every_other_finding_by_step
@@ -283,5 +284,5 @@
   job: {x: 2}
   findings: [{startswith: 'steps[1]: CWL argument contains an unsupported CWL expression'}]
 - {id: a_command_error_is_reported_instead_of_an_absent_optional_finding, why: The command's own error is the one
-   finding., tool: {id: ABSENT, inputs: {v: {type: 'string?', inputBinding: {}}}, arguments: [$(runtime.cores)]},
+   finding., tool: {inputs: {v: {type: 'string?', inputBinding: {}}}, arguments: [$(runtime.cores)]},
    findings: [{startswith: 'steps[0]: CWL argument contains an unsupported CWL expression'}]}

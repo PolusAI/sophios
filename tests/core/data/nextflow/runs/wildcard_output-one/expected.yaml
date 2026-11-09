@@ -1,2 +1,0 @@
-why: A scalar File output whose glob matches one file is that file; the tool declares its input in `T[]` shorthand.
-outputs: {make~result: {class: File, basename: a.txt, contents: ''}}

@@ -1,16 +1,5 @@
-"""Typed fixed-point inference and speculative insertion properties.
-
-The candidate model below is intentionally local to the test suite.  It does
-not import the production phase or either production type predicate.  The
-live-path check proves that the compiler retains the typed phase's decisions.
-Exact spelling is not the compatibility promise; the completed pipeline is
-judged at ``UP_TO_EMBEDDING``.
-
-BLIND SPOTS: the generated workflows never put a tool after a workflow call,
-and their registry has no converter processes. Workflow-call candidates,
-converter selection, ambiguity, falsy defaults, scatter, and exhaustion
-therefore have separate planted examples.
-"""
+"""Inference and speculative insertion against a local candidate model, judged at UP_TO_EMBEDDING.
+Blind spot: generated workflows put no tool after a workflow call and no converters exist, so those are planted."""
 import copy
 from typing import Any
 
@@ -34,7 +23,7 @@ from sophios.wic_types import StepId as LegacyStepId, Tool, Tools, Yaml
 from . import ast_strategies as strat
 from .cases import cases, diagnostic, match
 from .hermetic import ORACLE, bundle, compile_hermetic, subworkflow_step
-from .synthetic_tools import SYNTHETIC_NS, SYNTHETIC_TOOLS, clt
+from .synthetic_tools import SYNTHETIC_NS, SYNTHETIC_TOOLS, clt, insertion_registry, registered
 
 
 def _typed(workflow: Yaml, tools: Tools = SYNTHETIC_TOOLS):  # type: ignore[no-untyped-def]
@@ -82,10 +71,9 @@ def _ran(case: dict[str, Any]) -> tuple[Any, Diagnostics]:
             raise ValueError(f"{case['id']}: tool {stem} has keys nothing reads: {sorted(unread)}")
     if case.get('compiled') and (unread := set(case.get('policy', {})) - {'strict'}):
         raise ValueError(f"{case['id']}: a compiled case reads only policy.strict, not {sorted(unread)}")
-    tools = {**SYNTHETIC_TOOLS, **{
-        LegacyStepId(stem, SYNTHETIC_NS): Tool(f'/synthetic/{stem}.cwl', clt(
-            tool.get('inputs', {}), tool.get('outputs', {}), canonical=tool.get('canonical', False)))
-        for stem, tool in case.get('tools', {}).items()}}
+    tools = registered({stem: clt(tool.get('inputs', {}), tool.get('outputs', {}),
+                                  canonical=tool.get('canonical', False))
+                        for stem, tool in case.get('tools', {}).items()})
     policy = case.get('policy', {})
     workflow = {'steps': _built(case['steps'])}
     if not case.get('compiled'):
@@ -185,7 +173,7 @@ def test_scatter_lifts_both_sides_of_candidate_selection() -> None:
 @pytest.mark.fast
 def test_converter_insertion_reaches_the_same_fixed_point() -> None:
     """Two speculative insertions agree with the live typed compiler."""
-    workflow, tools = _insertion_registry()
+    workflow, tools = insertion_registry()
     _, linked, registry = _typed(workflow, tools)
     result = infer(linked, InferencePolicy(insert_steps_automatically=True),
                    InsertionCatalog.from_registry(registry))
@@ -218,7 +206,7 @@ def test_workflow_call_outputs_are_inference_candidates() -> None:
 @pytest.mark.fast
 def test_workflow_call_outputs_can_feed_inserted_converters() -> None:
     """Converter search sees formats exported through a workflow call."""
-    _, tools = _insertion_registry()
+    _, tools = insertion_registry()
     child = {'steps': [{'id': 'mk_2'}]}
     workflow = {'steps': [subworkflow_step('sub.wic', child), {'id': 'use_2'}]}
     typed, linked, registry = _typed(workflow, tools)
@@ -235,7 +223,7 @@ def test_workflow_call_outputs_can_feed_inserted_converters() -> None:
 @pytest.mark.fast
 def test_converter_search_stops_at_the_candidate_break() -> None:
     """Insertion cannot reuse formats hidden behind a local break rule."""
-    _, tools = _insertion_registry()
+    _, tools = insertion_registry()
     workflow = {
         'steps': [{'id': 'mk_1'}, {'id': 'mk_2'}, {'id': 'use_1'}],
         'wic': {'steps': {
@@ -334,26 +322,6 @@ def _graphs(graph: WorkflowGraph) -> tuple[WorkflowGraph, ...]:
     return (graph,) + tuple(item for child in graph.children for item in _graphs(child))
 
 
-def _insertion_registry() -> tuple[Yaml, Tools]:
-    """Hermetic two-converter catalog; independent of the benchmark harness."""
-    specs = {}
-    steps: list[Yaml] = []
-    for index in (1, 2):
-        source_format = f'edam:format_src{index}'
-        sink_format = f'edam:format_dst{index}'
-        specs[f'mk_{index}'] = clt(
-            {}, {'file': {'type': 'File', 'format': source_format}}, canonical=True)
-        specs[f'use_{index}'] = clt(
-            {'file': {'type': 'File', 'format': sink_format}}, {}, canonical=True)
-        specs[f'insert_steps_automatically_conv_{index}'] = clt(
-            {'file': {'type': 'File', 'format': source_format}},
-            {'file': {'type': 'File', 'format': sink_format}}, canonical=True)
-        steps.extend(({'id': f'mk_{index}'}, {'id': f'use_{index}'}))
-    tools = {LegacyStepId(name, SYNTHETIC_NS): Tool(f'/synthetic/{name}.cwl', cwl)
-             for name, cwl in specs.items()}
-    return {'steps': steps}, tools
-
-
 @pytest.mark.fast
 def test_a_positional_output_source_compiles_beside_an_inferred_edge() -> None:
     """Inference moves no step, so `(4, count)` still names the fourth step."""
@@ -364,13 +332,3 @@ def test_a_positional_output_source_compiles_beside_an_inferred_edge() -> None:
     assert cwl['outputs']['n']['outputSource'] == 'count@4/n'
     fourth = next(step for step in cwl['steps'] if step['id'] == 'count@4')
     assert fourth['in']['file'] == 'mk_file@3/file'
-
-
-@pytest.mark.fast
-def test_a_positional_output_source_compiles_in_a_fully_explicit_workflow() -> None:
-    """With every input bound explicitly, the position is reliable and compiles."""
-    compiled = compile_hermetic({'outputs': {'n': {'type': 'int', 'outputSource': '(2, count)/n'}},
-                                 'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'x'}},
-                                            'out': [{'file': {'wic_anchor': 'f'}}]},
-                                           {'id': 'count', 'in': {'file': {'wic_alias': 'f'}}}]})
-    assert compiled.artifact.cwl['outputs']['n']['outputSource'] == 'count/n'

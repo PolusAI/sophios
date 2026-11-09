@@ -1,8 +1,4 @@
-"""Multi-input dotproduct scatter: index-paired invocations, index-ordered gather.
-
-design_docs/sophios_nextflow_backend.md §6, Topology, "Multi-input scatter
-(approved Phase 3 lowering)" and "Gather".
-"""
+"""Multi-input dotproduct scatter: index-paired invocations, index-ordered gather (design §6, Topology)."""
 
 # pylint: disable=missing-function-docstring
 
@@ -11,59 +7,26 @@ import subprocess
 
 import pytest
 
-from sophios.input_output_nf import render_nextflow, write_nextflow_artifacts
+from sophios.input_output_nf import render_nextflow
 from sophios.nf_types import (
     ExecutableNextflowWorkflow,
     NfArrayBinding,
     NfCommand,
     NfConnection,
     NfInputReference,
-    NfLiteral,
     NfPort,
     NfProcess,
     NfShellLiteral,
-    NfTemplate,
     NfWorkflowInputConnection,
     NfWorkflowOutputConnection,
 )
 
-from .testkit import execute_nextflow, ref, template
+from .testkit import ref, run_observed, template
 
 
 def _text_port(name: str, glob: str = "out.txt") -> NfPort:
     """A val output port whose captured text is the globbed file's decoded content."""
-    return NfPort(name, "val", name, NfTemplate((NfLiteral(glob),)), capture="text")
-
-
-def _sink(
-    workflow: ExecutableNextflowWorkflow,
-    directory: Path,
-    *,
-    emit_name: str,
-    sink_name: str = "gathered.txt",
-) -> subprocess.CompletedProcess[str]:
-    """Write the artifacts, append a test-only sink observing the gathered emission
-    order, and run. ``PIPELINE.out.<emit_name>`` is the already sorted-and-stripped
-    channel produced inside the named workflow (design §6, Topology, Gather); this
-    only observes, in a file, the order its items actually arrive downstream.
-    """
-    write_nextflow_artifacts(workflow, directory)
-    script = directory / "workflow.nf"
-    text = script.read_text(encoding="utf-8")
-    assert text.endswith("}\n")
-    # collectFile does not preserve arrival order; toList().subscribe does,
-    # since a single subscriber receives a dataflow channel's items in the
-    # order they arrive and toList never reorders what it collects. Items
-    # join on a record separator, not a newline, since a gathered item (S10)
-    # may itself contain embedded newlines.
-    sink = (
-        f"\n    PIPELINE.out.{emit_name}.toList().subscribe {{ list -> "
-        f"new File('{sink_name}').text = list.join('\\u0001') }}\n"
-    )
-    # The entry workflow ends the file with "}\n", so appending before its
-    # closing brace keeps PIPELINE.out in scope.
-    script.write_text(text[:-2] + sink + "}\n", encoding="utf-8")
-    return execute_nextflow(directory)
+    return NfPort(name, "val", name, template(glob), capture="text")
 
 
 def _write_and_sink(
@@ -74,20 +37,14 @@ def _write_and_sink(
     directory: Path,
     *,
     emit_name: str,
-    sink_name: str = "gathered.txt",
-) -> subprocess.CompletedProcess[str]:
-    """Run one process as ``PIPELINE`` and observe its ``emit_name`` output through ``_sink``."""
+) -> tuple[subprocess.CompletedProcess[str], dict[str, list[str]]]:
+    """Run one process as ``PIPELINE`` and observe its ``emit_name`` output."""
     workflow = ExecutableNextflowWorkflow("PIPELINE", [process], connections, params, param_types)
-    return _sink(workflow, directory, emit_name=emit_name, sink_name=sink_name)
+    return run_observed(workflow, directory, emits=[emit_name])
 
 
 def _sleep_then_pair(*port_names: str) -> NfCommand:
-    """sleep <last port> ; printf the hyphen-joined ports, to out.txt.
-
-    The last named port doubles as an artificial per-invocation delay, so a
-    runtime test can force tasks to finish out of index order and still prove
-    the gathered output is in index order (design §6, Topology, Gather).
-    """
+    """sleep <last port> ; printf the hyphen-joined ports, to out.txt; the sleep reorders task completion."""
     parts: list[str | NfInputReference] = [ref(port_names[0])]
     for name in port_names[1:]:
         parts += ["-", ref(name)]

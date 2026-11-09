@@ -1,13 +1,5 @@
-"""Cost against nesting depth.
-
-A cost that doubles per nesting level is invisible at the depths a test uses and
-unusable at the depths a partitioned workflow reaches, and a bound on one depth
-cannot tell it from a cost that is merely large. So each claim here times the
-same work at several depths and bounds the factor it multiplies by per level,
-the way `test_scattering_scaling` bounds the quadratic term over five sizes.
-A cost that only grows with the depth is under that bound at any depth a test
-can afford, so it is pinned by counting the work instead.
-"""
+"""Cost against nesting depth: each claim times the same work at several depths and bounds the factor per level, since
+one depth cannot tell a doubling from a large constant. A cost that only grows with depth is pinned by counting work."""
 import math
 import statistics
 import time
@@ -35,10 +27,8 @@ SAMPLE_SECONDS: Final = 0.05
 
 
 def _fastest(run: Callable[[], object]) -> float:
-    """The least CPU time of one run over `REPEATS` samples: time the process
-    spends running, which a busy machine does not stretch the way it stretches
-    the clock. A sample repeats the run for `SAMPLE_SECONDS` and divides by the
-    count, so the tick of the clock is a small share of what is measured."""
+    """The least CPU time of one run over `REPEATS` samples (a busy machine stretches the clock, not process time); a
+    sample repeats the run for `SAMPLE_SECONDS`."""
     best = math.inf
     for _ in range(REPEATS):
         runs = 0
@@ -54,11 +44,8 @@ def _fastest(run: Callable[[], object]) -> float:
 
 
 def _assert_growth_is_bounded(work_at: Callable[[int], object], depths: Sequence[int]) -> None:
-    """Time `work_at(depth)` for each depth and bound the factor per level.
-
-    The factor is `exp(slope)` of the least-squares line through the log of the
-    timings, so one noisy depth moves it by a fraction of its own error.
-    """
+    """Time `work_at(depth)` per depth and bound the factor per level: `exp(slope)` of the least-squares line through
+    the log timings."""
     seconds = {depth: _fastest(partial(work_at, depth)) for depth in depths}
     slope = statistics.linear_regression(list(seconds), [math.log(s) for s in seconds.values()]).slope
     growth = math.exp(slope)

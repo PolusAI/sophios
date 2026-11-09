@@ -1,14 +1,5 @@
-"""Hypothesis example budgets, and the one knob that deepens all of them.
-
-Every property's budget is `budget(n)`: `n` examples on an ordinary run, and
-`n` times `SOPHIOS_PROPERTY_SCALE` when that is set. The weekly property lane
-(`.github/workflows/property_weekly.yml`) sets it; nothing else does, so an
-ordinary run draws exactly the examples it always did.
-
-Nothing here pins a seed or derandomizes, so each run draws fresh examples.
-`print_blob` makes a failure print the `@reproduce_failure` line that replays
-it, beside the falsifying example itself.
-"""
+"""Hypothesis example budgets: `budget(n)` is `n` examples, times SOPHIOS_PROPERTY_SCALE when set (the weekly lane).
+No seed is pinned; `print_blob` prints the `@reproduce_failure` line that replays a failure."""
 import os
 from typing import Final
 

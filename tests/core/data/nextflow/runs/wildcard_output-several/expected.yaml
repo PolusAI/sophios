@@ -1,2 +1,0 @@
-why: A scalar File output whose glob matches several files fails the run, as cwltool does.
-fails: true

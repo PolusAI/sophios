@@ -1,8 +1,5 @@
-"""Deliberately unhermetic probe used to prove the runtime poison fires.
-
-The file does not match pytest's default ``test_*.py`` pattern.  The
-hermeticity suite invokes it explicitly under the poison plugin.
-"""
+"""Deliberately unhermetic probe proving the runtime poison fires; not a `test_*.py` name, it is invoked explicitly
+under the poison plugin."""
 import sophios.plugins
 
 

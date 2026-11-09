@@ -1,39 +1,5 @@
-"""The import is the renderer's exact inverse over the workflows Sophios compiles (design §4.2).
-
-The fixed point. For each workflow W in CASES, M is W compiled to
-Nextflow; the three files written from M import to a workflow that compiles,
-with inference disabled, to M. Model equality implies equal text and also sees
-the fields that never reach it. The domain is the image of compilation: the
-workflows built here through the Python API, the real-world examples, the
-Phase 3 calculator and predicate cells, which hold every arithmetic, ``Math``
-and comparison form a condition reads, and the one workflow in examples/ the
-target compiles. Every form with holes in the idiom table is written or read
-for at least one of them, and each of its holes is read once.
-
-Layout. Each rewrite in LAYOUTS changes only what design §4.2 calls
-layout, with its reason, and the import of the rewritten files compiles to M.
-Deliberately NOT on the list, though they look like layout: reordering the
-statements of ``main:``, since the call order is the order of the steps, as
-core keeps "reorder independent steps" off its list (tests/core/transformations.py);
-adding a space where the renderer writes none, or removing the one it writes,
-since that joins or splits a token; and anything inside a string literal, a
-script or stub body, or a helper, which are content.
-
-Rejection. One edit of generated text for each import code
-(provocations.IMPORT_EDITS, which the provocation of each code applies too),
-a few more, among them lines of tens of KB that nearly match a form, and a
-value Sophios never writes on each kind of line that holds one: each stops
-the import with its code at the line it names, not at the process or workflow
-around it, and nothing is returned.
-
-Any bytes. Whatever the three files hold, cut short, with a byte that is not
-UTF-8, an integer longer than Python converts or nesting deeper than it
-recurses, the read returns a model or raises SophiosError or OSError.
-
-Hermetic. The import reads the three files alone: copied into an empty
-directory, with no network, they import, and no path a parameter names is
-looked at.
-"""
+"""The import is the renderer's exact inverse over the workflows Sophios compiles (design §4.2): written files import
+to a workflow that compiles back to the same model, layout-only rewrites included; edits stop at the line they name."""
 
 # pylint: disable=missing-function-docstring
 
@@ -78,7 +44,7 @@ from ..provocations import IMPORT_EDITS, import_edited
 from .test_phase3_cells import calculator_workflow, predicates_workflow
 from .test_real_world_examples import (flags_workflow, months_workflow, plan_workflow, summaries_workflow,
                                        tallies_workflow)
-from .testkit import REPO_ROOT
+from ..helpers import REPO_ROOT
 
 
 def _echo(name: str, **inputs: Input) -> CommandLineTool:
@@ -230,10 +196,8 @@ def _merged() -> Workflow:
 
 
 def _valued() -> Workflow:
-    """Values bound on workflow inputs: text with what CWL and Groovy escape, ints, files, an empty optional array;
-    one input feeds two steps and one none. A required int is given to an optional binding, and an optional int
-    that has a value to a condition, which holds each tool input to its own optionality. A literal `$(` in an
-    argument after a reference is written escaped, and a pattern glob's brace is escaped for Nextflow."""
+    """Values bound on workflow inputs: text CWL and Groovy escape, ints, files, an empty optional array; a required int
+    given to an optional binding, an optional int to a condition, a literal `$(` after a reference, a glob's brace."""
     count = CommandLineTool("count", Inputs(
         word=Input(cwl.string, position=1), n=Input(cwl.int, required=False, position=2, flag="--n"),
         files=Input(cwl.array(cwl.file), position=3), main=Input(cwl.file, position=4, flag="--in=", separate=False),
@@ -315,14 +279,6 @@ def _file_references() -> Workflow:
     return workflow
 
 
-def _example(name: str) -> Callable[[], Workflow]:
-    def build() -> Workflow:
-        path = REPO_ROOT / "examples" / "scripts" / f"{name}.py"
-        workflow: Workflow = import_python_file(name, path).workflow()
-        return workflow
-    return build
-
-
 def _flag_first() -> Workflow:
     """A command that starts with a flag, which renders nothing when it is false."""
     step = CommandLineTool("first", Inputs(env=Input(cwl.boolean, position=0, flag="env")), Outputs()).argument(
@@ -338,7 +294,8 @@ CASES: dict[str, Callable[[], Workflow]] = {
     "merged": _merged, "valued": _valued, "renamed": _renamed, "nested": _nested, "conditions": _conditions,
     "file_references": _file_references, "flag_first": _flag_first,
     # The one workflow in examples/ the Nextflow target compiles.
-    "helloworld_pyapi": _example("helloworld_pyapi"),
+    "helloworld_pyapi": lambda: import_python_file(
+        "helloworld_pyapi", REPO_ROOT / "examples" / "scripts" / "helloworld_pyapi.py").workflow(),
     "plan": plan_workflow, "months": lambda: months_workflow(Path("/data")), "summaries": summaries_workflow,
     "tallies": tallies_workflow, "flags": flags_workflow,
     "calculator": calculator_workflow, "predicates": predicates_workflow,
@@ -394,9 +351,8 @@ def _origins(kind: str, value: Any) -> st.SearchStrategy[str]:
 
 @st.composite
 def _generated(draw: st.DrawFn) -> Workflow:
-    """One tool with inputs of each kind, each value bound on the step or on a workflow input or the default of the
-    tool or of the step input, given to the command by their own bindings and by arguments among literal words and
-    shell text, in a container or with resources."""
+    """One tool with inputs of each kind, each value bound on the step, a workflow input or a default, reaching the
+    command by bindings and by arguments among literal and shell text, in a container or with resources."""
     kinds = draw(st.lists(st.sampled_from(sorted(_VALUES)), min_size=1, max_size=4))
     names = [f"i{index}" for index in range(len(kinds))]
     values = [draw(_VALUES[kind]) for kind in kinds]
@@ -587,6 +543,8 @@ class Layout:
     rationale: str
 
 
+#: Not layout, though it looks it: reordering main: (call order is step order), adding or removing a space the
+#: renderer writes one or none of (it joins or splits a token), and anything in a string, script, stub body or helper.
 LAYOUTS: tuple[Layout, ...] = (
     Layout("process order", _reordered,
            "Each process block is declared on its own and a call names it wherever it is declared; the order of "
@@ -647,8 +605,8 @@ _EDITS = [
     (_CODE.IMPORT_FOREIGN_STATEMENT, NEXTFLOW_SCRIPT, "\nworkflow {\n",
      "\nworkflow.onComplete { println('done') }\nworkflow {\n", "onComplete"),
     (_CODE.IMPORT_FOREIGN_STATEMENT, NEXTFLOW_SCRIPT, "    input:\n", "    cpus params.threads\n    input:\n", "cpus"),
-    (_CODE.IMPORT_FOREIGN_STATEMENT, NEXTFLOW_SCRIPT, "    greet(message)\n", "    greet(message)\n    other(message)\n",
-     "other("),
+    (_CODE.IMPORT_FOREIGN_STATEMENT, NEXTFLOW_SCRIPT, "    greet(message)\n",
+     "    greet(message)\n    other(message)\n", "other("),
     # A second block of a process, which nothing else would read.
     (_CODE.IMPORT_FOREIGN_STATEMENT, NEXTFLOW_SCRIPT, "\nworkflow provoke {\n",
      '\nprocess greet {\n    script:\n    """\n    rm o\n    """\n}\n\nworkflow provoke {\n', "process greet"),
@@ -688,8 +646,7 @@ _VALUE_EDITS = [
     (_CODE.IMPORT_FOREIGN_STATEMENT, NEXTFLOW_SCRIPT, "container 'registry.io/a b:{1}\\'\"'", "container ''",
      "container ''", "resources"),
     (_CODE.IMPORT_FOREIGN_STATEMENT, NEXTFLOW_SCRIPT, "cpus 2", "cpus 0", "cpus 0", "resources"),
-    (_CODE.IMPORT_FOREIGN_STATEMENT, NEXTFLOW_SCRIPT, 'memory "1.5 MB"', 'memory "0 MB"', 'memory "0 MB"',
-     "resources"),
+    (_CODE.IMPORT_FOREIGN_STATEMENT, NEXTFLOW_SCRIPT, 'memory "1.5 MB"', 'memory "0 MB"', 'memory "0 MB"', "resources"),
     (_CODE.IMPORT_FOREIGN_STATEMENT, NEXTFLOW_SCRIPT, "cudaVersionMin: '11.7'", "cudaVersionMin: ['11.7']",
      "cudaVersionMin: ['11.7']", "resources"),
     (_CODE.IMPORT_FOREIGN_STATEMENT, NEXTFLOW_SCRIPT, "Directory: ['made']", "Directory: [made]", "Directory: [made]",
@@ -786,9 +743,8 @@ def _bytes(name: str) -> dict[str, bytes]:
 
 @st.composite
 def _corrupted(draw: st.DrawFn) -> tuple[str, str, bytes]:
-    """A case, of values of each kind or of thirty conditions, and one of its three files cut short, or with a byte
-    that is not UTF-8, an integer longer than Python converts, or nesting deeper than it recurses at its start or
-    after one of its brackets or quotes."""
+    """A case of values of each kind or thirty conditions, with one of its three files cut short or holding a non-UTF-8
+    byte, an integer longer than Python converts, or nesting deeper than it recurses."""
     case, file = draw(st.sampled_from(["valued", "calculator"])), draw(st.sampled_from(_FILES))
     data = _bytes(case)[file]
     kind = draw(st.sampled_from(["cut", "byte", "digits", "nesting"]))

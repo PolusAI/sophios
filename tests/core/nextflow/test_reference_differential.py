@@ -1,14 +1,5 @@
-"""A path input's references mean at run time under Nextflow what they mean under cwltool (design §6).
-
-The renderer writes `$(inputs.X)`, `$(inputs.X.path)` and `$(inputs.X.basename)` of a File or Directory
-input through the idiom table, and the table's tests read the text it writes. Text is not meaning: Nextflow's
-`.name` of an input staged under a directory, as every InitialWorkDirRequirement entry's input is, is the whole
-staged path, so `$(inputs.X.basename)` once named the staged input instead of the entry, and a tool wrote
-through it into the user's original. Only a run shows that. This runs one workflow under both runners and
-compares what is comparable: each output's name and contents, the text the command printed for each reference,
-and the inputs, which neither runner may change. Absolute paths differ between runners by design and are never
-compared as text.
-"""
+"""A path input's references mean under Nextflow what they mean under cwltool (design §6): the idiom table's tests
+read text, but `.name` of an input staged under a directory is the whole staged path, which only a run shows."""
 
 # pylint: disable=missing-function-docstring
 
@@ -18,7 +9,7 @@ import hashlib
 import io
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -26,7 +17,7 @@ from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Outp
 from sophios.api.python.workflow import Step, Workflow
 from sophios.input_output_nf import NF_OUTPUT_MARKER
 
-from .testkit import execute_nextflow
+from .testkit import assert_succeeded, execute_nextflow
 
 #: One script for every cell. $1, $2, $3 are `$(inputs.x)`, `$(inputs.x.path)`, `$(inputs.x.basename)` as
 #: command arguments, $4 a name derived from the basename, $5 how the input is staged. It prints, for each
@@ -153,7 +144,7 @@ def _snapshot(values: dict[str, Any]) -> dict[str, Any]:
 
 def _run_nextflow(workflow: Workflow, directory: Path) -> dict[str, Any]:
     result = execute_nextflow(workflow.compile(target="nextflow").write(directory))
-    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    assert_succeeded(result)
     marker = f"{NF_OUTPUT_MARKER} "
     return dict(json.loads(line.removeprefix(marker)) for line in result.stdout.splitlines() if line.startswith(marker))
 
@@ -168,8 +159,7 @@ def _run_cwltool(main: Callable[..., int], workflow: Workflow, directory: Path) 
         stdout=stdout, stderr=stderr,
     )
     assert code == 0, stderr.getvalue()
-    outputs: dict[str, Any] = json.loads(stdout.getvalue())
-    return outputs
+    return cast(dict[str, Any], json.loads(stdout.getvalue()))
 
 
 @pytest.mark.nextflow

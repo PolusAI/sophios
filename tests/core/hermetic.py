@@ -1,14 +1,5 @@
-"""Compilation with no environment.
-
-`tests/core/compile_harness.py` is the same idea, but it imports `tools_cwl`
-from `test_setup`, which runs plugin discovery at import. The hermeticity
-property forbids that here, so this module is its sibling: the same fourteen-
-typed call, against `SYNTHETIC_TOOLS`.
-
-The two are deliberately separate files rather than one file with a `tools=`
-parameter. A shared module would have to import `test_setup` for one of its two
-callers, and the import is the thing being forbidden.
-"""
+"""Compilation with no environment: compile_harness compiles against the registry test_setup discovers, so this
+sibling compiles against SYNTHETIC_TOOLS and runs with discovery poisoned under the hermeticity property."""
 import socket
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -30,8 +21,7 @@ from sophios.wic_types import Tools, Yaml
 from .budgets import budget
 from .synthetic_tools import SYNTHETIC_TOOLS
 
-#: Budgets, per the TDD guide's table. They may be raised for a dispatch run.
-#: They may never be lowered to make a failing property pass.
+#: Budgets; raise them for a dispatch run, never lower one to make a property pass.
 COVERAGE: Final = budget(500)
 ORACLE: Final = budget(100)
 PARTITION: Final = budget(50)
@@ -39,13 +29,8 @@ PARTITION: Final = budget(50)
 
 @contextmanager
 def network_refused() -> Iterator[list[str]]:
-    """Refuse every name lookup and outgoing connection, recording each attempt.
-
-    The attempts are yielded so the caller can assert there were none: a
-    library that downgrades a failed fetch to a warning would otherwise pass
-    unnoticed. A context manager rather than a fixture, because Hypothesis
-    rejects function-scoped fixtures under `@given`.
-    """
+    """Refuse every name lookup and connection, yielding the attempts so a caller can assert none; a context manager,
+    since Hypothesis rejects function-scoped fixtures under @given."""
     attempts: list[str] = []
 
     def refuse(kind: str) -> Any:
@@ -62,14 +47,8 @@ def network_refused() -> Iterator[list[str]]:
 
 
 def _documents(*results: ParseResult) -> tuple[Document, ...]:
-    """Each parsed document and the implementation bodies written inside it."""
-    documents = []
-    for result in results:
-        if result.document is None:
-            continue
-        documents.append(result.document)
-        documents.extend(_implementation_bodies(result.document))
-    return tuple(documents)
+    return tuple(found for result in results if result.document is not None
+                 for found in (result.document, *_implementation_bodies(result.document)))
 
 
 def _implementation_bodies(document: Document) -> tuple[Document, ...]:
@@ -79,12 +58,8 @@ def _implementation_bodies(document: Document) -> tuple[Document, ...]:
 
 
 def bundle(yml: Yaml, name: str, tools: Tools) -> SourceBundle:
-    """`yml` as the file door would read it, each `subtree` the file it stands for.
-
-    A test-side model of the loader's shape (see `subworkflow_step`): the body
-    becomes a registry entry keyed by the step's stem, `parentargs` the step's
-    own keys, and every document's `wic: lang_version:` a pin.
-    """
+    """`yml` as the file door reads it: each `subtree` a registry entry under its step's stem, `parentargs` the step's
+    keys, and each `wic: lang_version:` a pin."""
     workflows: dict[tuple[str, str], ParseResult] = {}
 
     def parsed(document: Yaml, stem: str) -> ParseResult:
@@ -109,40 +84,26 @@ def bundle(yml: Yaml, name: str, tools: Tools) -> SourceBundle:
 def compile_hermetic(yml: Yaml, name: str = 'oracle', *,
                      tools: Tools | None = None,
                      insert_steps_automatically: bool = False,
-                     inference_strict: bool = False,
-                     is_root: bool = True) -> CompilationResult:
-    """Compile one in-memory workflow against the synthetic registry.
-
-    `insert_steps_automatically` and `inference_strict` are named rather than taken as `**options` so a
-    typo is a type error instead of a silently ignored setting — the same
-    reasoning as `compile_harness.compile_info`.
-    """
+                     inference_strict: bool = False) -> CompilationResult:
+    """Compile one in-memory workflow against the synthetic registry; options are named so a typo is a type error."""
     compiler_options = sophios.cli.default_compilation_settings()
     compiler_options['insert_steps_automatically'] = insert_steps_automatically
     compiler_options['inference_strict'] = inference_strict
-    del is_root
     return sophios.compiler.compile_source(
-        bundle(yml, name, SYNTHETIC_TOOLS if tools is None else tools), compiler_options,
-        testing=True)
+        bundle(yml, name, SYNTHETIC_TOOLS if tools is None else tools), compiler_options, testing=True)
 
 
 def compile_hermetic_source(source: str, name: str = 'oracle', *, tools: Tools | None = None) -> CompilationResult:
-    """Compile one `.wic` text against the synthetic registry, as `compile_hermetic` compiles a document.
-
-    For what only the text can say, such as whether an `!ii` scalar is quoted: `bundle` writes a document
-    out with `yaml.dump`, which chooses the quoting itself.
-    """
+    """Compile `.wic` text against the synthetic registry, for what only text says, such as whether an `!ii` scalar is
+    quoted (bundle dumps with yaml.dump, which picks the quoting)."""
     parsed = parse(source, f'{name}.wic')
     return sophios.compiler.compile_source(
         SourceBundle(parsed, name, RegistrySnapshot.from_tools(SYNTHETIC_TOOLS if tools is None else tools), ()),
         sophios.cli.default_compilation_settings(), testing=True)
 
 
-def compile_production(yml: Yaml, name: str = 'binding', *,
-                       tools: Tools | None = None,
-                       is_root: bool = True) -> CompilationResult:
+def compile_production(yml: Yaml, name: str = 'binding', *, tools: Tools | None = None) -> CompilationResult:
     """Compile with user-facing progress enabled (``testing=False``)."""
-    del is_root
     return sophios.compiler.compile_source(
         bundle(yml, name, SYNTHETIC_TOOLS if tools is None else tools),
         sophios.cli.default_compilation_settings(), testing=False)
@@ -152,10 +113,7 @@ def compile_hermetic_cwl(yml: Yaml, name: str = 'oracle', *,
                          tools: Tools | None = None,
                          insert_steps_automatically: bool = False) -> Yaml:
     """Compile one in-memory workflow and return the emitted CWL."""
-    info = compile_hermetic(yml, name, tools=tools,
-                            insert_steps_automatically=insert_steps_automatically)
-    compiled: Yaml = info.artifact.cwl
-    return compiled
+    return compile_hermetic(yml, name, tools=tools, insert_steps_automatically=insert_steps_automatically).artifact.cwl
 
 
 def nested_workflow(levels: int) -> Yaml:
@@ -167,11 +125,7 @@ def nested_workflow(levels: int) -> Yaml:
 
 
 def subworkflow_step(stem: str, subtree: Yaml) -> Yaml:
-    """A subworkflow step: its body in `subtree`, its own keys in `parentargs`.
-
-    `bundle` turns the body into the registry entry a file on disk would be.
-    Building the shape here is what lets a partitioned workflow exist without
-    a file on disk, which is what makes partition independence hermetic.
-    """
+    """A subworkflow step, its body in `subtree` and its keys in `parentargs`: a partitioned workflow without files,
+    so partition independence stays hermetic."""
     assert stem.endswith('.wic'), 'a subworkflow step is recognised by its .wic suffix only'
     return {'id': stem, 'subtree': subtree, 'parentargs': {}}

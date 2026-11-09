@@ -55,7 +55,7 @@
 - {id: accepts_literal_shell_quote_false_binding, why: *unquoted, out: *out, tool: {<<: *shell, arguments: [{valueFrom:
    '>>', shellQuote: false}, out.txt]}, lowered: {processes: [{command: {tokens: [*shell_word, *append, *out_txt]}}]}}
 - {id: a_command_of_only_flags_still_runs_a_program, why: A flag-only argv would render an empty script that silently
-   exits zero., job: {verbose: true}, tool: {id: FLAGS, baseCommand: null, inputs: {verbose: {type: boolean,
+   exits zero., job: {verbose: true}, tool: {baseCommand: null, inputs: {verbose: {type: boolean,
    inputBinding: {position: 1, prefix: --verbose}}}}, lowered: {processes: [{command: {tokens: [{segments: [{kind:
    literal, value: 'true'}]}, {kind: flag, name: verbose, prefix: --verbose}]}}]}}
 - id: basename_lowers_to_a_typed_segment_in_every_template_position
@@ -119,7 +119,7 @@
    message, to_process: _OPTIONAL, to_port: message, adapter: null}]}}}
 - {id: a_file_reference_embedded_in_text-whole-file, why: &json 'design §6, Commands: CWL renders an embedded File
    object as JSON; the reference alone, or its path or basename in text, is what the target takes.', job: &f_s {f:
-   {class: File, path: in.txt}, s: x}, tool: &embedded {id: EMBEDDED, inputs: {f: {type: File}, s: {type: string}},
+   {class: File, path: in.txt}, s: x}, tool: &embedded {inputs: {f: {type: File}, s: {type: string}},
    arguments: [$(inputs.f)]}}
 - {id: a_file_reference_embedded_in_text-embedded-path, why: *json, job: *f_s, tool: {<<: *embedded, arguments:
    ['--input=$(inputs.f.path)']}}

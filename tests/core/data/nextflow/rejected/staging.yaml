@@ -115,7 +115,7 @@
    ['steps[0].run.requirements.InitialWorkDirRequirement.listing[1]: must be a bare $(inputs.<name>) reference or a
    Dirent mapping']}
 - {id: a_list_of_globs_is_refused_for_being_a_list, why: 'Not for a reference in it: each item of a list is a whole
-   value, which no other text surrounds.', out: *out, job: &f {f: {class: File, path: in}}, tool: {id: REF, inputs: {f:
+   value, which no other text surrounds.', out: *out, job: &f {f: {class: File, path: in}}, tool: {inputs: {f:
    {type: File}}, outputs: {result: {type: File, outputBinding: {glob: [$(inputs.f)]}}}}, findings: ["steps[0]: CWL
    output glob lists for 'result' are not supported by the Nextflow target"]}
 - id: a_reference_where_it_stands-glob-File-$(inputs.f)
@@ -124,7 +124,7 @@
     entry, the one input under the output directory; stdin reads one staged File by its whole `.path`. Each case is a
     cell of cwltool''s own run of the tool. What a finding offers instead is what the target then takes: not the
     input''s own staged name, or a path inside it, where the link the input is staged under would be named.'
-  tool: &ref {id: REF, inputs: {f: {type: File}}, outputs: {result: {type: File, outputBinding: {glob: $(inputs.f)}}}}
+  tool: &ref {inputs: {f: {type: File}}, outputs: {result: {type: File, outputBinding: {glob: $(inputs.f)}}}}
   out: *out
   job: *f
   findings: ['steps[0].run.outputs.result.outputBinding.glob: $(inputs.f) is the File or Directory object, which CWL
@@ -134,7 +134,7 @@
    ['steps[0].run.outputs.result.outputBinding.glob: $(inputs.f) is the File or Directory object, which CWL does not
    take as a glob; use $(inputs.f.basename)']}
 - {id: a_reference_where_it_stands-glob-Directory-$(inputs.f)-writable, why: *stands, out: *out, job: &d {f: {class:
-   Directory, path: in}}, tool: &ref_dir {id: REF, inputs: {f: {type: Directory}}, outputs: {result: {type: Directory,
+   Directory, path: in}}, tool: &ref_dir {inputs: {f: {type: Directory}}, outputs: {result: {type: Directory,
    outputBinding: {glob: $(inputs.f)}}}, requirements: &writable {InitialWorkDirRequirement: {listing: [{entry:
    $(inputs.f), writable: true}]}}}, findings: ['steps[0].run.outputs.result.outputBinding.glob: $(inputs.f) is the File
    or Directory object, which CWL does not take as a glob; use $(inputs.f.basename)']}
@@ -142,8 +142,8 @@
    outputs: {result: {type: File, outputBinding: {glob: $(inputs.f).out}}}}, findings:
    ['steps[0].run.outputs.result.outputBinding.glob: $(inputs.f) embedded in other text renders a File object as JSON in
    CWL; use $(inputs.f.basename)']}
-- {id: a_reference_where_it_stands-glob-Directory-$(inputs.f)/keep.txt, why: *stands, out: *out, job: *d, tool: {id:
-   REF, inputs: {f: {type: Directory}}, outputs: {result: {type: Directory, outputBinding: {glob:
+- {id: a_reference_where_it_stands-glob-Directory-$(inputs.f)/keep.txt, why: *stands, out: *out, job: *d, tool: {inputs:
+   {f: {type: Directory}}, outputs: {result: {type: Directory, outputBinding: {glob:
    $(inputs.f)/keep.txt}}}}, findings: ['steps[0].run.outputs.result.outputBinding.glob: $(inputs.f) embedded in other
    text renders a File object as JSON in CWL; derive a new name from it, or make the input an InitialWorkDirRequirement
    entry']}
@@ -156,12 +156,12 @@
    ['steps[0].run.outputs.result.outputBinding.glob: $(inputs.f.path) is an absolute path outside the output directory,
    which no CWL glob matches; use $(inputs.f.basename)']}
 - {id: a_reference_where_it_stands-glob-Directory-$(inputs.f.path)/keep.txt, why: *stands, out: *out, job: *d, tool: {
-   id: REF, inputs: {f: {type: Directory}}, outputs: {result: {type: Directory, outputBinding: {glob:
+   inputs: {f: {type: Directory}}, outputs: {result: {type: Directory, outputBinding: {glob:
    $(inputs.f.path)/keep.txt}}}}, findings: ['steps[0].run.outputs.result.outputBinding.glob: $(inputs.f.path) is an
    absolute path outside the output directory, which no CWL glob matches; derive a new name from it, or make the input
    an InitialWorkDirRequirement entry']}
-- {id: a_reference_where_it_stands-stdin-File-$(inputs.f), why: *stands, out: *out, job: *f, tool: &ref_stream {id: REF,
-   inputs: {f: {type: File}}, outputs: {result: {type: File, outputBinding: {glob: done.txt}}}, stdin: $(inputs.f)},
+- {id: a_reference_where_it_stands-stdin-File-$(inputs.f), why: *stands, out: *out, job: *f, tool: &ref_stream {inputs:
+   {f: {type: File}}, outputs: {result: {type: File, outputBinding: {glob: done.txt}}}, stdin: $(inputs.f)},
    findings: ['steps[0].run.stdin: $(inputs.f) is the File or Directory object, which CWL does not take as stdin; use
    $(inputs.f.path) alone']}
 - {id: a_reference_where_it_stands-stdin-File-$(inputs.f.basename)-linked, why: *stands, out: *out, job: *f, tool: {<<:
@@ -177,8 +177,8 @@
 - {id: a_reference_where_it_stands-stdin-Directory-$(inputs.f.path)-writable, why: *stands, out: *out, job: *d, tool: {
    <<: *ref_stream_dir, stdin: $(inputs.f.path), requirements: *writable}, findings: ['steps[0].run.stdin: stdin reads a
    file, and $(inputs.f.path) names a Directory']}
-- {id: a_reference_where_it_stands-stdout-File-$(inputs.f), why: *stands, out: *out, job: *f, tool: &ref_stdout {id:
-   REF, inputs: {f: {type: File}}, outputs: {result: {type: File, outputBinding: {glob: done.txt}}}, stdout:
+- {id: a_reference_where_it_stands-stdout-File-$(inputs.f), why: *stands, out: *out, job: *f, tool: &ref_stdout {inputs:
+   {f: {type: File}}, outputs: {result: {type: File, outputBinding: {glob: done.txt}}}, stdout:
    $(inputs.f)}, findings: ['steps[0].run.stdout: $(inputs.f) is the File or Directory object, which CWL does not take
    as a stdout target; derive a new name from it, or make the input a writable InitialWorkDirRequirement entry']}
 - {id: a_reference_where_it_stands-stdout-File-$(inputs.f)-writable, why: *stands, out: *out, job: *f, tool: {<<:
@@ -195,13 +195,13 @@
    the target refuses rather than do that.', out: *out, job: *f, tool: {<<: *ref_stdout, stdout: $(inputs.f).log},
    findings: ['steps[0].run.stdout: $(inputs.f) embedded in other text renders a File object as JSON in CWL; use
    $(inputs.f.basename)']}
-- {id: a_reference_where_it_stands-stderr-File-$(inputs.f)-linked, why: *stands, out: *out, job: *f, tool: {id: REF,
-   inputs: {f: {type: File}}, outputs: {result: {type: File, outputBinding: {glob: done.txt}}}, stderr: $(inputs.f),
+- {id: a_reference_where_it_stands-stderr-File-$(inputs.f)-linked, why: *stands, out: *out, job: *f, tool: {inputs: {f:
+   {type: File}}, outputs: {result: {type: File, outputBinding: {glob: done.txt}}}, stderr: $(inputs.f),
    requirements: *linked}, findings: ['steps[0].run.stderr: $(inputs.f) is the File or Directory object, which CWL does
    not take as a stderr target; derive a new name from it, or make the input a writable InitialWorkDirRequirement
    entry']}
-- {id: a_reference_where_it_stands-stderr-File-$(inputs.f.path), why: *stands, out: *out, job: *f, tool: {id: REF,
-   inputs: {f: {type: File}}, outputs: {result: {type: File, outputBinding: {glob: done.txt}}}, stderr:
+- {id: a_reference_where_it_stands-stderr-File-$(inputs.f.path), why: *stands, out: *out, job: *f, tool: {inputs: {f:
+   {type: File}}, outputs: {result: {type: File, outputBinding: {glob: done.txt}}}, stderr:
    $(inputs.f.path)}, findings: ['steps[0].run.stderr: $(inputs.f.path) is an absolute path, and CWL takes only a
    relative name as a stderr target; derive a new name from it, or make the input a writable InitialWorkDirRequirement
    entry']}

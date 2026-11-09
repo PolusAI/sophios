@@ -1,16 +1,5 @@
-"""What the shipped Python API workflows compile *to*, not merely that they compile.
-
-`examples/workflows/` is a `search_paths_wic` entry, so every script in it is
-discovered, compiled and schema-validated by the same two steps that carry the
-image-workflows corpus. That mechanism asserts one thing: no exception escaped.
-
-It cannot see whether a `when` expression reached the emitted CWL, or which
-`scatterMethod` was chosen. Those are the claims here, made against the same
-files the mechanism runs — one workflow, two claims about it.
-
-Compiled, never executed; whether a runner can execute the result belongs to
-the workflow-running lane.
-"""
+"""What the shipped Python API workflows compile to, not merely that they compile: the discovery lanes assert only
+that no exception escaped."""
 import json
 import re
 import shutil
@@ -19,28 +8,17 @@ from typing import Any
 
 import pytest
 
-from sophios.api.python.workflow import Step, Workflow
+from sophios.api.python.workflow import Workflow
 from sophios.python_cwl_adapter import import_python_file
 
+from .helpers import REPO_ROOT, adapter_step
 from .test_setup import home_with_shipped_tools, use_home
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-ADAPTERS = REPO_ROOT / 'cwl_adapters'
-HERE = Path(__file__).resolve().parent
 WORKFLOWS = REPO_ROOT / 'examples' / 'workflows'
 
 
 def _discovered(stem: str) -> Any:
-    """Import a shipped Python workflow the way discovery does.
-
-    `examples/workflows/` is a `search_paths_wic` entry, so
-    `test_compile_python_workflows` already imports each script there and calls
-    its `workflow()` — the same path `image-workflows/workflows/bbbc.py` takes.
-    That proves the script compiles and nothing more, because it asserts only
-    that no exception escaped. These tests import the same file and assert what
-    the compiled document actually says, so there is one copy of each workflow
-    and two claims about it.
-    """
+    """Import a shipped Python workflow as discovery does, so these claims are about the file the lanes run."""
     path = WORKFLOWS / f'{stem}.py'
     assert path.is_file(), f'{path} is a discovered Python workflow and must exist'
     return import_python_file(stem, path.resolve())
@@ -90,27 +68,15 @@ def test_a_compiled_multistep_workflow_matches_its_checked_in_ground_truth() -> 
     The other tests here assert one key each. This compares the entire emitted
     workflow, its job inputs and its name to `ground_truth_multistep1.json`, so
     a change anywhere in the compiled shape has to be acknowledged by updating
-    the file rather than passing unnoticed. The comparison was written as an
-    example script's `__main__`, which nothing ran.
+    the file rather than passing unnoticed.
     """
-    touch = Step(clt_path=ADAPTERS / 'touch.cwl')
-    touch.inputs.filename = 'empty.txt'
-
-    append = Step(clt_path=ADAPTERS / 'append.cwl')
-    append.inputs.file = touch.outputs.file
-    append.inputs.str = 'Hello'
-
-    cat = Step(clt_path=ADAPTERS / 'cat.cwl')
-    cat.inputs.file = append.outputs.file
-
+    touch = adapter_step('touch', filename='empty.txt')
+    append = adapter_step('append', file=touch.outputs.file, str='Hello')
+    cat = adapter_step('cat', file=append.outputs.file)
     compiled = Workflow([touch, append, cat], 'multistep1_toJson_pyapi_py').compile()
-    ground_truth = json.loads((HERE / 'ground_truth_multistep1.json').read_text(encoding='utf-8'))
-
-    assert compiled.name == ground_truth['name']
-    assert compiled.cwl_job_inputs == ground_truth['yaml_inputs']
-    assert compiled.cwl_workflow == {
-        key: value for key, value in ground_truth.items() if key not in {'name', 'yaml_inputs'}
-    }
+    truth = json.loads(Path(__file__).with_name('ground_truth_multistep1.json').read_text(encoding='utf-8'))
+    assert (compiled.name, compiled.cwl_job_inputs) == (truth.pop('name'), truth.pop('yaml_inputs'))
+    assert compiled.cwl_workflow == truth
 
 
 @pytest.mark.fast
@@ -153,29 +119,6 @@ def test_two_in_memory_tools_chain_and_keep_their_output_binding() -> None:
 _INPUTS = {'input_dir': '/data/in', 'output_dir': '/data/out', 'model_dir': '/data/models'}
 
 
-def _compile_ichnaea_script(script: str, tmp_path: Path) -> None:
-    """Both scripts build a tool with a GPU hint and a Docker requirement, which
-    cwl_utils renders as lists. `Workflow.compile()` crashed on the list, and the
-    only test ran the tool through `validate()`, which never takes the compile path.
-
-    The script is imported from a copy: `ichnaea_integrated.workflow()` writes
-    `built-ichnaea-autosegmentation.cwl` next to its own file, which would leave
-    an untracked file in `examples/scripts/` after every run."""
-    source = tmp_path / f'{script}.py'
-    shutil.copyfile(REPO_ROOT / 'examples' / 'scripts' / f'{script}.py', source)
-    module = import_python_file(script, source)
-    compiled = module.workflow(dict(_INPUTS), 'autoseg_workflow').compile()
-    run = compiled.cwl_workflow['steps'][0]['run']
-    assert any(entry.get('class') == 'DockerRequirement' for entry in run['requirements'])
-    assert any(entry.get('class') == 'cwltool:CUDARequirement' for entry in run['hints'])
-
-
-@pytest.mark.fast
-def test_the_compact_ichnaea_script_compiles_its_hinted_tool(tmp_path: Path) -> None:
-    """The hinted tool compiles; see `_compile_ichnaea_script`."""
-    _compile_ichnaea_script('ichnaea_compact', tmp_path)
-
-
 @pytest.mark.fast
 def test_the_compact_ichnaea_script_names_its_outputs_folder_relative_to_basepath(
         capsys: pytest.CaptureFixture[str]) -> None:
@@ -193,9 +136,16 @@ def test_the_compact_ichnaea_script_names_its_outputs_folder_relative_to_basepat
 @pytest.mark.fast
 @pytest.mark.needs_cwltool
 def test_the_integrated_ichnaea_script_compiles_its_hinted_tool(tmp_path: Path) -> None:
-    """The hinted tool compiles; see `_compile_ichnaea_script`. The script also
-    writes the tool with `validate=True`, which runs cwltool in-process."""
-    _compile_ichnaea_script('ichnaea_integrated', tmp_path)
+    """The hinted tool compiles: the script builds a tool with a GPU hint and a Docker requirement, which cwl_utils
+    renders as lists and compile() once crashed on; imported from a copy, as `workflow()` writes a .cwl beside its
+    own file. The script also writes the tool with `validate=True`, which runs cwltool in-process."""
+    source = tmp_path / 'ichnaea_integrated.py'
+    shutil.copyfile(REPO_ROOT / 'examples' / 'scripts' / source.name, source)
+    module = import_python_file(source.stem, source)
+    compiled = module.workflow(dict(_INPUTS), 'autoseg_workflow').compile()
+    run = compiled.cwl_workflow['steps'][0]['run']
+    assert any(entry.get('class') == 'DockerRequirement' for entry in run['requirements'])
+    assert any(entry.get('class') == 'cwltool:CUDARequirement' for entry in run['hints'])
 
 
 @pytest.mark.fast

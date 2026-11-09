@@ -1,9 +1,5 @@
-"""A pytest plugin that makes plugin discovery an error.
-
-Loaded with `-p core._poison_plugins`. Any module that reaches
-`get_tools_cwl` or `get_yml_paths` under this plugin fails loudly instead of
-quietly reading whatever the machine happens to have.
-"""
+"""A pytest plugin (`-p core._poison_plugins`) that makes plugin discovery an error: a module reaching `get_tools_cwl`
+or `get_yml_paths` fails loudly instead of reading whatever the machine has."""
 from typing import Any, NoReturn
 
 import sophios.plugins

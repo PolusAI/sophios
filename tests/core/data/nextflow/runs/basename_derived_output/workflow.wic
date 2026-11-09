@@ -1,4 +1,0 @@
-steps:
-- id: write_source
-  in: {message: !ii basename derived}
-- id: copy_named_after_source
