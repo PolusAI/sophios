@@ -268,8 +268,8 @@ def test_a_refused_input_made_from_a_written_value_is_refused_where_the_value_wa
         '    pick.inputs.input_array = ["a", "b"]') + 1
     with pytest.raises(NotLowered) as raised:
         lowered(compile_workflow_result(Workflow([pick], "flow")))
-    assert f"{__file__}:{written}:1: step 'pick': workflow input 'pick~input_array': supplied value does not match " \
-        "its supported CWL type" in [str(refusal) for refusal in raised.value.refusals]
+    assert f"{__file__}:{written}:1: error [nf-s048] workflow input 'pick~input_array': type: unsupported CWL type " \
+        "for the Nextflow target: 'Any' (step 'pick')" in [str(line) for line in raised.value.diagnostics]
 
 
 @pytest.mark.fast
@@ -322,11 +322,12 @@ def test_a_scattered_step_inside_a_subworkflow_uses_the_outer_scatter_contract()
 
 @pytest.mark.fast
 @pytest.mark.parametrize("case", cases(
-    "nextflow/rejected", "tool", "out", "job", "workflow", "tools", "error", "findings"))
+    "nextflow/rejected", "tool", "out", "job", "workflow", "tools", "error", "findings", "codes"))
 def test_a_rejected_source_is_refused_as_its_case_says(case: Yaml) -> None:
     """A case's source, its documents left as they were, is refused with exactly its `findings`, or with refusals
-    whose lines `error` matches (tests/core/cases.py reads both). A refusal is read without its span: a case's
-    document is written out by `hermetic.bundle`, which decides its lines."""
+    whose lines `error` matches (tests/core/cases.py reads both), each printed with the code of its reason, in order,
+    when the case names its `codes`. A refusal is read without its span: a case's document is written out by
+    `hermetic.bundle`, which decides its lines."""
     documents = copy.deepcopy(case)
     with pytest.raises(NotLowered) as raised:
         lowered_case(case)
@@ -336,3 +337,5 @@ def test_a_rejected_source_is_refused_as_its_case_says(case: Yaml) -> None:
         assert match(case["error"], "\n".join(lines)), lines
     else:
         assert match(case["findings"], lines), lines
+    if "codes" in case:
+        assert re.findall(r"\[((?:nf-s|wic)\d{3})\]", str(raised.value)) == case["codes"], str(raised.value)

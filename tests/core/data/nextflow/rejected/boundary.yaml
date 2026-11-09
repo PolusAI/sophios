@@ -1,13 +1,14 @@
 # The workflow boundary, names, types and requirements the target refuses (design §3, §6). Each `findings` or `error`
 # is the diagnostic the replaced test wrote by hand from that rule, copied verbatim; nothing here was read off a run.
-- {id: a_required_workflow_input_with_no_value, why: &missing 'Missing, null and a default are three things.', workflow:
+- {id: a_required_workflow_input_with_no_value, codes: [nf-s014], why: &missing 'Missing, null and a default are three things.', workflow:
    {steps: &noop [{id: NOOP}], inputs: {message: {type: string}}}, tools: &noop_tool [{id: NOOP}], error: {re: required
    workflow input value is missing}}
-- {id: an_explicit_null_workflow_input, why: *missing, workflow: {steps: *noop, inputs: {message: {type: string}}},
+- {id: an_explicit_null_workflow_input, codes: [wic012], why: *missing, workflow: {steps: *noop, inputs: {message: {type: string}}},
    tools: *noop_tool, job: {message: null}, error: {re: explicit null input values}}
-- {id: a_workflow_input_default_that_is_not_a_scalar, why: *missing, workflow: {steps: *noop, inputs: {message:
+- {id: a_workflow_input_default_that_is_not_a_scalar, codes: [nf-s017], why: *missing, workflow: {steps: *noop, inputs: {message:
    {type: string, default: [not, scalar]}}}, tools: *noop_tool, error: {re: JSON scalar defaults only}}
 - id: workflow_input_collisions_aggregate_with_other_findings
+  codes: [nf-s002, nf-s054]
   why: A naming collision is a finding beside the rest, not an error that hides them.
   workflow: {steps: [{id: COLLISION, unknown_field: true}], inputs: &collide {out-dir: {type: string}, out_dir: {type:
     string}}}
@@ -15,57 +16,60 @@
   job: &collision {out-dir: first, out_dir: second}
   findings: {contains: [{re: 'workflow input: workflow input identifiers'}, {re: 'step ''COLLISION'': step:
     unknown_field is not consumed'}]}
-- {id: workflow_input_identifier_collisions, why: &normalize Two names that normalize alike would be one parameter.,
+- {id: workflow_input_identifier_collisions, codes: [nf-s002], why: &normalize Two names that normalize alike would be one parameter.,
    workflow: {steps: *noop, inputs: *collide}, tools: *noop_tool, job: *collision, error: {re: "workflow input
    identifiers 'out-dir', 'out_dir'.*normalize to 'out_dir'"}}
-- {id: step_identifier_collisions_naming_both_steps, why: 'A repeated id carries `@<position>`; it and an authored id
+- {id: step_identifier_collisions_naming_both_steps, codes: [nf-s002], why: 'A repeated id carries `@<position>`; it and an authored id
    may normalize alike.', workflow: {steps: [{id: touch}, {id: touch}, {id: touch_2}]}, tools: [{id: touch}, {id:
    touch}, {id: touch_2}], error: {re: 'workflow ''wf'': step: workflow step identifiers ''touch@2'', ''touch_2''
    normalize to ''touch_2'''}}
-- {id: tool_port_identifier_collisions, why: *normalize, workflow: {steps: [{id: COLLISION}]}, tools: [{id: COLLISION,
+- {id: tool_port_identifier_collisions, codes: [nf-s002], why: *normalize, workflow: {steps: [{id: COLLISION}]}, tools: [{id: COLLISION,
    inputs: {out-dir: {type: string, default: first}, out_dir: {type: string, default: second}}}], error: {re: "tool
    input identifiers 'out-dir', 'out_dir'.*normalize to 'out_dir'"}}
 - id: a_workflow_input_and_a_tool_default_normalizing_alike
+  codes: [nf-s002]
   why: *normalize
   workflow: {steps: [{id: DEFAULT}], inputs: {DEFAULT_message: {type: string}}}
   tools: [{id: DEFAULT, inputs: {message: {type: string, default: tool default, inputBinding: {position: 1}}}}]
   job: {DEFAULT_message: workflow value}
   error: {re: "workflow parameter identifiers 'DEFAULT_message', 'DEFAULT~message' normalize to '_DEFAULT_message'"}
-- {id: boundary_values_outside_supported_shape-string, why: &shape A value has the shape of its declared type.,
+- {id: boundary_values_outside_supported_shape-string, codes: [nf-s015], why: &shape A value has the shape of its declared type.,
    workflow: {steps: *noop, inputs: {value: {type: string}}}, tools: *noop_tool, job: {value: [not, a, string]}, error:
    &mismatch {re: does not match its supported CWL type}}
-- {id: boundary_values_outside_supported_shape-int, why: *shape, workflow: {steps: *noop, inputs: {value: {type: int}}},
+- {id: boundary_values_outside_supported_shape-int, codes: [nf-s015], why: *shape, workflow: {steps: *noop, inputs: {value: {type: int}}},
    tools: *noop_tool, job: {value: true}, error: *mismatch}
-- {id: boundary_values_outside_supported_shape-File, why: *shape, workflow: {steps: *noop, inputs: {value: {type:
+- {id: boundary_values_outside_supported_shape-File, codes: [nf-s015], why: *shape, workflow: {steps: *noop, inputs: {value: {type:
    File}}}, tools: *noop_tool, job: {value: {class: File, path: reference.fa, secondaryFiles: [reference.fa.fai]}},
    error: *mismatch}
-- {id: unknown_connection_source, why: A source names a step., workflow: {steps: [{id: B, out: [out]}], outputs:
+- {id: unknown_connection_source, codes: [nf-s028], why: A source names a step., workflow: {steps: [{id: B, out: [out]}], outputs:
    {result: {type: File, outputSource: MISSING/out}}}, tools: [{id: B, outputs: {out: {type: File, outputBinding:
    {glob: out.txt}}}}], error: {re: unknown source process 'MISSING'}}
 - id: a_made_workflow_input_is_refused_at_the_step_it_was_made_for
+  codes: [nf-s014, wic012]
   why: A workflow input the compiler made has no line of its own; the step input it was made for owns its refusal.
   workflow: {steps: [{id: NEED}]}
   tools: [{id: NEED, inputs: {message: {type: string, inputBinding: {position: 1}}}}]
   findings: ['step ''NEED'': workflow input ''NEED~message'': required workflow input value is missing', 'step ''NEED'':
     tool ''NEED.cwl: inputs.message'': resolves to an absent required value']
-- {id: output_glob_outside_typed_input_subset, why: A glob reads inputs only., workflow: {steps: [{id: BAD_GLOB, out:
+- {id: output_glob_outside_typed_input_subset, codes: [nf-s045], why: A glob reads inputs only., workflow: {steps: [{id: BAD_GLOB, out:
    [result]}]}, tools: [{id: BAD_GLOB, outputs: {result: {type: File, outputBinding: {glob:
    $(runtime.outdir)/result.txt}}}}], error: {re: unsupported CWL expression}}
-- {id: a_workflow_output_forwarding_an_input_is_a_workflow_finding, why: Boundary passthrough has no process to run.,
+- {id: a_workflow_output_forwarding_an_input_is_a_workflow_finding, codes: [nf-s025], why: Boundary passthrough has no process to run.,
    workflow: {steps: [{id: ECHO}], inputs: {a: string}, outputs: {a_out: {type: string, outputSource: a}}}, tools: [{id:
    ECHO}], job: {a: x}, findings: ['workflow ''wf'': workflow: workflow output ''a_out'' directly forwards a workflow
    input; boundary passthrough is not executable on the Nextflow target']}
-- {id: tool_requirement_without_class-requirements, why: &classless A requirement or hint names its class., tool: {id:
+- {id: tool_requirement_without_class-requirements, codes: [nf-s055], why: &classless A requirement or hint names its class., tool: {id:
    CLASSLESS, requirements: [{directive: '${System.exit(3)}'}]}, findings: ['step ''CLASSLESS'': tool ''CLASSLESS.cwl:
    requirements.0'': a requirement or hint needs a string `class`']}
-- {id: tool_requirement_without_class-hints, why: *classless, tool: {id: CLASSLESS, hints: [{directive:
+- {id: tool_requirement_without_class-hints, codes: [nf-s055], why: *classless, tool: {id: CLASSLESS, hints: [{directive:
    '${System.exit(3)}'}]}, findings: ['step ''CLASSLESS'': tool ''CLASSLESS.cwl: hints.0'': a requirement or hint needs
    a string `class`']}
-- {id: a_long_input_with_a_default_has_only_the_type_finding, why: The type's finding names a long; its default is not
+- {id: a_long_input_with_a_default_has_only_the_type_finding, codes: [nf-s048], why: The type's finding names a long; its default is not
    judged against it., workflow: {steps: [{id: N}]}, tools: [{id: N, inputs: {n: {type: long, default: 1}}}], findings:
    ['step ''N'': tool ''N.cwl: inputs.n.type'': long is not supported: the Nextflow target lowers int and float; declare
    one of those']}
 - id: long_in_a_tool_input
+  codes: [nf-s048, nf-s048, nf-s014, wic012]
   why: &long A long or a double is refused where it is declared, naming the type.
   workflow: &produce_wf {steps: [{id: PRODUCE, in: {n: n}, out: [out]}], inputs: {n: {type: long}}, outputs: {out:
     {type: File, outputSource: PRODUCE/out}}}
@@ -73,73 +77,81 @@
     outputBinding: {glob: out.txt}}}}]
   error: {contains: ['step ''PRODUCE'': tool ''PRODUCE.cwl: inputs.n.type'': long is not supported', 'workflow ''wf'':
     workflow input ''n'': type: long is not supported']}
-- {id: double_in_a_tool_input, why: *long, workflow: {<<: *produce_wf, inputs: {n: {type: double}}}, tools: [{<<:
+- {id: double_in_a_tool_input, codes: [nf-s048, nf-s048, nf-s014, wic012], why: *long, workflow: {<<: *produce_wf, inputs: {n: {type: double}}}, tools: [{<<:
    *produce, inputs: {n: {type: double, inputBinding: {position: 1}}}}], error: {contains: ['step ''PRODUCE'': tool
    ''PRODUCE.cwl: inputs.n.type'': double is not supported', 'workflow ''wf'': workflow input ''n'': type: double is not
    supported']}}
-- {id: long_in_an_array_item, why: *long, workflow: {<<: *produce_wf, inputs: {n: {type: {type: array, items: long}}}},
+- {id: long_in_an_array_item, codes: [nf-s048, nf-s048, nf-s014], why: *long, workflow: {<<: *produce_wf, inputs: {n: {type: {type: array, items: long}}}},
    tools: [{<<: *produce, inputs: {n: {type: {type: array, items: long}, inputBinding: {position: 1}}}}], error:
    {contains: ['step ''PRODUCE'': tool ''PRODUCE.cwl: inputs.n.type'': long is not supported']}}
-- {id: double_in_an_array_item, why: *long, workflow: {<<: *produce_wf, inputs: {n: {type: {type: array, items:
+- {id: double_in_an_array_item, codes: [nf-s048, nf-s048, nf-s014], why: *long, workflow: {<<: *produce_wf, inputs: {n: {type: {type: array, items:
    double}}}}, tools: [{<<: *produce, inputs: {n: {type: {type: array, items: double}, inputBinding: {position: 1}}}}],
    error: {contains: ['step ''PRODUCE'': tool ''PRODUCE.cwl: inputs.n.type'': double is not supported']}}
 - id: long_in_a_tool_output
+  codes: [nf-s048, nf-s031, nf-s014, nf-s048]
   why: *long
   workflow: {<<: *produce_wf, inputs: &int {n: {type: int}}, outputs: {out: {type: long, outputSource: PRODUCE/out}}}
   tools: [{<<: *produce, inputs: &int_input {n: {type: int, inputBinding: {position: 1}}}, outputs: {out: {type: long,
     outputBinding: {glob: out.txt}}}}]
   error: {contains: ['step ''PRODUCE'': tool ''PRODUCE.cwl: outputs.out.type'': long is not supported']}
 - id: double_in_a_tool_output
+  codes: [nf-s048, nf-s031, nf-s014, nf-s048]
   why: *long
   workflow: {<<: *produce_wf, inputs: *int, outputs: {out: {type: double, outputSource: PRODUCE/out}}}
   tools: [{<<: *produce, inputs: *int_input, outputs: {out: {type: double, outputBinding: {glob: out.txt}}}}]
   error: {contains: ['step ''PRODUCE'': tool ''PRODUCE.cwl: outputs.out.type'': double is not supported']}
-- {id: long_in_a_workflow_output, why: *long, tools: [{<<: *produce, inputs: *int_input}], workflow: {<<: *produce_wf,
+- {id: long_in_a_workflow_output, codes: [nf-s014, nf-s048, wic012], why: *long, tools: [{<<: *produce, inputs: *int_input}], workflow: {<<: *produce_wf,
    inputs: *int, outputs: {out: {type: long, outputSource: PRODUCE/out}}}, error: {contains: ['workflow ''wf'': workflow
    output ''out'': type: long is not supported']}}
-- {id: double_in_a_workflow_output, why: *long, tools: [{<<: *produce, inputs: *int_input}], workflow: {<<: *produce_wf,
+- {id: double_in_a_workflow_output, codes: [nf-s014, nf-s048, wic012], why: *long, tools: [{<<: *produce, inputs: *int_input}], workflow: {<<: *produce_wf,
    inputs: *int, outputs: {out: {type: double, outputSource: PRODUCE/out}}}, error: {contains: ['workflow ''wf'':
    workflow output ''out'': type: double is not supported']}}
-- {id: fractional_cpus, why: A cpu count is whole., tool: {id: RESOURCES, requirements: {ResourceRequirement: {coresMax:
+- {id: fractional_cpus, codes: [nf-s040], why: A cpu count is whole., tool: {id: RESOURCES, requirements: {ResourceRequirement: {coresMax:
    2.5}}}, error: {re: coresMax.*whole number}}
-- {id: a_cuda_field_cwltool_does_not_declare, why: A field nothing lowers is refused naming itself., tool: {id: GPU,
+- {id: a_cuda_field_cwltool_does_not_declare, codes: [nf-s054], why: A field nothing lowers is refused naming itself., tool: {id: GPU,
    hints: [{class: 'cwltool:CUDARequirement', cudaComputeCapabilityMin: '3.0'}]}, findings: ['step ''GPU'': tool
    ''GPU.cwl: hints.0.cudaComputeCapabilityMin'': cudaComputeCapabilityMin is not consumed by the Nextflow lowering']}
-- {id: cuda_device_count_min-0, why: &count A CUDA device count is a positive whole number., tool: {id: GPU, hints:
+- {id: cuda_device_count_min-0, codes: [nf-s055], why: &count A CUDA device count is a positive whole number., tool: {id: GPU, hints:
    {'cwltool:CUDARequirement': {cudaDeviceCountMin: 0}}}, findings: ['step ''GPU'': tool ''GPU.cwl:
    hints.cwltool:CUDARequirement.cudaDeviceCountMin'': a CUDA device count must be a positive whole number, got 0']}
-- {id: cuda_device_count_min--1, why: *count, tool: {id: GPU, hints: {'cwltool:CUDARequirement': {cudaDeviceCountMin:
+- {id: cuda_device_count_min--1, codes: [nf-s055], why: *count, tool: {id: GPU, hints: {'cwltool:CUDARequirement': {cudaDeviceCountMin:
    -1}}}, findings: ['step ''GPU'': tool ''GPU.cwl: hints.cwltool:CUDARequirement.cudaDeviceCountMin'': a CUDA device
    count must be a positive whole number, got -1']}
-- {id: cuda_device_count_min-true, why: *count, tool: {id: GPU, hints: {'cwltool:CUDARequirement': {cudaDeviceCountMin:
+- {id: cuda_device_count_min-true, codes: [nf-s055], why: *count, tool: {id: GPU, hints: {'cwltool:CUDARequirement': {cudaDeviceCountMin:
    true}}}, findings: ['step ''GPU'': tool ''GPU.cwl: hints.cwltool:CUDARequirement.cudaDeviceCountMin'': a CUDA device
    count must be a positive whole number, got True']}
-- {id: cuda_device_count_min-1.5, why: *count, tool: {id: GPU, hints: {'cwltool:CUDARequirement': {cudaDeviceCountMin:
+- {id: cuda_device_count_min-1.5, codes: [nf-s055], why: *count, tool: {id: GPU, hints: {'cwltool:CUDARequirement': {cudaDeviceCountMin:
    1.5}}}, findings: ['step ''GPU'': tool ''GPU.cwl: hints.cwltool:CUDARequirement.cudaDeviceCountMin'': a CUDA device
    count must be a positive whole number, got 1.5']}
-- {id: cuda_device_count_min-text, why: *count, tool: {id: GPU, hints: {'cwltool:CUDARequirement': {cudaDeviceCountMin:
+- {id: cuda_device_count_min-text, codes: [nf-s055], why: *count, tool: {id: GPU, hints: {'cwltool:CUDARequirement': {cudaDeviceCountMin:
    '2'}}}, findings: ['step ''GPU'': tool ''GPU.cwl: hints.cwltool:CUDARequirement.cudaDeviceCountMin'': a CUDA device
    count must be a positive whole number, got ''2''']}
-- {id: cuda_device_count_min-expression, why: *count, tool: {id: GPU, hints: {'cwltool:CUDARequirement':
+- {id: cuda_device_count_min-expression, codes: [nf-s040], why: *count, tool: {id: GPU, hints: {'cwltool:CUDARequirement':
    {cudaDeviceCountMin: $(inputs.n)}}}, findings: ['step ''GPU'': tool ''GPU.cwl:
    hints.cwltool:CUDARequirement.cudaDeviceCountMin'': a CUDA device count must be a positive whole number, got
    ''$(inputs.n)''']}
-- {id: cuda_device_count_max-0, why: *count, tool: {id: GPU, hints: {'cwltool:CUDARequirement': {cudaDeviceCountMin: 1,
+- {id: cuda_device_count_max-0, codes: [nf-s055], why: *count, tool: {id: GPU, hints: {'cwltool:CUDARequirement': {cudaDeviceCountMin: 1,
    cudaDeviceCountMax: 0}}}, findings: ['step ''GPU'': tool ''GPU.cwl:
    hints.cwltool:CUDARequirement.cudaDeviceCountMax'': a CUDA device count must be a positive whole number, got 0']}
-- {id: cuda_device_count_max--1, why: *count, tool: {id: GPU, hints: {'cwltool:CUDARequirement': {cudaDeviceCountMin: 1,
+- {id: cuda_device_count_max--1, codes: [nf-s055], why: *count, tool: {id: GPU, hints: {'cwltool:CUDARequirement': {cudaDeviceCountMin: 1,
    cudaDeviceCountMax: -1}}}, findings: ['step ''GPU'': tool ''GPU.cwl:
    hints.cwltool:CUDARequirement.cudaDeviceCountMax'': a CUDA device count must be a positive whole number, got -1']}
-- {id: cuda_device_count_max-true, why: *count, tool: {id: GPU, hints: {'cwltool:CUDARequirement': {cudaDeviceCountMin:
+- {id: cuda_device_count_max-true, codes: [nf-s055], why: *count, tool: {id: GPU, hints: {'cwltool:CUDARequirement': {cudaDeviceCountMin:
    1, cudaDeviceCountMax: true}}}, findings: ['step ''GPU'': tool ''GPU.cwl:
    hints.cwltool:CUDARequirement.cudaDeviceCountMax'': a CUDA device count must be a positive whole number, got True']}
-- {id: cuda_device_count_max-1.5, why: *count, tool: {id: GPU, hints: {'cwltool:CUDARequirement': {cudaDeviceCountMin:
+- {id: cuda_device_count_max-1.5, codes: [nf-s055], why: *count, tool: {id: GPU, hints: {'cwltool:CUDARequirement': {cudaDeviceCountMin:
    1, cudaDeviceCountMax: 1.5}}}, findings: ['step ''GPU'': tool ''GPU.cwl:
    hints.cwltool:CUDARequirement.cudaDeviceCountMax'': a CUDA device count must be a positive whole number, got 1.5']}
-- {id: cuda_device_count_max-text, why: *count, tool: {id: GPU, hints: {'cwltool:CUDARequirement': {cudaDeviceCountMin:
+- {id: cuda_device_count_max-text, codes: [nf-s055], why: *count, tool: {id: GPU, hints: {'cwltool:CUDARequirement': {cudaDeviceCountMin:
    1, cudaDeviceCountMax: '2'}}}, findings: ['step ''GPU'': tool ''GPU.cwl:
    hints.cwltool:CUDARequirement.cudaDeviceCountMax'': a CUDA device count must be a positive whole number, got ''2''']}
-- {id: cuda_device_count_max-expression, why: *count, tool: {id: GPU, hints: {'cwltool:CUDARequirement':
+- {id: cuda_device_count_max-expression, codes: [nf-s040], why: *count, tool: {id: GPU, hints: {'cwltool:CUDARequirement':
    {cudaDeviceCountMin: 1, cudaDeviceCountMax: $(inputs.n)}}}, findings: ['step ''GPU'': tool ''GPU.cwl:
    hints.cwltool:CUDARequirement.cudaDeviceCountMax'': a CUDA device count must be a positive whole number, got
    ''$(inputs.n)''']}
+- id: a_nan_for_a_float_input
+  why: The parameters are JSON, which holds no NaN.
+  codes: [nf-s015]
+  tool: {id: T, inputs: {x: {type: float, inputBinding: {position: 1}}}}
+  job: {x: .nan}
+  findings: ["workflow 'wf': workflow input 'x': supplied value does not match its supported CWL type"]

@@ -488,7 +488,17 @@ def test_explain_prints_what_a_code_means_and_the_fix(monkeypatch: pytest.Monkey
     assert printed.startswith('wic011 (document): ') and '\nFix: ' in printed and '!ii' in printed
 
 
-_ROW = re.compile(r'^\| `(?P<code>[a-z]{3}\d{3})` \| (?P<kind>[a-z]+) \| (?P<meaning>.+) \| (?P<fix>.+) \|$')
+@pytest.mark.fast
+def test_explain_says_what_a_nextflow_support_code_means(monkeypatch: pytest.MonkeyPatch,
+                                                         capsys: pytest.CaptureFixture[str]) -> None:
+    """An nf-s code is looked up as any other, and its kind says nothing is wrong with the workflow: the target
+    cannot run it yet."""
+    assert run_cli(monkeypatch, '--explain', 'nf-s007') == 0
+    assert capsys.readouterr().out.startswith(
+        'nf-s007 (target): A `nested_crossproduct` result read by a later step.\nFix: ')
+
+
+_ROW = re.compile(r'^\| `(?P<code>[a-z]{3}\d{3}|nf-s\d{3})` \| (?P<kind>[a-z]+) \| (?P<meaning>.+) \| (?P<fix>.+) \|$')
 
 
 @pytest.mark.fast

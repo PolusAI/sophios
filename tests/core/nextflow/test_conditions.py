@@ -84,7 +84,8 @@ def test_admitted_when_cells_lower_to_a_process_condition(when: str, inputs: dic
 @pytest.mark.fast
 def test_a_conditional_step_whose_process_has_no_inputs_is_refused_at_its_when() -> None:
     """A process decides its condition per invocation of its inputs; a step-only input counts as one (design §9)."""
-    with pytest.raises(ValueError, match="step 'PRODUCE': when: process '_PRODUCE' has a condition but no inputs"):
+    with pytest.raises(ValueError, match=r"error \[nf-s012\] when: process '_PRODUCE' has a condition but no inputs"
+                       r".*\(step 'PRODUCE'\)$"):
         _when_workflow("$(true)", {})
 
 

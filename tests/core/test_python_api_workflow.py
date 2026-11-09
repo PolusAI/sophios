@@ -13,7 +13,7 @@ import tempfile
 import traceback
 import warnings
 from types import SimpleNamespace
-from typing import Any, Callable, Final, Iterator, Literal, cast
+from typing import Any, Callable, Final, Iterator, Literal, NoReturn, cast
 from unittest.mock import Mock, patch
 
 from hypothesis import example, given, strategies as st
@@ -262,24 +262,65 @@ def test_check_under_nextflow_reports_a_nextflow_that_is_not_installed(
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize("target, build, policy, raised, said", [
-    ("cwl", _ambiguous, RunPolicy(), SophiosError, "[wic055]"),
-    ("nextflow", _noted_on_nextflow, RunPolicy(partial_failure=True), nextflow.NotLowered,
-     "workflow 'noted': policy 'partial failure': partial failure is a policy of the CWL target")])
-def test_check_raises_what_compile_raises(target: Literal["cwl", "nextflow"], build: Callable[[], Workflow],
-                                          policy: RunPolicy, raised: type[Exception], said: str) -> None:
-    """A workflow that does not compile is the same `SophiosError` from `check()` as from `compile()`, and one the
-    Nextflow target cannot lower the same `NotLowered`, holding every `Refusal` by its `Construct`: partial failure
-    is a policy of the CWL target."""
-    workflow = build()
-    with pytest.raises(raised) as from_check:
-        workflow.check(target=target, policy=policy)
-    with pytest.raises(raised) as from_compile:
-        workflow.compile(target=target, policy=policy)
-    assert said in str(from_check.value) and str(from_check.value) == str(from_compile.value)
-    if isinstance(from_check.value, nextflow.NotLowered):
-        assert all(isinstance(refusal, nextflow.Refusal) for refusal in from_check.value.refusals)
-        assert [refusal.construct for refusal in from_check.value.refusals] == [nextflow.Construct.POLICY]
+@pytest.mark.parametrize("target", ["cwl", "nextflow"])
+def test_check_raises_what_compile_raises(target: Literal["cwl", "nextflow"]) -> None:
+    """A workflow that does not compile is the same `SophiosError` from `check()` as from `compile()`, whichever the
+    target."""
+    with pytest.raises(SophiosError) as from_check:
+        _ambiguous().check(target=target)
+    with pytest.raises(SophiosError) as from_compile:
+        _ambiguous().compile(target=target)
+    assert "[wic055]" in str(from_check.value) and str(from_check.value) == str(from_compile.value)
+
+
+def _refused_when() -> Workflow:
+    """A `when` comparing strings, which the Nextflow target's subset does not do (`nf-s010`), at the step's line."""
+    echo = Step(clt_path=ADAPTERS / "echo.cwl")
+    flow = Workflow([echo], "refused")
+    echo.inputs.message = "hi"
+    echo.when = '$(inputs.message < "27")'
+    return flow
+
+
+@pytest.mark.fast
+def test_a_nextflow_refusal_prints_as_a_diagnostic_at_its_line() -> None:
+    """A refusal reads as every other error does: where, `error`, its code, the message, and the step."""
+    line = inspect.getsourcelines(_refused_when)[1] + 2
+    with pytest.raises(nextflow.NotLowered) as refused:
+        _refused_when().compile(target="nextflow")
+    assert str(refused.value) == (
+        f"{__file__}:{line}:1: error [nf-s010] when: '$(inputs.message < \"27\")' is outside the safe JavaScript "
+        "subset: < requires number operands, not string (step 'echo')")
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("build, policy, codes", [
+    (_refused_when, RunPolicy(), ["nf-s010"]),
+    (_noted_on_nextflow, RunPolicy(partial_failure=True), ["nf-s001"])])
+def test_check_returns_what_the_nextflow_target_refuses(build: Callable[[], Workflow], policy: RunPolicy,
+                                                        codes: list[str]) -> None:
+    """`check()` answers whether the target can run the workflow, and returns the answer: each refusal is an error
+    diagnostic among the notes, and partial failure, a policy of the CWL target, is the one refusal."""
+    found = build().check(target="nextflow", policy=policy)
+    errors = [diagnostic for diagnostic in found if str(diagnostic.severity) == "error"]
+    assert [str(error.code) for error in errors] == codes
+    with pytest.raises(nextflow.NotLowered) as refused:
+        build().compile(target="nextflow", policy=policy)
+    assert errors == list(refused.value.diagnostics)
+    assert all(isinstance(refusal, nextflow.Refusal) for refusal in refused.value.refusals)
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("call", ["compile", "check", "run", "start"])
+def test_an_unknown_target_is_one_message_from_every_entry_point(call: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The table of targets says which targets there are, once, before anything is compiled."""
+    def compiled_first(*_args: Any, **_kwargs: Any) -> NoReturn:
+        raise AssertionError("compiled before the target was looked up")
+
+    monkeypatch.setattr(python_runtime, "compile_workflow_result", compiled_first)
+    flow = Workflow([adapter_step("touch")], "elsewhere")
+    with pytest.raises(ValueError, match=r"^unknown target 'wdl'; the targets are cwl, nextflow$"):
+        getattr(flow, call)(target="wdl")
 
 
 @pytest.mark.fast
