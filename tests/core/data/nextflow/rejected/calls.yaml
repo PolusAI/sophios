@@ -110,6 +110,7 @@
   tools: *tools
   findings:
   - &unbound "step 'child': input 'extra': a workflow output relays it, but nothing binds it and it has no default"
+  codes: [nf-s025]
 - id: a_relayed_nested_input_nothing_binds_is_refused_once_through_two_calls
   why: The input is refused at the call that leaves it unbound, however many calls surround it.
   workflow: {steps: [{id: mid.wic, subtree: {steps: [{id: child.wic, subtree: *relay}], outputs: {passed: {type:

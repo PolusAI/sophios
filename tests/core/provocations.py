@@ -394,3 +394,44 @@ COMPILED: Final[dict[SophiosErrorCode, Callable[[], object]]] = {
     SophiosErrorCode.WHEN_NOT_BOOLEAN: _provoke_when_not_boolean,
     **{code: partial(_import_edited, code) for code in IMPORT_EDITS},
 }
+
+
+def _provoke_partial_failure() -> None:
+    """Partial failure, which the Nextflow target refuses as a policy of the CWL target; the refusals raised as
+    Sophios raises any error."""
+    # pylint: disable=import-outside-toplevel
+    from sophios.api.python.nextflow import NotLowered
+    from sophios.api.python.workflow import RunPolicy, Workflow
+    from sophios.lang.diagnostics import SophiosError
+
+    from .helpers import adapter_step
+
+    try:
+        Workflow([adapter_step('touch', filename='empty.txt')], 'provoke').compile(
+            target='nextflow', policy=RunPolicy(partial_failure=True))
+    except NotLowered as refused:
+        raise SophiosError(refused.diagnostics) from None
+
+
+def _provoke_nextflow_refusal(code: SophiosErrorCode) -> None:
+    """The first case of tests/core/data/nextflow/rejected whose refusals name `code`, lowered to Nextflow; the
+    refusals raised as Sophios raises any error."""
+    # pylint: disable=import-outside-toplevel
+    from sophios.ir.resolved import NotLowered
+    from sophios.lang.diagnostics import SophiosError
+
+    from .cases import cases
+    from .nextflow.testkit import lowered_case
+
+    case = next(param.values[0] for param in cases(
+        'nextflow/rejected', 'tool', 'out', 'job', 'workflow', 'tools', 'error', 'findings', 'codes')
+        if str(code) in param.values[0].get('codes', ()))
+    try:
+        lowered_case(case)
+    except NotLowered as refused:
+        raise SophiosError(refused.diagnostics) from None
+
+
+COMPILED.update({SophiosErrorCode.NF_PARTIAL_FAILURE: _provoke_partial_failure})
+COMPILED.update({code: partial(_provoke_nextflow_refusal, code) for code in SophiosErrorCode
+                 if code.value.startswith('nf-s') and code is not SophiosErrorCode.NF_PARTIAL_FAILURE})

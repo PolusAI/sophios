@@ -2,7 +2,6 @@
 
 from collections.abc import Sequence
 import copy
-from dataclasses import replace
 import os
 import subprocess
 from pathlib import Path
@@ -148,8 +147,11 @@ def lowered_case(data: Yaml) -> tuple[ExecutableNextflowWorkflow, tuple[Diagnost
 
 
 def refusal_lines(refused: NotLowered) -> list[str]:
-    """Each refusal as it prints, less its span, which the line the document is written at decides."""
-    return [str(replace(refusal, span=None)) for refusal in refused.refusals]
+    """Each refusal's owner and message: `step '<step>': <message>`, or `workflow '<name>': <message>`. Its span,
+    which the line the document is written at decides, and its code, which a case names as its `codes`, are left
+    out."""
+    return [f"{f'step {refusal.step!r}' if refusal.step is not None else f'workflow {refusal.workflow!r}'}: "
+            f"{refusal.message}" for refusal in refused.refusals]
 
 
 def runtime_workflow() -> ExecutableNextflowWorkflow:
