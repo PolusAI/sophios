@@ -88,7 +88,8 @@ templates_path = ['_templates']
 # This pattern also affects html_static_path and html_extra_path.
 building_pdf = os.environ.get('SOPHIOS_BUILD_PDF') == '1'
 
-exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store']
+# LMS/ holds course downloads and a README that GitHub shows; it is not a page of this site.
+exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store', 'LMS']
 if building_pdf:
     exclude_patterns.append('index.md')
 else:
