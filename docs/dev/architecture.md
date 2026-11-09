@@ -175,15 +175,25 @@ for a `StepInput` default against the working directory.
   adapters and never by a compute submission.
 - `sophios.backends` describes a run once, as a `RunRequest`, which the
   command line, the Python API and the CI harness each build. The backend for
-  its target and runner (`BACKENDS`, keyed by `('cwl', 'cwltool')` and
-  `('cwl', 'toil-cwl-runner')`) answers four questions and starts nothing:
-  `check` (the pre-flight), `prepare` (`run_setup.prepare`), `launch` (the
-  runner's argv, environment and working directory; `--provenance` unless
-  `no_provenance`) and `outcome` (after exit: the output object and the
-  failed steps, read from the runner's log lines).
-- `sophios.run_local` is the one path that runs a launch: always as a child
+  its target and runner (a row's `runners` in `sophios.targets`) describes the
+  run and starts nothing; only `prepare` acts, on this machine: `write` (the
+  runner's files under a folder, and the folders its machine must make),
+  `needs` (the paths the jobs name and the images, which `check` judges),
+  `prepare` (`write`, then the pre-flight, the pulls and the folders),
+  `launch` (the runner's argv, the variables it adds and its working
+  directory, from the request alone; `--provenance` unless `no_provenance`),
+  `outcome` (after exit: the output object and the failed steps, read from
+  what the runner printed and left, writing nothing) and its `program`, so a
+  site can run the same launch on another machine
+  (`design_docs/sites-design.md`).
+- `sophios.run_local` is the one path that runs a launch: `launch` places it
+  on this machine (absolute paths, the default output directory, this
+  process's environment under the run's), and it runs always as a child
   process in its own session, whose two streams it echoes line by line and
-  tees into `<basepath>/run_<workflow>.log`. `start` returns the
+  tees into `<basepath>/run_<workflow>.log`, and writes
+  `output_<workflow>.json` for a runner that prints its output object rather
+  than writing the file (Toil, Nextflow; cwltool writes its own,
+  `Backend.writes_summary`). `start` returns the
   `RunHandle` (`wait`, `collect`, `status`, `logs`, `outputs`, `cancel`) that
   `Workflow.start()` hands out, which lives as long as the Python process;
   `run` is start and wait, or writes `run.sh`. `wait` returns the run's
