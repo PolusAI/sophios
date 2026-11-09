@@ -238,16 +238,24 @@ the target's checks: on CWL, that each `when:` can give `true` or `false`
 on the workflow's inputs. Then it makes every check of this machine that
 `run()` makes before it starts, with `run()`'s arguments (`run_args_dict`,
 `basepath`): the input paths, the directories Sophios writes, the programs the
-run calls and the container engine. It returns the notes `compile()` would keep and
-prints nothing, not even the compile's warning lines. It raises what
-`compile()` raises: `SophiosError`, or
-for Nextflow `NotLowered`, whose `refusals` hold every construct the target
-cannot lower at once; and `SophiosError` for what this machine lacks, every
-problem at once, as `--check` exits 1 on them. For `when.py` that is the input `loud`, which has no
-value; bind one with `flow.inputs.loud = True` and the check passes.
-`NotLowered`, `Refusal` and `Construct` are importable from
-`sophios.api.python.nextflow`. `check()` writes no file (what the runner would
-read goes to a temporary directory it removes), pulls no image and runs
+run calls and the container engine. It returns the notes `compile()` would keep,
+and every construct the target cannot run, each an error with its code, all at
+once, and prints nothing, not even the compile's warning lines. For
+`when.py` that is the input `loud`, which has no value:
+
+```text
+when.py:16:1: error [nf-s014] workflow input 'loud': required workflow input value is missing
+```
+
+Bind one with `flow.inputs.loud = True` and the check passes. A workflow
+that does not compile raises `SophiosError`, as `compile()` does, and so does
+a machine that lacks what the run needs, every problem at once, as `--check`
+exits 1 on them; where `check()` returns a refusal, `compile()` and `run()`
+raise `NotLowered`, whose `refusals` and `diagnostics` hold the same, and whose
+text is theirs. `NotLowered`, `Refusal` and `Construct` are importable from
+`sophios.api.python.nextflow`. The command line prints a refusal as any
+other error, on stderr, and exits 1. `check()` writes no file (what the runner
+would read goes to a temporary directory it removes), pulls no image and runs
 nothing.
 
 `--check` is the same from the command line: it compiles, then makes every
