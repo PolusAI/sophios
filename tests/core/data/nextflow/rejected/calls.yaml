@@ -2,6 +2,7 @@
 # workflow says is lowered or refused before the boundary is crossed). Each `findings` is the diagnostic the replaced
 # test wrote by hand, copied verbatim, or the pattern it matched.
 - id: a_nested_workflow_steps_input_takes_one_source_as_it_is
+  codes: [nf-s016, nf-s016, nf-s016, nf-s016]
   why: The core compiler joins one source to each input a nested workflow step binds.
   workflow: {steps: [&write {id: write, out: [{result: {wic_anchor: written}}]}, {id: child.wic, subtree: &child
     {inputs: {source: File}, steps: [{id: copy, in: {source: source}}], outputs: {result: {type: File, outputSource:
@@ -29,6 +30,7 @@
   - 'step ''child'': input ''source'': source: a nested workflow step''s input takes one source as it is; merge on a
     step inside the nested workflow'
 - id: unconsumed_nested_workflow_port_fields
+  codes: [nf-s048, nf-s024, nf-s048, nf-s031, nf-s031]
   why: &ports A nested workflow's ports are judged as the root workflow's are, so a field cannot disappear in inlining.
   workflow: {steps: [{id: write_all, out: [{result: {wic_anchor: written}}]}, {id: child.wic, subtree: {inputs: {source:
     {type: {<<: *files, name: inputs}, secondaryFiles: [.fai]}}, steps: [{id: copy_all, in: {source: source}}], outputs:
@@ -39,18 +41,21 @@
     type\.name: an array schema''s name'}, {re: 'step ''child'': workflow output ''\w+'': type\.name: an array schema''s
     name'}]}
 - id: unconsumed_workflow_call_input_semantics
+  codes: [nf-s019]
   why: A call's binding is joined to the nested workflow's input as it is.
   workflow: {steps: [*write, {id: child.wic, subtree: *child, parentargs: {in: {source: {wic_raw_cwl: {source:
     {wic_alias: written}, valueFrom: $(self)}}}}}]}
   tools: *tools
   findings: {contains: [{re: a step input's valueFrom is not supported}]}
 - id: nested_findings_aggregate_across_workflow_calls
+  codes: [nf-s036, nf-s036]
   why: One finding per call, at the tool step that inherits the hint, and no third.
   workflow: {steps: [*write, {id: child_0.wic, subtree: &hinted {<<: *child, hints: {SoftwareRequirement: {}}},
     parentargs: *bound}, {id: child_1.wic, subtree: *hinted, parentargs: *bound}]}
   tools: *tools
   findings: [{re: &software "requirement 'SoftwareRequirement': SoftwareRequirement is not supported"}, {re: *software}]
 - id: scatter_on_a_resolved_subworkflow_call
+  codes: [nf-s003]
   why: Scattering an inlined sub-DAG is not the single-process shape scatter supports.
   workflow: {inputs: {sources: {type: *files}}, steps: [{id: child.wic, subtree: *child, parentargs: {in: {source:
     sources}, scatter: [source]}}]}
@@ -58,11 +63,13 @@
   job: {sources: [{class: File, path: a.txt}]}
   findings: {contains: [{re: scatter on a nested workflow step}]}
 - id: when_on_a_resolved_subworkflow_call
+  codes: [nf-s009]
   why: A when gates a tool step.
   workflow: {steps: [*write, {id: child.wic, subtree: *child, parentargs: {<<: *bound, when: $(true)}}]}
   tools: *tools
   findings: {contains: [{re: a when on a nested-workflow step is not supported}]}
 - id: unsupported_nested_workflow_requirements
+  codes: [nf-s036]
   why: &requirements A nested workflow's requirements and hints are inherited by its tool steps, each judged as the
     same entry written on its tool (resolved-view design §8).
   workflow: {steps: [*write, {id: child.wic, subtree: {<<: *child, requirements: {SoftwareRequirement: {}}},
@@ -70,23 +77,27 @@
   tools: *tools
   findings: {contains: [{re: "step 'child~copy': requirement 'SoftwareRequirement': SoftwareRequirement is not"}]}
 - id: every_unconsumed_nested_workflow_field
+  codes: [nf-s036]
   why: *requirements
   workflow: {steps: [*write, {id: child.wic, subtree: *hinted, parentargs: *bound}]}
   tools: *tools
   findings: {contains: [{re: "step 'child~copy': requirement 'SoftwareRequirement': SoftwareRequirement is not"}]}
 - id: a_nested_workflow_input_default_before_projection
+  codes: [nf-s016]
   why: Inlining replaces a nested workflow's input with the call's binding, where CWL would apply the default to a null.
   workflow: {steps: [*write, {id: child.wic, subtree: {<<: *child, inputs: {source: {type: File, default:
     fallback.txt}}}, parentargs: *bound}]}
   tools: *tools
   findings: {contains: [{re: 'step ''child'': workflow input ''\w+'': default: a nested workflow input''s default'}]}
 - id: long_on_a_nested_workflow_port_is_rejected_naming_the_type-inputs
+  codes: [nf-s048, nf-s048, nf-s034, nf-s048]
   why: *ports
   workflow: {steps: [{id: make_long, out: [{n: {wic_anchor: written}}]}, {id: child.wic, subtree: {inputs: {source:
     long}, steps: [{id: take_long, in: {n: source}}]}, parentargs: *bound}]}
   tools: *tools
   findings: {contains: [{re: 'step ''child'': workflow input ''source'': type: long is not supported'}]}
 - id: long_on_a_nested_workflow_port_is_rejected_naming_the_type-outputs
+  codes: [nf-s048, nf-s048, nf-s048, nf-s034]
   why: *ports
   workflow: {steps: [{id: child.wic, subtree: {steps: [{id: make_long}], outputs: {result: {type: long, outputSource:
     make_long/n}}}}]}

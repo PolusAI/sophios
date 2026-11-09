@@ -1,6 +1,7 @@
 # Scattered steps the target refuses (design §6, Topology). Each `findings` or `error` is the diagnostic the
 # replaced test wrote by hand from that rule, copied verbatim; nothing here was read off a run.
 - id: multi_input_scatter_without_a_scatter_method
+  codes: [nf-s055]
   why: A multi-input scatter has no method to default to.
   workflow: {steps: [{id: SCATTER, in: {first: firsts, second: seconds}, out: [result], scatter: [first, second]}],
     inputs: {firsts: {type: &strings {type: array, items: string}}, seconds: {type: *strings}}}
@@ -8,24 +9,27 @@
     inputBinding: {position: 2}}}, outputs: &result {result: {type: File, outputBinding: {glob: out.txt}}}}]
   job: {firsts: [a], seconds: [b]}
   findings: ['step ''SCATTER'': scatter: multi-input scatter over 2 inputs requires an explicit scatterMethod']
-- {id: an_unsupported_scatter_method, why: The methods are CWL's three., tools: [&scatter {id: SCATTER, inputs: {item:
+- {id: an_unsupported_scatter_method, codes: [nf-s055], why: The methods are CWL's three., tools: [&scatter {id: SCATTER, inputs: {item:
    {type: string, inputBinding: {position: 1}}}, outputs: *result}], job: &ab {items: [a, b]}, workflow: {steps: [{<<:
    &step {id: SCATTER, in: {item: items}, out: [result], scatter: [item]}, scatterMethod: product}], inputs: &items
    {items: {type: *strings}}}, findings: ['step ''SCATTER'': scatter: unsupported CWL scatter method ''product''']}
 - id: a_scatter_field_that_names_no_input
+  codes: [nf-s055]
   why: A scatter names one input or more.
   workflow: {steps: [{<<: *step, scatter: []}], inputs: {items: {type: string}}}
   tools: [*scatter]
   job: {items: a}
   findings: ['step ''SCATTER'': scatter: scatter must name one input, as a string or a non-empty list']
 - id: scatter_over_a_non_array_workflow_input
+  codes: [nf-s048, nf-s006]
   why: A scattered input's source is an array.
   workflow: {steps: [*step], inputs: {items: {type: Any}}}
   tools: [*scatter]
   job: *ab
-  findings: ['workflow ''wf'': workflow input ''items'': supplied value does not match its supported CWL type', 'step
-    ''SCATTER'': input ''item'': a scattered input needs an array-typed source; ''items'' declares ''Any''']
+  findings: ['workflow ''wf'': workflow input ''items'': type: unsupported CWL type for the Nextflow target: ''Any''',
+    'step ''SCATTER'': input ''item'': a scattered input needs an array-typed source; ''items'' declares ''Any''']
 - id: scatter_over_an_unscattered_steps_output
+  codes: [nf-s031, nf-s006]
   why: An unscattered step's output reaches a scattered step as one value, an array-typed one included.
   workflow: {steps: [{id: PRODUCER, out: [{out: {wic_anchor: produced}}]}, {<<: *step, in: {item: {wic_alias:
     produced}}}]}
@@ -35,14 +39,16 @@
     Directory, or captured as text with loadContents and outputEval', 'step ''SCATTER'': input ''item'': a scattered
     input needs an array-typed source; ''PRODUCER/out'', from a step that is not scattered, is one value']
 - id: scatter_over_an_array_typed_port
+  codes: [nf-s048, nf-s004]
   why: Scattering over an array of arrays is deferred.
   workflow: {steps: [*step], inputs: {items: {type: {type: array, items: *strings}}}}
   tools: [{<<: *scatter, inputs: {item: {type: *strings, inputBinding: {position: 1}}}}]
   job: {items: [[a], [b]]}
-  findings: ['workflow ''wf'': workflow input ''items'': supplied value does not match its supported CWL type', 'step
+  findings: ['workflow ''wf'': workflow input ''items'': type: nested arrays are deferred beyond this lowering', 'step
     ''SCATTER'': scatter: scattered input ''item'' is array-typed; scattering over an array of arrays is deferred beyond
     this lowering']
 - id: workflow_requirement_with_an_unconsumed_field
+  codes: [nf-s054]
   why: &workflow_requirements A workflow-level requirement is consumed, or refused naming itself.
   workflow: {<<: &scatter_items {steps: [*step], inputs: *items}, requirements: {ScatterFeatureRequirement: {method:
     dotproduct}}}
@@ -50,10 +56,51 @@
   job: *ab
   findings: ['workflow ''wf'': requirement ''ScatterFeatureRequirement'': method is not consumed by the Nextflow
     lowering']
-- {id: workflow_requirement_of_an_unsupported_class, why: 'A workflow-level requirement a tool cannot have is refused at
+- {id: workflow_requirement_of_an_unsupported_class, codes: [nf-s036], why: 'A workflow-level requirement a tool cannot have is refused at
    each tool step that inherits it (resolved-view design §8).', tools: [*scatter], job: *ab, workflow: {<<: *scatter_items,
    requirements: {SoftwareRequirement: {}}}, findings: ['step ''SCATTER'': requirement ''SoftwareRequirement'':
    SoftwareRequirement is not supported: use DockerRequirement']}
-- {id: workflow_requirements_of_the_wrong_shape, why: *workflow_requirements, tools: [*scatter], job: *ab, workflow:
+- {id: workflow_requirements_of_the_wrong_shape, codes: [nf-s055], why: *workflow_requirements, tools: [*scatter], job: *ab, workflow:
    {<<: *scatter_items, requirements: ScatterFeatureRequirement}, findings: ['workflow ''wf'': requirement: CWL Workflow
    requirements must be a mapping or list']}
+- id: a_scatter_over_a_step_only_input
+  codes: [nf-s005]
+  why: No process port receives the element of an input the step's tool does not declare.
+  workflow: {steps: [{id: ECHO, in: {message: m, enabled: {wic_raw_cwl: {source: flags}}}, out: [], scatter:
+    [enabled]}], inputs: {m: {type: string}, flags: {type: {type: array, items: boolean}}}}
+  tools: [{id: ECHO, inputs: {message: {type: string, inputBinding: {position: 1}}}}]
+  job: {m: hi, flags: [true]}
+  findings: ['step ''ECHO'': input ''enabled'': scatter over an input the step''s tool does not declare is not
+    supported']
+- id: a_scattered_input_with_two_sources
+  codes: [nf-s006]
+  why: A scattered input that joins two sources is refused once, for the one reason.
+  workflow: {steps: [{id: ECHO, in: {message: {wic_raw_cwl: {source: [a, b], linkMerge: merge_flattened}}}, out: [],
+    scatter: [message]}], inputs: {a: {type: *strings}, b: {type: *strings}}}
+  tools: [{id: ECHO, inputs: {message: {type: string, inputBinding: {position: 1}}}}]
+  job: {a: [x], b: [y]}
+  findings: ['step ''ECHO'': input ''message'': a scattered input takes its one source as it is']
+- id: a_nested_crossproduct_result_read_by_a_later_step
+  codes: [nf-s048, nf-s007]
+  why: A nested_crossproduct result reaches workflow outputs only.
+  workflow:
+    steps:
+    - {id: PAIR, in: {a: as, b: bs}, out: [{out: {wic_anchor: pairs}}], scatter: [a, b], scatterMethod:
+       nested_crossproduct}
+    - {id: SHOW, in: {texts: {wic_alias: pairs}}, out: []}
+    inputs: {as: {type: *strings}, bs: {type: *strings}}
+  tools:
+  - {id: PAIR, inputs: {a: {type: string, inputBinding: {position: 1}}, b: {type: string, inputBinding: {position:
+     2}}}, stdout: out.txt, outputs: {out: {type: File, outputBinding: {glob: out.txt}}}}
+  - {id: SHOW, inputs: {texts: {type: {type: array, items: {type: array, items: File}}, inputBinding: {position: 1}}}}
+  job: {as: [a], bs: [b]}
+  findings: ['step ''SHOW'': step: nested arrays are deferred beyond this lowering', 'step ''SHOW'': input ''texts'':
+    ''PAIR/out'' is a nested_crossproduct result, which reaches workflow outputs only']
+
+- id: a_scatter_method_with_no_scatter
+  why: cwltool reads a scatterMethod only beside a scatter; the target refuses one alone.
+  codes: [nf-s008]
+  workflow: {steps: [{id: ECHO, in: {message: m}, out: [], scatterMethod: dotproduct}], inputs: {m: {type: string}}}
+  tools: [{id: ECHO, inputs: {message: {type: string, inputBinding: {position: 1}}}}]
+  job: {m: hi}
+  findings: ['step ''ECHO'': scatter: scatterMethod without scatter is not executable']

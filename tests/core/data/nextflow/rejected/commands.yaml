@@ -2,6 +2,7 @@
 # channels, Resources and containers). Each `findings` or `error` is the diagnostic the replaced test wrote by hand from
 # that rule, copied verbatim; nothing here was read off a run.
 - id: absent_optional_flag_that_is_also_dereferenced
+  codes: [nf-s020]
   why: A flag only tests its value, but a template dereferences it, so absence would render `--label=[]`.
   tool: {inputs: {verbose: {type: ['null', boolean], inputBinding: {position: 1, prefix: --verbose}}},
     arguments: [{position: 2, valueFrom: '--label=$(inputs.verbose)'}]}
@@ -9,6 +10,7 @@
   findings: ['step ''make'': tool ''make.cwl: inputs.verbose'': absent optional values are supported only for a val
     input whose absence leaves command rendering unchanged']
 - id: absent_optional_input_referenced_outside_its_own_binding
+  codes: [nf-s020]
   why: Only the input's own binding is presence-gated; a reference elsewhere would render the sentinel.
   tool: {id: OPTIONAL, inputs: {message: {type: ['null', string], inputBinding: {position: 1, prefix: --message}}},
     arguments: [{position: 2, valueFrom: $(inputs.message)}]}
@@ -16,87 +18,92 @@
   error: &absent_message {re: 'step ''OPTIONAL'': tool ''OPTIONAL\.cwl: inputs\.message'': absent optional values are
     supported only for a val input whose absence leaves command rendering unchanged'}
 - id: absent_optional_input_whose_binding_emits_a_shell_literal
+  codes: [nf-s020]
   why: CWL omits the entire binding when its optional source is absent.
   tool: {id: OPTIONAL, requirements: {ShellCommandRequirement: {}}, inputs: {message: {type: ['null', string],
     inputBinding: {position: 1, valueFrom: printf optional, shellQuote: false}}}}
   job: *no_message
   error: {re: 'step ''OPTIONAL'': tool ''OPTIONAL\.cwl: inputs\.message'': absent optional values are supported only for
     a val input whose absence leaves command rendering unchanged'}
-- {id: absent_optional_input_whose_binding_has_a_literal_value_from, job: *no_message, error: {re: 'step ''OPTIONAL'':
+- {id: absent_optional_input_whose_binding_has_a_literal_value_from, codes: [nf-s020], job: *no_message, error: {re: 'step ''OPTIONAL'':
    tool ''OPTIONAL\.cwl: inputs\.message'': absent optional values are supported only for a val input whose absence
    leaves command rendering unchanged'}, why: CWL omits the prefix and the literal when the optional source is absent.,
    tool: {id: OPTIONAL, inputs: {message: {type: ['null', string], inputBinding: {position: 1, prefix: --message,
    valueFrom: literal}}}}}
-- {id: absent_optional_input_referenced_via_another_bindings_value_from, job: *no_message, error: {re: 'step
+- {id: absent_optional_input_referenced_via_another_bindings_value_from, codes: [nf-s020], job: *no_message, error: {re: 'step
    ''OPTIONAL'': tool ''OPTIONAL\.cwl: inputs\.message'': absent optional values are supported only for a val input
    whose absence leaves command rendering unchanged'}, why: 'No binding of its own, but referenced elsewhere.', tool:
    {id: OPTIONAL, inputs: {message: {type: ['null', string]}}, arguments: [{position: 1, valueFrom:
    $(inputs.message)}]}}
-- {id: absent_optional_path_input, why: Path channel construction always stages., job: *no_message, tool: {id: OPTIONAL,
+- {id: absent_optional_path_input, codes: [nf-s020], why: Path channel construction always stages., job: *no_message, tool: {id: OPTIONAL,
    inputs: {message: {type: ['null', File]}}}, error: {re: 'step ''OPTIONAL'': tool ''OPTIONAL\.cwl: inputs\.message'':
    absent optional values are supported only for a val input whose absence leaves command rendering unchanged'}}
-- {id: absent_optional_workflow_input_feeding_required_input, why: A required input takes a value., workflow: {steps:
+- {id: absent_optional_workflow_input_feeding_required_input, codes: [wic012], why: A required input takes a value., workflow: {steps:
    [{id: REQUIRED, in: {message: message}}], inputs: {message: {type: ['null', string]}}}, tools: [{id: REQUIRED,
    inputs: {message: {type: string}}}], error: {re: absent required}}
 - id: absent_optional_array_input
+  codes: [nf-s020]
   why: Absence (no array at all) is out of scope for the array lowering; empty is not absence.
   tool: {inputs: {values: {type: ['null', {type: array, items: string}], inputBinding: {position: 1, prefix:
     --value}}}}
   job: {values: null}
   error: {re: 'step ''make'': tool ''make\.cwl: inputs\.values'': absent optional'}
 - id: an_env_var_from_an_absent_input
+  codes: [nf-s020]
   why: An absent optional value has no text to export.
   tool: &env {id: ENV, inputs: {s: {type: string}, n: {type: int}, f: {type: File}, o: {type: 'string?'}}, requirements:
     {EnvVarRequirement: {envDef: [{envName: A, envValue: $(inputs.o)}]}}}
   job: &env_job_without_o {s: v, n: 1, f: {class: File, path: x.txt}}
   findings: ['step ''ENV'': tool ''ENV.cwl: inputs.o'': absent optional values are supported only for a val input whose
     absence leaves command rendering unchanged']
-- {id: an_env_def_entry_with_an_unknown_field, why: A field nothing lowers is refused naming itself., tool: {<<: *env,
+- {id: an_env_def_entry_with_an_unknown_field, codes: [nf-s054], why: A field nothing lowers is refused naming itself., tool: {<<: *env,
    requirements: {EnvVarRequirement: {envDef: {A: {envValue: x, foo: 1}}}}}, job: &env_job {<<: *env_job_without_o, o:
    w}, findings: ['step ''ENV'': tool ''ENV.cwl: requirements.EnvVarRequirement.envDef.A.foo'': foo is not consumed by
    the Nextflow lowering']}
-- {id: an_env_var_from_an_int_input, why: &env_value 'design §6, Resources and containers: a variable is literal text or
+- {id: an_env_var_from_an_int_input, codes: [nf-s041], why: &env_value 'design §6, Resources and containers: a variable is literal text or
    one string input''s value, read whole; every other value is refused by name.', job: *env_job, tool: {<<: *env,
    requirements: {EnvVarRequirement: {envDef: [{envName: A, envValue: $(inputs.n)}]}}}, findings: [{re: '^step ''ENV'':
    tool ''ENV\.cwl: requirements\.EnvVarRequirement\.envDef\[0\]'': .*needs a string input, read whole as
    \$\(inputs\.<name>\); n is declared ''int'''}]}
-- {id: an_env_var_from_a_file_path, why: *env_value, job: *env_job, tool: {<<: *env, requirements: {EnvVarRequirement:
+- {id: an_env_var_from_a_file_path, codes: [nf-s041], why: *env_value, job: *env_job, tool: {<<: *env, requirements: {EnvVarRequirement:
    {envDef: [{envName: A, envValue: $(inputs.f.path)}]}}}, findings: [{re: '^step ''ENV'': tool ''ENV\.cwl:
    requirements\.EnvVarRequirement\.envDef\[0\]'': .*needs a string input'}]}
-- {id: an_env_var_from_a_basename, why: *env_value, job: *env_job, tool: {<<: *env, requirements: {EnvVarRequirement:
+- {id: an_env_var_from_a_basename, codes: [nf-s041], why: *env_value, job: *env_job, tool: {<<: *env, requirements: {EnvVarRequirement:
    {envDef: [{envName: A, envValue: $(inputs.s.basename)}]}}}, findings: [{re: '^step ''ENV'': tool ''ENV\.cwl:
    requirements\.EnvVarRequirement\.envDef\[0\]'': .*needs a string input'}]}
-- {id: an_env_var_with_text_beside_a_reference, why: *env_value, job: *env_job, tool: {<<: *env, requirements:
+- {id: an_env_var_with_text_beside_a_reference, codes: [nf-s041], why: *env_value, job: *env_job, tool: {<<: *env, requirements:
    {EnvVarRequirement: {envDef: [{envName: A, envValue: pre-$(inputs.s)}]}}}, findings: [{re: '^step ''ENV'': tool
    ''ENV\.cwl: requirements\.EnvVarRequirement\.envDef\[0\]'': .*is not supported: write literal text or exactly
    \$\(inputs\.<name>\)'}]}
-- {id: an_env_var_from_javascript, why: *env_value, job: *env_job, tool: {<<: *env, requirements: {EnvVarRequirement:
+- {id: an_env_var_from_javascript, codes: [nf-s041], why: *env_value, job: *env_job, tool: {<<: *env, requirements: {EnvVarRequirement:
    {envDef: [{envName: A, envValue: '${return 1}'}]}}}, findings: [{re: '^step ''ENV'': tool ''ENV\.cwl:
    requirements\.EnvVarRequirement\.envDef\[0\]'': .*is not supported'}]}
-- {id: an_env_var_from_the_runtime, why: *env_value, job: *env_job, tool: {<<: *env, requirements: {EnvVarRequirement:
+- {id: an_env_var_from_the_runtime, codes: [nf-s041], why: *env_value, job: *env_job, tool: {<<: *env, requirements: {EnvVarRequirement:
    {envDef: [{envName: A, envValue: $(runtime.cores)}]}}}, findings: [{re: '^step ''ENV'': tool ''ENV\.cwl:
    requirements\.EnvVarRequirement\.envDef\[0\]'': .*is not supported'}]}
-- {id: an_env_var_name_that_is_not_a_shell_name, why: *env_value, job: *env_job, tool: {<<: *env, requirements:
+- {id: an_env_var_name_that_is_not_a_shell_name, codes: [nf-s041], why: *env_value, job: *env_job, tool: {<<: *env, requirements:
    {EnvVarRequirement: {envDef: [{envName: 1A, envValue: x}]}}}, findings: [{re: '^step ''ENV'': tool ''ENV\.cwl:
    requirements\.EnvVarRequirement\.envDef\[0\]'': .*environment variable name must be a shell variable name, got
    ''1A'''}]}
-- {id: an_env_var_value_that_is_not_text, why: *env_value, job: *env_job, tool: {<<: *env, requirements:
+- {id: an_env_var_value_that_is_not_text, codes: [nf-s055], why: *env_value, job: *env_job, tool: {<<: *env, requirements:
    {EnvVarRequirement: {envDef: [{envName: A, envValue: 3}]}}}, findings: &env_entry [{re: '^step ''ENV'': tool
    ''ENV\.cwl: requirements\.EnvVarRequirement\.envDef\[0\]'': .*an envDef entry needs a string envName and a string
    envValue'}]}
-- {id: an_env_def_entry_that_is_not_a_mapping, why: *env_value, job: *env_job, tool: {<<: *env, requirements:
+- {id: an_env_def_entry_that_is_not_a_mapping, codes: [nf-s055], why: *env_value, job: *env_job, tool: {<<: *env, requirements:
    {EnvVarRequirement: {envDef: [A=x]}}}, findings: [{re: '^step ''ENV'': tool ''ENV\.cwl:
    requirements\.EnvVarRequirement\.envDef\[0\]'': .*an envDef entry needs a string envName and a string envValue'}]}
-- {id: loadContents_on_an_arguments_entry, why: A binding's loadContents has no lowering., tool: {id: ARGS, arguments:
+- {id: loadContents_on_an_arguments_entry, codes: [nf-s022], why: A binding's loadContents has no lowering., tool: {id: ARGS, arguments:
    [{valueFrom: x, loadContents: true}]}, findings: ['step ''ARGS'': tool ''ARGS.cwl: arguments[0].loadContents'': a
    binding''s loadContents is not supported']}
 - id: shell_mode_in_a_container
+  codes: [nf-s038]
   why: CWL runs the command as /bin/sh -c after the image's ENTRYPOINT, which the Nextflow task does not.
   tool: {id: SHELL, requirements: {DockerRequirement: &ubuntu {dockerPull: 'ubuntu:24.04'}, ShellCommandRequirement:
     {}}}
   findings: ['step ''SHELL'': tool ''SHELL.cwl'': ShellCommandRequirement beside a DockerRequirement is not supported:
     CWL runs the command as /bin/sh -c after the image''s ENTRYPOINT, which the Nextflow task does not']
 - id: shell_mode_inherited_beside_the_tools_own_container
+  codes: [nf-s038]
   why: The pair is refused where its inherited half is written, which the tool's file does not hold (resolved-view
     design §8).
   workflow: {steps: [{id: say}], requirements: {ShellCommandRequirement: {}}}
@@ -105,6 +112,7 @@
     is not supported: CWL runs the command as /bin/sh -c after the image''s ENTRYPOINT, which the Nextflow task does
     not']
 - id: a_containerized_command_that_can_render_empty
+  codes: [nf-s053]
   why: CWL then gives the container no arguments, so the image runs its CMD, which the Nextflow task does not.
   tool: {id: ENTRY, baseCommand: null, requirements: {DockerRequirement: *ubuntu}, inputs: {name: {type: 'string?',
     inputBinding: {prefix: --name}}, verbose: {type: boolean, inputBinding: {prefix: -v}}}}
@@ -113,91 +121,94 @@
     the container no arguments, so the image runs its CMD, after its ENTRYPOINT if it has one, which the Nextflow task
     does not; name the program in baseCommand']
 - id: nested_arrays
+  codes: [nf-s031, nf-s048]
   why: &producer_feeds A producing step feeds the array, so the items' schema is refused rather than the value's shape.
   workflow: &array_from_producer {steps: [{id: PRODUCER, out: [{out: {wic_anchor: produced}}]}, {id: ARRAY, in: {values:
     {wic_alias: produced}}}]}
   tools: [{id: PRODUCER, outputs: {out: {type: &nested {type: array, items: {type: array, items: string}},
     outputBinding: {glob: out.txt}}}}, {id: ARRAY, inputs: {values: {type: *nested, inputBinding: {position: 1}}}}]
   error: {re: nested arrays are deferred}
-- {id: per_item_input_binding_on_array_items, why: *producer_feeds, workflow: *array_from_producer, tools: [{id:
+- {id: per_item_input_binding_on_array_items, codes: [nf-s031, nf-s050], why: *producer_feeds, workflow: *array_from_producer, tools: [{id:
    PRODUCER, outputs: {out: {type: {type: array, items: File}, outputBinding: {glob: '*.txt'}}}}, {id: ARRAY, inputs:
    {values: {type: {type: array, items: {type: File, inputBinding: {prefix: -I}}}, inputBinding:
    {position: 1}}}}], error: {re: per-item array element bindings are deferred}}
-- {id: separate_false_on_an_array_binding, why: An array binding's separate false is deferred., tool: {id: ARRAY,
+- {id: separate_false_on_an_array_binding, codes: [nf-s050], why: An array binding's separate false is deferred., tool: {id: ARRAY,
    inputs: {values: {type: {type: array, items: string}, inputBinding: {position: 1, separate: false}}}}, job: {values:
    [a, b]}, error: {re: 'separate: false on an array-typed inputBinding.*deferred'}}
-- {id: array_value_with_a_mismatched_item_type, why: A value has the shape of its declared type., tool: {inputs:
+- {id: array_value_with_a_mismatched_item_type, codes: [nf-s015], why: A value has the shape of its declared type., tool: {inputs:
    {values: {type: {type: array, items: string}, inputBinding: {position: 1}}}}, job: {values: [a, 1]}, error:
    {re: does not match its supported CWL type}}
-- {id: a_boolean_argument_position, why: 'A position is an integer, and true is none, though Python reads it as 1.',
+- {id: a_boolean_argument_position, codes: [nf-s055], why: 'A position is an integer, and true is none, though Python reads it as 1.',
    tool: {arguments: [{valueFrom: x, position: true}]}, error: {re: non-integer CWL command position}}
-- {id: a_boolean_array_binding-prefix, why: &booleans 'cwltool renders [true, false] bound with prefix -x as -x alone,
+- {id: a_boolean_array_binding-prefix, codes: [nf-s049], why: &booleans 'cwltool renders [true, false] bound with prefix -x as -x alone,
    and with no prefix as nothing.', job: &true_false {values: [true, false]}, tool: {id: ARRAY, inputs: {values: {type:
    {type: array, items: boolean}, inputBinding: {position: 1, prefix: -x}}}}, error: &boolean_array {re: 'tool
    ''ARRAY\.cwl: inputs\.values\.inputBinding'': a boolean array''s binding is not supported: CWL adds only its
    prefix'}}
-- {id: a_boolean_array_binding-no-prefix, why: *booleans, job: *true_false, error: {re: 'tool ''ARRAY\.cwl:
+- {id: a_boolean_array_binding-no-prefix, codes: [nf-s049], why: *booleans, job: *true_false, error: {re: 'tool ''ARRAY\.cwl:
    inputs\.values\.inputBinding'': a boolean array''s binding is not supported: CWL adds only its prefix'}, tool: {id:
    ARRAY, inputs: {values: {type: {type: array, items: {type: boolean}}, inputBinding: {position: 1}}}}}
-- {id: a_boolean_array_binding-optional, why: *booleans, job: *true_false, error: {re: 'tool ''ARRAY\.cwl:
+- {id: a_boolean_array_binding-optional, codes: [nf-s049], why: *booleans, job: *true_false, error: {re: 'tool ''ARRAY\.cwl:
    inputs\.values\.inputBinding'': a boolean array''s binding is not supported: CWL adds only its prefix'}, tool: {id:
    ARRAY, inputs: {values: {type: {type: array, items: ['null', boolean]}, inputBinding: {position: 1, prefix: -x}}}}}
-- {id: a_boolean_array_binding-optional-shorthand, why: *booleans, job: *true_false, error: {re: 'tool ''ARRAY\.cwl:
+- {id: a_boolean_array_binding-optional-shorthand, codes: [nf-s049], why: *booleans, job: *true_false, error: {re: 'tool ''ARRAY\.cwl:
    inputs\.values\.inputBinding'': a boolean array''s binding is not supported: CWL adds only its prefix'}, tool: {id:
    ARRAY, inputs: {values: {type: {type: array, items: 'boolean?'}, inputBinding: {position: 1, prefix: -x}}}}}
 - id: shell_quote_false_without_shell_command_requirement
+  codes: [nf-s051]
   why: &unquoted 'design §6, Commands: only a literal valueFrom, under ShellCommandRequirement, is unquoted.'
   tool: {id: SHELL, outputs: &result {result: {type: File, outputBinding: {glob: out.txt}}}, arguments: [{valueFrom:
     '>>', shellQuote: false}]}
   out: &out [result]
   error: {re: requires ShellCommandRequirement}
-- {id: shell_quote_false_with_no_value_from, why: *unquoted, out: *out, error: {re: has no valueFrom}, tool: &shell {id:
+- {id: shell_quote_false_with_no_value_from, codes: [nf-s051], why: *unquoted, out: *out, error: {re: has no valueFrom}, tool: &shell {id:
    SHELL, outputs: *result, requirements: {ShellCommandRequirement: {}}, arguments: [{shellQuote: false}]}}
-- {id: shell_quote_false_with_a_prefix, why: *unquoted, out: *out, error: &prefixed {re: does not support a prefix},
+- {id: shell_quote_false_with_a_prefix, codes: [nf-s051], why: *unquoted, out: *out, error: &prefixed {re: does not support a prefix},
    tool: {<<: *shell, arguments: [{valueFrom: '>>', shellQuote: false, prefix: -x}]}}
-- {id: shell_quote_false_input_binding_with_no_value_from, why: 'shellQuote: false on a plain, no-valueFrom
+- {id: shell_quote_false_input_binding_with_no_value_from, codes: [nf-s051], why: 'shellQuote: false on a plain, no-valueFrom
    inputBinding.', out: *out, error: *prefixed, job: {text: Hello}, tool: {outputs: *result, requirements:
    {ShellCommandRequirement: {}}, inputs: {text: {type: string, inputBinding: {shellQuote: false, position: 1, prefix:
    echo}}}}}
-- {id: shell_quote_false_referencing_an_input-bare, out: *out, job: &hi {message: hi}, error: &references {re:
+- {id: shell_quote_false_referencing_an_input-bare, codes: [nf-s051], out: *out, job: &hi {message: hi}, error: &references {re:
    references an input}, why: &unquoting_input 'Unquoting a value derived from any input, directly or via a suffix, is
    the boundary.', tool: &shell_input {<<: *shell, inputs: {message: {type: string}}, arguments: [{valueFrom:
    $(inputs.message), shellQuote: false}]}}
-- {id: shell_quote_false_referencing_an_input-embedded, why: *unquoting_input, out: *out, job: *hi, error: *references,
+- {id: shell_quote_false_referencing_an_input-embedded, codes: [nf-s051], why: *unquoting_input, out: *out, job: *hi, error: *references,
    tool: {<<: *shell_input, arguments: [{valueFrom: prefix-$(inputs.message)-suffix, shellQuote: false}]}}
-- {id: shell_quote_false_referencing_an_input-basename-suffix, why: *unquoting_input, out: *out, job: *hi, error:
+- {id: shell_quote_false_referencing_an_input-basename-suffix, codes: [nf-s046, nf-s051], why: *unquoting_input, out: *out, job: *hi, error:
    *references, tool: {<<: *shell_input, arguments: [{valueFrom: $(inputs.message.basename), shellQuote: false}]}}
-- {id: a_dollar_in_a_shell_quote_false_literal-variable, why: &expand "design §6, Commands: the task's bash -ue would
+- {id: a_dollar_in_a_shell_quote_false_literal-variable, codes: [nf-s051], why: &expand "design §6, Commands: the task's bash -ue would
    expand it, not CWL's sh -c.", out: *out, error: &dollar {re: "holds a '\\$', which the task's shell would expand"},
    tool: {<<: *shell, arguments: [{valueFrom: '[$UNSET]', shellQuote: false}]}}
-- {id: a_dollar_in_a_shell_quote_false_literal-escaped_substitution, why: *expand, out: *out, error: *dollar, tool: {<<:
+- {id: a_dollar_in_a_shell_quote_false_literal-escaped_substitution, codes: [nf-s051], why: *expand, out: *out, error: *dollar, tool: {<<:
    *shell, arguments: [{valueFrom: '\$(date)', shellQuote: false}]}}
-- {id: value_from_aliasing_a_different_input_on_a_boolean_binding, job: {verbose: true, other: false}, why: Aliasing a
+- {id: value_from_aliasing_a_different_input_on_a_boolean_binding, codes: [nf-s049], job: {verbose: true, other: false}, why: Aliasing a
    different input's presence onto this flag has no approved lowering., tool: {inputs: {verbose: {type:
    boolean, inputBinding: {position: 1, prefix: --verbose, valueFrom: $(inputs.other)}}, other: {type: boolean}}},
    error: &boolean_value_from {re: valueFrom on a boolean inputBinding is supported only as}}
-- {id: literal_value_from_on_a_boolean_binding, why: A literal string is not a provably-boolean valueFrom result., job:
+- {id: literal_value_from_on_a_boolean_binding, codes: [nf-s049], why: A literal string is not a provably-boolean valueFrom result., job:
    &verbose {verbose: true}, error: *boolean_value_from, tool: {inputs: {verbose: {type: boolean,
    inputBinding: {position: 1, prefix: --verbose, valueFrom: 'true'}}}}}
-- {id: basename_suffixed_value_from_on_a_boolean_binding, why: 'A .basename suffix is never boolean-shaped, even on a
+- {id: basename_suffixed_value_from_on_a_boolean_binding, codes: [nf-s046, nf-s049], why: 'A .basename suffix is never boolean-shaped, even on a
    self-reference.', job: *verbose, error: *boolean_value_from, tool: {inputs: {verbose: {type: boolean,
    inputBinding: {position: 1, prefix: --verbose, valueFrom: $(inputs.verbose.basename)}}}}}
-- {id: a_boolean_valuefrom_on_an_optional_input, why: An optional input would render its absence., job: {b: true, s: x},
+- {id: a_boolean_valuefrom_on_an_optional_input, codes: [nf-s049], why: An optional input would render its absence., job: {b: true, s: x},
    tool: {baseCommand: echo, arguments: [], inputs: {b: {type: boolean}, s: {type: 'string?', inputBinding:
    {valueFrom: $(inputs.b), prefix: --flag}}}}, error: {re: "a boolean valueFrom on optional input 's' is not
    supported"}}
-- {id: a_dollar_starting_a_runtime_expression, why: &expression 'design §6, Commands: a `$` followed by `(` or `{`
+- {id: a_dollar_starting_a_runtime_expression, codes: [nf-s045], why: &expression 'design §6, Commands: a `$` followed by `(` or `{`
    starts an expression, and only an input reference is one the target reads.', job: &x {x: v}, tool:
    &args {baseCommand: echo, inputs: {x: {type: string}}, arguments: [$(runtime.cores)]}, error: &unsupported {re:
    unsupported
    CWL expression}}
-- {id: a_dollar_starting_javascript, why: *expression, job: *x, error: *unsupported, tool: {<<: *args, arguments:
+- {id: a_dollar_starting_javascript, codes: [nf-s045], why: *expression, job: *x, error: *unsupported, tool: {<<: *args, arguments:
    ['${return 1}']}}
-- {id: a_dollar_starting_a_property_of_a_string, why: *expression, job: *x, error: *unsupported, tool: {<<: *args,
+- {id: a_dollar_starting_a_property_of_a_string, codes: [nf-s045], why: *expression, job: *x, error: *unsupported, tool: {<<: *args,
    arguments: [cost $5 $(inputs.x.size)]}}
-- {id: a_dollar_before_an_expression_on_self, why: *expression, job: *x, error: *unsupported, tool: {<<: *args,
+- {id: a_dollar_before_an_expression_on_self, codes: [nf-s045], why: *expression, job: *x, error: *unsupported, tool: {<<: *args,
    arguments: [$$(self)]}}
 - id: a_value_input_read_as_a_path
+  codes: [nf-s046]
   why: &path_of_value 'design §6, Commands: `.path` and `.basename` read a File or Directory.'
   tool: {id: BASENAME, inputs: {label: {type: string}}, outputs: {result: {type: File, outputBinding: {glob:
     $(inputs.label.basename).txt}}}}
@@ -205,80 +216,82 @@
   job: {label: input}
   findings: ['step ''BASENAME'': tool ''BASENAME.cwl: outputs.result.outputBinding.glob'': $(inputs.label.basename)
     requires a File or Directory input, and label is declared ''string''']
-- {id: path_of_a_string, why: *path_of_value, job: {value: x}, tool: {id: SUFFIXED, stdout: $(inputs.value.path).log,
+- {id: path_of_a_string, codes: [nf-s046, nf-s046], why: *path_of_value, job: {value: x}, tool: {id: SUFFIXED, stdout: $(inputs.value.path).log,
    inputs: {value: {type: string, inputBinding: {prefix: -v, valueFrom: $(inputs.value.path)}}}}, findings: {contains:
    ['step ''SUFFIXED'': tool ''SUFFIXED.cwl: inputs.value.inputBinding.valueFrom'': $(inputs.value.path) requires a File
    or Directory input, and value is declared ''string''', 'step ''SUFFIXED'': tool ''SUFFIXED.cwl: stdout'':
    $(inputs.value.path) requires a File or Directory input, and value is declared ''string''']}}
-- {id: path_of_an_int, why: *path_of_value, job: {value: 1}, tool: {id: SUFFIXED, stdout: $(inputs.value.path).log,
+- {id: path_of_an_int, codes: [nf-s046, nf-s046], why: *path_of_value, job: {value: 1}, tool: {id: SUFFIXED, stdout: $(inputs.value.path).log,
    inputs: {value: {type: int, inputBinding: {prefix: -v, valueFrom: $(inputs.value.path)}}}}, findings: {contains:
    ['step ''SUFFIXED'': tool ''SUFFIXED.cwl: inputs.value.inputBinding.valueFrom'': $(inputs.value.path) requires a File
    or Directory input, and value is declared ''int''', 'step ''SUFFIXED'': tool ''SUFFIXED.cwl: stdout'':
    $(inputs.value.path) requires a File or Directory input, and value is declared ''int''']}}
-- {id: path_of_a_float, why: *path_of_value, job: {value: 1.5}, tool: {id: SUFFIXED, stdout: $(inputs.value.path).log,
+- {id: path_of_a_float, codes: [nf-s046, nf-s046], why: *path_of_value, job: {value: 1.5}, tool: {id: SUFFIXED, stdout: $(inputs.value.path).log,
    inputs: {value: {type: float, inputBinding: {prefix: -v, valueFrom: $(inputs.value.path)}}}}, findings: {contains:
    ['step ''SUFFIXED'': tool ''SUFFIXED.cwl: inputs.value.inputBinding.valueFrom'': $(inputs.value.path) requires a File
    or Directory input, and value is declared ''float''', 'step ''SUFFIXED'': tool ''SUFFIXED.cwl: stdout'':
    $(inputs.value.path) requires a File or Directory input, and value is declared ''float''']}}
-- {id: path_of_a_boolean, why: *path_of_value, job: {value: true}, tool: {id: SUFFIXED, stdout:
+- {id: path_of_a_boolean, codes: [nf-s046, nf-s046], why: *path_of_value, job: {value: true}, tool: {id: SUFFIXED, stdout:
    $(inputs.value.path).log, inputs: {value: {type: boolean, inputBinding: {prefix: -v, valueFrom:
    $(inputs.value.path)}}}}, findings: {contains: ['step ''SUFFIXED'': tool ''SUFFIXED.cwl:
    inputs.value.inputBinding.valueFrom'': $(inputs.value.path) requires a File or Directory input, and value is declared
    ''boolean''', 'step ''SUFFIXED'': tool ''SUFFIXED.cwl: stdout'': $(inputs.value.path) requires a File or Directory
    input, and value is declared ''boolean''']}}
-- {id: basename_of_a_string, why: *path_of_value, job: {value: x}, tool: {id: SUFFIXED, stdout:
+- {id: basename_of_a_string, codes: [nf-s046, nf-s046], why: *path_of_value, job: {value: x}, tool: {id: SUFFIXED, stdout:
    $(inputs.value.basename).log, inputs: {value: {type: string, inputBinding: {prefix: -v, valueFrom:
    $(inputs.value.basename)}}}}, findings: {contains: ['step ''SUFFIXED'': tool ''SUFFIXED.cwl:
    inputs.value.inputBinding.valueFrom'': $(inputs.value.basename) requires a File or Directory input, and value is
    declared ''string''', 'step ''SUFFIXED'': tool ''SUFFIXED.cwl: stdout'': $(inputs.value.basename) requires a File or
    Directory input, and value is declared ''string''']}}
-- {id: basename_of_an_int, why: *path_of_value, job: {value: 1}, tool: {id: SUFFIXED, stdout:
+- {id: basename_of_an_int, codes: [nf-s046, nf-s046], why: *path_of_value, job: {value: 1}, tool: {id: SUFFIXED, stdout:
    $(inputs.value.basename).log, inputs: {value: {type: int, inputBinding: {prefix: -v, valueFrom:
    $(inputs.value.basename)}}}}, findings: {contains: ['step ''SUFFIXED'': tool ''SUFFIXED.cwl:
    inputs.value.inputBinding.valueFrom'': $(inputs.value.basename) requires a File or Directory input, and value is
    declared ''int''', 'step ''SUFFIXED'': tool ''SUFFIXED.cwl: stdout'': $(inputs.value.basename) requires a File or
    Directory input, and value is declared ''int''']}}
-- {id: basename_of_a_float, why: *path_of_value, job: {value: 1.5}, tool: {id: SUFFIXED, stdout:
+- {id: basename_of_a_float, codes: [nf-s046, nf-s046], why: *path_of_value, job: {value: 1.5}, tool: {id: SUFFIXED, stdout:
    $(inputs.value.basename).log, inputs: {value: {type: float, inputBinding: {prefix: -v, valueFrom:
    $(inputs.value.basename)}}}}, findings: {contains: ['step ''SUFFIXED'': tool ''SUFFIXED.cwl:
    inputs.value.inputBinding.valueFrom'': $(inputs.value.basename) requires a File or Directory input, and value is
    declared ''float''', 'step ''SUFFIXED'': tool ''SUFFIXED.cwl: stdout'': $(inputs.value.basename) requires a File or
    Directory input, and value is declared ''float''']}}
-- {id: basename_of_a_boolean, why: *path_of_value, job: {value: true}, tool: {id: SUFFIXED, stdout:
+- {id: basename_of_a_boolean, codes: [nf-s046, nf-s046, nf-s049], why: *path_of_value, job: {value: true}, tool: {id: SUFFIXED, stdout:
    $(inputs.value.basename).log, inputs: {value: {type: boolean, inputBinding: {prefix: -v, valueFrom:
    $(inputs.value.basename)}}}}, findings: {contains: ['step ''SUFFIXED'': tool ''SUFFIXED.cwl:
    inputs.value.inputBinding.valueFrom'': $(inputs.value.basename) requires a File or Directory input, and value is
    declared ''boolean''', 'step ''SUFFIXED'': tool ''SUFFIXED.cwl: stdout'': $(inputs.value.basename) requires a File or
    Directory input, and value is declared ''boolean''']}}
-- {id: a_file_reference_embedded_in_text, why: 'design §6, Commands: CWL renders an embedded File object as JSON.', job:
+- {id: a_file_reference_embedded_in_text, codes: [nf-s046], why: 'design §6, Commands: CWL renders an embedded File object as JSON.', job:
    {f: {class: File, path: in.txt}, s: x}, tool: {id: EMBEDDED, inputs: {f: {type: File}, s: {type: string}}, arguments:
    ['--input=$(inputs.f)']}, findings: ['step ''EMBEDDED'': tool ''EMBEDDED.cwl: arguments[0]'': $(inputs.f) embedded in
    other text renders a File object as JSON in CWL; use $(inputs.f.path) or $(inputs.f.basename), or the reference
    alone']}
 - id: an_empty_boolean_prefix
+  codes: [nf-s052]
   why: &lowering_only A rejection only the lowering finds is a finding at its step, beside the rest.
   tool: {inputs: {b: {type: boolean, inputBinding: {prefix: ''}}}}
   job: &b {b: true}
   findings: &bad_prefix [{re: '^step ''make'': step: .*prefix for ''b'' must be a non-empty string'}]
-- {id: a_blank_boolean_prefix, why: 'A blank prefix hits the named diagnostic, not the flag''s own invariant.', job: *b,
+- {id: a_blank_boolean_prefix, codes: [nf-s052], why: 'A blank prefix hits the named diagnostic, not the flag''s own invariant.', job: *b,
    tool: {id: REJECTED, inputs: {b: {type: boolean, inputBinding: {prefix: '   '}}}}, findings: [{re: '^step
    ''REJECTED'': step: .*prefix for ''b'' must be a non-empty string'}]}
-- {id: separate_without_a_prefix, why: cwltool rejects separate without a prefix., job: {s: x}, tool: {id: REJECTED,
+- {id: separate_without_a_prefix, codes: [nf-s055], why: cwltool rejects separate without a prefix., job: {s: x}, tool: {id: REJECTED,
    inputs: {s: {type: string, inputBinding: {separate: false}}}}, findings: &no_prefix [{re: '^step ''REJECTED'': step:
    .*separate cannot be specified without a prefix'}]}
-- {id: boolean_separate_without_a_prefix, why: cwltool rejects separate without a prefix., job: *b, tool: {id: REJECTED,
+- {id: boolean_separate_without_a_prefix, codes: [nf-s055], why: cwltool rejects separate without a prefix., job: *b, tool: {id: REJECTED,
    inputs: {b: {type: boolean, inputBinding: {separate: false}}}}, findings: [{re: '^step ''REJECTED'': step: .*separate
    cannot be specified without a prefix'}]}
-- {id: boolean_separate_null, why: &null_separate 'cwltool''s .get("separate", True) defaults only an absent key, so
+- {id: boolean_separate_null, codes: [nf-s055], why: &null_separate 'cwltool''s .get("separate", True) defaults only an absent key, so
    separate: null rejects too.', job: *b, tool: {id: REJECTED, inputs: {b: {type: boolean, inputBinding: {separate:
    null}}}}, findings: [{re: '^step ''REJECTED'': step: .*separate cannot be specified without a prefix'}]}
-- {id: string_separate_null, why: *null_separate, job: {s: x}, findings: [{re: '^step ''REJECTED'': step: .*separate
+- {id: string_separate_null, codes: [nf-s055], why: *null_separate, job: {s: x}, findings: [{re: '^step ''REJECTED'': step: .*separate
    cannot be specified without a prefix'}], tool: {id: REJECTED, inputs: {s: {type: string, inputBinding: {separate:
    null}}}}}
-- {id: a_value_from_on_an_array_binding, why: *lowering_only, job: {xs: [x]}, tool: {id: REJECTED, inputs: {xs: {type:
+- {id: a_value_from_on_an_array_binding, codes: [nf-s050], why: *lowering_only, job: {xs: [x]}, tool: {id: REJECTED, inputs: {xs: {type:
    {type: array, items: string}, inputBinding: {valueFrom: $(inputs.xs)}}}}, findings: [{re: '^step ''REJECTED'': step:
    .*valueFrom on an array-typed inputBinding'}]}
 - id: lowering_rejections_aggregate_with_every_other_finding_by_step
+  codes: [nf-s010, wic056, nf-s036]
   why: Each step's lowering rejection is a finding in step order, beside a capability finding.
   workflow: {steps: [{id: GATED, in: {a: a}, when: $(inputs.a ** 2 > 1)}, {id: GATED, in: {a: a}, when: $(inputs.a +
     1)}, {id: UNSUPPORTED}], inputs: {a: int}}
@@ -288,6 +301,7 @@
   findings: [{startswith: 'step ''GATED@1'': when:'}, {re: '^step ''GATED@2'': when: .*must compute a boolean'},
     {startswith: 'step ''UNSUPPORTED'': tool ''UNSUPPORTED.cwl: requirements.ToolTimeLimit'':'}]
 - id: a_command_error_is_reported_instead_of_a_wrong_cause_absence_finding
+  codes: [nf-s045]
   why: The command's own error is the one finding, not an absence finding a skipped producer would cause.
   workflow: {steps: [{id: PRODUCE, in: {x: x}, out: [{r: {wic_anchor: r}}], when: $(inputs.x > 1)}, {id: CONSUME, in:
     {v: {wic_alias: r}}}], inputs: {x: int}}
@@ -296,6 +310,56 @@
     {type: 'string?'}}, arguments: [$(runtime.cores)]}]
   job: {x: 2}
   findings: [{startswith: 'step ''CONSUME'': step: CWL argument contains an unsupported CWL expression'}]
-- {id: a_command_error_is_reported_instead_of_an_absent_optional_finding, why: The command's own error is the one
+- {id: a_command_error_is_reported_instead_of_an_absent_optional_finding, codes: [nf-s045], why: The command's own error is the one
    finding., tool: {id: ABSENT, inputs: {v: {type: 'string?', inputBinding: {}}}, arguments: [$(runtime.cores)]},
    findings: [{startswith: 'step ''ABSENT'': step: CWL argument contains an unsupported CWL expression'}]}
+- id: network_access_withheld
+  codes: [nf-s037]
+  why: A Nextflow task has network access, and the pipeline cannot withhold it.
+  tool: {id: FETCH, requirements: {NetworkAccess: {networkAccess: false}}}
+  job: {}
+  findings: ['step ''FETCH'': tool ''FETCH.cwl: requirements.NetworkAccess.networkAccess'': only the literal true is
+    supported: a Nextflow task has network access, and the generated pipeline cannot withhold it']
+- id: a_docker_file
+  codes: [nf-s039]
+  why: An image is pulled, never built.
+  tool: {id: BUILD, requirements: {DockerRequirement: {dockerPull: alpine, dockerFile: FROM alpine}}}
+  job: {}
+  findings: ['step ''BUILD'': tool ''BUILD.cwl: requirements.DockerRequirement.dockerFile'': dockerFile is not
+    supported: use dockerPull']
+- id: success_codes_of_a_tool
+  codes: [nf-s042]
+  why: A nonzero exit fails a Nextflow task.
+  tool: {id: GREP, successCodes: [0, 1]}
+  job: {}
+  findings: ['step ''GREP'': tool ''GREP.cwl: successCodes'': successCodes is not supported: a nonzero exit fails the
+    task']
+- id: an_expression_tool_step
+  codes: [nf-s047]
+  why: A process runs a CommandLineTool.
+  workflow: {steps: [{id: DOUBLE, in: {x: x}, out: [y]}], inputs: {x: {type: int}}}
+  tools: [{id: DOUBLE, class: ExpressionTool, requirements: {InlineJavascriptRequirement: {}}, inputs: {x: {type:
+     int}}, outputs: {y: {type: int}}, expression: '$({y: inputs.x * 2})'}]
+  job: {x: 1}
+  findings: ['step ''DOUBLE'': tool ''DOUBLE.cwl: class'': unsupported compiled step class ''ExpressionTool''']
+- id: an_optional_union_of_a_boolean_and_strings
+  why: mm-workflows' docking tools declare this union, which the target does not lower; it is refused, not a crash.
+  codes: [nf-s048, nf-s048]
+  tool: {id: DOCK, inputs: {flag: {type: ['null', boolean, {type: array, items: string}], inputBinding: {position:
+     1}}}}
+  job: {}
+  findings: ['step ''DOCK'': tool ''DOCK.cwl: inputs.flag.type'': unsupported optional CWL union [''null'', ''boolean'',
+    {''type'': ''array'', ''items'': ''string''}]', 'workflow ''wf'': workflow input ''flag'': type: unsupported optional
+    CWL union [''null'', ''boolean'', {''type'': ''array'', ''items'': ''string''}]']
+- id: requirements_written_as_a_class_name
+  why: A tool's requirements are a mapping or a list; a class name alone is CWL cwltool does not load.
+  codes: [nf-s055]
+  tool: {id: T, requirements: DockerRequirement, inputs: {x: {type: string, inputBinding: {position: 1}}}}
+  job: {x: a}
+  findings: ["step 'T': tool 'T.cwl: requirements': CommandLineTool requirements must be a mapping or list"]
+- id: arguments_written_as_a_string
+  why: A tool's arguments are a list; a string is CWL cwltool does not load.
+  codes: [nf-s055]
+  tool: {id: T, arguments: echo, inputs: {x: {type: string, inputBinding: {position: 1}}}}
+  job: {x: a}
+  findings: ["step 'T': tool 'T.cwl: arguments': CommandLineTool arguments must be a list"]

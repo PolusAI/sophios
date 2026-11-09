@@ -43,7 +43,7 @@
   job: *one
   notes: ["note [wic056] when 'true' is not one $(...) or ${...} expression: cwltool stops the run when it gives
       anything but true or false (step 'gated')"]
-  refused: ["step 'gated': when: 'true' must be a safe JavaScript subset $( … ) expression"]
+  refused: ["step 'gated': when: 'true' is not one $(...) or ${...} expression"]
 - id: a-template
   why: text around an expression is interpolated, so it gives a string however its expression types
   workflow: {inputs: {n: int}, steps: [{id: gated, in: {n: n}, when: $(inputs.n > 0) or not}]}
@@ -51,7 +51,7 @@
   job: *one
   notes: ["note [wic056] when '$(inputs.n > 0) or not' is not one $(...) or ${...} expression: cwltool stops the run
       when it gives anything but true or false (step 'gated')"]
-  refused: ["step 'gated': when: '$(inputs.n > 0) or not' must be a safe JavaScript subset $( … ) expression"]
+  refused: ["step 'gated': when: '$(inputs.n > 0) or not' is not one $(...) or ${...} expression"]
 - id: on-a-call
   why: a call's when is a CWL when like any other; the Nextflow target refuses a when on a call before it reads one
   workflow: {inputs: {n: int}, steps: [{id: child.wic, subtree: {inputs: {n: int}, steps: [{id: gated, in: {n: n}}]},
