@@ -4,7 +4,7 @@ from dataclasses import replace
 
 import pytest
 
-from sophios.compiler import cwl_notes
+from sophios.compiler import cwl_notes, resolved_view
 from sophios.ir.resolved import NotLowered
 from sophios.wic_types import StepId, Yaml
 
@@ -137,7 +137,7 @@ def test_a_when_that_cannot_give_a_boolean_is_a_note_on_cwl_and_refused_on_nextf
     """Each case of data/when_boolean.yaml, compiled once: the CWL target notes what the shared check finds, at the
     step, and refuses nothing; the Nextflow target refuses it."""
     result = compiled_case(case)
-    assert [str(replace(note, span=None)) for note in cwl_notes(result)] == case['notes']
+    assert [str(replace(note, span=None)) for note in cwl_notes(resolved_view(result))] == case['notes']
     try:
         lowered_case(case)
         refused = []

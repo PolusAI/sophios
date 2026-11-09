@@ -12,7 +12,7 @@ Python-facing workflow authoring.
 import asyncio
 import copy
 import logging
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePath
 from typing import TYPE_CHECKING, Any, Final, NamedTuple, Protocol, TypeVar
@@ -23,7 +23,7 @@ from cwl_utils.parser import CommandLineTool as CWLCommandLineTool
 from cwl_utils.parser import load_document_by_uri, load_document_by_yaml
 
 from sophios import backends, compiler, drawing, input_output, plugins, post_compile as pc, preflight, realtime
-from sophios import run_local, run_setup
+from sophios import run_local, run_setup, targets
 from sophios.input_output import SHIPPED_RENAMINGS
 from sophios.run_local import RunHandle
 from sophios.run_status import RunResult
@@ -34,7 +34,7 @@ from sophios.ir.locations import absolute_paths
 from sophios.ir.policy import RunPolicy
 from sophios.ir.realtime import ADAPTER, Declaration
 from sophios.ir.resolve import RegistrySnapshot
-from sophios.ir.resolved import ResolvedWorkflow
+from sophios.ir.resolved import NotLowered, ResolvedWorkflow
 from sophios.ir.types import AuthoredName, WorkflowGraph
 from sophios.lang import CwlRecord, Diagnostic, Diagnostics, Document, ParseResult, Severity, SophiosError, render
 from sophios.lang.diagnostics import report
@@ -44,7 +44,6 @@ from sophios.cli import default_compilation_settings, get_args, get_known_and_un
 from sophios.runtime_inputs import normalize_artifact_cwl, normalize_artifact_job_inputs, resolve_file_formats
 from sophios.utils import convert_args_dict_to_args_list
 from sophios.utils_cwl import tool_process
-from sophios.utils_nf import NEXTFLOW
 from sophios.wic_types import DEFAULT_BASEPATH, CompilerOptions, GraphSettings, Json, StepId, Tool, Tools
 
 from ._inference import Inference
@@ -53,7 +52,6 @@ from ._compiled import CompiledNextflowWorkflow, CompiledWorkflow
 from ._ports import InputParameter, OutputParameter, ParameterStore
 from ._types import ScatterMethod
 from ._utils import load_yaml as _load_yaml, serialize_value
-from ._api_config import DEFAULT_RUN_ARGS
 
 if TYPE_CHECKING:
     from .workflow import Step, Workflow
@@ -511,8 +509,8 @@ def _with_bound_values(workflow: "Workflow", result: CompilationResult) -> Compi
     return replace(result, artifact=replace(result.artifact, job_inputs={**result.artifact.job_inputs, **bound}))
 
 
-def _nextflow_view(workflow: "Workflow", result: CompilationResult) -> ResolvedWorkflow:
-    """The view the Nextflow target lowers: the workflow's bound values, and the outputs it declares, when it
+def _view(workflow: "Workflow", result: CompilationResult) -> ResolvedWorkflow:
+    """The view a target lowers, whichever target: the workflow's bound values, and the outputs it declares, when it
     declares any."""
     return compiler.resolved_view(result, values=_bound_values(workflow, result.graph),
                                   outputs=[output.name for output in workflow._outputs] or None)
@@ -599,67 +597,63 @@ def compiled_workflow_from_result(
         cwl_workflow=normalize_artifact_cwl(artifact),
         cwl_job_inputs=normalize_artifact_job_inputs(artifact, artifact.job_inputs),
         lang_version=result.lang_version,
-        diagnostics=(*result.diagnostics, *compiler.cwl_notes(result)),
+        diagnostics=tuple(Diagnostics([*result.diagnostics,
+                                       *targets.TARGETS["cwl"].lower(result, _view(workflow, result)).notes])),
     )
 
 
 def _compiled_nextflow(workflow: "Workflow", result: CompilationResult) -> CompiledNextflowWorkflow:
     """`result` lowered to Nextflow, with every note the compile and the lowering made."""
-    executable, notes = NEXTFLOW.lower(_nextflow_view(workflow, result))
+    lowered = targets.TARGETS["nextflow"].lower(result, _view(workflow, result))
     return CompiledNextflowWorkflow(
-        nextflow_workflow=executable,
+        nextflow_workflow=lowered.model,
         lang_version=result.lang_version,
-        diagnostics=(*result.diagnostics, *notes),
+        diagnostics=(*result.diagnostics, *lowered.notes),
     )
 
 
-def compiled_workflow(
+#: The object `Workflow.compile` returns for each target, as its overloads say.
+_COMPILED: Final[Mapping[str, Callable[["Workflow", CompilationResult],
+                                       CompiledWorkflow | CompiledNextflowWorkflow]]] = {
+    "cwl": compiled_workflow_from_result, "nextflow": _compiled_nextflow}
+
+
+def compiled(  # pylint: disable=too-many-arguments
     workflow: "Workflow",
     *,
-    tool_registry: Tools | None = None,
-    lang_version: str | None = None,
-    inference: Inference = Inference(),
-    policy: RunPolicy = RunPolicy(),
-) -> CompiledWorkflow:
-    """Compile a workflow into the public compiled-workflow boundary object, and print its notes.
+    target: str,
+    tool_registry: Tools | None,
+    lang_version: str | None,
+    inference: Inference,
+    policy: RunPolicy,
+) -> CompiledWorkflow | CompiledNextflowWorkflow:
+    """Compile `workflow` for `target` once through the core semantic pipeline, and print every note the compile and
+    the target made: see `Workflow.compile`.
 
-    Args:
-        workflow (Workflow): Workflow to compile.
-        tool_registry (Tools | None): Optional tool registry override.
-        lang_version (str | None): Pin the Sophios language version for this
-            compilation; None infers it. An explicit setting beats file tags.
-        inference (Inference): How unbound inputs are connected.
-        policy (RunPolicy): How the workflow runs.
-
-    Returns:
-        CompiledWorkflow: Compiled CWL workflow plus generated job inputs.
+    Raises:
+        ValueError: No target has that name, before anything is compiled.
+        NotLowered: The target cannot run the workflow.
     """
-    compiled = compiled_workflow_from_result(workflow, compile_workflow_result(
+    row = targets.target(target)
+    compiled_one = _COMPILED[row.name](workflow, compile_workflow_result(
         workflow, tool_registry=tool_registry, lang_version=lang_version, inference=inference, policy=policy))
-    report(compiled.diagnostics)
-    return compiled
-
-
-def compiled_nextflow_workflow(
-    workflow: "Workflow",
-    *,
-    tool_registry: Tools | None = None,
-    lang_version: str | None = None,
-    inference: Inference = Inference(),
-    policy: RunPolicy = RunPolicy(),
-) -> CompiledNextflowWorkflow:
-    """Compile once through the core semantic pipeline and lower to Nextflow, keeping and printing every note the
-    two made."""
-    compiled = _compiled_nextflow(workflow, compile_workflow_result(
-        workflow, tool_registry=tool_registry, lang_version=lang_version, inference=inference, policy=policy))
-    report(compiled.diagnostics)
-    return compiled
+    report(compiled_one.diagnostics)
+    return compiled_one
 
 
 def check_workflow(workflow: "Workflow", options: "RunOptions") -> tuple[Diagnostic, ...]:
-    """Every note compiling `workflow` to `options.target` makes, after the checks of this machine a run makes
-    before it starts, and nothing written, pulled or printed: see `Workflow.check`."""
-    return _run_request(workflow, options, refuse_realtime=False, check=True).diagnostics
+    """Every note compiling `workflow` to `options.target` makes, and every refusal of the target as an error, after
+    the checks of this machine a run makes before it starts; nothing is written, pulled or printed: see
+    `Workflow.check`."""
+    row = targets.target(options.target)
+    result, analyses = _compiled_for_run(workflow, options, refuse_realtime=False, check=True)
+    try:
+        lowered = _lowered_for_run(row, workflow, result)
+    except NotLowered as refused:
+        return (*result.diagnostics, *refused.diagnostics)
+    _REQUESTS[row.name](workflow, options, result=result, lowered=lowered, analyses=analyses,
+                        run_args=_run_args(options.run_args_dict, row.name), check=True)
+    return (*result.diagnostics, *lowered.notes)
 
 
 def _run_args(overrides: dict[str, str] | None, target: str) -> dict[str, str]:
@@ -669,7 +663,7 @@ def _run_args(overrides: dict[str, str] | None, target: str) -> dict[str, str]:
     a CWL run's, so `nextflow` has none. `quiet`, `no_provenance` and
     `generate_run_script` are normalised to `yes`/`no`.
     """
-    resolved = {**(DEFAULT_RUN_ARGS if target == "cwl" else {}), **(overrides or {})}
+    resolved = {**targets.target(target).run_defaults, **(overrides or {})}
     for switch in ("quiet", "no_provenance", "generate_run_script"):
         if switch in resolved:
             resolved[switch] = "yes" if _enabled(resolved[switch]) else "no"
@@ -704,31 +698,40 @@ def _realtime_refused(declarations: tuple[Declaration, ...]) -> SophiosError:
         "real-time analyses", declaration.span) for declaration in declarations)
 
 
-def _run_request(workflow: "Workflow", options: RunOptions, *, refuse_realtime: bool,
-                 check: bool = False) -> backends.RunRequest:
+def _run_request(workflow: "Workflow", options: RunOptions, *, refuse_realtime: bool) -> backends.RunRequest:
     """Compile `workflow`, check this machine, write what the runner reads and pull its images: the run, ready.
     Its notes are printed on stderr, as the command line prints them, and the request carries them.
-
-    With `check`, as the command line's `--check` does: the same compile and the same checks of this machine,
-    but what the runner reads goes to a temporary directory, nothing is pulled, and nothing is printed.
 
     Raises:
         SophiosError: The workflow does not compile, this machine cannot run it, or it declares real-time
             analyses and `refuse_realtime` is set (`api008`).
-        ValueError: `run_args_dict` names a `cwl_runner` Sophios cannot run, or a `user_env_vars` key is not
-            an environment variable name; or, for the Nextflow target, `run_args_dict` has a key only a CWL run
-            reads, or the workflow has no Nextflow lowering.
+        NotLowered: The target cannot run the workflow.
+        ValueError: No target has that name; `run_args_dict` names a `cwl_runner` Sophios cannot run, or a
+            `user_env_vars` key is not an environment variable name; or, for the Nextflow target, `run_args_dict`
+            has a key only a CWL run reads.
     """
-    if not check:
-        logger.info("Running %s", workflow.process_name)
-        plugins.logging_filters()
+    row = targets.target(options.target)
+    logger.info("Running %s", workflow.process_name)
+    plugins.logging_filters()
+    result, analyses = _compiled_for_run(workflow, options, refuse_realtime=refuse_realtime, check=False)
+    lowered = _lowered_for_run(row, workflow, result)
+    report(lowered.notes)
+    request = _REQUESTS[row.name](workflow, options, result=result, lowered=lowered, analyses=analyses,
+                                  run_args=_run_args(options.run_args_dict, row.name), check=False)
+    return replace(request, diagnostics=(*result.diagnostics, *lowered.notes))
 
-    resolved_run_args = _run_args(options.run_args_dict, options.target)
-    basepath = options.basepath
+
+def _compiled_for_run(workflow: "Workflow", options: RunOptions, *, refuse_realtime: bool,
+                      check: bool) -> tuple[CompilationResult, tuple[realtime.Analysis, ...]]:
+    """What a run and a check share before the target lowers anything: the compile, whose notes a run prints, the
+    real-time analyses, and the base path that can be written.
+
+    Raises:
+        SophiosError: The workflow does not compile, a real-time analysis does not, the base path cannot be
+            written, or it declares real-time analyses and `refuse_realtime` is set (`api008`).
+    """
     result = compile_workflow_result(workflow, tool_registry=options.tool_registry, inference=options.inference,
                                      policy=options.policy, lang_version=options.lang_version, quiet=check)
-    if options.target == "cwl":
-        result = replace(result, diagnostics=Diagnostics([*result.diagnostics, *compiler.cwl_notes(result)]))
     if not check:
         report(result.diagnostics)
     if refuse_realtime and result.realtime:
@@ -737,49 +740,63 @@ def _run_request(workflow: "Workflow", options: RunOptions, *, refuse_realtime: 
         result.realtime, {namespace: dict(paths) for namespace, paths in (options.workflow_paths or {}).items()},
         _merged_known_tools(workflow, options.tool_registry),
         compiler_options(options.inference, policy=options.policy))
-    if (problem := preflight.unwritable(Path(basepath), "the workflow and its run",
+    if (problem := preflight.unwritable(Path(options.basepath), "the workflow and its run",
                                         "pass run() a basepath you can write to")) is not None:
         raise SophiosError([problem])
-    if options.target == "nextflow":
-        return _nextflow_run_request(workflow, options, result, analyses, resolved_run_args, check=check)
-    outdir = resolved_run_args.get("outdir")
+    return result, analyses
+
+
+def _lowered_for_run(row: targets.Target[Any], workflow: "Workflow",
+                     result: CompilationResult) -> run_setup.Lowered[Any]:
+    """`result` lowered by `row` for a runner, which does not run where the workflow's relative paths are read."""
+    return row.lower(result, run_setup.absolute_view(_view(workflow, result), Path.cwd()))
+
+
+# pylint: disable-next=too-many-arguments
+def _cwl_run_request(workflow: "Workflow", options: RunOptions, *, result: CompilationResult,
+                     lowered: run_setup.Lowered[CompilationArtifact], analyses: tuple[realtime.Analysis, ...],
+                     run_args: dict[str, str], check: bool) -> backends.RunRequest:
+    """`_run_request` for the CWL target, which runs the one document `compile()` returns: each `run_args` key
+    Sophios does not read reaches the runner as `--<key> <value>`."""
+    outdir = run_args.get("outdir")
     writes = ((Path(outdir), "the run's outputs", "give run() an outdir you can write to"),) if outdir else ()
     # One document, the workflow's and each analysis's, as `compile()` returns it.
-    prepared = backends.backend("cwl", resolved_run_args["cwl_runner"]).prepare(
-        replace(result, artifact=_one_document(workflow, result)),
+    prepared = targets.backend("cwl", run_args["cwl_runner"]).prepare(
+        replace(lowered, model=_one_document(workflow, result)),
         tuple(replace(analysis, artifact=pc.inline_artifact_runs(analysis.artifact)) for analysis in analyses),
-        Path(basepath),
+        Path(options.basepath),
         run_setup.Settings(
-            preflight.RunSettings(resolved_run_args["container_engine"], resolved_run_args["pull_dir"],
-                                  runner=resolved_run_args["cwl_runner"],
-                                  run_script=_enabled(resolved_run_args.get("generate_run_script", "no")),
+            preflight.RunSettings(run_args["container_engine"], run_args["pull_dir"],
+                                  runner=run_args["cwl_runner"],
+                                  run_script=_enabled(run_args.get("generate_run_script", "no")),
                                   writes=writes),
-            Path.cwd(), resolved_run_args.get("inputs_file", ""), inputs_file_named="inputs_file", check=check,
-            remove_entrypoints=_enabled(resolved_run_args.get("docker_remove_entrypoints"))))
+            Path.cwd(), run_args.get("inputs_file", ""), inputs_file_named="inputs_file", check=check,
+            remove_entrypoints=_enabled(run_args.get("docker_remove_entrypoints"))))
     user_args = convert_args_dict_to_args_list(
-        resolved_run_args,
+        run_args,
         boolean_flags=_RUN_ARG_BOOLEAN_FLAGS,
     )
 
     _, unknown_args = get_known_and_unknown_args(workflow.process_name, user_args)
-    return _noted(result, prepared.notes, check, backends.RunRequest(
-        workflow.process_name, Path(basepath), runner=resolved_run_args["cwl_runner"],
-        container_engine=resolved_run_args["container_engine"], cachedir=resolved_run_args.get("cachedir", ""),
-        outdir=resolved_run_args.get("outdir", ""), quiet=resolved_run_args.get("quiet", "yes") == "yes",
-        provenance=resolved_run_args.get("no_provenance", "no") != "yes",
+    return backends.RunRequest(
+        workflow.process_name, Path(options.basepath), runner=run_args["cwl_runner"],
+        container_engine=run_args["container_engine"], cachedir=run_args.get("cachedir", ""),
+        outdir=run_args.get("outdir", ""), quiet=run_args.get("quiet", "yes") == "yes",
+        provenance=run_args.get("no_provenance", "no") != "yes",
         passthrough_args=tuple(unknown_args), env=dict(options.user_env_vars or {}), realtime_plans=prepared.plans,
-        generate_run_script=resolved_run_args.get("generate_run_script", "no") == "yes"))
+        generate_run_script=run_args.get("generate_run_script", "no") == "yes")
 
 
-def _nextflow_run_request(  # pylint: disable=too-many-arguments
-        workflow: "Workflow", options: RunOptions, result: CompilationResult, analyses: tuple[realtime.Analysis, ...],
-        run_args: dict[str, str], *, check: bool) -> backends.RunRequest:
-    """`_run_request` for the Nextflow target, which lowers the outputs `compile()` returns: each `run_args` key
+# pylint: disable-next=too-many-arguments,unused-argument
+def _nextflow_run_request(workflow: "Workflow", options: RunOptions, *, result: CompilationResult,
+                          lowered: run_setup.Lowered[Any], analyses: tuple[realtime.Analysis, ...],
+                          run_args: dict[str, str], check: bool) -> backends.RunRequest:
+    """`_run_request` for the Nextflow target, which runs the pipeline `compile()` returns: each `run_args` key
     Sophios does not read reaches Nextflow as `-<key> <value>`, or `-<key>` alone for an empty value, and one
     only a CWL run reads is refused.
 
     Raises:
-        ValueError: `run_args` has a key only a CWL run reads, or the workflow has no Nextflow lowering.
+        ValueError: `run_args` has a key only a CWL run reads.
     """
     cwl_only = {action.dest for action in target_options["cwl"]._group_actions}  # pylint: disable=protected-access
     if refused := [key for key in run_args if key in cwl_only]:
@@ -789,23 +806,19 @@ def _nextflow_run_request(  # pylint: disable=too-many-arguments
     passthrough = tuple(token for key, value in run_args.items() if key not in known
                         for token in (f"-{key}", *((value,) if value else ())))
     run_script = _enabled(run_args.get("generate_run_script", "no"))
-    prepared = backends.backend("nextflow", "nextflow").prepare(
-        result, analyses, Path(options.basepath),
+    prepared = targets.backend("nextflow").prepare(
+        lowered, analyses, Path(options.basepath),
         run_setup.Settings(preflight.RunSettings("docker", "", runner="nextflow", run_script=run_script), Path.cwd(),
-                           check=check, view=_nextflow_view(workflow, result)))
-    return _noted(result, prepared.notes, check, backends.RunRequest(
+                           check=check))
+    return backends.RunRequest(
         workflow.process_name, Path(options.basepath), runner="nextflow", target="nextflow",
         passthrough_args=passthrough, env=dict(options.user_env_vars or {}), realtime_plans=prepared.plans,
-        generate_run_script=run_script))
+        generate_run_script=run_script)
 
 
-def _noted(result: CompilationResult, notes: tuple[Diagnostic, ...], check: bool, request: backends.RunRequest
-           ) -> backends.RunRequest:
-    """`request` carrying the notes compiling and preparing the run made; the preparing ones are printed on
-    stderr here, as the command line prints them, unless this is a check."""
-    if not check:
-        report(notes)
-    return replace(request, diagnostics=(*result.diagnostics, *notes))
+#: How each target's run takes the `run_args_dict`: what the Python API adds to the table's row for a run.
+_REQUESTS: Final[Mapping[str, Callable[..., backends.RunRequest]]] = {
+    "cwl": _cwl_run_request, "nextflow": _nextflow_run_request}
 
 
 def start_workflow(workflow: "Workflow", options: RunOptions) -> RunHandle:

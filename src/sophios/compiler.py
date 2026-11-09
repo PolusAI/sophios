@@ -99,15 +99,15 @@ def resolved_view(result: CompilationResult, *, values: Mapping[str, OpaqueCwl] 
                    values=values, outputs=outputs)
 
 
-def cwl_notes(result: CompilationResult) -> tuple[Diagnostic, ...]:
-    """The notes the CWL target makes of `result`, which it never refuses and whose CWL it never changes: `wic056`
-    at each step whose authored `when` cannot give `true` or `false`, which cwltool stops the run at
-    (design_docs/resolved-view-design.md §10)."""
+def cwl_notes(view: ResolvedWorkflow) -> tuple[Diagnostic, ...]:
+    """The notes the CWL target makes of a compilation, read through its `view`; it never refuses one and never
+    changes its CWL: `wic056` at each step whose authored `when` cannot give `true` or `false`, which cwltool stops
+    the run at (design_docs/resolved-view-design.md §10). The view's values and kept outputs change none of them."""
     return tuple(
         Diagnostic(Severity.NOTE, SophiosErrorCode.WHEN_NOT_BOOLEAN,
                    f'when {problem}: cwltool stops the run when it gives anything but true or false',
                    step.span, Locator(step=step.name))
-        for step, problem in non_boolean_whens(resolved_view(result)))
+        for step, problem in non_boolean_whens(view))
 
 
 def _tools(graph: WorkflowGraph, artifact: CompilationArtifact) -> Iterator[tuple[StepId, ResolvedTool]]:

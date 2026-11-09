@@ -6,6 +6,7 @@ and its real-time analyses, check the machine and pull the images, and name the
 images without entrypoints when asked.
 """
 from dataclasses import dataclass, replace
+from typing import Generic, TypeVar
 from pathlib import Path
 import tempfile
 
@@ -15,6 +16,9 @@ from sophios.ir.locations import absolute_paths
 from sophios.ir.resolved import ResolvedWorkflow
 from sophios.lang.diagnostics import Diagnostic
 from sophios.runtime_inputs import normalize_artifact_job_inputs
+from sophios.utils_nf import local_locations_as_paths
+
+ModelT_co = TypeVar('ModelT_co', covariant=True)
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,8 +34,6 @@ class Settings:  # pylint: disable=too-many-instance-attributes
         check: Check the machine and stop: nothing is pulled.
         pull: Pull the images the run uses; off when an earlier step pulled them.
         remove_entrypoints: Run every image without its entrypoint.
-        view: The resolved view a target that lowers one runs: this run's values and the outputs it keeps.
-            `None` is the compilation's own, every value it binds and every output.
     """
 
     run: preflight.RunSettings
@@ -41,18 +43,35 @@ class Settings:  # pylint: disable=too-many-instance-attributes
     check: bool = False
     pull: bool = True
     remove_entrypoints: bool = False
-    view: ResolvedWorkflow | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class Lowered(Generic[ModelT_co]):
+    """What a target made of one compilation (`sophios.targets`): its model, the notes it made, and the resolved
+    view it read, with this run's values and the outputs it keeps."""
+
+    model: ModelT_co
+    notes: tuple[Diagnostic, ...]
+    view: ResolvedWorkflow
+
+
+def absolute_view(view: ResolvedWorkflow, root_dir: Path) -> ResolvedWorkflow:
+    """`view`, each value a run reads a relative File or Directory path of, written absolute against `root_dir`:
+    a runner does not run where the workflow's paths are read."""
+    bound = absolute_paths(local_locations_as_paths({port.name: port.value for port in view.inputs
+                                                     if port.has_value}), root_dir)
+    return replace(view, inputs=tuple(replace(port, value=bound[port.name]) if port.name in bound else port
+                                      for port in view.inputs))
 
 
 @dataclass(frozen=True, slots=True)
 class Prepared:
-    """A run ready to start: the workflow as the runner gets it, its analyses' plans, and the notes
-    preparing it made, for the front door to report."""
+    """A run ready to start: the name of the workflow the runner gets, its analyses' plans, and the documents
+    written for it."""
 
-    artifact: CompilationArtifact
+    name: str
     plans: tuple[realtime.Plan, ...]
     documents: tuple[Path, ...]
-    notes: tuple[Diagnostic, ...] = ()
 
 
 def prepare(artifact: CompilationArtifact, analyses: tuple[realtime.Analysis, ...], basepath: Path,
@@ -95,7 +114,7 @@ def _prepare(artifact: CompilationArtifact, analyses: tuple[realtime.Analysis, .
               if inputs_file else ()))
     if settings.check:
         preflight.check(preflight.needs(list(documents), jobs), settings.run)
-        return Prepared(artifact, plans, documents)
+        return Prepared(artifact.name, plans, documents)
     if settings.pull:
         # The real-time analyses' images too: they run with --disable-pull.
         preflight.prepare(list(documents), settings.run, jobs)
@@ -106,4 +125,4 @@ def _prepare(artifact: CompilationArtifact, analyses: tuple[realtime.Analysis, .
         # The images are built from the ones the pre-flight pulled, so the rewrite is written over the first write.
         input_output.write_artifacts_to_disk(artifact, basepath, settings.inputs_file)
         plans = realtime.write(realtime.without_entrypoints(analyses), basepath, artifact.name, settings.root_dir)
-    return Prepared(artifact, plans, documents)
+    return Prepared(artifact.name, plans, documents)

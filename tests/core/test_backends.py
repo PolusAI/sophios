@@ -12,7 +12,9 @@ from unittest import mock
 import pytest
 from hypothesis import example, given, strategies as st
 
-from sophios import backends, preflight, run_setup
+from sophios import backends, preflight, run_setup, targets
+from sophios.compiler import resolved_view
+from sophios.ir.artifacts import CompilationResult
 from sophios.api.python._workflow_runtime import compile_workflow_result
 from sophios.api.python.workflow import Step, Workflow
 from sophios.backends import RunRequest
@@ -28,7 +30,7 @@ pytestmark = pytest.mark.package
 
 
 def _argv(request: RunRequest) -> list[str]:
-    return list(backends.backend(request.target, request.runner).launch(request).argv)
+    return list(targets.backend(request.target, request.runner).launch(request).argv)
 
 
 class _Frozen(backends.datetime):
@@ -117,7 +119,7 @@ def test_the_runner_gets_this_processs_environment_with_the_users_on_top(
         monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv('SOPHIOS_TEST_KEPT', 'kept')
     monkeypatch.setenv('SOPHIOS_TEST_REPLACED', 'old')
-    launch = backends.backend('cwl', 'cwltool').launch(
+    launch = targets.backend('cwl', 'cwltool').launch(
         RunRequest('wf', tmp_path, env={'SOPHIOS_TEST_REPLACED': 'new'}))
     assert launch.env['SOPHIOS_TEST_KEPT'] == 'kept' and launch.env['SOPHIOS_TEST_REPLACED'] == 'new'
 
@@ -199,7 +201,7 @@ def test_toil_writes_the_output_object_it_printed_last_and_no_other(printed: lis
     expected = printed[-1][1] if printed and exit_code == 0 else None
     with tempfile.TemporaryDirectory() as base:
         request = RunRequest('wf', Path(base), runner='toil-cwl-runner')
-        outcome = backends.backend('cwl', 'toil-cwl-runner').outcome(request, exit_code, stdout, Path(base, 'no.log'))
+        outcome = targets.backend('cwl', 'toil-cwl-runner').outcome(request, exit_code, stdout, Path(base, 'no.log'))
         summary = Path(base).resolve() / 'output_wf.json'
         assert (outcome.outputs, outcome.summary) == (expected, None if expected is None else summary)
         assert (json.loads(summary.read_text(encoding='utf-8')) if summary.exists() else None) == expected
@@ -271,7 +273,7 @@ def test_a_nextflow_run_reports_the_outputs_its_pipeline_recorded_by_their_sophi
         'sophios-output ' + json.dumps(['text', 'a "line"\n']),
         'sophios-output ' + json.dumps(['skipped', None]),
     ])
-    backend = backends.backend('nextflow', 'nextflow')
+    backend = targets.backend('nextflow', 'nextflow')
     outcome = backend.outcome(_nextflow_request(tmp_path), 0, stdout, tmp_path / 'absent.log')
     assert outcome.outputs == {
         'copy~result': {'class': 'File', 'location': file.as_uri(), 'path': str(file), 'basename': 'copy.txt'},
@@ -290,7 +292,7 @@ def test_a_failed_nextflow_run_names_each_failed_step_and_no_outputs(tmp_path: P
     log = tmp_path / 'run_wf.log'
     log.write_text('\n'.join(_NEXTFLOW_FAILED_LOG) + '\n', encoding='utf-8')
     stdout = 'sophios-output ' + json.dumps(['grid', []]) + '\n'
-    outcome = backends.backend('nextflow', 'nextflow').outcome(_nextflow_request(tmp_path), 1, stdout, log)
+    outcome = targets.backend('nextflow', 'nextflow').outcome(_nextflow_request(tmp_path), 1, stdout, log)
     assert (outcome.outputs, outcome.summary) == (None, None)
     assert outcome.failed == {'bad-step': 7, 'child~copy': None}
     assert not (tmp_path / 'output_wf.json').exists()
@@ -329,6 +331,11 @@ def _write_into(tmp_path: Path) -> Any:
     return compile_workflow_result(Workflow([step], 'wf'))
 
 
+def _lowered(result: CompilationResult, root: Path) -> run_setup.Lowered[Any]:
+    """`result` lowered to Nextflow as a run lowers it: each relative path read against `root`."""
+    return targets.target('nextflow').lower(result, run_setup.absolute_view(resolved_view(result), root))
+
+
 #: What a Nextflow run asks of this machine.
 _NEXTFLOW_SETTINGS = preflight.RunSettings('docker', '', runner='nextflow')
 
@@ -345,7 +352,8 @@ def test_nextflow_prepare_writes_the_pipeline_from_absolute_paths_and_makes_each
     root.mkdir()
     write_tree(root, {'source.txt': ''})
     settings = run_setup.Settings(_NEXTFLOW_SETTINGS, root, check=check)
-    prepared = backends.backend('nextflow', 'nextflow').prepare(_write_into(root), (), tmp_path / 'base', settings)
+    prepared = targets.backend('nextflow', 'nextflow').prepare(_lowered(_write_into(root), root), (),
+                                                               tmp_path / 'base', settings)
     if check:
         assert not (tmp_path / 'base').exists() and not (root / 'made').exists()
         return
@@ -367,7 +375,8 @@ def test_the_nextflow_check_reports_a_missing_input_and_not_an_output_directory_
     monkeypatch.setattr(preflight, 'nextflow_problems', lambda _settings: [])
     settings = run_setup.Settings(_NEXTFLOW_SETTINGS, tmp_path, check=True)
     with pytest.raises(SophiosError) as raised:
-        backends.backend('nextflow', 'nextflow').prepare(_write_into(tmp_path), (), tmp_path / 'base', settings)
+        targets.backend('nextflow', 'nextflow').prepare(_lowered(_write_into(tmp_path), tmp_path), (),
+                                                        tmp_path / 'base', settings)
     (missing,) = raised.value.diagnostics
     assert missing.code is SophiosErrorCode.MISSING_INPUT_FILE
     assert f"input 'write-into~source' (from the workflow, whose relative paths are read from {tmp_path}) names " \
@@ -381,10 +390,11 @@ def test_a_nextflow_run_reads_its_own_names_after_another_workflow_is_prepared_i
     monkeypatch.setattr(preflight, 'nextflow_problems', lambda _settings: [])
     write_tree(tmp_path, {'source.txt': ''})
     settings = run_setup.Settings(_NEXTFLOW_SETTINGS, tmp_path)
-    backend = backends.backend('nextflow', 'nextflow')
-    backend.prepare(_write_into(tmp_path), (), tmp_path / 'base', settings)
+    backend = targets.backend('nextflow', 'nextflow')
+    backend.prepare(_lowered(_write_into(tmp_path), tmp_path), (), tmp_path / 'base', settings)
     echo = adapter_step('echo', message='hello')
-    backend.prepare(compile_workflow_result(Workflow([echo], 'other')), (), tmp_path / 'base', settings)
+    backend.prepare(_lowered(compile_workflow_result(Workflow([echo], 'other')), tmp_path), (), tmp_path / 'base',
+                    settings)
     stdout = 'sophios-output ' + json.dumps(['write_into_outDir', 'made']) + '\n'
     request = RunRequest('wf', tmp_path / 'base', runner='nextflow', target='nextflow')
     assert backend.outcome(request, 0, stdout, tmp_path / 'absent.log').outputs == {'write-into~outDir': 'made'}
@@ -402,7 +412,7 @@ def test_the_nextflow_check_asks_for_the_engine_only_when_a_process_has_a_contai
         return [engine_down]
     monkeypatch.setattr(preflight, 'nextflow_problems', lambda _settings: [])
     monkeypatch.setattr(preflight, 'engine_problems', engine_problems)
-    backend = backends.backend('nextflow', 'nextflow')
+    backend = targets.backend('nextflow', 'nextflow')
     host = runtime_workflow()
     contained = replace(host, processes=[replace(process, container='docker.io/bash:4.4')
                         for process in host.processes])

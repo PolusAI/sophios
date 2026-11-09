@@ -1,4 +1,4 @@
-from typing import Any, Final, NamedTuple, NotRequired, TypeAlias, TypedDict
+from typing import Any, Final, Literal, NamedTuple, NotRequired, TypeAlias, TypedDict, get_args
 
 # See https://mypy.readthedocs.io/en/stable/kinds_of_types.html#type-aliases
 
@@ -70,3 +70,9 @@ class PluginNodeConfig(TypedDict):
     ui: list[Json]
     inputs: list[Json]
     outputs: list[Json]
+
+
+#: The targets a workflow compiles to, as `--target` and `target=` name them. `sophios.targets.TARGETS` holds each
+#: one's row; these are the names alone, which the command line's parser reads without importing a target.
+TargetName: TypeAlias = Literal['cwl', 'nextflow']
+TARGET_NAMES: Final[tuple[str, ...]] = get_args(TargetName)

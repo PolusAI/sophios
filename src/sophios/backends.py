@@ -19,20 +19,19 @@ import re
 import sys
 import tempfile
 from collections.abc import Iterable, Iterator, Mapping, Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Final, Protocol
 
 from . import input_output_nf as io_nf
 from . import preflight, realtime, run_setup
-from .ir.artifacts import CompilationResult
-from .ir.locations import absolute_paths
+from .ir.artifacts import CompilationArtifact
 from .lang.diagnostics import Diagnostic, SophiosError
 from .nf_reader import read_nextflow
-from .compiler import resolved_view
+from .nf_types import ExecutableNextflowWorkflow
 from .runtime_inputs import output_target_inputs
-from .utils_nf import NEXTFLOW, local_locations_as_paths, nextflow_names
+from .utils_nf import nextflow_names
 from .wic_types import Json
 
 _ENV_VAR_NAME: Final = re.compile(r'[A-Za-z_][A-Za-z0-9_]*')
@@ -134,9 +133,10 @@ class Backend(Protocol):
               settings: preflight.RunSettings) -> None:
         """Raise every problem running `documents` with `jobs` would hit on this machine."""
 
-    def prepare(self, compilation: CompilationResult, analyses: tuple[realtime.Analysis, ...], basepath: Path,
+    def prepare(self, lowered: run_setup.Lowered[Any], analyses: tuple[realtime.Analysis, ...], basepath: Path,
                 settings: run_setup.Settings) -> run_setup.Prepared:
-        """Write what the runner reads of `compilation` under `basepath`, and make the machine ready to run it."""
+        """Write what the runner reads of the model its target `lowered` under `basepath`, and make the machine ready
+        to run it."""
 
     def launch(self, request: RunRequest) -> Launch:
         """The runner's command line, environment and working directory for `request`."""
@@ -229,13 +229,13 @@ class _Cwl:
         """The pre-flight's checks: paths, programs and the container engine."""
         preflight.check(preflight.needs(documents, jobs), settings)
 
-    def prepare(self, compilation: CompilationResult, analyses: tuple[realtime.Analysis, ...], basepath: Path,
-                settings: run_setup.Settings) -> run_setup.Prepared:
+    def prepare(self, lowered: run_setup.Lowered[CompilationArtifact], analyses: tuple[realtime.Analysis, ...],
+                basepath: Path, settings: run_setup.Settings) -> run_setup.Prepared:
         """The workflow and its job under `basepath`, its analyses beside it, and its images pulled.
 
-        The artifact written is `compilation.artifact`, as the front door rewrote it.
+        The artifact written is the model, as the front door rewrote it.
         """
-        return run_setup.prepare(compilation.artifact, analyses, basepath, settings)
+        return run_setup.prepare(lowered.model, analyses, basepath, settings)
 
 
 class CwltoolBackend(_Cwl):
@@ -419,42 +419,37 @@ class NextflowBackend:
         if problems:
             raise SophiosError(problems)
 
-    def prepare(self, compilation: CompilationResult, analyses: tuple[realtime.Analysis, ...], basepath: Path,
-                settings: run_setup.Settings) -> run_setup.Prepared:
+    def prepare(self, lowered: run_setup.Lowered[ExecutableNextflowWorkflow], analyses: tuple[realtime.Analysis, ...],
+                basepath: Path, settings: run_setup.Settings) -> run_setup.Prepared:
         """The four artifacts and `nextflow_names.json` in the workflow's `nextflow_directory`, the analyses under
         `basepath`, the check, and each output-target Directory input that names nothing yet made.
 
-        The workflow is lowered from its bound values, each relative File or Directory path read against
-        `settings.root_dir` and written absolute: Nextflow runs from its `nextflow_directory`.
+        The workflow was lowered from a view whose relative File or Directory paths are read against
+        `settings.root_dir` and written absolute (`run_setup.absolute_view`): Nextflow runs from its
+        `nextflow_directory`.
 
         A check (`settings.check`) writes them into a temporary directory instead, removed when the check ends,
         so it leaves `basepath` as it found it.
 
         Raises:
-            ValueError: The workflow has no Nextflow lowering; no artifact is left.
             SophiosError: What the check found in the way.
         """
         if not settings.check:
-            return self._prepare(compilation, analyses, basepath, settings)
+            return self._prepare(lowered, analyses, basepath, settings)
         with tempfile.TemporaryDirectory(prefix='sophios-check-') as scratch:
-            return self._prepare(compilation, analyses, Path(scratch), settings)
+            return self._prepare(lowered, analyses, Path(scratch), settings)
 
-    def _prepare(self, compilation: CompilationResult, analyses: tuple[realtime.Analysis, ...], basepath: Path,
-                 settings: run_setup.Settings) -> run_setup.Prepared:
+    def _prepare(self, lowered: run_setup.Lowered[ExecutableNextflowWorkflow], analyses: tuple[realtime.Analysis, ...],
+                 basepath: Path, settings: run_setup.Settings) -> run_setup.Prepared:
         """`prepare`, writing under `basepath`."""
-        artifact = compilation.artifact
-        view = settings.view if settings.view is not None else resolved_view(compilation)
-        bound = absolute_paths(local_locations_as_paths({port.name: port.value for port in view.inputs
-                                                         if port.has_value}), settings.root_dir)
-        view = replace(view, inputs=tuple(replace(port, value=bound[port.name]) if port.name in bound else port
-                                          for port in view.inputs))
-        directory = nextflow_directory(basepath, artifact.name)
+        view, workflow = lowered.view, lowered.model
+        bound = {port.name: port.value for port in view.inputs if port.has_value}
+        directory = nextflow_directory(basepath, view.name)
         io_nf.remove_nextflow_artifacts(directory)
-        workflow, notes = NEXTFLOW.lower(view)
         documents = io_nf.write_nextflow_artifacts(workflow, directory)
         (directory / _NEXTFLOW_NAMES).write_text(json.dumps(nextflow_names(view), indent=2) + '\n',
                                                  encoding='utf-8')
-        plans = realtime.write(analyses, basepath, artifact.name, settings.root_dir)
+        plans = realtime.write(analyses, basepath, view.name, settings.root_dir)
         targets = output_target_inputs(view)
         # An output-target Directory need not exist yet: it is made below.
         job = preflight.Job({name: value for name, value in bound.items() if name not in targets}, settings.root_dir,
@@ -466,7 +461,7 @@ class NextflowBackend:
                 match bound.get(name):
                     case {'class': 'Directory', 'path': str() as path} if not Path(path).exists():
                         Path(path).mkdir(parents=True)
-        return run_setup.Prepared(artifact, plans, documents, notes)
+        return run_setup.Prepared(view.name, plans, documents)
 
     def launch(self, request: RunRequest) -> Launch:
         """`nextflow` reading only the generated configuration, with the pipeline, its parameters, its work directory
@@ -499,24 +494,3 @@ class NextflowBackend:
     def realtime_command(self, request: RunRequest) -> str:
         """Why none can: an analysis watches cwltool's job directories, and a Nextflow run has none."""
         return _without_cwltool(request)
-
-
-#: The backend of each (target, runner).
-BACKENDS: Final[Mapping[tuple[str, str], Backend]] = {
-    ('cwl', 'cwltool'): CwltoolBackend(),
-    ('cwl', 'toil-cwl-runner'): ToilBackend(),
-    ('nextflow', 'nextflow'): NextflowBackend(),
-}
-
-
-def backend(target: str, runner: str) -> Backend:
-    """The backend that runs `target` documents with `runner`.
-
-    Raises:
-        ValueError: No backend runs them.
-    """
-    try:
-        return BACKENDS[(target, runner)]
-    except KeyError:
-        known = ', '.join(f'{name} ({kind})' for kind, name in BACKENDS)
-        raise ValueError(f'No backend runs {target} with {runner!r}; the runners are {known}.') from None

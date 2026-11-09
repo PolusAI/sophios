@@ -266,13 +266,15 @@ def _provoke_unchecked_cuda_field() -> None:
 
 def _provoke_when_not_boolean() -> None:
     """A `when` that computes a string, compiled for CWL. A note stops nothing, so it is raised here."""
-    from sophios.compiler import cwl_notes
+    # pylint: disable=import-outside-toplevel
+    from sophios.compiler import cwl_notes, resolved_view
+    from sophios.lang.diagnostics import SophiosError
 
     from .hermetic import compile_hermetic
 
-    raise SophiosError(cwl_notes(compile_hermetic(
+    raise SophiosError(cwl_notes(resolved_view(compile_hermetic(
         {'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'x'}}, 'when': '$(inputs.name)'}]},
-        'provoke')))
+        'provoke'))))
 
 
 #: One edit of the pipeline `import_edited` writes, for each import code: the file, the text replaced (every

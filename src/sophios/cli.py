@@ -5,7 +5,7 @@ from pathlib import Path
 from . import __version__
 from .input_output import SHIPPED_RENAMINGS
 from .lang.error_codes import SophiosErrorCode
-from .wic_types import DEFAULT_BASEPATH, CompilerOptions, GraphSettings
+from .wic_types import DEFAULT_BASEPATH, TARGET_NAMES, CompilerOptions, GraphSettings
 
 
 def _config_file(path: str) -> Path:
@@ -28,12 +28,10 @@ parser = argparse.ArgumentParser(prog='main', description='Convert a high-level 
                                  allow_abbrev=False)
 
 # Each option is declared in exactly one group, so its target is stated where it
-# is declared. `--target` offers the keys of `target_options`.
+# is declared. `--target` offers the targets' names (`wic_types.TARGET_NAMES`, the
+# names of `sophios.targets.TARGETS`), one group each.
 neutral = parser.add_argument_group('options for every target')
-target_options = {
-    'cwl': parser.add_argument_group('options for --target cwl only'),
-    'nextflow': parser.add_argument_group('options for --target nextflow only'),
-}
+target_options = {name: parser.add_argument_group(f'options for --target {name} only') for name in TARGET_NAMES}
 cwl = target_options['cwl']
 
 # Not `required=`: whether `--yaml` is needed depends on whether one of the
@@ -74,7 +72,7 @@ neutral.add_argument('--allow_raw_cwl', default=False, action="store_true",
                      help='''Do not check whether the input to a workflow step refers to the workflow inputs: tag.
                      A --yaml file that is a plain CWL workflow (cwlVersion and class: Workflow, or a $graph
                      whose main is a Workflow, and no Sophios syntax) is not compiled under --target cwl: it is used as it is''')
-neutral.add_argument('--target', choices=tuple(target_options), default='cwl',
+neutral.add_argument('--target', choices=TARGET_NAMES, default='cwl',
                      help='Compilation artifact target. Defaults to cwl.')
 neutral.add_argument('--inference_disable', default=False, action="store_true",
                      help='Disables use of the inference algorithm when compiling.')

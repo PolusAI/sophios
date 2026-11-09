@@ -44,10 +44,14 @@ What the compile does not keep does not come back:
   scatter's method; a ``when``'s spelling; adjacent ``shellQuote: false``
   texts; and a tool's input order.
 
-``Workflow.compile(target="nextflow")`` and ``Workflow.check(target="nextflow")``
-raise ``NotLowered``, a ``ValueError``, for a workflow the target cannot lower.
-Its ``refusals`` hold every ``Refusal`` at once, each naming the ``Construct``
-it refuses, the step, and the file and line its author wrote it at.
+``Workflow.compile(target="nextflow")`` and ``Workflow.run(target="nextflow")``
+raise ``NotLowered``, a ``ValueError``, for a workflow the target cannot lower,
+and ``Workflow.check(target="nextflow")`` returns the same refusals among its
+diagnostics. Its ``refusals`` hold every ``Refusal`` at once, each with the
+``nf-sNNN`` code of its reason (``sophios --explain``), the ``Construct`` it
+refuses, the step, and the file and line its author wrote it at; its
+``diagnostics`` are the same refusals as Sophios reports any error, and its
+text is theirs.
 """
 
 from pathlib import Path

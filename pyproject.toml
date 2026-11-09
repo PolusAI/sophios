@@ -319,7 +319,7 @@ allow_indirect_imports = true
 [[tool.importlinter.contracts]]
 name = "The run path takes values, never the command line's arguments"
 type = "forbidden"
-source_modules = ["sophios.run_setup", "sophios.backends", "sophios.run_local"]
+source_modules = ["sophios.run_setup", "sophios.backends", "sophios.run_local", "sophios.targets"]
 forbidden_modules = ["sophios.main", "sophios.cli"]
 
 [[tool.importlinter.contracts]]
