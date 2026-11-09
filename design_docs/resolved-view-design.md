@@ -5,7 +5,8 @@
 with `design_docs/`, `docs/`, `tests/` or `.github/`. cwltool is cited from the installed
 3.1.20260108082145 as `cwltool/<file>`, cwl-utils from 0.36 as `cwl_utils/<file>`, and CWL v1.2 from the copy
 cwltool ships, `cwltool/schemas/v1.2/<file>`.
-**Scope:** four PRs, P, A, B and C, in that order (§12). The Nextflow backend's own contract is
+**Scope:** five PRs, P, A, B, C and D, in that order (§12); D is designed in
+`design_docs/one-target-table-design.md`. The Nextflow backend's own contract is
 `design_docs/sophios_nextflow_backend.md`; this document says what it reads.
 
 ---
@@ -261,8 +262,10 @@ any refusal. It also turns every error that its own lowering or the model's vali
 the step being lowered (today `utils_nf.py:3418-3421`, `:3453-3454`). On success it returns the model and the
 notes the lowering made (`wic046`, `utils_nf.py:1036-1047`).
 
-The Nextflow target is `sophios.utils_nf.NEXTFLOW`; the CWL target is not one: it emits from the graph (rule 2)
-and refuses nothing. The `target=` dispatch stays where it is (`api/python/workflow.py:1141-1147`, `main.py:406-410`).
+The Nextflow target is `sophios.utils_nf.NEXTFLOW`; in A, B and C the CWL target is not one: it emits from the graph
+(rule 2) and refuses nothing, and the `target=` dispatch stays where it is (`api/python/workflow.py:1141-1147`,
+`main.py:406-410`). D replaces both: one table of targets that every entry point reads, in which CWL answers the
+same contract, refusing nothing and lowering with today's emitter (`design_docs/one-target-table-design.md` §2-§3).
 
 `Construct` names the eleven constructs a refusal can be about, from `workflow` to `policy`. A `Refusal` carries
 its construct, its subject (for `TOOL` the tool's file and the field's path in it), the root workflow, the
@@ -302,10 +305,10 @@ view carries are the CWL target's, written for the policy (§2, §4), so what th
 their `successCodes`, is the policy's and not their author's. In A and B no public path reaches it: the command line stops first (`cli.py:198-207`), and the
 Python API has no policy until C (§10).
 
-**Error codes do not change.** A Nextflow refusal carries no code today: it is a `ValueError` and not a
-`Diagnostic`, which always has one (`lang/diagnostics.py:52-66`). It keeps none, and every coded diagnostic
-keeps its code. A diagnostic that is new gets the next code in the catalog (`lang/error_codes.py:131` holds
-`wic055`).
+**Error codes, until D.** In A, B and C a Nextflow refusal carries no code: it is a `ValueError` and not a
+`Diagnostic`, which always has one (`lang/diagnostics.py:52-66`), and every coded diagnostic keeps its code. A
+diagnostic that is new gets the next code in the catalog (`lang/error_codes.py:131` holds `wic055`). D gives every
+Nextflow refusal a code, `nf-sNNN`, and prints it as a diagnostic (`design_docs/one-target-table-design.md` §4-§5).
 
 ## 8. Inherited requirements (PR B)
 
@@ -571,9 +574,10 @@ when a step uses a container.
 - **Writes nothing of its own.** What the runner would read goes to a temporary directory, removed when the
   check ends; no image is pulled and nothing runs.
 - **Raises** what `compile()` raises: `SophiosError` for a compile error, and for `nextflow` a `NotLowered`
-  holding every refusal. A machine that cannot run the workflow raises `SophiosError`, one diagnostic per
-  problem (`wic016`, `wic021`, `wic029`...) all at once, as `run()` raises them and `--check` exits 1 on them;
-  a check that finds nothing returns.
+  holding every refusal; from D it returns the refusals as error diagnostics instead
+  (`design_docs/one-target-table-design.md` §4). A machine that cannot run the workflow raises `SophiosError`,
+  one diagnostic per problem (`wic016`, `wic021`, `wic029`...) all at once, as `run()` raises them and `--check`
+  exits 1 on them; a check that finds nothing returns.
 
 `NotLowered`, `Refusal` and `Construct` are exported from `sophios.api.python.nextflow`, whose 22 names
 (`api/python/nextflow.py:84-107`) become 25.
@@ -600,7 +604,7 @@ The layers contract stands (`pyproject.toml:306-309`). `sophios.ir.resolved` and
 
 ## 12. The PRs
 
-The PRs land in the order P, A, B, C; P sits directly on the baseline. Each has at most 7 commits.
+The PRs land in the order P, A, B, C, D; P sits directly on the baseline. Each has at most 7 commits.
 
 **The gate set** is:
 - the docs examples (`docs/cookbook`, `docs/tutorials`, `examples/workflows`);
@@ -633,6 +637,7 @@ compiler's own tests. The Python builders that rewrote emitted CWL become `subtr
 | **A** `refactor`: Nextflow lowers from a resolved view of the graph | 1 `design:` this document and the backend revision. 2 `lang.subset`: the subset's parse, type check, canonical form and source text leave `nf_expr`. 3 `testkit` compiles each case through `compile_source`; the cases are re-spelled as above. 4 `ir.resolved`, `resolve`, `compiler.resolved_view` and `CompilationResult.policy`, and `tool_steps`. 5 Nextflow lowers from the view: every workflow-level analysis is over view constructs, run values and kept outputs are passed as §4 says, and tool lowering is unchanged. 6 Refusals at the user's line (§7): `WorkflowPort.span` and `Document.port_spans`, every expectation string that names a CWL path re-spelled in the printed form, and `nf_support.CONSTRUCTS`. That last is a second table joining each `Construct` to the `FIELDS` rows it stands for; `FIELDS` stays keyed by CWL class, so `docs/conf.py` and `tests/core/nextflow/test_support_table.py` keep working, and both gain the join. 7 Deletions and the import-linter contracts. | `CompiledNextflowSource`, `compilation_result_source` and its helpers. The CWL-dict versions of the workflow-level analysis. `testkit.synthetic_source` and `workflow_doc`. | **Byte-identical** in every mode, all four Nextflow files included. **Refusals:** only their text changes. The cases the core refuses leave the Nextflow data. The test count does not grow. |
 | **B** `feat(nextflow)`: step-only inputs and inherited requirements | Carried inputs (§9), `NfProcess.step_only_inputs`, `NfPort.scalar_type`, schema 21, the `WorkflowStepInput` carrier, the reader and `import_nextflow` reading output with and without it, and `when` typed by delivered type. Inherited requirements and the four feature classes (§8). The runtime differential (§9), with the §8 cases among its examples. | `_undeclared_inputs`, `_named_sources`, `_undeclared_input_findings` and `_declared_inputs_only` in their view form from A (today `utils_nf.py:1895-1962`). The rule that a conditional step's tool declares an input (`:1974-1978`). The `when`'s typing against the tool (`:2994-3012`). The three requirement and hint refusals A kept (§8). | `workflow.nf`, `nextflow.config` and `nextflow_params.json` byte-identical over the gate set. `nextflow_workflow.json` differs only as §9 says. Every CWL mode byte-identical. Fixed point over the old cases and the new ones. A pipeline written by A imports. The differential passes. The gate set gains no refusal (§9, Measured). |
 | **C** `feat`: checks before anything is written | The shared `when` check (§10), `wic056` as a note on the CWL target, `Workflow.check(target=...)`, the three exports from `sophios.api.python.nextflow`, and `policy=` on `compile`, `run`, `start`, `run_async` and `check`. | The Nextflow target's own boolean test of a `when`, which reads the shared check from here on. | Every mode byte-identical. No gate-set workflow gets a `wic056` note. Nextflow refusals unchanged. `check()` returns its notes without printing them, raises what `compile()` raises, and leaves the working directory and base path as it found them. `policy=` writes, for a Python workflow, the CWL the flags write for its `.wic` twin. |
+| **D** `feat`: one table of targets, nf-s codes | `design_docs/one-target-table-design.md`: `sophios.targets` read by every entry point, CWL answering the target contract, every Nextflow refusal an `nf-sNNN` diagnostic, `check(target="nextflow")` returning them. | The target branches, `backends.BACKENDS`, `ir.resolved.Target`, the refusal header and `error_<stem>.txt` of a refusal, and the refusals another one pre-empts (its §6). | Every mode byte-identical. Every refusal keeps its construct, span and reason, and gains a code. |
 
 ## 13. What stays
 
@@ -641,4 +646,4 @@ compiler's own tests. The Python builders that rewrote emitted CWL become `subtr
   and C adds three names (§10).
 - Emitted CWL, the inliner and every CWL rewriting flag (rule 2), but for P's fixes (§2).
 - `workflow.nf`, `nextflow.config` and `nextflow_params.json` for every workflow that lowers today.
-- Error codes. Drawing.
+- Error codes, until D gives Nextflow refusals theirs. Drawing.

@@ -57,7 +57,7 @@ The backend's support is one table in code, `src/sophios/nf_support.py`. It give
 
 Capability analysis is closed-world. Each semantic source field is consumed by a lowering, used by the Sophios compile alone, or reported as rejected. The compile-time fields are `format` on tool inputs and outputs and on workflow inputs and outputs, which Sophios uses for EDAM inference, and on a File value, which the parameters file does not carry; `streamable`; `doc`; `label`; `intent`; and `NetworkAccess` whose `networkAccess` is the literal `true`, which asks for what a Nextflow task already has. Every other value of `NetworkAccess` is rejected. Unknown requirements, bindings, expressions, directives, operators, and executable syntax are never ignored.
 
-Diagnostics identify the user's file and line, the step, the rejected construct, and the next supported action when one exists, in the printed form of resolved-view design §7; a tool's field is named by its path inside the tool's own document, and no diagnostic names a path into the CWL Sophios writes. Capability analysis aggregates independent findings so users do not have to fix unsupported constructs one at a time.
+Diagnostics identify the user's file and line, the step, the rejected construct, and the next supported action when one exists; each is an error diagnostic with an `nf-sNNN` code, printed in the layout of every other Sophios diagnostic (`design_docs/one-target-table-design.md` §4-§5); a tool's field is named by its path inside the tool's own document, and no diagnostic names a path into the CWL Sophios writes. Capability analysis aggregates independent findings so users do not have to fix unsupported constructs one at a time.
 
 ---
 
