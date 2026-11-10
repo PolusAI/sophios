@@ -255,8 +255,8 @@ Run it later on this machine, or read it to see what a run does.
 `cwltool_filterlog` is cwltool, started with two noisy log messages
 filtered out. The compiled workflow and job file it names are standard CWL,
 so a CWL runner on another machine needs only them, the step files beside
-them, and the files the job and the tools name. To run a workflow on another computer of
-your own over ssh, see [Sites](sites.md); to send it to the cluster's compute
+them, and the files the job and the tools name. To run a workflow over ssh on another computer
+of your own or on a Slurm cluster, see [Sites](sites.md); to send it to the cluster's compute
 service instead, see [The compute service](compute.md).
 
 ## Images that rely on an entrypoint
