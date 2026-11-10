@@ -1,8 +1,8 @@
 # Sites: Run a Workflow on a Cluster or a Machine as Yourself — Design
 
-**Status:** Approved by the owner on 2026-11-09. Experimental. S1, S2 and S3 are implemented; S4 is not yet. A
-commit that changes this file has a subject beginning with `design:`. What S2 found while it was built is in §17, what
-S3 found in §18.
+**Status:** Approved by the owner on 2026-11-09. Experimental. S1 to S4 are implemented. A commit that changes this
+file has a subject beginning with `design:`. What S2 found while it was built is in §17, what S3 found in §18, what S4
+found in §19.
 **Baseline:** PolusAI/sophios#586 (`feat/one-target-table`, measured at `865a3455`), itself on #585. Read against
 Toil 9.5.0, cwltool 3.2.20260413085819 and Nextflow 26.04.2. It supersedes the sites design of 2026-10-29; every
 measured fact below that this design keeps was measured for that design's draft of 2026-10-28.
@@ -310,7 +310,7 @@ the site. Problems only a site has (it cannot be reached, a scheduler command is
 | `wic060` | a Nextflow process with a container on a site whose engine is not Docker | S2 |
 | `wic061` | a note: a step Toil gives 4 GiB on a site, its tool declaring no memory (§10) | S2 |
 | reused | `wic015` the engine; `wic016` an input, or a path with `..`, `~` or `$`; `wic021` `<root>/sophios`, or an `outdir` that exists; `api008` a real-time analysis (the call's, as `run_async`'s) | S2 |
-| `wic062` | Slurm cannot run the run: one of its commands is missing or does not answer (`sacct` included), your login profile sends jobs to another cluster or sets an `SBATCH_` value no job script can carry, a partition the run needs is not there, a GPU step has no one partition with GPUs, or the runner is Nextflow, which S4 runs on Slurm (§18) | S3 |
+| `wic062` | Slurm cannot run the run: one of its commands is missing or does not answer (`sacct` included), your login profile sends jobs to another cluster or sets an `SBATCH_` value no job script can carry, a partition the run needs is not there, or a GPU step has no one partition with GPUs | S3 |
 
 ## 12. What Sites does not do
 
@@ -411,8 +411,9 @@ The owner's hierarchy (property, then fixture, then a table, then a single case)
 - **The states** (Appendix B) as a function of generated folder and scheduler facts: an end, once seen, never
   changes; a failed `squeue` or `sacct` decides nothing; the folder decides before the scheduler.
 - **Quoting:** every value that enters a script is printed back by the real `bash`, over generated strings.
-- **The argv:** Toil's read back by Toil's own parser; Nextflow's settings by the pinned Nextflow, from the run's
-  configuration.
+- **The argv:** Toil's read back by Toil's own parser; Nextflow's settings by a run of the pinned Nextflow against the
+  fake Slurm, which reads them from the run's configuration, and `executor.queueSize` by the capacity line in its log
+  (§19.3).
 - **The table:** every runner of `targets.TARGETS` on both schedulers runs, or is refused with its code.
 - **End to end:** the scripts with `bash` for `ssh`, a fake Slurm of Sophios's own (the compute driver's is in a
   private repository Sophios CI may not check out), and the real runners, each in the lane that already installs it.
@@ -451,6 +452,19 @@ The owner's hierarchy (property, then fixture, then a table, then a single case)
   and of a pending one, a leader that will never start, Toil's leader killed hard with a step job left, which is
   cancelled, and a submit whose answer is lost before or after Slurm took the job, with a second leader of the same
   folder that waits for the first (`singleton`) and exits at its claim.
+- **S4,** in the same file and lanes: the walk over `targets.TARGETS` runs Nextflow on Slurm too, end to end in the
+  Nextflow Runtime step with the pinned Nextflow and the fake Slurm (about 20 s more there): on Slurm the leader and
+  each job its runner submits, Toil's step or Nextflow's task, carry the run's comment, account, partition and time, as
+  the fake Slurm read them from `sbatch`, under a login profile that sets other `SBATCH_` values, which every job
+  sources again (§19); on Slurm Nextflow's walk adds a step that asks for a GPU, whose task is a job on the partition
+  with GPUs asking for its GPU (`--gres`), as the closures of the run's configuration send it (Toil runs a GPU step only
+  where cwltool finds a GPU, so its walk has none); Nextflow's task's `sbatch` gets none of the `SBATCH_` variables of
+  its header's options, nor `SBATCH_ERROR`; and `executor.queueSize` is the capacity Nextflow's log gives its executor.
+  In the package job, the property over Toil's argv also reads Nextflow's settings for the same run, the block the site
+  appends to its configuration, against what Toil's own parser read (`queueSize` its `--maxJobs`, the partition and the
+  GPU partition, the steps' time, none for no limit, the comment and account); the conventions' table places a GPU step
+  alike under either runner, since where a step goes no longer depends on its runner; and `check` on Slurm refuses a
+  Nextflow process with a container (`wic060`).
 - **No cluster probes** (the compute design's decision 38). By hand on one of the owner's clusters before a site
   leaves "experimental": the claim and `exit` over NFS, a cleanup cut short by `KillWait`, `module load` under
   `set -u`, Apptainer across nodes, Nextflow's head job under the partition's default memory.
@@ -545,6 +559,46 @@ Each is the smallest change that keeps the design's intent.
     state still gives the cause. A claimed run with no `exit` whose leader Slurm lists nowhere reads RUNNING: just
     after its end, before `sacct` records it, `exit` may not show yet over NFS.
 
+## 19. What S4 found while it was built
+
+Each is the smallest change that keeps the design's intent.
+
+1. **Nextflow reads no Slurm time.** The pinned Nextflow stops a run given the time `2-00:00:00` or `30:00` ("Not a
+   valid `time` value", measured), so a site gives the steps' time in seconds, `time = '172800s'`, which Nextflow
+   writes as `#SBATCH -t 48:00:00` (measured). A steps' time of `0`, no limit, gives no `time`. The seconds are
+   Sophios's reading of the time, which the property over Toil's argv holds to Toil's `parse_slurm_time`.
+2. **A GPU step under Nextflow on Slurm goes to the partition with GPUs, asking for its GPUs** (decision 25), as one
+   under Toil does: Nextflow's Slurm executor reads no `accelerator` (measured with 26.04.2 and 26.10.5: a task with `accelerator 1`
+   gets no `--gres`), so for a workflow with GPU steps the site's `queue` and `clusterOptions` are each a closure on
+   `task.accelerator`, which Nextflow evaluates per task: a task with one gets the GPU partition and
+   `--gres=gpu:<count>`, every other the run's partition (measured: the fake Slurm's `sbatch` reads them so). The
+   GPU partition is found as for Toil (`gpu_partition=`, else the one partition with GPUs), so where a step goes no
+   longer depends on its runner. Every task keeps the one steps' time (decision 24). The Nextflow target gives Docker
+   no `--gpus`, so a GPU step's container sees a GPU only where the engine shows one by default; that is the Nextflow
+   target's to change, here and locally alike.
+3. **The pinned Nextflow verifies what the site sets by a run against the fake Slurm** (§16): the job of each task
+   carries the partition, time, comment, account and GPUs the site gave Nextflow, as `sbatch` read them, and
+   `executor.queueSize` is the capacity Nextflow's log gives its executor, on a machine and on Slurm.
+4. **One function gives Toil's `--slurmArgs=` and Nextflow's `clusterOptions` their text,** the run's comment and
+   account, which Nextflow writes as one `#SBATCH` line, as it writes any `clusterOptions` string; and one,
+   `_nextflow`, writes every setting a site gives Nextflow. No value a site takes holds a quote (each matches its
+   setting's pattern), so each is a Groovy string as it is.
+5. **Nextflow's job unsets, before Nextflow starts, the `SBATCH_` variables of every option Nextflow writes as an
+   `#SBATCH` line,** as `submit` does for the leader's header (§18.7). Nextflow writes each task's header
+   (measured with 26.04.2 and 26.10.5): `-J`, `-o`, `--no-requeue`, `--signal B:USR2@30`, `-c` and `--mem` for a step that names its cores and
+   memory, `-t`, `-p`, and `clusterOptions`, the comment, account and a GPU task's `--gres`. Each variable beats its
+   line (sbatch(1)), and the leader's login shell (`#!/bin/bash -l`) sets it again from your profile: a profile's
+   `SBATCH_PARTITION` would send every task elsewhere than `partition=` says, its `SBATCH_MEM_PER_NODE` would cut a
+   task's `--mem`, and its `SBATCH_OUTPUT` would send each task's log where it may not be written. `SBATCH_ERROR` goes
+   too: Nextflow writes `-o` alone, so a task's two streams go to one file, `.command.log`. `--signal`'s variable,
+   `SBATCH_SIGNAL`, is one the leader's header never needed. The others are yours, as for the leader: a profile's
+   `SBATCH_QOS` reaches every task. Toil gives each option it sets on `sbatch`'s command line, which beats them. The
+   fake Slurm reads the account, partition and time variables as Slurm does, and records the variables each `sbatch`
+   got.
+6. **The Nextflow design's exception, which S2 wrote (§17.7), already names what S4 sets** in the run's
+   configuration, so S4 changes no word of it; lifting the non-goal still deletes that sentence whole and changes no
+   code of the backend (decisions 18 and 25).
+
 ## Appendix A. The leader script
 
 One script for every runner and both schedulers. Sophios fills each `<...>` with a validated, quoted value. On
@@ -596,8 +650,9 @@ cd <run>
   and on Slurm `process { executor = 'slurm'; queue = '<partition>'; time = '<steps' time in seconds>s';
   clusterOptions = '--comment=sophios:<id> --account=<account>' }` (no `time` when the steps have no limit), where for
   a workflow with GPU steps `queue` and `clusterOptions` are each a closure on `task.accelerator`, giving a GPU task
-  the GPU partition and `--gres=gpu:<count>`; before it, `mkdir -p` of each folder `write` returned, and `cd` to the
-  folder `launch` names; the trap removes no scratch; no image caches.
+  the GPU partition and `--gres=gpu:<count>`; before it, `mkdir -p` of each folder `write` returned, `cd` to the
+  folder `launch` names, and on Slurm `unset` of the `SBATCH_` variables of each option Nextflow writes in a task's
+  header, and `SBATCH_ERROR` (§19.5); the trap removes no scratch; no image caches.
 - **Written only when needed:** `--account` (both places) with `account=` or your `SBATCH_ACCOUNT`; `module load`
   with `modules=`; `--slurmGPUPartition` for a workflow with GPU steps under Toil; the image caches with
   `singularity`.
