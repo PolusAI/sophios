@@ -119,9 +119,8 @@ doc = [
     "sphinx-autodoc-typehints",
 ]
 plots = ["matplotlib"]
-cyto = ["ipycytoscape"] # only for DAG visualization
-all_except_runner_src = ["sophios[test,doc,plots,cyto,mypy-types]"]
-all = ["sophios[test,doc,plots,cyto,mypy-types]"]
+all_except_runner_src = ["sophios[test,doc,plots,mypy-types]"]
+all = ["sophios[test,doc,plots,mypy-types]"]
 
 [project.scripts]
 sophios = "sophios.main:main"
