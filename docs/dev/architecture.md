@@ -220,10 +220,11 @@ for a `StepInput` default against the working directory.
   files into a run folder there, and starts the backend's `launch` from
   `bin` in a job script that records how it ended: on a `Machine` as a
   process of its own, on `Slurm` as one leader job (`sbatch`), with each of
-  Toil's steps a job of its own. `status` reads the folder, and on Slurm
-  `squeue` and `sacct` while the folder has not decided (`decide`, one
-  function for both); the backend's `outcome` reads what the run left. It
-  is not part of the Python API, and never goes through the pre-flight.
+  Toil's steps and Nextflow's tasks a job of its own. `status` reads the
+  folder, and on Slurm `squeue` and `sacct` while the folder has not decided
+  (`decide`, one function for both); the backend's `outcome` reads what the
+  run left. It is not part of the Python API, and never goes through the
+  pre-flight.
 
 ## Compatibility contract
 

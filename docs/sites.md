@@ -56,6 +56,7 @@ from sophios.sites import Slurm
 
 hpc = Slurm('me@cluster', root='/project/me/cp', bin='/project/me/envs/run/bin')
 run = hpc.submit(workflow)                      # toil-cwl-runner, each step a Slurm job of its own
+run = hpc.submit(workflow, target='nextflow')   # Nextflow, each task a Slurm job of its own
 status = run.wait()
 ```
 
@@ -67,7 +68,7 @@ status = run.wait()
 | `partition=` | The leader's partition, and every step's | Your `SBATCH_PARTITION` there, else the cluster's default partition |
 | `time=` | The leader's time limit, and every step's, in Slurm's forms (`2-00:00:00`, `12:00:00`, `90`) | The leader: your `SBATCH_TIMELIMIT`, else its partition's longest. The steps: the shortest limit of their partitions |
 | `account=` | The account of the leader and of every step | Your `SBATCH_ACCOUNT`, else Slurm's default |
-| `gpu_partition=` | The partition of each step that asks for a GPU (`cwltool:CUDARequirement`), under Toil | The one partition with GPUs; with several, name one |
+| `gpu_partition=` | The partition of each step that asks for a GPU (`cwltool:CUDARequirement`), under Toil or Nextflow | The one partition with GPUs; with several, name one |
 
 `submit` prints each with where it came from:
 
@@ -82,8 +83,15 @@ there, `export SBATCH_QOS=...` in `~/.bash_profile` or `~/.profile`: it
 reaches the leader and every step job. Sophios writes the options it sets
 into the leader's `#SBATCH` lines and unsets, for `sbatch`, the `SBATCH_`
 variables of those options, which would beat the lines; the others are
-yours. A time whose days are `0`, such as `0-12`, is refused: Toil reads
-it as twelve minutes, Slurm as twelve hours. Write `12:00:00`.
+yours. Nextflow writes each task's options as `#SBATCH` lines too: its
+name, its log, no requeue, a signal before its time limit, its cores,
+memory and time, the partition, the comment and the account. Your login
+profile sets your `SBATCH_` variables again in every job, so before
+Nextflow starts, the leader unsets those of the options Nextflow writes,
+and `SBATCH_ERROR`, since Nextflow sends a task's two streams to one log.
+Your others, such as `SBATCH_QOS`, reach every task. A time whose days are
+`0`, such as `0-12`, is refused: Toil reads it as twelve minutes, Slurm as
+twelve hours. Write `12:00:00`.
 
 ## Reaching it
 
@@ -118,16 +126,17 @@ refused there with a code:
 |---|---|---|
 | `target='cwl'`, Toil, the default | Toil's `single_machine` batch system: at most `max_parallel` steps at once, each step's outputs and scratch in the run folder | Each step a Slurm job of its own, at most `max_parallel` in Slurm's queue, on the run's partition with the steps' time; each step's outputs and scratch in the run folder |
 | `target='cwl'`, `runner='cwltool'` | Refused, `wic058`: Toil runs the same CWL on a machine and on a cluster alike | Refused, `wic058` |
-| `target='nextflow'` | Nextflow's local executor: at most `max_parallel` tasks at once (`executor.queueSize`, which the site adds to the run's `nextflow.config`). Its outputs stay in its work folder, where the Nextflow target leaves them | Not yet: refused with `wic062` |
+| `target='nextflow'` | Nextflow's local executor: at most `max_parallel` tasks at once (`executor.queueSize`, which the site adds to the run's `nextflow.config`). Its outputs stay in its work folder, where the Nextflow target leaves them | Nextflow's Slurm executor: each task a Slurm job of its own, at most `max_parallel` in Slurm's queue, on the run's partition with the steps' time, or, for a step that asks for a GPU, on the partition with GPUs, asking for its GPUs; its outputs in its work folder. The site sets all of it in the run's `nextflow.config` |
 
 A site needs Toil 9.5.0 and Nextflow 26.04.2 or later; `check` reads
 each one's version. A runner pulls the images its steps need as it runs,
-so they must be in a registry the site can pull from. The Nextflow target runs containers with Docker only: on a machine
-whose `container_engine` is not `docker`, each step with a container is
-refused with `wic060`, by name. A Toil step whose tool declares no memory
-gets 4 GiB there (`--defaultMemory 4Gi`), and Toil refuses to start it on
-a machine with less: `check` notes each such step, `wic061`. The tool's own
-`ramMin` wins.
+so they must be in a registry the site can pull from. The Nextflow target runs containers with Docker only: on a site
+whose `container_engine` is not `docker`, such as a `Slurm` with its
+default, `singularity`, each step with a container is refused with
+`wic060`, by name, and a workflow whose steps have none runs. A Toil step
+whose tool declares no memory gets 4 GiB there (`--defaultMemory 4Gi`),
+and Toil refuses to start it on a machine with less: `check` notes each
+such step, `wic061`. The tool's own `ramMin` wins.
 
 `check` and `submit` take the workflow and these options:
 
@@ -182,12 +191,13 @@ says how to attach to the run, which may have started.
 
 On Slurm the call ends with `sbatch --parsable <run>/job.sh`. The leader
 job is named after the run and carries the comment `sophios:<id>`, as each
-of Toil's step jobs does. When the call fails or its answer is lost,
-`submit` asks Slurm for a job named after the run (`squeue`, then
-`sacct`) and adopts it; if there is none, it runs `sbatch` again on the
-same folder. A run has one leader all the same: the first job to start
-claims the run, `--dependency=singleton` runs one job of that name at a
-time, and a later one finds the claim and exits having changed nothing.
+of Toil's step jobs and Nextflow's task jobs does. When the call fails or
+its answer is lost, `submit` asks Slurm for a job named after the run
+(`squeue`, then `sacct`) and adopts it; if there is none, it runs `sbatch`
+again on the same folder. A run has one leader all the same: the first job
+to start claims the run, `--dependency=singleton` runs one job of that name
+at a time, and a later one finds the claim and exits having changed
+nothing.
 
 ## Following a run
 
@@ -289,16 +299,15 @@ site is a code of kind `machine`, which `sophios --explain` explains:
   runner you can run, or an older one than a site runs. Leave `runner=`
   out for Toil; install the runner there, or name the folder that holds it.
 - `wic059`: `attach` was given an id that names no run under `root`.
-- `wic060`: a Nextflow step with a container, on a machine whose engine is
+- `wic060`: a Nextflow step with a container, on a site whose engine is
   not Docker.
 - `wic061`, a note: a Toil step whose tool declares no memory, which gets
   4 GiB there.
 - `wic062`: Slurm cannot run the run: one of its commands is missing or
   does not answer (`sacct` too), your login profile there sends jobs to
   another cluster or sets an `SBATCH_` value no job script can carry, a
-  partition the run needs is not there, a GPU step has no one partition
-  with GPUs to go to, or the runner is Nextflow, which no site runs on
-  Slurm yet.
+  partition the run needs is not there, or a GPU step has no one partition
+  with GPUs to go to.
 - `wic015`, `wic016`, `wic021`: the container engine, an input, or a
   folder Sophios writes, as for a local run, each message naming the site.
 - `api008`: a workflow with real-time analyses, which no site runs.
@@ -312,7 +321,5 @@ say why, and `run.logs()` holds the rest.
 - It copies no data and fetches no outputs: `rsync` does both.
 - It resumes nothing: a run that failed is submitted again from the start.
 - It runs no real-time analysis, and no Windows computer is a site.
-- It does not yet run Nextflow on Slurm, which `check` refuses with
-  `wic062`.
 - It runs no cwltool, which `check` refuses with `wic058`: Toil, the
   default, runs the same CWL.
