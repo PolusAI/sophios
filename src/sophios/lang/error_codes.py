@@ -380,11 +380,10 @@ class SophiosErrorCode(StrEnum):
         'Slurm on a site cannot run the run: one of its commands (`sbatch`, `squeue`, `sacct`, `scancel`, `sinfo`) is '
         'missing or does not answer, `sacct` included; your login profile there sends jobs to another cluster '
         '(`SBATCH_CLUSTERS`, `SLURM_CLUSTERS`) or sets an `SBATCH_` value a job script cannot carry; a partition the '
-        'run needs is not there, or a step asks for a GPU and no one partition has GPUs; or the runner is one a site '
-        'does not run on Slurm yet, Nextflow.',
+        'run needs is not there; or a step asks for a GPU and no one partition has GPUs.',
         'Do what the message names: load the module that provides Slurm with `modules=`, ask the administrators to '
-        'turn on accounting, correct your login profile there, name the partition with `partition=` or '
-        "`gpu_partition=`, or run Nextflow on a `Machine`.",
+        'turn on accounting, correct your login profile there, or name the partition with `partition=` or '
+        '`gpu_partition=`.',
         kind=Kind.MACHINE)
 
     # --- Python API. The document is valid; the call was not. ---

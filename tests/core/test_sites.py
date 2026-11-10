@@ -32,7 +32,8 @@ from sophios.lang.diagnostics import Severity, SophiosError
 from sophios.lang.error_codes import SophiosErrorCode as Code
 from sophios.run_status import RunState
 from sophios.runners import RunSettings, Toil
-from sophios.sites import Folder, Job, decide
+from sophios.sites import _run, _runners, _site, _ssh, _states
+from sophios.sites._states import Folder, Job, decide
 from sophios.targets import TARGETS
 from sophios.wic_types import TargetName
 
@@ -49,18 +50,19 @@ _SITES = {'machine': sites.Machine, 'slurm': sites.Slurm}
 def _local(home: Path | None = None) -> Iterator[None]:
     """`ssh <host>` as a local `bash -c`; with `home`, a login profile of the test's own."""
     with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(sites, '_transport', lambda host: ['bash', '-c'])
+        patch.setattr(_ssh, '_transport', lambda host: ['bash', '-c'])
         if home is not None:
             patch.setenv('HOME', str(home))
         yield
 
 
 @pytest.fixture(name='site')
-def _site(tmp_path: Path, tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
+def _site_folder(tmp_path: Path, tmp_path_factory: pytest.TempPathFactory,
+                 monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
     """The project folder there, `root`, with `data/in.txt`; the working directory here is another folder, which
     holds no data; a run's status read every half second, not every five."""
     monkeypatch.chdir(tmp_path_factory.mktemp('here'))
-    monkeypatch.setattr(sites, 'POLL', 0.5)
+    monkeypatch.setattr(_run, 'POLL', 0.5)
     (tmp_path / 'data').mkdir()
     (tmp_path / 'data' / 'in.txt').write_text('hello\n', encoding='utf-8')
     with _local():
@@ -103,6 +105,20 @@ def _step(name: str, *command: str, source: str | None = None,
         step.inputs.source = {'class': 'File', 'location': source}
     workflow = Workflow([step], 'site')
     workflow.outputs.out = step.outputs.out
+    return workflow
+
+
+def _copy_then_on_a_gpu() -> Workflow:
+    """`copy`, then `gpu`, which asks for a GPU and copies what `copy` wrote. Toil runs a GPU step only where cwltool,
+    which runs it, finds a GPU, so only Nextflow's walk on Slurm runs this one."""
+    first, gpu = (Step(tool(CommandLineTool(name, Inputs(source=Input(cwl.file, position=1)),
+                                            Outputs(out=Output(cwl.file, glob=f'{name}.txt'))).base_command('cat'))
+                       .stdout(f'{name}.txt'), step_name=name)
+                  for name, tool in (('copy', lambda tool: tool), ('gpu', _gpu)))
+    first.inputs.source = {'class': 'File', 'location': 'data/in.txt'}
+    gpu.inputs.source = first.outputs.out
+    workflow = Workflow([first, gpu], 'site')
+    workflow.outputs.out = gpu.outputs.out
     return workflow
 
 
@@ -149,7 +165,7 @@ def _on_slurm(code: int | None, ended: str) -> _Life:
             (Folder('7', False, code), (_LEADER('RUNNING'), _STEP), end if code in range(129) else _RUNNING, ''),
             (Folder('7', False, code), (_LEADER(ended, ended=0), _STEP), _RUNNING if code is None else end,
              '' if code is None else told),
-            (Folder('7', False, code), (_LEADER(ended, ended=sites.ENDED_GRACE), _STEP), end, told)]
+            (Folder('7', False, code), (_LEADER(ended, ended=_states.ENDED_GRACE), _STEP), end, told)]
 
 
 _STOPPED = ("Slurm will never start its step job 9 (QOSMaxCpuPerJobLimit): ask for no more than the partition and "
@@ -159,9 +175,9 @@ _STOPPED = ("Slurm will never start its step job 9 (QOSMaxCpuPerJobLimit): ask f
 _LIVES: list[_Life] = [
     [(Folder('', False, None, age=599), (), _QUEUED, ''), (Folder('', False, None, age=600), (), _FAILED, 'none'),
      (Folder('none', False, None, age=600), (), _FAILED, '')],
-    [(Folder('', False, None, age=599), (_LEADER('FAILED', ended=sites.ENDED_GRACE - 1),), _QUEUED, ''),
-     (Folder('', False, None, age=600), (_LEADER('FAILED', ended=sites.ENDED_GRACE - 1),), _QUEUED, ''),
-     (Folder('', False, None, age=600), (_LEADER('FAILED', ended=sites.ENDED_GRACE),), _FAILED, 'none')],
+    [(Folder('', False, None, age=599), (_LEADER('FAILED', ended=_states.ENDED_GRACE - 1),), _QUEUED, ''),
+     (Folder('', False, None, age=600), (_LEADER('FAILED', ended=_states.ENDED_GRACE - 1),), _QUEUED, ''),
+     (Folder('', False, None, age=600), (_LEADER('FAILED', ended=_states.ENDED_GRACE),), _FAILED, 'none')],
     [(Folder('7', False, None), (_LEADER('RUNNING'), Job('9', False, 'PENDING', 'QOSMaxCpuPerJobLimit')), _FAILED,
       'stop'), (Folder('7', False, 143, _STOPPED), (), _FAILED, '')],
     [(Folder('', False, None), (_LEADER('PENDING', 'PartitionTimeLimit'),), _FAILED, 'stop'),
@@ -216,7 +232,7 @@ def test_every_value_a_script_carries_reaches_bash_as_it_was(tmp_path_factory: p
     """Every value enters a script quoted by `_q`, and the script goes through the guard on ssh's input: bash prints
     each value back byte for byte, whatever it holds."""
     with _local(tmp_path_factory.getbasetemp()):
-        said = sites._call('localhost', 'printf "%s\\0" start ' + ' '.join(map(sites._q, values)))
+        said = _ssh._call('localhost', 'printf "%s\\0" start ' + ' '.join(map(_ssh._q, values)))
     assert said == b''.join(f'{value}\0'.encode() for value in ['start', *values])
 
 
@@ -241,24 +257,24 @@ _NAMES = st.from_regex(r'[a-z][a-z0-9]{0,6}', fullmatch=True)
 @budget(25)
 @given(st.integers(1, 1000), st.sampled_from(['always', 'onSuccess', 'never']),
        st.sampled_from(['docker', 'podman', 'singularity']), st.sampled_from(['out', 'results/p1']),
-       st.none() | st.builds(sites._Queue, st.tuples(_NAMES, st.just('')), st.just(('9', '')), st.none() | _NAMES,
-                             st.just('0') | st.from_regex(sites._TIME, fullmatch=True), st.none() | _NAMES))
-def test_toils_command_line_reads_back_as_the_site_set_it(  # pylint: disable=too-many-arguments,too-many-positional-arguments
+       st.none() | st.builds(_runners._Queue, st.tuples(_NAMES, st.just('')), st.just(('9', '')), st.none() | _NAMES,
+                             st.just('0') | st.from_regex(_runners._TIME, fullmatch=True), st.none() | _NAMES))
+def test_toils_command_line_reads_back_as_the_site_set_it_and_nextflows_agrees(  # pylint: disable=R0913,R0917,R0914
         tmp_path_factory: pytest.TempPathFactory, max_parallel: int, clean: str, engine: str, outdir: str,
-        queue: sites._Queue | None) -> None:
+        queue: _runners._Queue | None) -> None:
     """The runner's line of `job.sh`, as Toil's own parser reads it: Toil's own launch and the site's flags (design
     Appendix A), `clean=` winning over the launch's `--clean always`, run from `bin`; on Slurm (a `queue`), each step a
     Slurm job on the run's partition, a GPU step on its own, with the steps' time as Toil reads it, the run's comment
-    and account, and the steps' Slurm logs in the run."""
+    and account, and the steps' Slurm logs in the run. Nextflow's settings for the same run, the block the site appends
+    to its configuration, ask what Toil read: as many at once, and on Slurm each task a job of the same partition, time
+    (none for no limit), comment and account, and a GPU task one on the same GPU partition, with its GPUs."""
     from toil.batchSystems.slurm import parse_slurm_time  # pylint: disable=import-outside-toplevel  # it imports `pwd`
     from toil.cwl.cwltoil import get_options  # pylint: disable=import-outside-toplevel
     run = str(tmp_path_factory.mktemp('runs') / 'wf-1')
     site = (sites.Machine if queue is None else sites.Slurm)('localhost', root='/r', bin='/opt/run/bin',
                                                              container_engine=engine)
-    adds = site._RUNNERS[Toil.name]
-    assert adds is not None
-    _, script = site._job(RunRequest('wf', Path(run), RunSettings(Toil(
-        *adds(run, max_parallel, clean, queue), container_engine=engine), f'{run}/{outdir}')), clean, (), queue)
+    runner = Toil(*site._RUNNERS[Toil.name](run, max_parallel, clean, queue), container_engine=engine)
+    _, script = site._job(RunRequest('wf', Path(run), RunSettings(runner, f'{run}/{outdir}')), clean, (), queue)
     words = shlex.split(script.splitlines()[-1])
     argv = words[1:words.index('|')]
     os.makedirs(f'{run}/toil/work')
@@ -277,35 +293,42 @@ def test_toils_command_line_reads_back_as_the_site_set_it(  # pylint: disable=to
         assert (read.slurm_partition, read.slurm_gpu_partition, read.slurm_args) == (
             queue.partition[0], queue.gpu_partition,
             '--comment=sophios:wf-1' + (f' --account={queue.account}' if queue.account else ''))
-        assert read.slurm_time == parse_slurm_time(queue.steps_time) == sites._seconds(queue.steps_time)
+        assert read.slurm_time == parse_slurm_time(queue.steps_time) == _runners._seconds(queue.steps_time)
+    partition, options = f"'{read.slurm_partition}'", f"'{read.slurm_args}'"
+    if queue is not None and read.slurm_gpu_partition:   # a GPU task's, by the task
+        partition = f"{{ task.accelerator ? '{read.slurm_gpu_partition}' : {partition} }}"
+        options = f"{{ {options} + (task.accelerator ? ' --gres=gpu:' + task.accelerator.request : '') }}"
+    settings = {'executor': "'slurm'", 'queue': partition, 'clusterOptions': options,
+                **({'time': f"'{read.slurm_time}s'"} if read.slurm_time else {})}
+    assert dict(line.strip().split(' = ', 1) for line in _runners._nextflow(run, max_parallel, queue).splitlines()
+                if ' = ' in line) == {'queueSize': str(read.max_jobs), **({} if queue is None else settings)}
 
 
 #: Slurm's answers to a check, but `sinfo`'s; the run's settings; your `SBATCH_ACCOUNT`, `_PARTITION` and
-#: `_TIMELIMIT`; `sinfo -a`'s rows; the runner and what its step asks for; and where Slurm puts its jobs, or the codes.
+#: `_TIMELIMIT`; `sinfo -a`'s rows; what its step asks for; and where Slurm puts its jobs, or the codes.
 _PLACES = [
-    ({}, ('', '', ''), 'normal*|2-00:00:00|(null) short|30:00|(null)', 'toil-cwl-runner', None,
+    ({}, ('', '', ''), 'normal*|2-00:00:00|(null) short|30:00|(null)', None,
      (('normal', "the cluster's default"), ('2-00:00:00', "the partition's longest"), None, '2-00:00:00', None)),
-    ({}, ('lab', 'short', '10:00'), 'normal*|2-00:00:00|(null) short|30:00|(null)', 'toil-cwl-runner', None,
+    ({}, ('lab', 'short', '10:00'), 'normal*|2-00:00:00|(null) short|30:00|(null)', None,
      (('short', 'your SBATCH_PARTITION'), ('10:00', 'your SBATCH_TIMELIMIT'), 'lab', '30:00', None)),
     ({'partition': 'normal', 'time': '1-00:00:00', 'account': 'mine'}, ('lab', 'short', '10:00'),
-     'normal*|2-00:00:00|(null) short|30:00|(null)', 'toil-cwl-runner', None,
+     'normal*|2-00:00:00|(null) short|30:00|(null)', None,
      (('normal', 'partition='), ('1-00:00:00', 'time='), 'mine', '1-00:00:00', None)),
-    ({}, ('', '', ''), 'cpu*|infinite|(null) gpu|infinite|gpu:2 gpu|infinite|(null)', 'toil-cwl-runner', 'gpu',
+    ({}, ('', '', ''), 'cpu*|infinite|(null) gpu|infinite|gpu:2 gpu|infinite|(null)', 'gpu',
      (('cpu', "the cluster's default"), ('UNLIMITED', "the partition's longest"), None, '0', 'gpu')),
-    ({}, ('', '', ''), 'cpu*|1-00:00:00|(null) gpu|2:00:00|gpu:2', 'toil-cwl-runner', 'gpu',
+    ({}, ('', '', ''), 'cpu*|1-00:00:00|(null) gpu|2:00:00|gpu:2', 'gpu',
      (('cpu', "the cluster's default"), ('1-00:00:00', "the partition's longest"), None, '2:00:00', 'gpu')),
-    ({}, ('', '', ''), 'cpu*|1-00:00:00|(null) a100|2:00:00|gpu:4 v100|9:00:00|gpu:2', 'toil-cwl-runner', 'gpu',
+    ({}, ('', '', ''), 'cpu*|1-00:00:00|(null) a100|2:00:00|gpu:4 v100|9:00:00|gpu:2', 'gpu',
      [Code.SITE_SLURM]),
-    ({'partition': 'nowhere', 'gpu_partition': 'nowhere'}, ('', '', ''), 'cpu*|1-00:00:00|(null)', 'toil-cwl-runner',
+    ({'partition': 'nowhere', 'gpu_partition': 'nowhere'}, ('', '', ''), 'cpu*|1-00:00:00|(null)',
      'gpu', [Code.SITE_SLURM, Code.SITE_SLURM]),
-    ({}, ('', '', ''), 'cpu|1-00:00:00|(null)', 'toil-cwl-runner', None, [Code.SITE_SLURM]),
+    ({}, ('', '', ''), 'cpu|1-00:00:00|(null)', None, [Code.SITE_SLURM]),
 ]
 
 
-@pytest.mark.parametrize(('settings', 'variables', 'rows', 'runner', 'asks', 'placed'), _PLACES)
+@pytest.mark.parametrize(('settings', 'variables', 'rows', 'asks', 'placed'), _PLACES)
 def test_a_run_goes_where_its_settings_say_else_where_slurms_conventions_put_it(  # pylint: disable=R0913,R0917
-        settings: dict[str, Any], variables: tuple[str, str, str], rows: str, runner: str, asks: str | None,
-        placed: Any) -> None:
+        settings: dict[str, Any], variables: tuple[str, str, str], rows: str, asks: str | None, placed: Any) -> None:
     """The partition, the leader's time and the account from the setting that names it, else your `SBATCH_` one,
     else the cluster's default partition and its longest limit (`infinite` is UNLIMITED); the steps' time `time=`,
     else the shortest limit of their partitions (`infinite` is Toil's 0); a GPU step's partition the one with GPUs.
@@ -315,9 +338,9 @@ def test_a_run_goes_where_its_settings_say_else_where_slurms_conventions_put_it(
                                   inference=Inference())
     assert lowered is not None
     said = ['0 slurm 24.05'] * 4 + [f'0 {rows}', *variables, '', '']
-    problems, queue = sites.Slurm('h', root='/r', bin='/b', **settings)._place(said, runner, lowered.view)
+    problems, queue = sites.Slurm('h', root='/r', bin='/b', **settings)._place(said, lowered.view)
     assert ([problem.code for problem in problems] if problems else queue) == (
-        placed if isinstance(placed, list) else sites._Queue(*placed))
+        placed if isinstance(placed, list) else _runners._Queue(*placed))
 
 
 @pytest.mark.fast
@@ -345,7 +368,7 @@ def test_a_step_declares_memory_exactly_when_cwltools_lookup_which_toil_asks_fin
             'hints' if outside_hint else 'requirements': [{'class': 'ResourceRequirement', **outside}]}
         context = LoadingContext({'construct_tool_object': default_make_tool, **written})
         found = load_tool(copy.deepcopy(tool), context).get_requirement('ResourceRequirement')[0] or {}
-        assert sites._declares_memory(tool, inherited) is ('ramMin' in found or 'ramMax' in found), (tool, inherited)
+        assert _site._declares_memory(tool, inherited) is ('ramMin' in found or 'ramMax' in found), (tool, inherited)
 
 
 @pytest.mark.fast
@@ -361,7 +384,7 @@ def test_the_leader_records_its_exit_last_once_toils_scratch_is_gone_as_clean_sa
         (tmp_path / 'toil' / scratch / 'locked').mkdir(parents=True)
         (tmp_path / 'toil' / scratch / 'locked' / 'out.txt').touch()
         (tmp_path / 'toil' / scratch / 'locked').chmod(0o500)
-    trap = sites._recorded(str(tmp_path), program, clean)
+    trap = _runners._recorded(str(tmp_path), program, clean)
     assert subprocess.run(['bash', '-c', f'trap {shlex.quote(trap)} EXIT; exit {code}'], check=False).returncode == code
     removed = program == 'toil-cwl-runner' and (clean == 'always' or (clean == 'onSuccess' and code == 0))
     assert sorted(os.listdir(tmp_path / 'toil')) == ([] if removed else ['tmp', 'work'])
@@ -382,7 +405,10 @@ _PROBLEMS = [
       for engine, refused in (('podman', [Code.SITE_NEXTFLOW_CONTAINER]), ('docker', []))),
     ('slurm', 'cwl', True, 'singularity', lambda: _step('copy', 'cat', source='data/in.txt'),
      None, 'sacct', {'SBATCH_CLUSTERS': 'other', 'SBATCH_TIMELIMIT': 'two days'},
-     [Code.SITE_RUNNER, *[Code.SITE_SLURM] * 3])]
+     [Code.SITE_RUNNER, *[Code.SITE_SLURM] * 3]),
+    ('slurm', 'nextflow', True, 'singularity',
+     lambda: Workflow([adapter_step('touch', filename='empty.txt')], 'site'), None, '', {},
+     [Code.SITE_RUNNER, Code.SITE_NEXTFLOW_CONTAINER])]
 
 
 @pytest.mark.parametrize(('kind', 'target', 'empty', 'engine', 'workflow', 'outdir', 'broken', 'variables', 'codes'),
@@ -440,34 +466,38 @@ def test_no_setting_takes_shell_code_and_no_runner_an_option_it_does_not_take(ca
         call()
 
 
-#: The header's options' `SBATCH_` variables, which beat its lines, and two it does not set, which `sbatch` keeps.
-_VARIABLES = {'SBATCH_JOB_NAME': 'other', 'SBATCH_ACCOUNT': 'lab', 'SBATCH_PARTITION': 'normal',
+#: A login profile's `SBATCH_` values: of options the leader's header or Nextflow's task's sets, which beat their
+#: lines, and of others, which `sbatch` keeps.
+_VARIABLES = {'SBATCH_JOB_NAME': 'other', 'SBATCH_ACCOUNT': 'lab', 'SBATCH_PARTITION': 'short',
               'SBATCH_TIMELIMIT': '1-00:00:00', 'SBATCH_OUTPUT': '/nowhere', 'SBATCH_ERROR': '/nowhere',
               'SBATCH_OPEN_MODE': 'truncate', 'SBATCH_REQUEUE': '1', 'SBATCH_NO_REQUEUE': '1',
-              'SBATCH_MEM_PER_CPU': '1', 'SBATCH_QOS': 'lab'}
+              'SBATCH_MEM_PER_CPU': '1', 'SBATCH_QOS': 'lab', 'SBATCH_SIGNAL': 'B:USR1@60', 'SBATCH_GRES': 'gpu:9'}
 _TARGETS = [pytest.param(kind, target, id=f'{kind}-{target}',
-                         marks=[pytest.mark.nextflow] if (kind, target) == ('machine', 'nextflow') else [])
+                         marks=[pytest.mark.nextflow] if target == 'nextflow' else [])
             for kind in _SITES for target in TARGETS]
 
 
 @pytest.mark.parametrize(('kind', 'target'), _TARGETS)
-def test_every_target_of_the_target_table_runs_on_every_site_or_is_refused_with_its_code(  # pylint: disable=R0913,R0917
+def test_every_target_of_the_target_table_runs_on_every_site(  # pylint: disable=R0913,R0917
         site: Path, slurm: Path, monkeypatch: pytest.MonkeyPatch, kind: str, target: TargetName) -> None:
     """Each of `targets.TARGETS` runs on each site, with the one runner a site runs it with (decision 26), from
-    `bin`, reading a path relative to `root`, and `check` notes only Toil's step that declares no memory; or the site
-    refuses it with its code: Nextflow on Slurm, `wic066`. Its outputs are its backend's own outcome, read over the
-    transport; the run's line attaches to it from anywhere; and its folder is its record: claimed by the leader's
-    pid, or on Slurm its job id, `exit` 0, no Toil scratch left. Nextflow's executor takes `max_parallel` tasks at
-    once, from the run's configuration. On Slurm every job of the run carries its comment, and `sbatch` gets none of
-    the `SBATCH_` variables of the options the leader's header sets."""
-    for name, value in _VARIABLES.items():
-        monkeypatch.setenv(name, value)
-    machine = _SITES[kind]('localhost', root=str(site), bin=_bin(target, site))
-    workflow = _step('copy', 'cat', source='data/in.txt')
+    `bin`, reading a path relative to `root`, and `check` notes only Toil's step that declares no memory. Its outputs
+    are its backend's own outcome, read over the transport; the run's line attaches to it from anywhere; and its
+    folder is its record: claimed by the leader's pid, or on Slurm its job id, `exit` 0, no Toil scratch left.
+    Nextflow's executor takes `max_parallel` tasks at once, from the run's configuration. On Slurm the leader and
+    each step job the runner submits (Toil's, Nextflow's) carry the run's comment, account, partition and time,
+    whatever the login profile, which every job sources again, sets, and Nextflow's task of a step that asks for a
+    GPU is a job on the partition with GPUs, asking for its GPU (`--gres`); and `sbatch` gets none of the `SBATCH_`
+    variables of the options the leader's header sets, nor, for Nextflow's task, of those its own header sets."""
+    (site / '.bash_profile').write_text(''.join(f'export {name}={value}\n' for name, value in _VARIABLES.items()),
+                                        encoding='utf-8')
+    monkeypatch.setenv('NXF_HOME', os.environ.get('NXF_HOME', str(Path.home() / '.nextflow')))
+    monkeypatch.setenv('HOME', str(site))
+    machine = _SITES[kind]('localhost', root=str(site), bin=_bin(target, site),
+                           **({'account': 'mine', 'partition': 'normal'} if kind == 'slurm' else {}))
+    gpu = (kind, target) == ('slurm', 'nextflow')
+    workflow = _copy_then_on_a_gpu() if gpu else _step('copy', 'cat', source='data/in.txt')
     found = machine.check(workflow, target=target)
-    if (kind, target) == ('slurm', 'nextflow'):
-        assert [d.code for d in found] == [Code.SITE_SLURM]
-        return
     assert [d.code for d in found if d.severity is Severity.ERROR or d.code is Code.SITE_DEFAULT_MEMORY] == (
         [Code.SITE_DEFAULT_MEMORY] if target == 'cwl' else [])   # `copy` declares no memory, and Toil runs it
     run = machine.submit(workflow, target=target)
@@ -485,13 +515,18 @@ def test_every_target_of_the_target_table_runs_on_every_site_or_is_refused_with_
         job = (folder / 'job.sh').read_text(encoding='utf-8')
         assert '--maxJobs 64 ' in job   # `max_parallel`, as the site's flags give it to Toil
         assert [flag in job for flag in ('--singularity', 'CWL_SINGULARITY_CACHE')] == [kind == 'slurm'] * 2
-    if target == 'nextflow':   # `max_parallel`, as Nextflow's executor took it
+    if target == 'nextflow':   # `max_parallel`, as Nextflow's executor took it; no cache of an engine it does not run
         assert re.findall(r'capacity[:=] ?(\d+);', (folder / 'nextflow_site' / '.nextflow.log').read_text()) == ['64']
+        assert 'SINGULARITY' not in (folder / 'job.sh').read_text(encoding='utf-8')
     if kind == 'slurm':
         jobs = fake_slurm.jobs(slurm)
-        assert [job['comment'] for job in jobs] == [f'sophios:{run.id}'] * 2   # the leader, Toil's step
-        assert (os.readlink(folder / 'leader'), jobs[0]['variables']) == (jobs[0]['id'], ['SBATCH_MEM_PER_CPU',
-                                                                                          'SBATCH_QOS'])
+        # the leader, then the step's job
+        placed = [(f'sophios:{run.id}', 'mine', 'normal', seconds, '') for seconds in (86400, 2 * 86400)]
+        assert [(job['comment'], job['account'], job['partition'], fake_slurm._seconds(job['time']), job['gres'])
+                for job in jobs] == placed + ([(f'sophios:{run.id}', 'mine', 'gpu', 2 * 86400, 'gpu:1')] if gpu else [])
+        assert (os.readlink(folder / 'leader'), jobs[0]['variables']) == (jobs[0]['id'], [
+            'SBATCH_GRES', 'SBATCH_MEM_PER_CPU', 'SBATCH_QOS', 'SBATCH_SIGNAL'])
+        assert target != 'nextflow' or all(job['variables'] == ['SBATCH_OPEN_MODE', 'SBATCH_QOS'] for job in jobs[1:])
 
 
 #: The site; the step's command; how the test ends the run: by `cancel`, by aging its record past the ten minutes,
@@ -504,7 +539,7 @@ _ENDS: list[tuple[str, tuple[str, ...], str | None, str | None, tuple[Any, ...]]
     *((kind, ('sleep', '600'), 'cancel', None, (RunState.CANCELLED, 'cancelled', [], 143)) for kind in _SITES),
     *((kind, ('sleep', '600'), 'cancel', 'cancelled', (RunState.CANCELLED, 'cancelled', [], None))
       for kind in _SITES),
-    ('machine', ('sleep', '600'), 'age', 'none', (RunState.FAILED, sites._NEVER_CLAIMED, [], None)),
+    ('machine', ('sleep', '600'), 'age', 'none', (RunState.FAILED, _states._NEVER_CLAIMED, [], None)),
     ('slurm', ('true',), 'never', None, (RunState.FAILED, _NEVER, [], None))]
 
 
@@ -540,7 +575,7 @@ def test_a_run_that_fails_is_cancelled_or_never_starts_ends_as_its_folder_says( 
     (slurm / 'broken').unlink(missing_ok=True)
     assert end != 'cancel' or (run.cancel() and run.cancel())
     if end == 'age':   # a claim that cannot be written decides nothing
-        os.utime(folder / 'run.json', (time.time() - 60 * sites.UNCLAIMED_MINUTES - 60,) * 2)
+        os.utime(folder / 'run.json', (time.time() - 60 * _states.UNCLAIMED_MINUTES - 60,) * 2)
         folder.chmod(0o555)
         assert run.status().state is RunState.QUEUED
         folder.chmod(0o755)
