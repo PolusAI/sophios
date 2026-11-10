@@ -577,12 +577,33 @@ class RunOptions:  # pylint: disable=too-many-instance-attributes
     lang_version: str | None = None
 
 
-def _realtime_refused(declarations: tuple[Declaration, ...]) -> SophiosError:
-    """`api008`, at each real-time analysis declaration: `run_async` never runs them."""
+def _realtime_refused(declarations: tuple[Declaration, ...], never: str = "run_async() never runs") -> SophiosError:
+    """`api008`, at each real-time analysis declaration: what `never` names never runs them."""
     return SophiosError(Diagnostic(
         Severity.ERROR, SophiosErrorCode.REALTIME_NOT_ASYNC,
-        f"this step declares the real-time analysis {declaration.analysis!r}, and run_async() never runs "
+        f"this step declares the real-time analysis {declaration.analysis!r}, and {never} "
         "real-time analyses", declaration.span) for declaration in declarations)
+
+
+def lowered_for_site(workflow: "Workflow", *, target: str, root: PurePath, tool_registry: Tools | None,
+                     inference: Inference) -> tuple[run_setup.Lowered[Any] | None, tuple[Diagnostic, ...]]:
+    """`workflow` compiled and lowered to `target`, as `run()` lowers it, for a run on another machine whose relative
+    paths are read against `root` there, printing nothing: the model (for CWL, the one document `compile()` returns)
+    and every note the compile and the target made, with `api008` at each real-time analysis, which no site runs; or
+    None and every refusal of the target, where `compile()` raises `NotLowered`.
+
+    Raises:
+        SophiosError: The workflow does not compile.
+        ValueError: No target has that name.
+    """
+    row = targets.target(target)
+    result = compile_workflow_result(workflow, tool_registry=tool_registry, inference=inference, quiet=True)
+    realtime_ = _realtime_refused(result.realtime, "a site never runs").diagnostics if result.realtime else ()
+    try:
+        lowered, _ = _lowered_for_run(row, workflow, result, root)
+    except NotLowered as refused:
+        return None, (*result.diagnostics, *refused.diagnostics, *realtime_)
+    return lowered, (*result.diagnostics, *lowered.notes, *realtime_)
 
 
 def _run_request(workflow: "Workflow", options: RunOptions, *, refuse_realtime: bool) -> backends.RunRequest:
@@ -629,12 +650,16 @@ def _compiled_for_run(workflow: "Workflow", options: RunOptions, *, refuse_realt
     return result, analyses
 
 
-def _lowered_for_run(row: targets.Target[Any], workflow: "Workflow",
-                     result: CompilationResult) -> tuple[run_setup.Lowered[Any], Yaml]:
-    """`result` lowered by `row` for a runner, which does not run where the workflow's relative paths are read, and
-    the values bound in the workflow as the author wrote their paths."""
+def _lowered_for_run(row: targets.Target[Any], workflow: "Workflow", result: CompilationResult,
+                     root: PurePath | None = None) -> tuple[run_setup.Lowered[Any], Yaml]:
+    """`result` lowered by `row` for a runner, which does not run where the workflow's relative paths are read, so
+    each is read against `root`, the working directory when None, and the values bound in the workflow as the author
+    wrote their paths. A CWL runner runs the one document `compile()` returns."""
     view = _view(workflow, result)
-    return row.lower(targets.for_run(row, view, Path.cwd())), row.run_values(view)
+    lowered = row.lower(targets.for_run(row, view, Path.cwd() if root is None else root))
+    if row.name == "cwl":
+        lowered = replace(lowered, model=pc.inline_artifact_runs(lowered.model))
+    return lowered, row.run_values(view)
 
 
 # pylint: disable-next=too-many-arguments
@@ -643,11 +668,10 @@ def _prepared(workflow: "Workflow", options: RunOptions, *,
               check: bool) -> backends.RunRequest:
     """Write what `options.run`'s runner reads and make the machine ready for it: the run's request.
 
-    A CWL runner runs the one document `compile()` returns, and each real-time analysis's too.
+    A CWL runner runs each real-time analysis as one document too, as it runs the workflow (`_lowered_for_run`).
     """
     run = options.run
     if run.runner.target == "cwl":
-        lowered = replace(lowered, model=pc.inline_artifact_runs(lowered.model))
         analyses = tuple(replace(analysis, artifact=pc.inline_artifact_runs(analysis.artifact))
                          for analysis in analyses)
     prepared = targets.backend(run.runner).prepare(
