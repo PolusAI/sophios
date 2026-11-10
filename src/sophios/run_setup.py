@@ -8,7 +8,7 @@ images without entrypoints when asked.
 from dataclasses import dataclass, replace
 from collections.abc import Collection
 from typing import Generic, TypeVar
-from pathlib import Path
+from pathlib import Path, PurePath
 import tempfile
 
 from sophios import input_output, post_compile, preflight, realtime
@@ -56,7 +56,7 @@ class Lowered(Generic[ModelT]):
     view: ResolvedWorkflow
 
 
-def absolute_view(view: ResolvedWorkflow, root_dir: Path) -> ResolvedWorkflow:
+def absolute_view(view: ResolvedWorkflow, root_dir: PurePath) -> ResolvedWorkflow:
     """`view`, each value a run reads a relative File or Directory path of, written absolute against `root_dir`:
     a runner does not run where the workflow's paths are read."""
     bound = absolute_paths(local_locations_as_paths({port.name: port.value for port in view.inputs

@@ -278,7 +278,7 @@ def path_problems(jobs: Sequence[Job]) -> list[Diagnostic]:
     problems = []
     for job in jobs:
         for name, value in input_paths(job.values):
-            written = _written_path(value)
+            written = written_path(value)
             if written is None:
                 continue
             resolved = Path(written) if Path(written).is_absolute() else job.base / written
@@ -304,7 +304,7 @@ def _unusable(path: Path, kind: str) -> str | None:
     return None
 
 
-def _written_path(value: Mapping[str, Any]) -> str | None:
+def written_path(value: Mapping[str, Any]) -> str | None:
     """The local path a File or Directory names: its `location` or `path`, without `file://`;
     None for a literal (`contents`, `listing`) or a remote URL."""
     written = value.get('location', value.get('path'))
