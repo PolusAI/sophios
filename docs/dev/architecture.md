@@ -213,6 +213,14 @@ for a `StepInput` default against the working directory.
   `run-request.schema.json`, and follows the run over HTTP on the service's
   Unix socket, reached through the user's own `ssh`. It is not part of the
   Python API, and never goes through the pre-flight.
+- `sophios.sites` runs a workflow on another computer over the user's own
+  `ssh` (`design_docs/sites-design.md`). It compiles and lowers through the
+  runtime adapter's `lowered_for_site`, calls the backend's `write` into a
+  local folder and its `needs`, judges them there in one call, copies the
+  files into a run folder there, and starts the backend's `launch` from
+  `bin` in a job script that records how it ended; `status` reads the
+  folder, and the backend's `outcome` reads what the run left. It is not
+  part of the Python API, and never goes through the pre-flight.
 
 ## Compatibility contract
 

@@ -4,7 +4,7 @@ What does a code in a Sophios message mean, and what do I change? This page is
 the catalog, one row per code; `sophios --explain <code>` prints the same row.
 
 Every problem Sophios reports carries a code: `wic0NN` for a document or for
-what running it needs from this machine or a site, `api0NN` for a Python API call, and
+what running it needs from this machine or a [site](sites.md), `api0NN` for a Python API call, and
 `nf-sNNN` for what the Nextflow target cannot run yet. A
 diagnostic reads `file:line:col: error [code] message (step, port)`; the
 position and the step are there when Sophios knows them. A note reports a
