@@ -1,7 +1,8 @@
 # Sites: Run a Workflow on a Cluster or a Machine as Yourself — Design
 
-**Status:** Approved by the owner on 2026-11-09. Experimental. S1 and S2 are implemented; S3 and S4 are not yet. A
-commit that changes this file has a subject beginning with `design:`. What S2 found while it was built is in §17.
+**Status:** Approved by the owner on 2026-11-09. Experimental. S1, S2 and S3 are implemented; S4 is not yet. A
+commit that changes this file has a subject beginning with `design:`. What S2 found while it was built is in §17, what
+S3 found in §18.
 **Baseline:** PolusAI/sophios#586 (`feat/one-target-table`, measured at `865a3455`), itself on #585. Read against
 Toil 9.5.0, cwltool 3.2.20260413085819 and Nextflow 26.04.2. It supersedes the sites design of 2026-10-29; every
 measured fact below that this design keeps was measured for that design's draft of 2026-10-28.
@@ -223,8 +224,8 @@ leader a process group of its own, whose id is its pid (§17). Run ids are
 run has ended, its outputs and failed steps are the backend's own `outcome` over the run's `stdout`, `run.log` and
 summary, read once: a run there reads as it does here. **`wait()`** polls every 5 s for a minute, then every 60 s,
 printing each change and what `run.log` gained; Ctrl-C prints the `attach` line and leaves the run going.
-**`cancel()`** claims the run as `cancelled`, stops the leader (`scancel -u "$(id -un)" -n <id>`; on a machine,
-TERM to the job's process group), waits about 2 minutes, and returns whether it ended CANCELLED.
+**`cancel()`** claims the run as `cancelled`, stops the leader (`scancel -u "$(id -un)" -n <id>`, before the claim
+(§18); on a machine, TERM to the job's process group), waits about 2 minutes, and returns whether it ended CANCELLED.
 
 ```
 <root>/sophios/runs/<id>/
@@ -309,7 +310,7 @@ the site. Problems only a site has (it cannot be reached, a scheduler command is
 | `wic060` | a Nextflow process with a container on a site whose engine is not Docker | S2 |
 | `wic061` | a note: a step Toil gives 4 GiB on a site, its tool declaring no memory (§10) | S2 |
 | reused | `wic015` the engine; `wic016` an input, or a path with `..`, `~` or `$`; `wic021` `<root>/sophios`, or an `outdir` that exists; `api008` a real-time analysis (the call's, as `run_async`'s) | S2 |
-| new, then | a scheduler command that is missing | S3 |
+| `wic062` | Slurm cannot run the run: one of its commands is missing or does not answer (`sacct` included), your login profile sends jobs to another cluster or sets an `SBATCH_` value no job script can carry, a partition the run needs is not there, a GPU step has no one partition with GPUs, or the runner is Nextflow, which S4 runs on Slurm (§18) | S3 |
 
 ## 12. What Sites does not do
 
@@ -439,6 +440,17 @@ The owner's hierarchy (property, then fixture, then a table, then a single case)
   Runtime step runs with `tests/core/nextflow`, which it selects by that marker. The site codes' provocations
   (`tests/core/provocations.py`) go through the same local `bash`; on the Windows leg, where Sophios makes no site, only
   `wic057` fires, and `tests/core/test_run_on_windows.py` checks that a `Machine` is refused there.
+- **S3,** in the same file and lanes, with a fake Slurm of Sophios's own, `tests/core/fake_slurm.py` (`sbatch`,
+  `squeue`, `sacct`, `scancel`, `sinfo`, as much of each as Sophios and Toil ask; a job pends for `hold`, a time longer
+  than its partition's, or `singleton`): the states property takes Slurm's lives too, every claim, exit status and
+  state Slurm ends a leader in, with the ten-minute and two-minute windows, a job that will never start, and the step
+  jobs a killed runner left, and a failing `squeue` or `sacct` deciding nothing; Toil's argv on Slurm read back by
+  Toil's own parser, the steps' time by Toil's `parse_slurm_time` and by Sophios's reading of a partition's limit,
+  over every time `time=` takes; where a run goes, by a table of settings, `SBATCH_` values and `sinfo` rows; and, end
+  to end with the real Toil (`--batchSystem slurm`, each step a job of the fake), the runner table's Slurm column, `sbatch` given none of the `SBATCH_` variables of the header's options, a failed run, a cancel of a running
+  and of a pending one, a leader that will never start, Toil's leader killed hard with a step job left, which is
+  cancelled, and a submit whose answer is lost before or after Slurm took the job, with a second leader of the same
+  folder that waits for the first (`singleton`) and exits at its claim.
 - **No cluster probes** (the compute design's decision 38). By hand on one of the owner's clusters before a site
   leaves "experimental": the claim and `exit` over NFS, a cleanup cut short by `KillWait`, `module load` under
   `set -u`, Apptainer across nodes, Nextflow's head job under the partition's default memory.
@@ -489,6 +501,49 @@ Each is the smallest change that keeps the design's intent.
     names a path here. It sits in the document, not the job, so neither the pre-flight nor a site's `check` reads it,
     and the runner there reports it. Bind such a value on a workflow input instead; reading defaults against `root`
     would change the document builder, which S2 leaves as it is.
+
+## 18. What S3 found while it was built
+
+Each is the smallest change that keeps the design's intent.
+
+1. **`reason` decides first** (Appendix B): `status()` stops a run Slurm will never start as `cancel()` does, whose
+   claim or TERM would otherwise read CANCELLED. A run is stopped for a step job only while its runner has not exited.
+2. **One `squeue` lists the user's jobs with their comment and name** (`-o '%i|%T|%r|%k|%j'`), not only those named
+   after the run: the leaders by name, Toil's step jobs by the run's comment, for a step job that will never start and
+   for those a killed runner left. `scancel` has no comment filter, so `status()` cancels those by id, whenever Slurm
+   tells it the leader ended; the reason does not name them. Submit's adoption asks `squeue -n <id>` as designed.
+3. **Asked with the folder, decided after it.** `squeue` and `sacct` answer in the call that reads the folder, before
+   its files, as `ps` does on a machine; the decision reads them only when the folder has not decided, so a failed
+   one raises only then (`wic057`, as ssh not answering does), and nothing is written or cancelled.
+4. **One decision for both schedulers.** A machine's `none` claim, which S2 wrote in the reading call, is decided by
+   the same function as Slurm's and written by a second call that reads the claim back: an end is reported only once
+   it holds; while the claim cannot be written, or a leader took it first, the run reads QUEUED.
+5. **"Neither squeue nor sacct has a job of the run"** counts a job that ended at least two minutes ago without
+   claiming the run (its login profile exited, a `scancel` by hand while it pended) as none, so such a run is claimed
+   `none` ten minutes after its submit rather than read QUEUED for ever.
+6. **A time whose days are 0 is refused** (`0-12`): Toil 9.5 reads it as 12 minutes, Slurm as 12 hours. Found by the
+   differential test of the steps' time against Toil's own parser.
+7. **The `SBATCH_` variables unset** are sbatch(1)'s for each option the header writes, `--no-requeue`'s two
+   (`SBATCH_NO_REQUEUE`, `SBATCH_REQUEUE`) among them; `--comment`, `--chdir` and `--dependency` have none. An option
+   the header does not write keeps yours: the leader takes your `SBATCH_MEM_PER_NODE`, say.
+8. **`SLURM_CLUSTERS` is refused with `SBATCH_CLUSTERS`:** `sbatch` reads either.
+9. **No cwltool on Slurm** (decision 22, 2026-11-11). As built first, cwltool ran every step inside the leader, which
+   asked for the largest step's cores and memory and for no GPU, so a GPU step under it was refused. Toil, the
+   default, runs each step as a job of its own on the partition it needs, so `runner='cwltool'` is refused, `wic058`,
+   and the leader asks for neither cores nor memory.
+10. **The code S3 adds,** `wic062` (§11), covers each problem of Slurm's that `check()` finds, and Nextflow on Slurm,
+    which S4 lifts. `sacct --starttime` is the submit's time, `run.json`'s, read on the site (`date -r run.json`); the
+    two minutes are counted on the site's clock against `sacct`'s End (`SLURM_TIME_FORMAT=%s`).
+11. **A stop is done before it is recorded.** On Slurm, `cancel()`, and `status()` when it stops a run, run `scancel`
+    first, then the claim, and `status()` writes `reason` last; a `scancel` Slurm refuses ends the call, which raises
+    (`wic057`) having written nothing, so the next `status()` decides again. `scancel` by name stops a job whether or
+    not it has claimed the run, so none starts in between; on a machine the claim still comes first, since TERM
+    reaches only a claimed pid. The step jobs a killed runner left are cancelled the same way. `scancel` exits 0 for a
+    job that has ended and for a name no job has (Slurm's `scancel.c`), so only a Slurm that does not answer fails it.
+12. **An `exit` above 128 decides alone once Slurm lists its leader no more,** in neither `squeue` nor `sacct` (its
+    record purged): FAILED, by the signal, and the step jobs left are cancelled. While Slurm lists the leader, its
+    state still gives the cause. A claimed run with no `exit` whose leader Slurm lists nowhere reads RUNNING: just
+    after its end, before `sacct` records it, `exit` may not show yet over NFS.
 
 ## Appendix A. The leader script
 
@@ -543,8 +598,9 @@ cd <run>
   a workflow with GPU steps `queue` and `clusterOptions` are each a closure on `task.accelerator`, giving a GPU task
   the GPU partition and `--gres=gpu:<count>`; before it, `mkdir -p` of each folder `write` returned, and `cd` to the
   folder `launch` names; the trap removes no scratch; no image caches.
-- **Written only when needed:** `--account` (both places) with `account=`; `module load` with `modules=`;
-  `--slurmGPUPartition` for a workflow with GPU steps; the image caches with `singularity`.
+- **Written only when needed:** `--account` (both places) with `account=` or your `SBATCH_ACCOUNT`; `module load`
+  with `modules=`; `--slurmGPUPartition` for a workflow with GPU steps under Toil; the image caches with
+  `singularity`.
 - **`clean=`** (Toil only): `'onSuccess'` passes `--clean onSuccess`, and the trap removes `toil/` only when `$code`
   is 0; `'never'` passes `--clean never`, and the trap removes nothing.
 
@@ -561,21 +617,23 @@ The first row that applies decides.
 
 | State | How `status()` reads it |
 |---|---|
+| FAILED | `reason` exists, which `status()` wrote when it stopped the run (§18) |
 | COMPLETED | `exit` is 0: the runner's outputs, by its backend's `outcome`, are in place |
 | CANCELLED | `leader` is `cancelled`; or `exit` is 143 and `sacct` says CANCELLED (on a machine, 143 alone); or no `exit`, and the leader ended CANCELLED at least 2 minutes ago (a cleanup cut short: `<run>/toil` is left) |
-| FAILED | `reason` exists; `leader` is `none` ("Slurm never took the job"); `exit` is anything else, with the reason from the backend's `outcome` (the failed steps) or `sacct` (TIMEOUT is "time limit"; PREEMPTED; OUT_OF_MEMORY); or a hard kill: `exit` above 128 but not 143, or no `exit` and the leader ended at least 2 minutes ago. A hard kill's reason says `<run>/toil` is left, and its step jobs are cancelled |
+| FAILED | `leader` is `none` ("Slurm never took the job"); `exit` is anything else, with the reason from the backend's `outcome` (the failed steps) or `sacct` (TIMEOUT is "time limit"; PREEMPTED; OUT_OF_MEMORY); or a hard kill: `exit` above 128 but not 143, or no `exit` and the leader ended at least 2 minutes ago. A hard kill's reason says `<run>/toil` is left, and its step jobs are cancelled |
 | QUEUED | no claim, and a job named after the run is pending (Slurm's reason); or no job listed yet, within 10 minutes of the submit |
 | RUNNING | the claimed leader runs; or it ended less than 2 minutes ago and no `exit` shows yet |
 
 - **The folder decides first.** Once `exit`, or a `none` or `cancelled` claim, exists, it alone decides; Slurm is
-  asked then only for the cause of an `exit` above 128 and for the step jobs a killed runner left.
-- **Otherwise Slurm is asked by the run's name:** `squeue -a -h -u "$(id -un)" -n <id> -o '%i|%T|%r|%N'`, then
-  `sacct -n -X -P --name=<id> --starttime=<submit>`. Without `-a` a hidden partition's jobs are not listed; without
-  `-j`, `sacct` lists only today's.
+  asked then only for the cause of an `exit` above 128, which decides alone once Slurm lists its leader no more
+  (§18), and for the step jobs a killed runner left.
+- **Otherwise Slurm is asked:** `squeue -a -h -u "$(id -un)" -o '%i|%T|%r|%k|%j'`, the run's jobs by its comment
+  and its leaders by its name (§18), then `sacct -n -X -P --name=<id> --starttime=<submit> -o JobID,State,End`.
+  Without `-a` a hidden partition's jobs are not listed; without `-j`, `sacct` lists only today's.
 - **A failed `squeue` or `sacct` decides nothing:** it raises, and nothing is written or cancelled. "Not listed" comes
   only from a `squeue` that exited 0. The 2 minutes let `exit` show over NFS, which caches entries up to 60 s.
 - **A leader or step job that will never start** (`PartitionTimeLimit`, `QOSMaxWallDurationPerJobLimit`, ...):
-  `status()` writes `reason`, naming the setting to change, and cancels as `cancel()` does.
+  `status()` cancels as `cancel()` does, then writes `reason`, naming the setting to change (§18).
 - **On a machine**, `ps -ww -o args= -p <pid>` naming `<run>/job.sh` is RUNNING, read before the files (a job found
   gone has left its `exit`); gone with no `exit` is a hard kill. `started_at` is the claim's time, `ended_at`
   `exit`'s, `outputs` and `steps` from the backend's `outcome`. A run no leader has claimed 10 minutes after its
