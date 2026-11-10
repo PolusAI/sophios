@@ -286,10 +286,11 @@ IMPORT_EDITS: Final[dict[SophiosErrorCode, tuple[str, str, str, str]]] = {
 }
 
 
-def _provoke_site(call: str = 'check', engine: str = 'docker', **options: Any) -> None:
+def _provoke_site(call: str = 'check', engine: str = 'docker', site: str = 'Machine', **options: Any) -> None:
     """A site's `check` of a one-step workflow, or its `attach` of no run, on a site that is this computer: `ssh
     <host>` a local `bash`, with no login profile, as the site's own tests make it, and nothing of Sophios replaced.
-    `bin` is the empty `root`, so it holds no runner; the problems are raised as Sophios raises any error."""
+    `bin` is the empty `root`, so it holds no runner, and this computer has no Slurm; the problems are raised as
+    Sophios raises any error."""
     from sophios import sites
     from sophios.api.python.workflow import Workflow
 
@@ -299,7 +300,7 @@ def _provoke_site(call: str = 'check', engine: str = 'docker', **options: Any) -
         pytest.skip('Sophios on Windows itself makes no site (wic057), so no other site code fires there')
     with tempfile.TemporaryDirectory() as root, mock.patch.dict(os.environ, {'HOME': root}), \
             mock.patch.object(sites, '_transport', return_value=['bash', '-c']):
-        machine = sites.Machine('provoke', root=root, bin=root, container_engine=engine)
+        machine = getattr(sites, site)('provoke', root=root, bin=root, container_engine=engine)
         if call == 'attach':
             machine.attach('provoke-20261109T000000-00000000')
         raise SophiosError(machine.check(Workflow([adapter_step('touch', filename='empty.txt')], 'provoke'),
@@ -415,6 +416,8 @@ COMPILED: Final[dict[SophiosErrorCode, Callable[[], object]]] = {
     SophiosErrorCode.SITE_NEXTFLOW_CONTAINER: partial(_provoke_site, engine='podman', target='nextflow'),
     # touch declares no memory.
     SophiosErrorCode.SITE_DEFAULT_MEMORY: partial(_provoke_site, runner='toil-cwl-runner'),
+    # This computer has no sbatch.
+    SophiosErrorCode.SITE_SLURM: partial(_provoke_site, site='Slurm'),
     **{code: partial(_import_edited, code) for code in IMPORT_EDITS},
 }
 

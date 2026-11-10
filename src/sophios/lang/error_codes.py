@@ -150,6 +150,8 @@ class SophiosErrorCode(StrEnum):
     SITE_NEXTFLOW_CONTAINER = 'wic060'
     #: Note: a step Toil gives 4 GiB on a site, its tool declaring no memory.
     SITE_DEFAULT_MEMORY = 'wic061'
+    #: Slurm on a site cannot run the run: a command, a setting of yours there, a partition, or the runner.
+    SITE_SLURM = 'wic062'
 
     #: --- Python API. The document is valid; the call was not. ---
     INVALID_INPUT_VALUE = 'api001'
@@ -547,6 +549,16 @@ EXPLANATIONS: Final[Mapping[SophiosErrorCode, Explanation]] = {
         '(`--defaultMemory 4Gi`), and refuses to start it on a computer with less.',
         'Declare the memory the tool needs, `ramMin` in its `ResourceRequirement` '
         '(`CommandLineTool.resources(ram_min=...)` in Python); a site with 4 GiB or more runs it as it is.'),
+    SophiosErrorCode.SITE_SLURM: Explanation(
+        Kind.MACHINE,
+        'Slurm on a site cannot run the run: one of its commands (`sbatch`, `squeue`, `sacct`, `scancel`, `sinfo`) is '
+        'missing or does not answer, `sacct` included; your login profile there sends jobs to another cluster '
+        '(`SBATCH_CLUSTERS`, `SLURM_CLUSTERS`) or sets an `SBATCH_` value a job script cannot carry; a partition the '
+        'run needs is not there, or a step asks for a GPU and no one partition has GPUs; or the runner is one a site '
+        'does not run on Slurm yet, Nextflow.',
+        'Do what the message names: load the module that provides Slurm with `modules=`, ask the administrators to '
+        'turn on accounting, correct your login profile there, name the partition with `partition=` or '
+        "`gpu_partition=`, or run Nextflow on a `Machine`."),
     SophiosErrorCode.INVALID_INPUT_VALUE: Explanation(
         Kind.CALL,
         'A value bound to a step input that the input cannot take.',
