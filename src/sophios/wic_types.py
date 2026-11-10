@@ -37,17 +37,6 @@ Tools: TypeAlias = dict[StepId, Tool]
 # NOTE: Please read the Names section of docs/dev/architecture.md !!!
 Namespace: TypeAlias = str
 
-# Create a type for our Abstract Syntax Tree (AST).
-# We can probably use Dict here if str is step_name_i not just yaml_stem.
-# If we need to insert steps, that will happen
-# after edge inference, so there should not be a uniqueness issue w.r.t. step
-# number re-indexing.
-
-
-class YamlTree(NamedTuple):
-    step_id: StepId
-    yml: Yaml
-
 
 class CompilerOptions(TypedDict):
     """Core compiler flags needed for compilation and transformation into CWL."""

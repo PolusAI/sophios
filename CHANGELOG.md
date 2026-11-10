@@ -31,6 +31,12 @@ Codes in parentheses are the codes Sophios prints with each diagnostic.
 - Every guessed edge is one row of one note (wic043), and wic042 is retired:
   under `--inference_strict` a guess fails as wic043.
 
+### Packaging
+
+- The `cyto` extra is gone, with `ipycytoscape.ipynb`, the notebook it served,
+  which no longer ran. Drop `[cyto]` from your install lines; `Workflow.draw()`
+  and `--graphviz` draw a workflow.
+
 ## [0.7.0](https://github.com/PolusAI/sophios/compare/v0.6.0...v0.7.0) (2026-11-04)
 
 
