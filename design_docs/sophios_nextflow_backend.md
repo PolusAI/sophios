@@ -33,7 +33,7 @@ The backend does not perform a second forward inference pass. An imported workfl
 
 - General Groovy parsing or execution equivalence for arbitrary `.nf` files.
 - Silent preservation of unsupported semantics in executable output.
-- Running a generated pipeline other than as one local `nextflow run` child process (§4.4), and setting an executor or any other Nextflow option for the user: each reaches Nextflow only as an unchecked passthrough argument.
+- Running a generated pipeline other than as one local `nextflow run` child process (§4.4), and setting an executor or any other Nextflow option for the user: each reaches Nextflow only as an unchecked passthrough argument. One exception, for sites (`design_docs/sites-design.md`, decisions 18 and 25): a site runs the pipeline on the computer it names and sets its own scheduler's settings (`executor.queueSize`, and on Slurm each task's executor, partition, time and `clusterOptions`) in a block it appends to the run's copy of the generated `nextflow.config`, from one function in `sophios.sites`. The backend never learns of sites, so lifting this non-goal later deletes this exception with it and changes no code.
 - Nextflow-native graph inference, until a successor design. The backend does not perform a second forward inference pass.
 - Backward compatibility for private, unversioned intermediate Python objects. Serialized schemas are versioned explicitly.
 - User-written Nextflow configuration. The generated `nextflow.config` is the only configuration Sophios supports.

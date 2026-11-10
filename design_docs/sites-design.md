@@ -1,7 +1,7 @@
 # Sites: Run a Workflow on a Cluster or a Machine as Yourself — Design
 
-**Status:** Approved by the owner on 2026-11-09. Experimental. S1 is implemented; S2, S3 and S4 are not yet. A commit
-that changes this file has a subject beginning with `design:`.
+**Status:** Approved by the owner on 2026-11-09. Experimental. S1 and S2 are implemented; S3 and S4 are not yet. A
+commit that changes this file has a subject beginning with `design:`. What S2 found while it was built is in §17.
 **Baseline:** PolusAI/sophios#586 (`feat/one-target-table`, measured at `865a3455`), itself on #585. Read against
 Toil 9.5.0, cwltool 3.2.20260413085819 and Nextflow 26.04.2. It supersedes the sites design of 2026-10-29; every
 measured fact below that this design keeps was measured for that design's draft of 2026-10-28.
@@ -199,13 +199,14 @@ whose frames name the source tree and its line numbers. 668 cases exit non-zero 
 **Every call** is `ssh -T -o BatchMode=yes -o RemoteCommand=none -o ConnectTimeout=20 -o ServerAliveInterval=15 -o
 ServerAliveCountMax=3 <host> "bash -l -c '<guard>'"`. The script comes on stdin, and the guard runs it only when its
 sha256 matches: a profile that reads its input would eat part of the script and run the rest (measured). A two-factor
-cluster works through a shared connection (`ControlMaster`) opened by hand. Tests replace `ssh <host>` with a local
-`bash`, and nothing else.
+cluster works through a shared connection (`ControlMaster`) opened by hand. The guard prints the hash before it runs
+the script, so what a login profile prints is never read as the script's (§17). Tests replace `ssh <host>` with a
+local `bash`, and nothing else.
 
 **`check()`** compiles and lowers here, through the target table, so a workflow the target cannot run is refused with
 its `nf-s` code before anything reaches the site. It reads relative paths against `root`, refusing `..`, `~`, `$` and
 real-time analyses. One call then reports every File and Directory the run reads, by the backend's `needs`; the
-runner, `<bin>/<program>`, and its version against the range Sophios supports; the container engine (`docker info`
+runner, `<bin>/<program>`, and its version against the range Sophios supports (§17); the container engine (`docker info`
 on a machine; `singularity` or `apptainer` on Slurm); on Slurm `sbatch`, `squeue`, `sacct` (it must answer),
 `scancel` and `sinfo -a`, and your `SBATCH_ACCOUNT`, `_PARTITION` and `_TIMELIMIT`; and whether `<root>/sophios` is
 writable and `outdir` is free. `SBATCH_CLUSTERS` is refused: no runner can follow step jobs to another cluster.
@@ -214,7 +215,8 @@ writable and `outdir` is free. `SBATCH_CLUSTERS` is refused: no runner can follo
 folder. One call sets `trap '' HUP PIPE` (a dropped connection cannot stop it between starting the leader and the
 record), makes `<run>` and `outdir` exclusively, writes the files, and starts the leader: on Slurm `sbatch --parsable
 <run>/job.sh`, with the `SBATCH_` variables of the options `job.sh` sets unset, since they beat `#SBATCH` lines; on
-a machine `setsid nohup bash -l <run>/job.sh > <run>/run.log 2>&1 < /dev/null &`. Run ids are
+a machine `set -m; nohup bash -l <run>/job.sh > <run>/run.log 2>&1 < /dev/null &`, bash's job control giving the
+leader a process group of its own, whose id is its pid (§17). Run ids are
 `<workflow>-<YYYYMMDD>T<HHMMSS>-<8 hex>`.
 
 **`status()`** reads the folder and asks the scheduler only when the folder has not decided (Appendix B). Once the
@@ -284,7 +286,7 @@ comment, `sophios:<id>`, which Sites puts on every step job of every runner, und
 | Outputs | `<run>/out`, printed with the id; a Nextflow run's in its work folder | `outdir=` (CWL runners) |
 | The leader | your `SBATCH_PARTITION`, else the default partition; your `SBATCH_TIMELIMIT`, else that partition's longest | `partition=`, `time=`, `account=` |
 | Steps | each tool's resources; the run's partition, or for a GPU step the one partition with GPUs; `time=`, else the shortest limit of those partitions | `gpu_partition=` (several GPU partitions), `time=` |
-| Memory | a Toil step that declares none gets 4 GiB, `--no-cwl-default-ram --defaultMemory 4Gi` (Toil reads `4G` as 4·10⁹ bytes); `check()` warns for each such step; Nextflow as it runs locally | the tool's own `ramMin` |
+| Memory | a Toil step that declares none gets 4 GiB, `--no-cwl-default-ram --defaultMemory 4Gi` (Toil reads `4G` as 4·10⁹ bytes); `check()` warns for each such step (`wic061`, a note; §17); Nextflow as it runs locally | the tool's own `ramMin` |
 | Parallel | at most 64: Toil's `--maxJobs`, Nextflow's `executor.queueSize` | `max_parallel=` |
 | The runners | `<bin>/<program>`, `bin` first on PATH in every job | `bin=` (required) |
 | Modules | none | `modules=` (names) |
@@ -298,6 +300,16 @@ A problem on a site is a problem of the machine a run needs, so it is a `wic0NN`
 existing code has (a missing input file is `wic016` here and there), the site reuses that code, with a message naming
 the site. Problems only a site has (it cannot be reached, a scheduler command is missing, a runner no site runs or
 `bin` lacks, a run id names no run, Nextflow's containers without Docker) get new `wic0NN` codes. No new range.
+
+| Code | Meaning | PR |
+|---|---|---|
+| `wic057` | the site cannot be reached or used: ssh, a login profile that read the script, a call that failed there, a platform that is neither macOS nor Linux, or Sophios on Windows itself | S2 |
+| `wic058` | the runner is cwltool, which no site runs (decision 22), or `bin` lacks it, it does not run, or it is older than a site runs | S2 |
+| `wic059` | a run id names no run there | S2 |
+| `wic060` | a Nextflow process with a container on a site whose engine is not Docker | S2 |
+| `wic061` | a note: a step Toil gives 4 GiB on a site, its tool declaring no memory (§10) | S2 |
+| reused | `wic015` the engine; `wic016` an input, or a path with `..`, `~` or `$`; `wic021` `<root>/sophios`, or an `outdir` that exists; `api008` a real-time analysis (the call's, as `run_async`'s) | S2 |
+| new, then | a scheduler command that is missing | S3 |
 
 ## 12. What Sites does not do
 
@@ -384,7 +396,8 @@ code and tests, and its docs (two or three commits):
    adds this document. No user-visible change, so no docs commit.
 2. **S2. `Machine`:** the transport, the run folder, `job.sh`, the claim, the states, `check`, `submit`, `attach` and
    `Run`, every runner of the table (Toil `single_machine`, Nextflow's local executor, cwltool refused), the codes,
-   and `docs/sites.md`. An EC2 instance works from here on.
+   the refusal of Nextflow's containers without Docker, the one exception in the Nextflow design's non-goal
+   (decisions 18 and 25; §17), and `docs/sites.md`. An EC2 instance works from here on.
 3. **S3. `Slurm` with the CWL runners:** `sbatch`, the claim and adoption, the defaults and the steps' time, Toil's
    Slurm flags, a leader or step job that would never start, leftover step jobs.
 4. **S4. Nextflow on Slurm:** Slurm's settings in the block the exception S2 makes already allows (decision 25),
@@ -411,9 +424,71 @@ The owner's hierarchy (property, then fixture, then a table, then a single case)
   only for a run. In `tests/core/data/runner-transcripts`, the summary cwltool leaves is kept byte for byte, and which
   runs name it. In `tests/core/test_python_api_workflow.py`, `--docker_remove_entrypoints` rewrites a real-time
   analysis's images too, through the second `write`.
+- **S2,** in `tests/core/test_sites.py`, with a local `bash` for `ssh <host>`: in the package job, the states over
+  every life a run's folder can have on a machine (exhaustively: each claim, each exit status, with and without a hard
+  kill); every value a script carries printed back by the real `bash` through the guard, over generated strings; a login
+  profile that prints, and one that reads its input; Toil's argv, as `job.sh` writes it, read back by Toil's own parser
+  over generated `max_parallel`, `clean`, engine and outdir; the leader's EXIT trap run by `bash` for each runner,
+  `clean` and exit status; `check` finding every problem at once and writing nothing; the settings and options refused;
+  whether a step declares memory, as `check` reads it for `wic061`, against cwltool's own lookup, which Toil asks, over
+  every placement of a `ResourceRequirement` a tool can write or inherit; and, end to end with the real Toil, a run,
+  one that fails, one cancelled while it runs, and one whose job, held in its login profile, finds the run claimed
+  `cancelled` by `cancel` or `none` by `status` ten minutes after its submit. The walk over `targets.TARGETS` is one
+  test parametrized by its rows: cwltool's is refused, `wic058`, with nothing compiled or sent; its Nextflow row,
+  whose executor takes `max_parallel` from the run's configuration, marked `nextflow`, Lint And Test's Nextflow
+  Runtime step runs with `tests/core/nextflow`, which it selects by that marker. The site codes' provocations
+  (`tests/core/provocations.py`) go through the same local `bash`; on the Windows leg, where Sophios makes no site, only
+  `wic057` fires, and `tests/core/test_run_on_windows.py` checks that a `Machine` is refused there.
 - **No cluster probes** (the compute design's decision 38). By hand on one of the owner's clusters before a site
   leaves "experimental": the claim and `exit` over NFS, a cleanup cut short by `KillWait`, `module load` under
   `set -u`, Apptainer across nodes, Nextflow's head job under the partition's default memory.
+
+## 17. What S2 found while it was built
+
+Each is the smallest change that keeps the design's intent.
+
+1. **No `setsid` on macOS.** A workstation may be a Mac, which has no `setsid`. The submit call runs `set -m` before
+   `nohup bash -l <run>/job.sh ... &`: bash's job control puts the leader in a process group of its own, whose id is
+   its pid, the claim, which `cancel()` signals. Measured with bash 3.2 (macOS) and 5 (Linux).
+2. **The traps follow the claim at once** (Appendix A): a line of the environment that fails under `set -e` (a
+   `module load`, say) is recorded in `exit` as the job's failure rather than read as a hard kill, and a TERM before
+   the runner starts is a cancel. A leader that loses the claim exits before it sets them, so it records nothing.
+3. **Toil's scratch folders are made before Toil starts:** Toil 9.5 refuses a `--workDir` that does not exist
+   (measured), so `job.sh` makes `<run>/toil/work` and `<run>/toil/tmp`, as it makes Nextflow's output-target
+   folders, and goes to `<run>` (`--chdir` on Slurm), or to the folder `launch` names.
+4. **What a login profile prints is never read as the script's:** the guard prints the script's hash before it runs
+   it, and Sophios reads only what follows. A profile that prints a banner is common; one that reads its input is
+   refused, `wic057`.
+5. **The range Sophios supports** for a runner on a site is a floor: Toil 9.5.0 and Nextflow 26.04.2, the versions
+   this design was read against. The version is the
+   last `a.b.c` that `<bin>/<program> --version` (`-version` for Nextflow) prints.
+6. **On a machine, Toil's `single_machine` holds each step to the machine's memory:** it gives no more than the
+   machine has, and refuses a step that asks for more when it would start it (measured with Toil 9.5 under
+   `--maxMemory 2Gi`: a step that declares no memory fails, asking for 4 GiB; one with `ramMin` runs). So the memory
+   note holds on a machine as on Slurm: `check()` notes, `wic061`, each Toil step whose tool declares no memory,
+   which a machine with less than 4 GiB fails. A step declares memory as Toil reads it: the `ResourceRequirement`
+   that wins by cwltool's lookup (the tool's own requirement, else the one it inherits, else its own hint, else the
+   hint it inherits) names `ramMin` or `ramMax`.
+7. **Decision 18's exception lands with S2,** the first PR that runs a generated pipeline on a site and sets one of
+   its settings (`executor.queueSize`, in the block it appends to the run's configuration, decision 25), so the
+   Nextflow design's non-goal says so from the PR that makes it true. S4 adds Slurm's settings to the same block, from
+   the same function.
+8. **On a machine, a run unclaimed 10 minutes after its submit is claimed `none`,** as on Slurm, so a job script that
+   died before its claim (a login profile that exits, say) does not read QUEUED for ever. A hard kill's reason names
+   `<run>/toil` only for Toil, and only without `exit`, since with one the trap ran; a machine has no step jobs.
+9. **`outcome` reads each file it names in a call of its own, once:** the ended status is kept, so however often
+   `status()` is asked, a run's outcome is read once.
+10. **The codes a site reuses** (§11): real-time analyses are `api008`, `run_async`'s, whose meaning (a way of
+    running that never runs them) is the site's; a path with `..`, `~` or `$` is `wic016`; an `outdir` that exists
+    is `wic021`.
+11. **Sophios on Windows itself makes no site:** `Machine(...)` raises `wic057` when it is made, as
+    `sophios.compute.Service` refuses Windows when it is made, so neither `check`, `submit` nor `attach` starts
+    there: a site's paths are POSIX paths, which Python on Windows reads as its own. Inside WSL, Sophios makes one.
+12. **Known limit: a `StepInput(default=...)` File or Directory** is made absolute against the working directory
+    when the Python document is built (`_with_defaults_resolved`), before any target or site sees it, so on a site it
+    names a path here. It sits in the document, not the job, so neither the pre-flight nor a site's `check` reads it,
+    and the runner there reports it. Bind such a value on a workflow input instead; reading defaults against `root`
+    would change the document builder, which S2 leaves as it is.
 
 ## Appendix A. The leader script
 
@@ -436,6 +511,8 @@ Slurm, with `toil-cwl-runner`:
 set -euo pipefail
 ln -s "$SLURM_JOB_ID" <run>/leader 2> /dev/null || [ -L <run>/leader ] || ln -s "$SLURM_JOB_ID" <run>/leader
 [ "$(readlink <run>/leader)" = "$SLURM_JOB_ID" ] || exit 0
+trap 'code=$?; set +e; chmod -R u+rwX <run>/toil/tmp <run>/toil/work; rm -rf <run>/toil/tmp <run>/toil/work; echo "$code" > <run>/exit.partial; mv <run>/exit.partial <run>/exit' EXIT
+trap 'exit 143' TERM
 unset "${!TOIL_@}" "${!PYTHON@}"
 export PYTHONNOUSERSITE=1 TOIL_HISTORY=False
 module load <modules>
@@ -443,8 +520,8 @@ export PATH=<bin>:$PATH
 export CWL_SINGULARITY_CACHE=<root>/sophios/images
 export SINGULARITY_CACHEDIR="${SINGULARITY_CACHEDIR:-<root>/sophios/images/cache}"
 export APPTAINER_CACHEDIR="${APPTAINER_CACHEDIR:-<root>/sophios/images/cache}"
-trap 'code=$?; set +e; chmod -R u+rwX <run>/toil/tmp <run>/toil/work; rm -rf <run>/toil/tmp <run>/toil/work; echo "$code" > <run>/exit.partial; mv <run>/exit.partial <run>/exit' EXIT
-trap 'exit 143' TERM
+mkdir -p <run>/toil/work <run>/toil/tmp
+cd <run>
 { <bin>/toil-cwl-runner <launch's flags, as on #586> \
     --batchSystem slurm --bypass-file-store --leave-tmpdir \
     --no-cwl-default-ram --defaultMemory 4Gi --maxJobs <max_parallel> \
@@ -457,14 +534,15 @@ trap 'exit 143' TERM
 **What varies.** Only the scheduler's header, the runner's line and the trap's scratch:
 
 - **On a machine:** no `#SBATCH` lines; the claim takes `$$` for `$SLURM_JOB_ID`, so `leader` names the pid
-  `cancel()` signals; Toil runs `--batchSystem single_machine` and no `--slurm*` flags.
+  `cancel()` signals; Toil runs `--batchSystem single_machine` and no `--slurm*` flags, nor `--batchLogsDir`, which
+  holds step jobs' Slurm logs.
 - **Nextflow:** `<bin>/nextflow` with `launch`'s flags and none of the site's: what the site sets is the block it
   appends to the run's copy of the generated `nextflow.config` (decision 25): `executor { queueSize = <max_parallel> }`,
   and on Slurm `process { executor = 'slurm'; queue = '<partition>'; time = '<steps' time in seconds>s';
   clusterOptions = '--comment=sophios:<id> --account=<account>' }` (no `time` when the steps have no limit), where for
   a workflow with GPU steps `queue` and `clusterOptions` are each a closure on `task.accelerator`, giving a GPU task
-  the GPU partition and `--gres=gpu:<count>`; before it, `mkdir -p` of each folder `write` returned; the trap removes
-  no scratch; no image caches.
+  the GPU partition and `--gres=gpu:<count>`; before it, `mkdir -p` of each folder `write` returned, and `cd` to the
+  folder `launch` names; the trap removes no scratch; no image caches.
 - **Written only when needed:** `--account` (both places) with `account=`; `module load` with `modules=`;
   `--slurmGPUPartition` for a workflow with GPU steps; the image caches with `singularity`.
 - **`clean=`** (Toil only): `'onSuccess'` passes `--clean onSuccess`, and the trap removes `toil/` only when `$code`
@@ -500,4 +578,5 @@ The first row that applies decides.
   `status()` writes `reason`, naming the setting to change, and cancels as `cancel()` does.
 - **On a machine**, `ps -ww -o args= -p <pid>` naming `<run>/job.sh` is RUNNING, read before the files (a job found
   gone has left its `exit`); gone with no `exit` is a hard kill. `started_at` is the claim's time, `ended_at`
-  `exit`'s, `outputs` and `steps` from the backend's `outcome`.
+  `exit`'s, `outputs` and `steps` from the backend's `outcome`. A run no leader has claimed 10 minutes after its
+  submit is claimed `none` and FAILED, as on Slurm (§17).
