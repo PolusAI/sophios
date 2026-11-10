@@ -293,13 +293,14 @@ def _provoke_site(call: str = 'check', engine: str = 'docker', site: str = 'Mach
     Sophios raises any error."""
     from sophios import sites
     from sophios.api.python.workflow import Workflow
+    from sophios.sites import _ssh
 
     from .helpers import adapter_step
 
     if sys.platform == 'win32':
         pytest.skip('Sophios on Windows itself makes no site (wic057), so no other site code fires there')
     with tempfile.TemporaryDirectory() as root, mock.patch.dict(os.environ, {'HOME': root}), \
-            mock.patch.object(sites, '_transport', return_value=['bash', '-c']):
+            mock.patch.object(_ssh, '_transport', return_value=['bash', '-c']):
         machine = getattr(sites, site)('provoke', root=root, bin=root, container_engine=engine)
         if call == 'attach':
             machine.attach('provoke-20261109T000000-00000000')
@@ -310,8 +311,9 @@ def _provoke_site(call: str = 'check', engine: str = 'docker', site: str = 'Mach
 def _provoke_site_unreachable() -> None:
     """No ssh to run: the transport, a command no computer has; on Windows itself, the site is refused when made."""
     from sophios import sites
+    from sophios.sites import _ssh
 
-    with mock.patch.object(sites, '_transport', return_value=['sophios-no-such-ssh']):
+    with mock.patch.object(_ssh, '_transport', return_value=['sophios-no-such-ssh']):
         sites.Machine('provoke', root='/r', bin='/b').attach('provoke-20261109T000000-00000000')
 
 

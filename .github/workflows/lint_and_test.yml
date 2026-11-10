@@ -332,8 +332,8 @@ jobs:
           echo "${RUNNER_TEMP}" >> "${GITHUB_PATH}"
           NXF_ANSI_LOG=false "${RUNNER_TEMP}/nextflow" -version | grep 'version 26.10.5'
 
-      # tests/core/test_sites.py: a run of the Nextflow target on a machine, marked `nextflow`, the rest of whose
-      # tests the package job runs.
+      # tests/core/test_sites.py: a run of the Nextflow target on a machine and on Slurm (Sophios's fake Slurm),
+      # marked `nextflow`, the rest of whose tests the package job runs.
       - name: PyTest Nextflow Runtime
         if: ${{ runner.os == 'Linux' && !cancelled() && steps.setup.outcome == 'success' }}
         timeout-minutes: 20

@@ -1,430 +1,59 @@
-"""Run a workflow on another computer, as yourself, over your own ssh: a site (design_docs/sites-design.md).
-
-A core feature, but not part of the Python API: `sophios.api.python` neither exports nor knows it.
-
-    from sophios.sites import Machine, Slurm
-
-    hpc = Slurm('me@cluster', root='/project/me/cp', bin='/project/me/envs/run/bin')
-    ec2 = Machine('my-ec2', root='/data/cp', bin='/opt/conda/envs/run/bin')   # a Host in ~/.ssh/config
-    run = hpc.submit(workflow)            # prints the run's id, its runner and its settings, and where its outputs go
-    status = run.wait()
-
-Sophios compiles and lowers the workflow here, through `sophios.targets`, and writes the run's files here. It copies
-those files, never the data, into the run's folder there, `<root>/sophios/runs/<id>`, and starts the runner from
-`bin`: as one leader job on Slurm, or as a process of its own on a machine, which outlives ssh and Python. Nothing of
-Sophios is installed there, and nothing of a site is stored here: the run folder is the record, and `repr(run)` is
-the line that follows the run from any computer. A relative path the workflow reads is read against `root` there, as
-it is read against the working directory here.
-
-A `Machine` is a computer of your own, macOS or Linux: a workstation or a cloud instance, never a login node. A
-`Slurm` is a cluster's login node, whose compute nodes share its filesystem.
-"""
-# pylint: disable=too-many-lines,protected-access  # the sites and the run they share; a run calls its site's scheduler
-import hashlib
+"""The sites: `Machine` and `Slurm`, which check, submit and attach a run."""
+# pylint: disable=protected-access  # a site starts its run in the run's folder
 import json
-import math
 import re
 import secrets
 import shlex
-import subprocess
 import sys
 import tempfile
-import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import KW_ONLY, dataclass, replace
 from datetime import datetime, timezone
-from functools import partial, reduce
+from functools import partial
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any, ClassVar, Final
 
-from . import __version__, preflight, targets
-from .api.python._inference import Inference
-from .api.python._workflow_runtime import lowered_for_site
-from .backends import Launch, RunRequest, nextflow_directory
-from .input_output_nf import NEXTFLOW_CONFIG
-from .ir.artifacts import CompilationArtifact
-from .ir.locations import absolute_paths, input_paths
-from .ir.resolved import Requirement, ResolvedTool, ResolvedWorkflow, tool_steps
-from .lang.diagnostics import Diagnostic, Locator, Severity, SophiosError, report
-from .lang.error_codes import SophiosErrorCode as Code
-from .run_setup import Lowered
-from .run_status import RunState, RunStatus, StepStatus
-from .runtime_inputs import output_target_inputs, runner_job_inputs
-from .utils_nf import nextflow_names
-from .wic_types import Json, Tools
+from .. import __version__, preflight, targets
+from ..api.python._inference import Inference
+from ..api.python._workflow_runtime import lowered_for_site
+from ..backends import Launch, RunRequest, nextflow_directory
+from ..input_output_nf import NEXTFLOW_CONFIG
+from ..ir.artifacts import CompilationArtifact
+from ..ir.locations import absolute_paths, input_paths
+from ..ir.resolved import Requirement, ResolvedTool, ResolvedWorkflow, tool_steps
+from ..lang.diagnostics import Diagnostic, Locator, Severity, SophiosError, report
+from ..lang.error_codes import SophiosErrorCode as Code
+from ..run_setup import Lowered
+from ..runtime_inputs import output_target_inputs, runner_job_inputs
+from ..utils_nf import nextflow_names
+from ..wic_types import Json, Tools
+
+from ._run import Run, _run_folder
+from ._runners import (MAX_PARALLEL, OLDEST, ON_A_MACHINE, ON_SLURM, _CLEAN, _Queue, _SBATCH_VARIABLES,
+                       _TASK_VARIABLES, _TIME, _header, _nextflow, _recorded, _seconds)
+from ._ssh import _ANSWER, _CHECKS, _PUT, _Said, _alive, _call, _q, _unreachable
+from ._states import Job, _jobs
 
 if TYPE_CHECKING:
-    from .api.python.workflow import Workflow
+    from ..api.python.workflow import Workflow
 
-#: Every call: your own ssh, so your keys, agent, `~/.ssh/config` and jump hosts apply. It asks for nothing, so a host
-#: that wants a password or a second factor is reached through a shared connection (`ControlMaster`) opened by hand.
-SSH: Final = ('ssh', '-T', '-o', 'BatchMode=yes', '-o', 'RemoteCommand=none', '-o', 'ConnectTimeout=20',
-              '-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=3')
-#: Sophios's default for `max_parallel`: Toil's `--maxJobs`, Nextflow's `executor.queueSize`.
-MAX_PARALLEL: Final = 64
-#: How often `wait` reads a run's status in its first minute, in seconds; every minute after.
-POLL: Final = 5.0
-#: How long `cancel` waits for the run to end, in seconds.
-CANCEL_WAIT: Final = 120.0
-#: How long a run may go unclaimed after its submit before `status` decides its job never started, in minutes.
-UNCLAIMED_MINUTES: Final = 10
-#: How long after Slurm says a leader ended `status` waits for its `exit`, in seconds: NFS caches entries up to 60 s.
-ENDED_GRACE: Final = 120
 
 #: What a setting may hold: none takes shell code. A folder is absolute, and its characters fit an `#SBATCH` line.
 _HOST: Final = re.compile(r'[A-Za-z0-9_][A-Za-z0-9_.@:-]*')
 _FOLDER: Final = re.compile(r'/[A-Za-z0-9/._+-]*')
 _NAME: Final = re.compile(r'[A-Za-z0-9_][A-Za-z0-9_./+-]*')
 _RUN_ID: Final = re.compile(r'[A-Za-z0-9][A-Za-z0-9_.-]*')
-#: A Slurm time, as `--time` and Toil's `--slurmTime` read it alike: minutes, minutes:seconds, hours:minutes:seconds,
-#: days-hours, days-hours:minutes or days-hours:minutes:seconds, the days not 0 (Toil 9.5 reads `0-12` as 12 minutes).
-_TIME: Final = re.compile(r'[0-9]*[1-9][0-9]*-[0-9]+(?::[0-9]+){0,2}|[0-9]+(?::[0-9]+){0,2}')
-#: The `clean=` names, Toil's own; only Toil leaves scratch outside its outputs, so the other runners take 'always'.
-_CLEAN: Final = ('always', 'onSuccess', 'never')
-#: The oldest version of each runner a site runs, as the sites design was read against them
-#: (design_docs/sites-design.md §7).
-OLDEST: Final[Mapping[str, tuple[int, ...]]] = {'toil-cwl-runner': (9, 5, 0), 'nextflow': (26, 4, 2)}
-_ENDED: Final = (RunState.COMPLETED, RunState.FAILED, RunState.CANCELLED)
-_NEVER_CLAIMED: Final = f'its job never claimed the run within {UNCLAIMED_MINUTES} minutes of the submit'
-#: The `sbatch` variables that set each option of a leader's header, which beat its `#SBATCH` line: `submit` unsets
-#: them for `sbatch` (sbatch(1), INPUT ENVIRONMENT VARIABLES). Two set the requeue.
-_SBATCH_VARIABLES: Final[Mapping[str, tuple[str, ...]]] = {
-    'job-name': ('SBATCH_JOB_NAME',), 'comment': (), 'account': ('SBATCH_ACCOUNT',),
-    'partition': ('SBATCH_PARTITION',), 'time': ('SBATCH_TIMELIMIT',), 'output': ('SBATCH_OUTPUT',),
-    'error': ('SBATCH_ERROR',), 'open-mode': ('SBATCH_OPEN_MODE',), 'chdir': (),
-    'no-requeue': ('SBATCH_NO_REQUEUE', 'SBATCH_REQUEUE'), 'dependency': ()}
 #: The Slurm commands a run on Slurm uses, each asked so it answers; `sacct` must have accounting behind it.
 _SLURM: Final = ('sbatch --version', 'squeue --version', 'scancel --version', 'sacct -n -X -P -o JobID -S now',
                  "sinfo -a -h -o '%P|%l|%G'")
-#: Why Slurm will never start a pending job, as squeue says it, and the setting that would let it start: a per-job
-#: limit, which no wait clears (Slurm's job reason codes). A group limit, a drained node or a partition set down is
-#: not among them: each clears in time.
-_NEVER: Final = (
-    (re.compile(r'PartitionTimeLimit|(QOS|Assoc)MaxWallDuration\w*'), 'give a shorter time='),
-    (re.compile(r'InvalidAccount|AccountNotAllowed'), 'name an account you may use with account='),
-    (re.compile(r'InvalidQOS|QOSNotAllowed'), 'name a QOS you may use with SBATCH_QOS in your login profile there'),
-    (re.compile(r'(QOS|Assoc)Max\w*Per(Job|Node)\w*|QOSMin\w*|MaxMemPerLimit|BadConstraints'),
-     "ask for no more than the partition and your limits allow: a step asks for its tool's resources"))
 #: The submit's time, as `sacct --starttime` reads it, in a script that runs in the run's folder: run.json's.
 _SUBMITTED: Final = '"$(date -r run.json +%Y-%m-%dT%H:%M:%S)"'
-#: What a leader's end says, by the state Slurm ended it in, when it ended by no `exit` of its own.
-_CAUSES: Final[Mapping[str, str]] = {
-    'TIMEOUT': 'it reached its time limit: give a longer time=', 'OUT_OF_MEMORY': 'it ran out of memory',
-    'PREEMPTED': 'Slurm preempted it', 'NODE_FAIL': 'its node failed'}
-
-
-def _q(value: str) -> str:
-    """`value` as one word of a script: every value enters a script this way, and only this way."""
-    return shlex.quote(value)
-
-
-def _seconds(limit: str) -> float:
-    """A Slurm time in seconds, as Toil reads it; `infinite`, a partition with no limit, is infinite."""
-    if limit == 'infinite':
-        return math.inf
-    days, _, rest = limit.rpartition('-')
-    parts = [int(part) for part in rest.split(':')]
-    parts += [0] * ((3 if days else 2) - len(parts))
-    return int(days or 0) * 86400 + reduce(lambda total, part: total * 60 + part, parts, 0)
-
-
-@dataclass(frozen=True, slots=True)
-class _Queue:
-    """Where a run's jobs go on Slurm, and with what: the leader's partition and time, each with where it comes from;
-    the account; the steps' time; and the partition of the steps that ask for a GPU."""
-
-    partition: tuple[str, str]
-    time: tuple[str, str]
-    account: str | None
-    steps_time: str
-    gpu_partition: str | None
-
-
-def _toil(run: str, max_parallel: int, clean: str, system: str, *more: str) -> tuple[str, ...]:
-    """Toil's flags on a site (design Appendix A): its batch system, the scratch in the run, `more`, `clean=`."""
-    return ('--batchSystem', system, '--bypass-file-store', '--leave-tmpdir', '--no-cwl-default-ram',
-            '--defaultMemory', '4Gi', '--maxJobs', str(max_parallel), '--workDir', f'{run}/toil/work',
-            '--tmpdir-prefix', f'{run}/toil/tmp/t', '--tmp-outdir-prefix', f'{run}/toil/tmp/o', *more, '--clean', clean)
-
-
-def _nextflow(max_parallel: int) -> str:
-    """What a site sets for Nextflow, the one function it sets it with (decision 25): a block it appends to the run's
-    copy of the generated `nextflow.config`, the one configuration Nextflow reads (`-C`). At most `max_parallel` tasks
-    at once."""
-    return f'executor {{\n    queueSize = {max_parallel}\n}}\n'
-
-
-def _toil_on_slurm(run: str, max_parallel: int, clean: str, queue: _Queue | None) -> tuple[str, ...]:
-    """Toil's flags on Slurm: each step a job of its own, on the run's partition, or the GPU partition for a step that
-    asks for a GPU, with the steps' time, the run's comment and its account."""
-    assert queue is not None, 'a Slurm site places every run'
-    account = f' --account={queue.account}' if queue.account else ''
-    return _toil(run, max_parallel, clean, 'slurm', '--batchLogsDir', f'{run}/batch', '--slurmPartition',
-                 queue.partition[0], '--slurmTime', queue.steps_time,
-                 *(('--slurmGPUPartition', queue.gpu_partition) if queue.gpu_partition else ()),
-                 f'--slurmArgs=--comment=sophios:{PurePosixPath(run).name}{account}')
-
-
-#: The design's runner-by-scheduler table: what each site adds to a runner's launch, by its program, given the run's
-#: folder, `max_parallel`, `clean` and, on Slurm, where its jobs go; None for a runner the site does not run yet. A
-#: runner no site runs, cwltool, is in neither (decision 22). Nextflow takes none: what a site sets for it is a block
-#: of its configuration (`_nextflow`).
-ON_A_MACHINE: Final[Mapping[str, Callable[[str, int, str, _Queue | None], tuple[str, ...]]]] = {
-    'toil-cwl-runner': lambda run, max_parallel, clean, queue: _toil(run, max_parallel, clean, 'single_machine'),
-    'nextflow': lambda run, max_parallel, clean, queue: (),
-}
-ON_SLURM: Final[Mapping[str, Callable[[str, int, str, _Queue | None], tuple[str, ...]] | None]] = {
-    'toil-cwl-runner': _toil_on_slurm,
-    'nextflow': None,
-}
-
-
-def _transport(host: str) -> list[str]:
-    """The command that runs a shell command on `host`: `ssh <host>`, which the tests replace with a local `bash -c`,
-    and nothing else."""
-    return [*SSH, host]
-
-
-def _call(host: str, script: str) -> bytes:
-    """Run `script` with bash, as a login shell, on `host`, and return what it printed on its output.
-
-    The script goes on ssh's input, and the command runs it only when its sha256 is the one sent: a login profile
-    that reads its input would eat part of the script and run the rest. What the profile prints comes before the hash,
-    which the command prints once the script has arrived whole, so it is never read as the script's.
-
-    Raises:
-        SophiosError: `wic057`: ssh could not be run or failed, the script did not arrive whole, or it failed there.
-    """
-    data = script.encode('utf-8')
-    digest = hashlib.sha256(data).hexdigest()
-    guard = ('s=$(cat; echo .); s=${s%.}; h=$(printf %s "$s" | { sha256sum 2> /dev/null || shasum -a 256; }); '
-             f'[ "${{h%% *}}" = {digest} ] || {{ echo "the script Sophios sent did not arrive whole: a login '
-             f'profile there reads its input" >&2; exit 1; }}; echo {digest}; eval "$s"')
-    try:
-        done = subprocess.run([*_transport(host), f"bash -l -c '{guard}'"], input=data, capture_output=True,
-                              check=False)
-    except OSError as error:
-        raise _unreachable(host, f'ssh could not be run ({error})') from error
-    _, marker, said = done.stdout.partition(f'{digest}\n'.encode())
-    if done.returncode != 0 or not marker:
-        lines = done.stderr.decode('utf-8', 'replace').strip().splitlines()
-        raise _unreachable(host, f'the call there exited with status {done.returncode} '
-                           f"({' / '.join(lines[-3:]) or 'it said nothing'})")
-    return said
-
-
-def _unreachable(host: str, why: str) -> SophiosError:
-    return SophiosError.error(Code.SITE_UNREACHABLE, f'{host} cannot be used as a site: {why}.')
-
-
-#: A script's function that prints a file from byte `$2` on: its length in bytes on a line, then the bytes; -1 for no
-#: file. The length is read first, so a file that grows meanwhile is cut where it was.
-_PUT: Final = ('put() { if [ -f "$1" ]; then n=$(($(wc -c < "$1") - $2)); [ "$n" -gt 0 ] || n=0; echo "$n"; '
-               'if [ "$n" -gt 0 ]; then tail -c +$(($2 + 1)) "$1" | head -c "$n"; fi; else echo -1; fi; }')
-#: A script's function that runs a command and prints its exit status and the length of what it said, on a line, then
-#: what it said on both streams.
-_ANSWER: Final = 'answer() { out=$("$@" 2>&1); code=$?; echo "$code $(printf %s "$out" | wc -c)"; printf %s "$out"; }'
-
-
-class _Said:
-    """What a script printed: lines, files as `_PUT` prints them, and answers as `_ANSWER` prints them."""
-
-    def __init__(self, data: bytes) -> None:
-        self._data, self._at = data, 0
-
-    def line(self) -> str:
-        """The next line, without its line break."""
-        end = self._data.index(b'\n', self._at)
-        found, self._at = self._data[self._at:end], end + 1
-        return found.decode('utf-8', 'replace')
-
-    def _bytes(self, size: int) -> bytes:
-        found, self._at = self._data[self._at:self._at + size], self._at + size
-        return found
-
-    def file(self) -> bytes | None:
-        """The next file's bytes, None for no file."""
-        size = int(self.line())
-        return None if size < 0 else self._bytes(size)
-
-    def answer(self) -> tuple[int, str]:
-        """The next command's exit status, and what it said."""
-        status, size = self.line().split()
-        return int(status), self._bytes(int(size)).decode('utf-8', 'replace')
-
-
-def _alive(run: str) -> str:
-    """A script's function: the leader whose pid `$1` is, the claim, runs `<run>/job.sh` (a reused pid runs another)."""
-    return (f'alive() {{ case $1 in ""|*[!0-9]*) return 1 ;; esac; '
-            f'case $(ps -ww -o args= -p "$1" 2> /dev/null) in *{_q(run + "/job.sh")}*) return 0 ;; esac; return 1; }}')
-
-
-#: The checks' functions, each printing one line: what a path is, what a program printed and its exit status, a
-#: variable's value, and whether a folder can be made.
-_CHECKS: Final = '\n'.join((
-    'kind() { if [ -d "$1" ]; then if [ -r "$1" ] && [ -x "$1" ]; then echo Directory; else echo unreadable; fi; '
-    'elif [ -e "$1" ]; then if [ -r "$1" ]; then echo File; else echo unreadable; fi; else echo missing; fi; }',
-    'said() { echo "$1 $(printf %s "$2" | tr "\\n\\r" "  ")"; }',
-    'runs() { if command -v "$1" > /dev/null 2>&1; then out=$("$@" 2>&1); said $? "$out"; else echo missing; fi; }',
-    'probe() { if command -v "$1" > /dev/null 2>&1; then out=$("$@" 2>&1 > /dev/null); said $? "$out"; '
-    'else echo missing; fi; }',
-    'variable() { printf %s "${!1-}" | tr "\\n\\r" "  "; echo; }',
-    'writable() { p=$1; while [ ! -e "$p" ]; do p=$(dirname "$p"); done; '
-    'if [ -d "$p" ] && [ -w "$p" ] && [ -x "$p" ]; then echo yes; else echo "no $p"; fi; }',
-    'new() { if [ -e "$1" ] || [ -L "$1" ]; then echo exists; else writable "$1"; fi; }'))
-
-
 #: A question a check asks the site: a command that prints one line, and the judge of that line.
 _Ask = tuple[str, Callable[[str], Diagnostic | None]]
 
 
 def _error(code: Code, message: str) -> Diagnostic:
     return Diagnostic(Severity.ERROR, code, message)
-
-
-@dataclass(frozen=True, slots=True)
-class Folder:
-    """What a run's folder says, read before anything else is asked: the claim, whether its leader runs, `exit`,
-    `reason`, and how long ago the run was submitted."""
-
-    #: `leader`'s target: the leader's pid or Slurm job id, `cancelled` or `none`; '' while nothing has claimed the run.
-    leader: str
-    #: On a machine, the claimed leader runs `<run>/job.sh`, read before `exit`, so a leader found gone has left its
-    #: `exit`.
-    alive: bool
-    #: What `exit` holds: the job script's exit status, written last; None while there is none.
-    exit: int | None
-    #: What `reason` holds: why `status` stopped a run Slurm would never start; None while there is none.
-    reason: str | None = None
-    #: Seconds since the submit, on the site's clock.
-    age: int = 0
-
-
-@dataclass(frozen=True, slots=True)
-class Job:
-    """A job of a run on Slurm: one squeue lists with the run's comment, or a leader sacct lists by the run's name."""
-
-    id: str
-    #: Named after the run: a leader, of which a submit made again may have made two; else one of Toil's step jobs.
-    leader: bool
-    #: Slurm's state: PENDING, RUNNING, ...; as sacct ends it, COMPLETED, `CANCELLED by 1000`, TIMEOUT, ...
-    state: str
-    #: Why a pending job waits, as squeue says: Priority, Dependency, PartitionTimeLimit, ...
-    pending: str = ''
-    #: Seconds since it ended, as sacct says; None while it has not.
-    ended: int | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class Decision:
-    """A run's state and why, and what `status` must do there for it to hold."""
-
-    state: RunState
-    reason: str | None = None
-    #: Claim the run `none`: no job of it will ever claim it.
-    claim_none: bool = False
-    #: Write `reason` and stop the run as `cancel` does: Slurm will never start one of its jobs.
-    stop: bool = False
-    #: The step jobs a killed runner left in Slurm's queue, which `status` cancels.
-    cancel: tuple[str, ...] = ()
-
-
-# pylint: disable-next=too-many-return-statements  # the design's table: the first row that applies
-def decide(folder: Folder, scratch: str | None, queue: Callable[[], Sequence[Job]] | None = None) -> Decision:
-    """A run's state and why (design Appendix B): the first row that applies.
-
-    The folder decides first; `queue`, the run's jobs as Slurm lists them, is asked only when it has not, and raises
-    when Slurm does not answer, deciding nothing. It is None on a machine, where `folder.alive` says whether the leader
-    runs. `scratch` is the folder a hard kill leaves (Toil's `<run>/toil`), None for a runner that leaves none.
-    """
-    if folder.reason is not None:
-        return Decision(RunState.FAILED, folder.reason)
-    if folder.exit == 0:
-        return Decision(RunState.COMPLETED)
-    if folder.leader == 'cancelled':
-        return Decision(RunState.CANCELLED, 'cancelled')
-    if folder.leader == 'none':
-        return Decision(RunState.FAILED, _NEVER_CLAIMED)
-    if folder.exit is not None and folder.exit <= 128:
-        return Decision(RunState.FAILED, f'the runner exited with status {folder.exit}')
-    if queue is not None:
-        return _on_slurm(folder, scratch, queue())
-    if folder.exit is not None:
-        return Decision(RunState.CANCELLED, 'cancelled') if folder.exit == 143 else Decision(
-            RunState.FAILED, _killed(folder.exit))
-    if not folder.leader:
-        return _unclaimed(folder, None)
-    if folder.alive:
-        return Decision(RunState.RUNNING)
-    return Decision(RunState.FAILED, 'its job was killed before it recorded how the run ended (SIGKILL, out of '
-                    f'memory, or the computer stopped){_left(scratch)}')
-
-
-def _on_slurm(folder: Folder, scratch: str | None, jobs: Sequence[Job]) -> Decision:
-    """`decide` for a run on Slurm whose folder has not decided: by the run's jobs, as Slurm lists them."""
-    never = next((job for job in jobs if job.state == 'PENDING' and _remedy(job.pending)
-                  and folder.exit is None), None)
-    if not folder.leader:
-        if never is not None and never.leader:
-            return _stopped(never)
-        live = [job for job in jobs if job.leader and (job.ended is None or job.ended < ENDED_GRACE)]
-        return _unclaimed(folder, next((f"waiting in Slurm's queue ({job.pending})" for job in live
-                                        if job.state == 'PENDING'), '' if live else None))
-    leader = next((job for job in jobs if job.id == folder.leader), None)
-    if leader is None:   # Slurm may list it only later; an `exit` decides alone
-        running = folder.exit is None
-    else:
-        running = leader.ended is None or (folder.exit is None and leader.ended < ENDED_GRACE)
-    if running:
-        return Decision(RunState.RUNNING) if never is None else _stopped(never)
-    left = tuple(job.id for job in jobs if not job.leader and job.ended is None)
-    ended = leader.state.split(' ')[0] if leader is not None else 'no longer lists its job'
-    if ended == 'CANCELLED' and folder.exit in (143, None):
-        return Decision(RunState.CANCELLED, 'cancelled' if folder.exit else
-                        f'cancelled; its cleanup was cut short{_left(scratch)}', cancel=left)
-    told = (_killed(folder.exit) if folder.exit is not None else
-            'its job was killed before it recorded how the run ended')
-    cause = f"Slurm ended the run's job {ended}: {_CAUSES[ended]}" if ended in _CAUSES else f'{told} (Slurm: {ended})'
-    return Decision(RunState.FAILED, cause + ('' if folder.exit is not None else _left(scratch)), cancel=left)
-
-
-def _unclaimed(folder: Folder, waiting: str | None) -> Decision:
-    """An unclaimed run: QUEUED while a job of it may still claim it (`waiting`, '' or Slurm's reason, when one is
-    listed) or within `UNCLAIMED_MINUTES` of its submit; then claimed `none`."""
-    if waiting is not None or folder.age < 60 * UNCLAIMED_MINUTES:
-        return Decision(RunState.QUEUED, waiting or None)
-    return Decision(RunState.FAILED, _NEVER_CLAIMED, claim_none=True)
-
-
-def _killed(code: int) -> str:
-    return f'the runner ended with status {code}, a kill by signal {code - 128}: out of memory, or by hand'
-
-
-def _left(scratch: str | None) -> str:
-    return f'; {scratch} is left: rm -rf {scratch} removes it' if scratch else ''
-
-
-def _remedy(pending: str) -> str | None:
-    """The setting that would let a job Slurm will never start start, by why it pends; None for one that may start."""
-    return next((remedy for pattern, remedy in _NEVER if pattern.fullmatch(pending)), None)
-
-
-def _stopped(job: Job) -> Decision:
-    who = 'the run' if job.leader else f'its step job {job.id}'
-    return Decision(RunState.FAILED, f'Slurm will never start {who} ({job.pending}): {_remedy(job.pending)}', stop=True)
-
-
-def _jobs(run_id: str, listed: str, accounted: str, now: int) -> tuple[Job, ...]:
-    """The run's jobs: each `squeue` lists with the run's comment (`%i|%T|%r|%k|%j`), then each leader `sacct` lists
-    by the run's name that squeue does not (`JobID|State|End`, End in seconds)."""
-    found = [Job(job, name == run_id, state, pending)
-             for job, state, pending, comment, name in (line.split('|', 4) for line in listed.splitlines()
-                                                        if line.count('|') >= 4)
-             if comment == f'sophios:{run_id}']
-    known = {job.id for job in found}
-    return (*found, *(Job(job, True, state, '', now - int(end) if end.isdigit() else None)
-                      for job, state, end in (line.split('|') for line in accounted.splitlines()
-                                              if line.count('|') == 2) if job not in known))
 
 
 class _Site:
@@ -436,7 +65,7 @@ class _Site:
     container_engine: str
     modules: tuple[str, ...]
     #: The design's runner-by-scheduler table: `ON_A_MACHINE` or `ON_SLURM`.
-    _RUNNERS: ClassVar[Mapping[str, Callable[[str, int, str, _Queue | None], tuple[str, ...]] | None]] = ON_A_MACHINE
+    _RUNNERS: ClassVar[Mapping[str, Callable[[str, int, str, _Queue | None], tuple[str, ...]]]] = ON_A_MACHINE
     #: The pattern of each setting of the site's own that may be None, which no other site has.
     _OPTIONAL: ClassVar[Mapping[str, re.Pattern[str]]] = {}
     #: What the leader claims a run with: its pid on a machine, its job id on Slurm.
@@ -559,9 +188,6 @@ class _Site:
         if clean not in _CLEAN or (clean != 'always' and program != 'toil-cwl-runner'):
             raise ValueError(f"clean={clean!r}: Toil takes {', '.join(_CLEAN)}; {program} leaves no scratch of its "
                              "own outside its outputs, and takes 'always'")
-        if self._RUNNERS[program] is None:
-            return [_error(Code.SITE_SLURM, f'Sophios does not run {program} on Slurm yet: run it on a Machine, or '
-                           f"with target='cwl' on {self.host}")], {}, {}
         root = PurePosixPath(self.root)
         name = workflow.process_name
         run_id = f'{name}-{datetime.now(timezone.utc):%Y%m%dT%H%M%S}-{secrets.token_hex(4)}'
@@ -586,7 +212,8 @@ class _Site:
         if any(diagnostic.severity is Severity.ERROR for diagnostic in found):
             return found, {}, {}
         if program == 'nextflow':
-            files[(nextflow_directory(Path(), written.name) / NEXTFLOW_CONFIG).as_posix()] += _nextflow(max_parallel)
+            config = (nextflow_directory(Path(), written.name) / NEXTFLOW_CONFIG).as_posix()
+            files[config] += _nextflow(run, max_parallel, queue)
         launch, files['job.sh'] = self._job(RunRequest(
             written.name, Path(run), runner=chosen, target=target, container_engine=self.container_engine,
             outdir='' if program == 'nextflow' else outdir), max_parallel, clean, written.folders,
@@ -636,7 +263,7 @@ class _Site:
         if len(lines) != len(asks) + len(questions):
             raise _unreachable(self.host, f'its checks printed {len(lines)} lines for '
                                f'{len(asks) + len(questions)} questions')
-        more, queue = self._place(lines[len(asks):], program, view)
+        more, queue = self._place(lines[len(asks):], view)
         return problems + [found for (_, judge), line in zip(asks, lines) if (found := judge(line)) is not None] + \
             more, queue
 
@@ -720,9 +347,8 @@ class _Site:
         script (design Appendix A): on Slurm its header, then the claim, by the leader's pid or job id, the record of
         how it ended in `exit` whatever happens after the claim, `folders` made, and the launch run from `bin`."""
         backend, run = targets.backend(request.target, request.runner), str(request.basepath)
-        adds = self._RUNNERS[backend.program]
-        assert adds is not None, '_prepare refuses a runner the site does not run'
-        launch = backend.launch(replace(request, passthrough_args=adds(run, max_parallel, clean, queue)))
+        adds = self._RUNNERS[backend.program](run, max_parallel, clean, queue)
+        launch = backend.launch(replace(request, passthrough_args=adds))
         if backend.program == 'toil-cwl-runner':
             folders = (*folders, f'{run}/toil/work', f'{run}/toil/tmp', *([f'{run}/batch'] if queue else []))
         leader, images = _q(f'{run}/leader'), f'{self.root}/sophios/images'
@@ -738,6 +364,7 @@ class _Site:
             f'[ "$(readlink {leader})" = {claimant} ] || exit 0',
             f'trap {_q(_recorded(run, backend.program, clean))} EXIT',
             "trap 'exit 143' TERM", *self._environment(), *caches,
+            *([f'unset {" ".join(_TASK_VARIABLES)}'] if queue is not None and backend.program == 'nextflow' else []),
             *(f'export {name}={_q(value)}' for name, value in launch.env.items()),
             *(f'mkdir -p {_q(folder)}' for folder in folders), f'cd {_q(str(launch.cwd or run))}',
             f'{{ {shlex.join(argv)} | tee {_q(f"{run}/stdout")}; }} >> {_q(f"{run}/run.log")} 2>&1', ''])
@@ -767,10 +394,9 @@ class _Site:
         """The scheduler's questions a check asks, each printing one line."""
         return []
 
-    def _place(self, said: Sequence[str], program: str,
-               view: ResolvedWorkflow) -> tuple[list[Diagnostic], _Queue | None]:
+    def _place(self, said: Sequence[str], view: ResolvedWorkflow) -> tuple[list[Diagnostic], _Queue | None]:
         """What the answers to `_questions` say: the scheduler's problems with the run, and where its jobs go."""
-        del said, program, view
+        del said, view
         return [], None
 
     def _leader(self, run: str, job: str) -> list[str]:
@@ -826,7 +452,7 @@ class Machine(_Site):
 @dataclass(frozen=True)
 class Slurm(_Site):  # pylint: disable=too-many-instance-attributes  # the design's settings
     """A Slurm cluster's login node you can `ssh` to, as a site: each run is one leader job, and each of Toil's steps
-    a job of its own (design Appendix A). Its compute nodes share `root`'s filesystem.
+    and Nextflow's tasks a job of its own (design Appendix A). Its compute nodes share `root`'s filesystem.
 
     Args:
         host, root, bin, modules: As `Machine` takes them.
@@ -863,11 +489,11 @@ class Slurm(_Site):  # pylint: disable=too-many-instance-attributes  # the desig
                                                   'SBATCH_CLUSTERS', 'SLURM_CLUSTERS'))]
 
     # pylint: disable-next=too-many-locals  # the conventions' table, row by row
-    def _place(self, said: Sequence[str], program: str,
-               view: ResolvedWorkflow) -> tuple[list[Diagnostic], _Queue | None]:
+    def _place(self, said: Sequence[str], view: ResolvedWorkflow) -> tuple[list[Diagnostic], _Queue | None]:
         """`wic062` at each Slurm command that does not answer, at each of your settings that sends jobs to another
         cluster or that a job script cannot carry, and at a partition the run needs that `sinfo -a` does not list;
-        else where the run's jobs go, each setting from the one that names it, else by the convention."""
+        else where the run's jobs go, each setting from the one that names it, else by the convention: a GPU step's,
+        under Toil and Nextflow alike, the one partition with GPUs."""
         account, partition, limit, *clusters = said[len(_SLURM):]
         problems = [_error(Code.SITE_SLURM, f'on {self.host}, `{command}` ' + (
             'is not on PATH: modules= loads the one a cluster provides' if line == 'missing' else
@@ -892,7 +518,7 @@ class Slurm(_Site):  # pylint: disable=too-many-instance-attributes  # the desig
         chosen, source = ((self.partition, 'partition=') if self.partition else
                           (partition, 'your SBATCH_PARTITION') if partition else (default, "the cluster's default"))
         gpu = None
-        if program == 'toil-cwl-runner' and _gpu_steps(view):
+        if _gpu_steps(view):
             gpu = self.gpu_partition or (gpus[0] if len(gpus) == 1 else '')
         needed = [(chosen, source, 'partition='),
                   *([(gpu, 'gpu_partition=' if self.gpu_partition else f"of {len(gpus)} with GPUs, the one a GPU "
@@ -951,31 +577,6 @@ class Slurm(_Site):  # pylint: disable=too-many-instance-attributes  # the desig
                 'ln -s cancelled leader 2> /dev/null || true']
 
 
-def _header(run: str, queue: _Queue | None) -> list[str]:
-    """A leader's `#SBATCH` lines on Slurm (design Appendix A), none on a machine: named after the run, with its
-    comment, in one leader at a time (`singleton`), never requeued."""
-    if queue is None:
-        return []
-    run_id = PurePosixPath(run).name
-    options = [('job-name', run_id), ('comment', f'sophios:{run_id}'), ('account', queue.account),
-               ('partition', queue.partition[0]), ('time', queue.time[0]), ('output', f'{run}/run.log'),
-               ('error', f'{run}/run.log'), ('open-mode', 'append'), ('chdir', run), ('no-requeue', ''),
-               ('dependency', 'singleton')]
-    return [f'#SBATCH --{option}' + (f'={value}' if value else '') for option, value in options if value is not None]
-
-
-def _recorded(run: str, program: str, clean: str) -> str:
-    """The leader's EXIT trap: Toil's scratch removed as `clean` says, once Toil has stopped, then the exit status,
-    written last."""
-    scratch = f'{_q(f"{run}/toil/tmp")} {_q(f"{run}/toil/work")}'
-    cleanup = (f'chmod -R u+rwX {scratch}; rm -rf {scratch}; '
-               if program == 'toil-cwl-runner' and clean != 'never' else '')
-    if cleanup and clean == 'onSuccess':
-        cleanup = f'[ "$code" != 0 ] || {{ {cleanup}}}; '
-    partial_, done = _q(f'{run}/exit.partial'), _q(f'{run}/exit')
-    return f'code=$?; set +e; {cleanup}echo "$code" > {partial_}; mv {partial_} {done}'
-
-
 def _announce(host: str, record: Json) -> str:
     """What `submit` prints first: the id, the runner, on Slurm the partition and time, `max_parallel`, and the
     outputs, each with its source."""
@@ -985,10 +586,6 @@ def _announce(host: str, record: Json) -> str:
     return (f'Submitting {record["id"]} to {host}: {runner} ({runner_from}), {placed}at most {parallel} at once '
             f'({parallel_from}).\n'
             f'Outputs: {record["outdir"][0]} ({record["outdir"][1]})')
-
-
-def _run_folder(root: str, run_id: str) -> str:
-    return f'{root}/sophios/runs/{run_id}'
 
 
 def _job_values(lowered: Lowered[Any], root: PurePosixPath) -> preflight.Job:
@@ -1041,158 +638,3 @@ def _section(section: Any, cls: str) -> Any:
         return section.get(cls)
     return next((entry for entry in reversed(section or ())
                  if isinstance(entry, Mapping) and entry.get('class') == cls), None)
-
-
-class Run:
-    """A run on a site, made by `submit` and `attach`, never by calling the class.
-
-    Followed as the local `RunHandle` is, `collect` aside: `status`, `wait`, `outputs`, `logs` and `cancel`; and `id`.
-    Its run outlives ssh and Python, and `repr(run)` is the line that follows it from any computer. When the site
-    or its scheduler cannot be asked, a method raises `wic057` and decides nothing.
-    """
-
-    def __init__(self, site: _Site, record: Json) -> None:
-        self._site, self._record = site, record
-        #: The run's id: `<workflow>-<YYYYMMDD>T<HHMMSS>-<8 hex>`, the time UTC.
-        self.id: str = record['id']
-        self._folder = _run_folder(site.root, self.id)
-        self._backend = targets.backend(record['target'], record['runner'][0])
-        self._log = b''
-        self._ended: RunStatus | None = None
-
-    def __repr__(self) -> str:
-        return f'{self._site!r}.attach({self.id!r})'
-
-    # pylint: disable-next=too-many-locals  # what the one call printed
-    def status(self) -> RunStatus:
-        """Where the run is now, read from its folder, and from Slurm only when the folder has not decided (design
-        Appendix B); once it has ended, as it ended, read once.
-
-        A run whose job has not claimed it within `UNCLAIMED_MINUTES` of the submit, and of which Slurm lists no job
-        that may still claim it, is claimed `none`, and FAILED. On Slurm, a run one of whose jobs Slurm will never
-        start is stopped, its `reason` naming the setting to change; the step jobs a killed runner left are cancelled.
-
-        Raises:
-            SophiosError: `wic057`: the site, or its Slurm, could not be asked.
-        """
-        if self._ended is not None:
-            return self._ended
-        run, site = _q(self._folder), self._site
-        said = _Said(_call(site.host, '\n'.join([
-            f'cd {run} || exit 1', _PUT, _alive(self._folder),
-            'mtime() { stat -c %Y "$1" 2> /dev/null || stat -f %m "$1" 2> /dev/null || echo; }',
-            'leader=$(readlink leader 2> /dev/null || true)',
-            'echo "$(alive "$leader" && echo yes || echo no) $(date +%s) $(mtime run.json) $leader"',
-            *site._asked(self.id), 'echo "$(mtime leader) $(mtime exit)"', 'put exit 0', 'put reason 0',
-            f'put run.log {len(self._log)}', 'if [ -f exit ]; then put stdout 0; fi'])))
-        alive, now, submitted, leader = said.line().split(' ', 3)
-        queue = site._queue(self.id, said, int(now))
-        claimed, ended = said.line().split(' ')
-        code, written = said.file(), said.file()
-        self._log += said.file() or b''
-        exit_code = None if code is None else int(code)
-        scratch = f'{self._folder}/toil' if self._backend.program == 'toil-cwl-runner' else None
-        decision = decide(Folder(leader, alive == 'yes', exit_code, None if written is None else written.decode(),
-                                 int(now) - int(submitted)), scratch, queue)
-        if self._act(decision) != 'none' and decision.claim_none:   # a leader claimed it first, or no claim is written
-            decision = Decision(RunState.QUEUED)
-        state = decision.state
-        steps, outputs = (self._outcome(exit_code, said.file() or b'', state is RunState.COMPLETED)
-                          if exit_code is not None and state is not RunState.CANCELLED else ((), None))
-        status = RunStatus(state, decision.reason, _when(claimed) if leader.isdigit() else None, _when(ended), steps,
-                           outputs, exit_code)
-        if state in _ENDED:
-            self._ended = status
-        return status
-
-    def _act(self, decision: Decision) -> str:
-        """What `decision` says `status` must do there: claim the run `none`, stop it as `cancel` does and then write
-        its `reason`, or cancel the step jobs a killed runner left. A `scancel` Slurm refuses ends the call, which
-        raises, the `reason` unwritten. Returns the claim then, '' when nothing was done."""
-        acts = [*(['ln -s none leader 2> /dev/null || true'] if decision.claim_none else []),
-                *([*self._site._cancelling(self._folder), f'printf %s {_q(decision.reason or "")} > reason.partial',
-                   'mv reason.partial reason'] if decision.stop else []),
-                *([f'{shlex.join(["scancel", *decision.cancel])} || exit 1'] if decision.cancel else [])]
-        if not acts:
-            return ''
-        return _call(self._site.host, '\n'.join([f'cd {_q(self._folder)} || exit 1', *acts,
-                                                 'readlink leader || true'])).decode().strip()
-
-    def _outcome(self, exit_code: int, stdout: bytes, completed: bool) -> tuple[tuple[StepStatus, ...], Json | None]:
-        """The failed steps and the outputs the backend's own outcome reads from what the run left, as here."""
-        request = RunRequest(self._record['workflow'], Path(self._folder), runner=self._record['runner'][0],
-                             target=self._record['target'])
-        outcome = self._backend.outcome(request, exit_code, stdout.decode('utf-8', 'replace'),
-                                        self._log.decode('utf-8', 'replace'), self._read)
-        steps = tuple(StepStatus(name, RunState.FAILED, ended if isinstance(ended, int) else None,
-                                 ended if isinstance(ended, str) else None) for name, ended in outcome.failed.items())
-        return steps, outcome.outputs if completed else None
-
-    def _read(self, name: str) -> str | None:
-        """The text of the file `name` in the run's folder there, or None: how the backend's outcome reads it."""
-        found = _Said(_call(self._site.host, f'cd {_q(self._folder)} || exit 1\n{_PUT}\nput {_q(name)} 0')).file()
-        return None if found is None else found.decode('utf-8', 'replace')
-
-    def wait(self, timeout: float | None = None) -> RunStatus:
-        """Read the status every `POLL` seconds for a minute, then every minute, until the run ends, printing what
-        `run.log` gained and each change; a run that FAILED or was CANCELLED is returned, not raised.
-
-        Raises:
-            TimeoutError: It had not ended within `timeout` seconds; it goes on.
-            KeyboardInterrupt: On Ctrl-C, having printed how to follow it again; it goes on.
-            SophiosError: As `status` raises it.
-        """
-        began, shown = time.monotonic(), None
-        try:
-            while True:
-                before = len(self._log)
-                status = self.status()
-                sys.stdout.write(self._log[before:].decode('utf-8', 'replace'))
-                if (status.state, status.reason) != shown:
-                    shown = (status.state, status.reason)
-                    print(f'{self.id}: {status.state.value}' + (f' ({status.reason})' if status.reason else ''),
-                          flush=True)
-                if status.state in _ENDED:
-                    return status
-                waited = time.monotonic() - began
-                if timeout is not None and waited >= timeout:
-                    raise TimeoutError(f'run {self.id} has not ended within {timeout:g} s; it goes on, and '
-                                       f'{self!r}.wait() waits again')
-                time.sleep(min(POLL if waited < 60 else 60.0, float('inf') if timeout is None else timeout - waited))
-        except KeyboardInterrupt:
-            print(f'\nRun {self.id} goes on: {self!r} follows it again, and its cancel() stops it.', file=sys.stderr)
-            raise
-
-    def outputs(self) -> Json | None:
-        """The workflow's output object, once the run COMPLETED; else None."""
-        return self.status().outputs
-
-    def logs(self) -> str:
-        """`run.log` so far: the job script's and the runner's two streams, as they came."""
-        self.status()
-        return self._log.decode('utf-8', 'replace')
-
-    def cancel(self) -> bool:
-        """Claim the run `cancelled`, so a job that has not started never will, and stop its leader: on a machine its
-        process group, with TERM, once claimed; on Slurm every job named after the run, with `scancel`, before the
-        claim. Then wait up to `CANCEL_WAIT` seconds for it to end.
-
-        Returns:
-            bool: True when the run ended CANCELLED, by this call or before it; False when it ended COMPLETED or
-            FAILED, which it stays, or had not ended within `CANCEL_WAIT`.
-
-        Raises:
-            SophiosError: As `status` raises it; `wic057` too when Slurm refuses the `scancel`, nothing written.
-        """
-        _call(self._site.host, '\n'.join([f'cd {_q(self._folder)} || exit 1', *self._site._cancelling(self._folder)]))
-        deadline = time.monotonic() + CANCEL_WAIT
-        while (status := self.status()).state not in _ENDED and time.monotonic() < deadline:
-            time.sleep(POLL)
-        return status.state is RunState.CANCELLED
-
-
-def _when(seconds: str) -> datetime | None:
-    return datetime.fromtimestamp(int(seconds)) if seconds.isdigit() else None
-
-
-__all__ = ['Machine', 'Run', 'Slurm']

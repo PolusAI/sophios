@@ -1,5 +1,5 @@
 """A Slurm of Sophios's own, for the sites tests: `sbatch`, `squeue`, `sacct`, `scancel` and `sinfo`, as much of each
-as Sophios and Toil ask of them (the compute driver's fake lives in a repository Sophios CI may not check out).
+as Sophios and its runners ask of them (the compute driver's fake lives in a repository Sophios CI may not check out).
 `install` puts a shim for each in a folder, which runs this file over a state folder of one JSON file per job.
 
 A job runs at once, in a process group of its own, under a watcher of its own, unless the state folder holds `hold`
@@ -24,9 +24,11 @@ from typing import Any
 #: Each partition, as `sinfo -o '%P|%l|%G'` prints it: its name (`*` marks the default), its time limit, its GRES.
 PARTITIONS = (('normal*', '2-00:00:00', '(null)'), ('short', '30:00', '(null)'), ('gpu', 'infinite', 'gpu:2'))
 #: Each command's short options that take a value.
-_TAKES = {'sbatch': 'Jope', 'squeue': 'unoj', 'sacct': 'SEoj', 'scancel': 'un', 'sinfo': 'o'}
-_LONG = {'J': 'job-name', 'o': 'output', 'e': 'error', 'p': 'partition'}
+_TAKES = {'sbatch': 'Jopet', 'squeue': 'unojtp', 'sacct': 'SEoj', 'scancel': 'un', 'sinfo': 'o'}
+_LONG = {'J': 'job-name', 'o': 'output', 'e': 'error', 'p': 'partition', 't': 'time'}
 _LOST = 'sbatch: error: Batch job submission failed: Socket timed out on send/recv operation'
+#: The `sbatch` variables the fake reads, by option: each beats a script's `#SBATCH` line and loses to the command line.
+_VARIABLES = {'account': 'SBATCH_ACCOUNT', 'partition': 'SBATCH_PARTITION', 'time': 'SBATCH_TIMELIMIT'}
 
 
 def install(folder: Path) -> dict[str, str]:
@@ -85,6 +87,7 @@ def sbatch(state: Path, argv: list[str]) -> str:
     for line in script.splitlines():
         if line.startswith('#SBATCH '):
             options.update(_options('sbatch', line.split()[1:])[0])
+    options.update({option: os.environ[name] for option, name in _VARIABLES.items() if name in os.environ})
     options.update(given)
     limits = {name.rstrip('*'): limit for name, limit, _ in PARTITIONS}
     if options.get('partition', 'normal') not in limits:
@@ -100,6 +103,8 @@ def sbatch(state: Path, argv: list[str]) -> str:
     output = options.get('output', 'slurm-%j.out')
     _save(state, {
         'id': str(number), 'name': options.get('job-name', 'wrap'), 'comment': options.get('comment', ''),
+        'account': options.get('account', ''), 'partition': options.get('partition', 'normal'),
+        'gres': options.get('gres', ''),
         'limit': limits[options.get('partition', 'normal')], 'time': options.get('time', 'infinite'),
         'chdir': options.get('chdir', os.getcwd()), 'output': output, 'error': options.get('error', output),
         'mode': 'a' if options.get('open-mode') == 'append' else 'w', 'singleton': options.get('dependency') ==
