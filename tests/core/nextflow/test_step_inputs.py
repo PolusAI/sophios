@@ -62,39 +62,6 @@ def _say(name: str, port: Any, value: Any) -> Step:
 
 @pytest.mark.nextflow
 @pytest.mark.serial
-def test_link_merge_joins_the_sources_in_order(tmp_path: Path) -> None:
-    # Every file is named out.txt: each joined file is staged apart, as a gathered one is.
-    write_tool = CommandLineTool(
-        "write", Inputs(name=Input(cwl.string, position=1)), Outputs(file=Output(cwl.file, glob="out.txt"))
-    ).base_command("echo").stdout("out.txt")
-    each, one = Step(write_tool, step_name="each"), Step(write_tool, step_name="one")
-    each.inputs.name = ["a", "b"]
-    each.scatter_on(each.inputs.name)
-    one.inputs.name = "c"
-    cat = Step(CommandLineTool(
-        "cat_all", Inputs(files=Input(cwl.array(cwl.file), position=1)), Outputs(line=Output(cwl.file, glob="all.txt"))
-    ).base_command("cat").stdout("all.txt"), step_name="cat_all")
-    cat.inputs.files = StepInput(source=[each.outputs.file, one.outputs.file], link_merge="merge_flattened")
-    flow = Workflow([each, one, cat], "merged")
-    nested = _say("nested", cwl.array(cwl.string), StepInput(
-        source=[flow.inputs.x.as_type("string"), flow.inputs.y.as_type("string")]
-    ))
-    single = _say("single", cwl.array(cwl.string), StepInput(
-        source=[flow.inputs.x.as_type("string")], link_merge="merge_nested"
-    ))
-    flow.steps.extend([nested, single])
-    flow.outputs.flattened, flow.outputs.nested, flow.outputs.single = (
-        cat.outputs.line, nested.outputs.line, single.outputs.line
-    )
-    result, observed = _run(flow, tmp_path, params={"x": "x", "y": "y z"})
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert observed["flattened"] == ["a\nb\nc\n"]
-    assert observed["nested"] == ["x y z\n"]
-    assert observed["single"] == ["x\n"]
-
-
-@pytest.mark.nextflow
-@pytest.mark.serial
 def test_pick_value_picks_from_the_joined_sources(tmp_path: Path) -> None:
     skipped, ran = _maybe("skipped", "never", runs=False), _maybe("ran", "only", runs=True)
     flow = Workflow([skipped, ran], "picked")

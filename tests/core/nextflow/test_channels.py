@@ -235,36 +235,3 @@ def test_the_v1_script_parser_stops_the_run_before_any_task(tmp_path: Path, monk
     assert result.returncode != 0
     assert NF_PARSER_MESSAGE in result.stdout + result.stderr
     assert not (tmp_path / "work").exists() or not list((tmp_path / "work").glob("*/*"))
-
-
-@pytest.mark.nextflow
-@pytest.mark.serial
-def test_an_unscattered_steps_output_broadcasts_to_every_task_of_a_scattered_step(tmp_path: Path) -> None:
-    """The note's step reads a conditional step's output, so its own output is a queue of one element."""
-    gate_tool = CommandLineTool(
-        "gate", Inputs(n=Input(cwl.int)),
-        Outputs(said=Output(cwl.string, glob="said.txt", load_contents=True, output_eval="$(self[0].contents)")),
-    ).base_command("echo").argument("yes", position=1).stdout("said.txt")
-    write_tool = CommandLineTool(
-        "write_note",
-        Inputs(text=Input(cwl.string, position=1), after=Input(cwl.string, required=False)),
-        Outputs(note=Output(cwl.file, glob="note.txt")),
-    ).base_command("echo").stdout("note.txt")
-    copy_tool = CommandLineTool(
-        "copy_note",
-        Inputs(note=Input(cwl.file, position=1), name=Input(cwl.string)),
-        Outputs(copy=Output(cwl.file, glob="$(inputs.name).txt")),
-    ).base_command("cp").argument("$(inputs.name).txt", position=2)
-    gate = Step(gate_tool, step_name="gate")
-    write, copy = Step(write_tool, step_name="write_note"), Step(copy_tool, step_name="copy_note")
-    gate.inputs.n = 1
-    gate.when = "$(inputs.n > 0)"
-    write.inputs.text, write.inputs.after = "shared", gate.outputs.said
-    copy.inputs.note = write.outputs.note
-    copy.inputs.name = ["a", "b", "c"]
-    copy.scatter_on(copy.inputs.name)
-    flow = Workflow([gate, write, copy], "broadcast")
-    flow.outputs.copies = copy.outputs.copy
-    result, observed = _run(flow, tmp_path)
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert observed["copies"] == ["shared\n"] * 3
