@@ -65,6 +65,37 @@
     cudaVersionMin: '11.4', cudaDeviceCountMin: 2, cudaComputeCapability: ['7.0', '8.0']}], baseCommand: [mkdir, made],
     outputs: {result: {type: Directory, outputBinding: {glob: made}}}}}
   outputs: {gpu_tool~result: {class: Directory, basename: made, link: false, contents: {}}}
+- id: default_is_the_value_with_no_source
+  why: A step-input default is the value of an input with no source, and takes the place of a null one, from an absent
+    workflow input or a skipped step, but not of a given value.
+  tools:
+    skipped: &tool_maybe {baseCommand: printf, inputs: {text: {type: string, inputBinding: {position: 1}}, go: boolean},
+      stdout: said.txt, outputs: {said: &said_text {type: string, outputBinding: {glob: said.txt, loadContents: true,
+      outputEval: '$(self[0].contents)'}}}}
+    unsourced: &tool_say_word {baseCommand: echo, inputs: {words: {type: string, inputBinding: {position: 1}}},
+      stdout: out.txt, outputs: {line: {type: File, outputBinding: {glob: out.txt}}}}
+    missing: *tool_say_word
+    present: *tool_say_word
+    after_skip: *tool_say_word
+  inputs: {unset: 'string?', given: 'string?'}
+  params: {unset: null, given: g}
+  steps: |
+    - id: skipped
+      in: {text: !ii never, go: !ii false}
+      out: [said: !& skipped_said]
+      when: $(inputs.go)
+    - id: unsourced
+      in: {words: !cwl {default: d1}}
+    - id: missing
+      in: {words: !cwl {source: unset, default: d2}}
+    - id: present
+      in: {words: !cwl {source: given, default: d3}}
+    - id: after_skip
+      in: {words: !cwl {source: !* skipped_said, default: d4}}
+  outputs: {skipped~said: null, unsourced~line: {class: File, basename: out.txt, contents: "d1\n"},
+    missing~line: {class: File, basename: out.txt, contents: "d2\n"},
+    present~line: {class: File, basename: out.txt, contents: "g\n"},
+    after_skip~line: {class: File, basename: out.txt, contents: "d4\n"}}
 - id: entry_name_collision-entry-and-staged-input
   why: &why_entry_name_collision cp and ln would make the entry inside the directory holding its name, so the task
     stops, saying so.
@@ -137,6 +168,55 @@
     contents: "2\n"}, {class: File, basename: a.txt, contents: "3\n"}], cat_pair~out: [{class: File, basename: b.txt,
     contents: "1\nREF\n"}, {class: File, basename: b.txt, contents: "2\nREF\n"}, {class: File, basename: b.txt,
     contents: "3\nREF\n"}]}
+- id: gated_chain-queue-first
+  why: &why_gated_chain A three-operand `when` over an upstream output, a parameter and an absent optional runs when
+    all hold, whichever input its process declares first, and with an array input the command sees whole; a skipped
+    upstream or a false parameter skips it.
+  tools: &tools_gated_chain_first
+    up: &tool_up {baseCommand: echo, arguments: [{position: 1, valueFrom: ok}], inputs: {go: boolean}, stdout: out.txt,
+      outputs: {result: &text_result {type: string, outputBinding: {glob: out.txt, loadContents: true,
+      outputEval: '$(self[0].contents)'}}}}
+    gated: {baseCommand: echo, stdout: out.txt, outputs: {result: *text_result}, inputs: {prev: 'string?', flag: boolean,
+      xs: {type: 'int[]', inputBinding: {position: 1}}, maybe: 'int?'}}
+  inputs: &inputs_gated_chain {go: boolean, flag: boolean, maybe: 'int?', xs: 'int[]'}
+  params: &params_gated_chain {go: true, flag: true, xs: [1, 2, 3]}
+  steps: &steps_gated_chain |
+    - id: up
+      in: {go: !cwl {source: go}}
+      out: [result: !& upped]
+      when: $(inputs.go)
+    - id: gated
+      in:
+        prev: !* upped
+        flag: !cwl {source: flag}
+        xs: !cwl {source: xs}
+        maybe: !cwl {source: maybe}
+      when: $(inputs.prev !== null && inputs.flag && inputs.maybe === null)
+  outputs: {up~result: "ok\n", gated~result: "1 2 3\n"}
+- id: gated_chain-queue-last
+  why: *why_gated_chain
+  tools:
+    up: *tool_up
+    gated: {baseCommand: echo, stdout: out.txt, outputs: {result: *text_result}, inputs: {flag: boolean,
+      xs: {type: 'int[]', inputBinding: {position: 1}}, maybe: 'int?', prev: 'string?'}}
+  inputs: *inputs_gated_chain
+  params: *params_gated_chain
+  steps: *steps_gated_chain
+  outputs: {up~result: "ok\n", gated~result: "1 2 3\n"}
+- id: gated_chain-skipped-upstream
+  why: *why_gated_chain
+  tools: *tools_gated_chain_first
+  inputs: *inputs_gated_chain
+  params: {go: false, flag: true, xs: [1, 2, 3]}
+  steps: *steps_gated_chain
+  outputs: {up~result: null, gated~result: null}
+- id: gated_chain-false-parameter
+  why: *why_gated_chain
+  tools: *tools_gated_chain_first
+  inputs: *inputs_gated_chain
+  params: {go: true, flag: false, xs: [1, 2, 3]}
+  steps: *steps_gated_chain
+  outputs: {up~result: "ok\n", gated~result: null}
 - id: golden_path
   why: touch makes an empty file, inferred into cp, which copies it.
   tools:
@@ -307,6 +387,75 @@
     own~wild: {class: File, basename: lines.txt, contents: "entry content\n", link: true},
     own~same: {class: File, basename: lines.txt, contents: "entry content\n", link: true},
     renamed~wild: {class: File, basename: renamed.txt, contents: "entry content\n", link: true}}
+- id: pick_value_picks_from_the_joined_sources
+  why: first_non_null, the_only_non_null and all_non_null pick among a joined list of workflow inputs and conditional
+    steps' outputs, skipping the null of an absent input and of a skipped step.
+  tools:
+    skipped: *tool_maybe
+    ran: *tool_maybe
+    first: *tool_say_word
+    only: *tool_say_word
+    every: {baseCommand: echo, inputs: {words: {type: 'string[]', inputBinding: {position: 1}}}, stdout: out.txt,
+      outputs: {line: {type: File, outputBinding: {glob: out.txt}}}}
+  inputs: {unset: 'string?', given: 'string?'}
+  params: {unset: null, given: x}
+  steps: |
+    - id: skipped
+      in: {text: !ii never, go: !ii false}
+      out: [said: !& skipped_said]
+      when: $(inputs.go)
+    - id: ran
+      in: {text: !ii only, go: !ii true}
+      out: [said: !& ran_said]
+      when: $(inputs.go)
+    - id: first
+      in: {words: !cwl {source: [unset, !* skipped_said, given], pickValue: first_non_null}}
+    - id: only
+      in: {words: !cwl {source: [!* skipped_said, !* ran_said], pickValue: the_only_non_null}}
+    - id: every
+      in: {words: !cwl {source: [given, !* skipped_said, !* ran_said, unset], pickValue: all_non_null}}
+  outputs: {skipped~said: null, ran~said: only, first~line: {class: File, basename: out.txt, contents: "x\n"},
+    only~line: {class: File, basename: out.txt, contents: "only\n"},
+    every~line: {class: File, basename: out.txt, contents: "x only\n"}}
+- id: pick_value_finding_no_one_value-first_non_null-of-none
+  why: A pickValue that finds no one value stops the run before the step runs, naming the count it found.
+  tools: {pick: *tool_say_word}
+  inputs: {a: 'string?', b: 'string?'}
+  params: {a: null, b: null}
+  steps: |
+    - id: pick
+      in: {words: !cwl {source: [a, b], pickValue: first_non_null}}
+  never: [out.txt]
+  fails: 'Sophios step input pick.words: first_non_null finds 0 values that are not null'
+- id: pick_value_finding_no_one_value-the_only_non_null-of-none
+  why: &why_pick_none A pickValue that finds no one value stops the run before the step runs, naming the count it found.
+  tools: {pick: *tool_say_word}
+  inputs: {a: 'string?', b: 'string?'}
+  params: {a: null, b: null}
+  steps: |
+    - id: pick
+      in: {words: !cwl {source: [a, b], pickValue: the_only_non_null}}
+  never: [out.txt]
+  fails: 'Sophios step input pick.words: the_only_non_null finds 0 values that are not null'
+- id: pick_value_finding_no_one_value-the_only_non_null-of-two
+  why: *why_pick_none
+  tools: {pick: *tool_say_word}
+  inputs: {a: 'string?', b: 'string?'}
+  params: {a: x, b: y}
+  steps: |
+    - id: pick
+      in: {words: !cwl {source: [a, b], pickValue: the_only_non_null}}
+  never: [out.txt]
+  fails: 'Sophios step input pick.words: the_only_non_null finds 2 values that are not null'
+- id: shipped_append_appends_the_message_as_written
+  why: 'The shipped `append.cwl` appends one line holding exactly the message, whose shell syntax and backslashes are
+    text: a separator, a run of spaces, a quote, a substitution, a glob; the file it was given keeps its contents.'
+  steps: |
+    - id: append
+      in: {file: !ii greeting.txt, str: !ii "Hello;  it's $(echo substituted) * a\\tb\\nc 100%s"}
+  files: {greeting.txt: "first line\n"}
+  outputs: {append~file: {class: File, basename: greeting.txt,
+    contents: "first line\nHello;  it's $(echo substituted) * a\\tb\\nc 100%s\n"}}
 - id: shell_redirect_literal
   why: An approved shellQuote false literal reaches the shell as real redirect syntax; printf writes its one quoted
     word.
