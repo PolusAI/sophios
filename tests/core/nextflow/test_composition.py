@@ -11,7 +11,6 @@ from sophios.input_output_nf import render_nextflow, write_nextflow_artifacts
 from sophios.nf_expr import parse
 from sophios.nf_types import (
     ExecutableNextflowWorkflow,
-    NfConnection,
     NfPort,
     NfProcess,
     NfProcessConnection,
@@ -20,9 +19,8 @@ from sophios.nf_types import (
 )
 from sophios.utils_nf import compiled_source_to_nextflow
 
-from .test_dotproduct import _sleep_then_pair, _text_port, _write_and_sink
 from .testkit import (
-    assert_succeeded, command, execute_nextflow, output_port, step, synthetic_source, tool, workflow_doc)
+    command, execute_nextflow, output_port, step, synthetic_source, tool, workflow_doc)
 
 STRINGS = {"type": "array", "items": "string"}
 FILES = {"type": "array", "items": "File"}
@@ -207,30 +205,6 @@ def test_a_scattered_step_stages_two_gathered_arrays_of_same_named_files(
     used = list((run / "work").glob("*/*/used.txt"))
     assert len(used) == 2
     assert {path.read_text(encoding="utf-8") for path in used} == {"a x 20\nb y 20\nc z 20\n" + more}
-
-
-@pytest.mark.nextflow
-@pytest.mark.serial
-def test_per_combination_when_reads_a_scattered_and_a_broadcast_port(tmp_path: Path) -> None:
-    """The condition sees each invocation's scattered element and the broadcast value."""
-    process = NfProcess(
-        "PAIR",
-        [NfPort("item", "val"), NfPort("tag", "val"), NfPort("skipped", "val")],
-        [_text_port("line")],
-        _sleep_then_pair("item", "tag"),
-        condition=parse("$(inputs.tag !== inputs.skipped)"),
-    )
-    connections: list[NfConnection] = [
-        NfWorkflowInputConnection("items", "PAIR", "item", "dotproduct"),
-        NfWorkflowInputConnection("tags", "PAIR", "tag", "dotproduct"),
-        NfWorkflowInputConnection("skipped", "PAIR", "skipped"),
-        NfWorkflowOutputConnection("PAIR", "line", "result"),
-    ]
-    params = {"items": ["a", "b", "c"], "tags": ["2", "1", "0"], "skipped": "1"}
-    types = {"items": "string[]", "tags": "string[]", "skipped": "string"}
-    result, observed = _write_and_sink(process, connections, params, types, tmp_path, emit_name="result")
-    assert_succeeded(result)
-    assert observed["result"] == ["a-2", "[]", "c-0"]
 
 
 @pytest.mark.fast

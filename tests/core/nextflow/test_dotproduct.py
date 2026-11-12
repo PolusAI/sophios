@@ -2,9 +2,6 @@
 
 # pylint: disable=missing-function-docstring
 
-from pathlib import Path
-import subprocess
-
 import pytest
 
 from sophios.input_output_nf import render_nextflow
@@ -21,26 +18,12 @@ from sophios.nf_types import (
     NfWorkflowOutputConnection,
 )
 
-from .testkit import ref, run_observed, template
+from .testkit import ref, template
 
 
 def _text_port(name: str, glob: str = "out.txt") -> NfPort:
     """A val output port whose captured text is the globbed file's decoded content."""
     return NfPort(name, "val", name, template(glob), capture="text")
-
-
-def _write_and_sink(
-    process: NfProcess,
-    connections: list[NfConnection],
-    params: dict,
-    param_types: dict[str, str],
-    directory: Path,
-    *,
-    emit_name: str,
-) -> tuple[subprocess.CompletedProcess[str], dict[str, list[str]]]:
-    """Run one process as ``PIPELINE`` and observe its ``emit_name`` output."""
-    workflow = ExecutableNextflowWorkflow("PIPELINE", [process], connections, params, param_types)
-    return run_observed(workflow, directory, emits=[emit_name])
 
 
 def _sleep_then_pair(*port_names: str) -> NfCommand:

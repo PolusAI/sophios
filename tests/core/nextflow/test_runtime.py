@@ -3,6 +3,7 @@
 # pylint: disable=missing-function-docstring,protected-access
 
 from collections import Counter
+from dataclasses import replace
 from functools import partial
 import itertools
 import json
@@ -29,11 +30,11 @@ from sophios.nf_types import (
     NfResources,
 )
 from sophios.plugins import get_tools_cwl
-from sophios.utils_nf import compiled_source_to_nextflow, nextflow_names
+from sophios.utils_nf import compilation_result_source, compiled_source_to_nextflow, nextflow_names
 
 from ..budgets import budget
 from ..cases import cases, match
-from ..helpers import ADAPTERS, adapter_step, python_process, search_config, write_tree
+from ..helpers import ADAPTERS, python_process, search_config, write_tree
 from .test_executable_ir import NAMES
 from .test_public_api import supported_workflow
 from .test_reference_differential import _observed, _run_cwltool, _run_nextflow, _tree
@@ -46,31 +47,6 @@ from .testkit import (
     single_process_workflow,
     template,
 )
-
-
-@pytest.mark.nextflow
-@pytest.mark.serial
-def test_a_cuda_requirement_runs_under_the_local_executor(tmp_path: Path) -> None:
-    """design §6, Resources and containers: the local executor accepts the accelerator directive and runs the task.
-
-    The CUDA fields and the Directory output ride in the ext directive, which changes nothing (design §4.2).
-    """
-    gpu_tool = (
-        CommandLineTool("gpu_tool", Inputs(), Outputs(result=Output(cwl.directory, glob="made")))
-        .base_command("mkdir", "made")
-        .gpu(cuda_version_min="11.4", device_count_min=2, extra={"cudaComputeCapability": ["7.0", "8.0"]})
-    )
-    run = Step(gpu_tool, step_name="gpu")
-    workflow = Workflow([run], "nextflow_gpu")
-    workflow.outputs.result = run.outputs.result
-    workflow.compile(target="nextflow").write(tmp_path)
-    assert (
-        "\n    accelerator 2\n"
-        "    ext cudaVersionMin: '11.4', cudaComputeCapability: ['7.0', '8.0'], Directory: ['result']\n"
-    ) in (tmp_path / "workflow.nf").read_text(encoding="utf-8")
-    result = execute_nextflow(tmp_path)
-    assert_succeeded(result)
-    assert '"class":"Directory"' in result.stdout
 
 
 @pytest.mark.nextflow
@@ -179,105 +155,6 @@ def test_array_of_directories_stages_every_element_for_one_process_call(count: i
     assert [path.read_text(encoding="utf-8") for path in outputs] == [
         " ".join(f"gather_sources_{index + 1}/source_{index}" for index in range(count)) + "\n"
     ]
-
-
-@pytest.mark.nextflow
-@pytest.mark.serial
-def test_a_pattern_glob_matches_an_entry_as_a_cwl_glob_does(tmp_path: Path) -> None:
-    """F69 and F84: a pattern glob, or a glob of the input's own basename, captures the entry the task made."""
-    write_tool = (
-        CommandLineTool(
-            "write_source",
-            Inputs(message=Input(cwl.string, position=1)),
-            Outputs(result=Output(cwl.file, glob="lines.txt")),
-        )
-        .base_command("echo")
-        .stdout("lines.txt")
-    )
-    write = Step(write_tool, step_name="write")
-    write.inputs.message = "entry content"
-    own_tool = (
-        CommandLineTool(
-            "own",
-            Inputs(source=Input(cwl.file)),
-            Outputs(
-                wild=Output(cwl.file, glob="lines*"),
-                same=Output(cwl.file, glob="$(inputs.source.basename)"),
-            ),
-        )
-        .base_command("true")
-        .initial_workdir(["$(inputs.source)"])
-    )
-    own = Step(own_tool, step_name="own")
-    own.inputs.source = write.outputs.result
-    renamed_tool = CommandLineTool(
-        "renamed", Inputs(source=Input(cwl.file)), Outputs(wild=Output(cwl.file, glob="renamed*"))
-    )
-    renamed_tool = renamed_tool.base_command("true").stage(renamed_tool.inputs.source, entryname="renamed.txt")
-    renamed = Step(renamed_tool, step_name="renamed")
-    renamed.inputs.source = write.outputs.result
-    workflow = Workflow([write, own, renamed], "nextflow_entry_globs")
-    workflow.outputs.wild = own.outputs.wild
-    workflow.outputs.same = own.outputs.same
-    workflow.outputs.renamed = renamed.outputs.wild
-    result = execute_nextflow(workflow.compile(target="nextflow").write(tmp_path))
-    assert_succeeded(result)
-    # Nextflow stages each entry's input as a symlink in the hidden directory; the task links the entry beside it.
-    entries = [
-        path for path in (tmp_path / "work").rglob("*")
-        if path.is_symlink() and not path.parent.name.startswith(".sophios_entry_")
-    ]
-    assert sorted(path.name for path in entries) == ["lines.txt", "renamed.txt"]
-    assert {path.read_text(encoding="utf-8") for path in entries} == {"entry content\n"}
-
-
-@pytest.mark.nextflow
-@pytest.mark.serial
-def test_mixed_adapter_and_builder_workflow_executes_end_to_end(tmp_path: Path) -> None:
-    """One workflow mixing an imported adapter with tool_builder steps runs end to end.
-
-    Deliberate exception to the one-idiom-per-test rule: composing both public
-    construction surfaces in a single executed workflow is the claim under test.
-    """
-    message = "mixed construction, one backend"
-    emit = adapter_step("echo", "emit", message=message)
-
-    copy_tool = (
-        CommandLineTool(
-            "copy_file",
-            Inputs(source=Input(cwl.file, position=1)),
-            Outputs(result=Output(cwl.file, glob="copy.txt")),
-        )
-        .base_command("cp")
-        .argument("copy.txt", position=2)
-    )
-    duplicate = Step(copy_tool, step_name="duplicate")
-    duplicate.inputs.source = emit.outputs.stdout
-
-    count_tool = (
-        CommandLineTool(
-            "count_bytes",
-            Inputs(source=Input(cwl.file, position=1)),
-            Outputs(result=Output(cwl.file, glob="count.txt")),
-        )
-        .base_command("wc", "-c")
-        .stdout("count.txt")
-    )
-    count = Step(count_tool, step_name="count")
-    count.inputs.source = emit.outputs.stdout
-
-    workflow = Workflow([emit, duplicate, count], "nextflow_mixed_e2e")
-    workflow.outputs.copy = duplicate.outputs.result
-    workflow.outputs.count = count.outputs.result
-
-    result = execute_nextflow(workflow.compile(target="nextflow").write(tmp_path))
-    assert_succeeded(result)
-    copies = list((tmp_path / "work").rglob("copy.txt"))
-    assert [path.read_text(encoding="utf-8") for path in copies] == [f"{message}\n"]
-    counts = list((tmp_path / "work").rglob("count.txt"))
-    assert len(counts) == 1
-    counted_bytes = int(counts[0].read_text(encoding="utf-8").split()[0])
-    assert counted_bytes == len(message) + 1
 
 
 @pytest.mark.nextflow
@@ -403,10 +280,10 @@ def test_two_workflows_started_from_one_base_path_each_run_their_own_pipeline(tm
 
 
 def _seen(value: Any) -> Any:
-    """A recorded output as test_reference_differential observes one, null as it is, a path also as whether it is a
-    symlink (`link`)."""
-    if value is None:
-        return None
+    """A recorded output as test_reference_differential observes one, null and a string, number or boolean as it is,
+    a path also as whether it is a symlink (`link`)."""
+    if not isinstance(value, (dict, list)):
+        return value
     if isinstance(value, list):
         return [_seen(item) for item in value]
     return {**_observed(value), "link": Path(value["path"]).is_symlink()}
@@ -414,12 +291,13 @@ def _seen(value: Any) -> Any:
 
 def _case_files(case: dict[str, Any]) -> dict[str, str]:
     """A case's files: each tool a CommandLineTool but for what it leaves out, a workflow of one step per tool unless
-    it gives its `steps`, each child workflow, and its other files."""
+    it gives its `steps`, after its `inputs` (name: type), each child workflow, and its other files."""
     tools = case.get("tools", {})
     return {
         **{f"{stem}.cwl": json.dumps({"cwlVersion": "v1.2", "class": "CommandLineTool", "inputs": {}, "outputs": {},
                                       **tool}) for stem, tool in tools.items()},
-        "workflow.wic": "steps:\n" + (case.get("steps") or "".join(f"- id: {stem}\n" for stem in tools)),
+        "workflow.wic": (f"inputs: {json.dumps(case['inputs'])}\n" if "inputs" in case else "") + "steps:\n" + (
+            case.get("steps") or "".join(f"- id: {stem}\n" for stem in tools)),
         **{f"{stem}.wic": text for stem, text in case.get("children", {}).items()},
         **case.get("files", {}),
     }
@@ -427,14 +305,15 @@ def _case_files(case: dict[str, Any]) -> dict[str, str]:
 
 @pytest.mark.nextflow
 @pytest.mark.serial
-@pytest.mark.parametrize("case", cases("nextflow/runs.yaml", "tools", "steps", "children", "files", "outputs",
-                                       "fails", "rendered"))
+@pytest.mark.parametrize("case", cases("nextflow/runs.yaml", "tools", "inputs", "params", "steps", "children", "files",
+                                       "outputs", "fails", "never", "rendered"))
 def test_a_workflow_runs_as_its_case_says(
         case: dict[str, Any], tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A case's workflow, its tools written beside it or among cwl_adapters, runs to each of its `outputs`, a workflow
     output by its Sophios name, observed as its class, basename and contents, or `fails` showing the text given, no
     output unlisted, and a `rendered` match of the script written; the files beside it are left as they were
-    (tests/core/cases.py reads each form); an output's `link` is whether it is a symlink."""
+    (tests/core/cases.py reads each form); an output's `link` is whether it is a symlink, and no task made a file
+    named in `never`; `params` are the values of its workflow inputs."""
     write_tree(tmp_path, _case_files(case))
     monkeypatch.chdir(tmp_path)
     inputs = {path.name: _tree(path) for path in tmp_path.iterdir() if path.suffix not in (".wic", ".cwl")}
@@ -442,7 +321,9 @@ def test_a_workflow_runs_as_its_case_says(
     children = {"global": {path.stem: path for path in tmp_path.glob("*.wic") if path.name != "workflow.wic"}}
     compiled = compile_workflow_result(Workflow.from_wic(tmp_path / "workflow.wic", tool_registry=tools,
                                                          workflow_paths=children), tool_registry=tools)
-    write_nextflow_artifacts(compiled_source_to_nextflow(compiled), tmp_path)
+    source = compilation_result_source(compiled)
+    params = {**source.params, **case.get("params", {})}
+    write_nextflow_artifacts(compiled_source_to_nextflow(replace(source, params=params)), tmp_path)
     if "rendered" in case:
         assert match(case["rendered"], (tmp_path / "workflow.nf").read_text(encoding="utf-8"))
     result = execute_nextflow(tmp_path)
@@ -454,6 +335,7 @@ def test_a_workflow_runs_as_its_case_says(
         names = nextflow_names(compiled)["outputs"]
         observed = {names[key]: _seen(value) for key, value in _recorded(result.stdout).items()}
         assert match(case["outputs"], observed) and observed.keys() == case["outputs"].keys()
+    assert not [name for name in case.get("never", []) if list((tmp_path / "work").rglob(name))]
     assert {path.name: _tree(path) for path in tmp_path.iterdir() if path.name in inputs} == inputs
 
 

@@ -1,3 +1,19 @@
+- id: adapter_then_cp_and_wc
+  why: One workflow mixing an imported adapter with tools written beside it runs, the adapter's stdout read by both.
+  tools:
+    copy_file: {baseCommand: cp, arguments: [{position: 2, valueFrom: copy.txt}], inputs: {source: {type: File,
+      inputBinding: {position: 1}}}, outputs: {result: {type: File, outputBinding: {glob: copy.txt}}}}
+    count_bytes: {baseCommand: [wc, -c], inputs: {source: {type: File, inputBinding: {position: 1}}},
+      stdout: count.txt, outputs: {result: {type: File, outputBinding: {glob: count.txt}}}}
+  steps: |
+    - {id: emit, run: echo, in: {message: !ii 'mixed construction, one backend'}, out: [stdout: !& emitted]}
+    - id: copy_file
+      in: {source: !* emitted}
+    - id: count_bytes
+      in: {source: !* emitted}
+  outputs: {emit~stdout: {class: File, basename: stdout, contents: "mixed construction, one backend\n"},
+    copy_file~result: {class: File, basename: copy.txt, contents: "mixed construction, one backend\n"},
+    count_bytes~result: {class: File, basename: count.txt, contents: {re: '^\s*32 '}}}
 - id: basename_derived_output
   why: An output name derived from a staged input's basename names the copy the command made.
   tools:
@@ -17,6 +33,38 @@
   tools: {produce: {baseCommand: [sh, -c, 'echo literal > ''a{b,c}.txt''; echo decoy > ab.txt'],
     outputs: {result: {type: File, outputBinding: {glob: 'a{b,c}.txt'}}}}}
   outputs: {produce~result: {class: File, basename: 'a{b,c}.txt', contents: "literal\n"}}
+- id: broadcast_from_conditional_step
+  why: A step reading a conditional step's output has a queue of one element, which every task of a scattered step
+    reads whole; the conditional step runs, and the string it made is its output.
+  tools:
+    gate: {baseCommand: [echo, 'yes'], inputs: {n: int}, stdout: said.txt, outputs: {said: {type: string,
+      outputBinding: {glob: said.txt, loadContents: true, outputEval: '$(self[0].contents)'}}}}
+    write_note: {baseCommand: echo, inputs: {text: {type: string, inputBinding: {position: 1}}, after: 'string?'},
+      stdout: note.txt, outputs: {note: {type: File, outputBinding: {glob: note.txt}}}}
+    copy_note: {baseCommand: cp, arguments: [{position: 2, valueFrom: $(inputs.name).txt}], inputs: {note: {type: File,
+      inputBinding: {position: 1}}, name: string}, outputs: {copy: {type: File, outputBinding: {glob: $(inputs.name).txt}}}}
+  steps: |
+    - id: gate
+      in: {n: !ii 1}
+      out: [said: !& gated]
+      when: $(inputs.n > 0)
+    - id: write_note
+      in: {text: !ii shared, after: !* gated}
+      out: [note: !& noted]
+    - id: copy_note
+      scatter: [name]
+      scatterMethod: dotproduct
+      in: {note: !* noted, name: !ii [a, b, c]}
+  outputs: {gate~said: "yes\n", write_note~note: {class: File, basename: note.txt, contents: "shared\n"},
+    copy_note~copy: [{class: File, basename: a.txt, contents: "shared\n"}, {class: File, basename: b.txt,
+    contents: "shared\n"}, {class: File, basename: c.txt, contents: "shared\n"}]}
+- id: cuda_requirement_runs
+  why: The local executor accepts the accelerator directive and runs the task; the CUDA fields change nothing about
+    the Directory it makes.
+  tools: {gpu_tool: {$namespaces: {cwltool: 'http://commonwl.org/cwltool#'}, hints: [{class: 'cwltool:CUDARequirement',
+    cudaVersionMin: '11.4', cudaDeviceCountMin: 2, cudaComputeCapability: ['7.0', '8.0']}], baseCommand: [mkdir, made],
+    outputs: {result: {type: Directory, outputBinding: {glob: made}}}}}
+  outputs: {gpu_tool~result: {class: Directory, basename: made, link: false, contents: {}}}
 - id: entry_name_collision-entry-and-staged-input
   why: &why_entry_name_collision cp and ln would make the entry inside the directory holding its name, so the task
     stops, saying so.
@@ -130,6 +178,56 @@
     - id: stage_and_read
   outputs: {write_source~result: {class: File, basename: original_name.txt, contents: "iwdr staged content\n"},
     stage_and_read~result: {class: File, basename: out.txt, contents: "iwdr staged content\n"}}
+- id: link_merge_joins_the_sources_in_order
+  why: A step input of several sources joins them in order, flattened over a scattered step's Files and a lone one's,
+    or nested over scalar Files, and a lone merge_nested source is an array of one.
+  tools:
+    write_each: &tool_write_name {baseCommand: echo, inputs: {name: {type: string, inputBinding: {position: 1}}},
+      stdout: out.txt, outputs: {file: {type: File, outputBinding: {glob: out.txt}}}}
+    write_one: *tool_write_name
+    write_two: *tool_write_name
+    cat_flat: &tool_cat {baseCommand: cat, inputs: {files: {type: 'File[]', inputBinding: {position: 1}}},
+      stdout: all.txt, outputs: {line: {type: File, outputBinding: {glob: all.txt}}}}
+    cat_nested: *tool_cat
+    cat_single: *tool_cat
+    say_nested: &tool_say {baseCommand: echo, inputs: {words: {type: 'string[]', inputBinding: {position: 1}}},
+      stdout: out.txt, outputs: {line: {type: File, outputBinding: {glob: out.txt}}}}
+    say_single: *tool_say
+  inputs: {x: {type: string}, y: {type: string}}
+  params: {x: x, y: y z}
+  steps: |
+    - id: write_each
+      scatter: [name]
+      scatterMethod: dotproduct
+      in: {name: !ii [a, b]}
+      out: [file: !& each]
+    - id: write_one
+      in: {name: !ii c}
+      out: [file: !& one]
+    - id: write_two
+      in: {name: !ii d}
+      out: [file: !& two]
+    - id: cat_flat
+      in:
+        files: !cwl {source: [!* each, !* one], linkMerge: merge_flattened}
+    - id: cat_nested
+      in:
+        files: !cwl {source: [!* two, !* one]}
+    - id: cat_single
+      in:
+        files: !cwl {source: [!* one], linkMerge: merge_nested}
+    - id: say_nested
+      in:
+        words: !cwl {source: [x, y]}
+    - id: say_single
+      in:
+        words: !cwl {source: [x], linkMerge: merge_nested}
+  outputs: {write_each~file: [{class: File, basename: out.txt, contents: "a\n"}, {class: File, basename: out.txt,
+    contents: "b\n"}], write_one~file: {class: File, basename: out.txt, contents: "c\n"}, write_two~file: {class: File,
+    basename: out.txt, contents: "d\n"}, cat_flat~line: {class: File, basename: all.txt, contents: "a\nb\nc\n"},
+    cat_nested~line: {class: File, basename: all.txt, contents: "d\nc\n"}, cat_single~line: {class: File,
+    basename: all.txt, contents: "c\n"}, say_nested~line: {class: File, basename: out.txt, contents: "x y z\n"},
+    say_single~line: {class: File, basename: out.txt, contents: "x\n"}}
 - id: literal_dollar_and_backtick_globs
   why: A `$` before no `(` or `{` is text, and a backtick beside a reference is text, so each glob names the file made.
     A plain input reference can carry a pattern, so globbing stays on.
@@ -186,6 +284,29 @@
   why: *why_optional_output
   tools: {maybe: {baseCommand: [touch, maybe.txt], outputs: {o: {type: 'File?', outputBinding: {glob: maybe.txt}}}}}
   outputs: {maybe~o: {class: File, basename: maybe.txt, contents: ''}}
+- id: pattern_glob_matches_iwdr_entry
+  why: A pattern glob, or a glob of the input's own basename, captures the entry the task made, as a CWL glob does.
+  tools:
+    write_source: {baseCommand: echo, inputs: {message: {type: string, inputBinding: {position: 1}}}, stdout: lines.txt,
+      outputs: {result: {type: File, outputBinding: {glob: lines.txt}}}}
+    own: {requirements: {InitialWorkDirRequirement: {listing: [$(inputs.source)]}}, baseCommand: 'true',
+      inputs: {source: File}, outputs: {wild: {type: File, outputBinding: {glob: lines*}}, same: {type: File,
+      outputBinding: {glob: $(inputs.source.basename)}}}}
+    renamed: {requirements: {InitialWorkDirRequirement: {listing: [{entry: $(inputs.source),
+      entryname: renamed.txt}]}}, baseCommand: 'true', inputs: {source: File}, outputs: {wild: {type: File,
+      outputBinding: {glob: renamed*}}}}
+  steps: |
+    - id: write_source
+      in: {message: !ii entry content}
+      out: [result: !& written]
+    - id: own
+      in: {source: !* written}
+    - id: renamed
+      in: {source: !* written}
+  outputs: {write_source~result: {class: File, basename: lines.txt, contents: "entry content\n", link: false},
+    own~wild: {class: File, basename: lines.txt, contents: "entry content\n", link: true},
+    own~same: {class: File, basename: lines.txt, contents: "entry content\n", link: true},
+    renamed~wild: {class: File, basename: renamed.txt, contents: "entry content\n", link: true}}
 - id: shell_redirect_literal
   why: An approved shellQuote false literal reaches the shell as real redirect syntax; printf writes its one quoted
     word.
@@ -211,12 +332,80 @@
     - id: write_nothing
       in: {message: !ii nothing is written}
   fails: out.txt
+- id: skipped_step_feeds_an_optional_input
+  why: A skipped step makes no task and a null output, and a step with an optional input reading it still runs.
+  tools:
+    produce: {baseCommand: [echo, produced], inputs: {n: int}, stdout: out.txt, outputs: {text: {type: string,
+      outputBinding: {glob: out.txt, loadContents: true, outputEval: '$(self[0].contents)'}}}}
+    consume: {baseCommand: [touch, done.txt], inputs: {maybe: 'string?'}, outputs: {done: {type: File,
+      outputBinding: {glob: done.txt}}}}
+  steps: |
+    - id: produce
+      in: {n: !ii 0}
+      out: [text: !& produced]
+      when: $(inputs.n > 0)
+    - id: consume
+      in: {maybe: !* produced}
+  outputs: {produce~text: null, consume~done: {class: File, basename: done.txt, contents: ''}}
+  never: [out.txt]
 - id: stdout_of_every_shell_command
   why: CWL redirects stdout for the whole shell command, not its last part, so both echoes land in out.txt.
   tools: {two_commands: {requirements: {ShellCommandRequirement: {}}, baseCommand: echo, arguments: [{position: 1,
     valueFrom: first}, {position: 2, valueFrom: ;, shellQuote: false}, {position: 3, valueFrom: echo}, {position: 4,
     valueFrom: second}], stdout: out.txt, outputs: {result: {type: File, outputBinding: {glob: out.txt}}}}}
   outputs: {two_commands~result: {class: File, basename: out.txt, contents: "first\nsecond\n"}}
+- id: when_in_an_inlined_child
+  why: The inlined inner step keeps its condition and is skipped; the outer step still runs.
+  tools: {touch_n: {baseCommand: [touch, n.txt], inputs: {n: int}, outputs: {out: {type: File,
+    outputBinding: {glob: n.txt}}}}}
+  steps: |
+    - id: child.wic
+    - id: touch_n
+      in: {n: !ii 3}
+  children:
+    child: |
+      steps:
+      - id: touch_n
+        in: {n: !ii 3}
+        when: $(inputs.n > 5)
+  outputs: {child~touch_n~out: null, touch_n~out: {class: File, basename: n.txt, contents: ''}}
+- id: when_non_finite_fails
+  why: A non-finite subexpression of a condition fails the run, naming the step, the expression and the subexpression.
+  tools: {c0: {baseCommand: [touch, c0.txt], inputs: {i: int}, outputs: {out: {type: File,
+    outputBinding: {glob: c0.txt}}}}}
+  steps: |
+    - id: c0
+      in: {i: !ii 7}
+      when: $(inputs.i / (inputs.i - 7) > 0)
+  never: [c0.txt]
+  fails: 'Sophios expression c0 when ((inputs.i / (inputs.i - 7)) > 0): (inputs.i / (inputs.i - 7)) is Infinity'
+- id: when_per_scatter_combination
+  why: The condition sees each invocation's scattered elements and the broadcast value; the gather keeps null where it
+    skips, whatever order the tasks finish in.
+  tools: {pair: {baseCommand: [sh, -c, 'sleep "$2"; printf %s-%s "$1" "$2"', pair], inputs: {item: {type: string,
+    inputBinding: {position: 1}}, tag: {type: string, inputBinding: {position: 2}}, skipped: string}, stdout: out.txt,
+    outputs: {line: {type: File, outputBinding: {glob: out.txt}}}}}
+  steps: |
+    - id: pair
+      scatter: [item, tag]
+      scatterMethod: dotproduct
+      in: {item: !ii [a, b, c], tag: !ii ['2', '1', '0'], skipped: !ii '1'}
+      when: $(inputs.tag !== inputs.skipped)
+  outputs: {pair~line: [{class: File, basename: out.txt, contents: a-2}, null, {class: File, basename: out.txt,
+    contents: c-0}]}
+- id: when_per_scatter_invocation
+  why: The condition runs per invocation, and the gather keeps null at the skipped position.
+  tools: {pair: {baseCommand: printf, arguments: [{position: 0, valueFrom: '%s-%s'}], inputs: {a: {type: string,
+    inputBinding: {position: 1}}, b: {type: string, inputBinding: {position: 2}}}, stdout: out.txt, outputs: {line: {
+    type: File, outputBinding: {glob: out.txt}}}}}
+  steps: |
+    - id: pair
+      scatter: [a, b]
+      scatterMethod: dotproduct
+      in: {a: !ii [a, b, c], b: !ii [x, y, z]}
+      when: $(inputs.a !== 'b')
+  outputs: {pair~line: [{class: File, basename: out.txt, contents: a-x}, null, {class: File, basename: out.txt,
+    contents: c-z}]}
 - id: wildcard_output-one
   why: A scalar File output whose glob matches one file is that file; the tool declares its input in `T[]` shorthand.
   tools: &tools_wildcard_output {make: {baseCommand: touch, inputs: {names: {type: 'string[]',

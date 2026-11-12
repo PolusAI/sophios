@@ -1,36 +1,18 @@
-"""The Phase 3 acceptance cells (design §6) under pinned Nextflow. A1-A9, W1-W7 are decided in
-test_subset_differential.py, S1-S14 in test_runtime.py's scatter property; A10 has no runtime test (rejected)."""
+"""The Phase 3 acceptance cells (design §6) as builders. A1-A9, W1-W7 are decided in test_subset_differential.py,
+S1-S14 in test_runtime.py's scatter property, W8-W11 and A11 in the cases of nextflow/runs.yaml; A10 has no runtime
+test (rejected)."""
 
 # pylint: disable=missing-function-docstring
 
-from pathlib import Path
-import subprocess
 from typing import Any
 
-import pytest
-
-from sophios.api.python._workflow_runtime import compile_workflow_result
 from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
 from sophios.api.python.workflow import Step, Workflow
-from sophios.utils_nf import compiled_source_to_nextflow
-
-from .testkit import run_observed
 
 
 def _text_output() -> Output:
     """A string output holding the contents of out.txt."""
     return Output(cwl.string, glob="out.txt", load_contents=True, output_eval="$(self[0].contents)")
-
-
-def _run(
-    root: Workflow, directory: Path, *emits: str
-) -> tuple["subprocess.CompletedProcess[str]", dict[str, list[str]]]:
-    """Lower, render, observe each named workflow output in arrival order, and run."""
-    return run_observed(compiled_source_to_nextflow(compile_workflow_result(root)), directory, emits=emits)
-
-
-def _ran(directory: Path, name: str) -> bool:
-    return bool(list((directory / "work").glob(f"*/*/{name}")))
 
 
 def _printf(name: str, *ports: str) -> CommandLineTool:
@@ -90,18 +72,6 @@ def calculator_workflow() -> Workflow:
     return _calc_workflow(whens, "calc_cells")
 
 
-@pytest.mark.nextflow
-@pytest.mark.serial
-def test_calculator_failures(tmp_path: Path) -> None:
-    """A11: a non-finite subexpression fails the run, named; no task output is produced."""
-    result, _ = _run(_calc_workflow(["$(inputs.i / (inputs.i - 7) > 0)"], "fail_cells"), tmp_path)
-    assert result.returncode != 0
-    assert "Sophios expression c0 when ((inputs.i / (inputs.i - 7)) > 0): (inputs.i / (inputs.i - 7)) is Infinity" in (
-        result.stdout + result.stderr
-    )
-    assert not _ran(tmp_path, "c0.txt")
-
-
 # W1-W11 ------------------------------------------------------------------
 
 PREDICATES = {
@@ -131,55 +101,3 @@ def predicates_workflow() -> Workflow:
         step.when = predicate
         steps.append(step)
     return Workflow(steps, "when_cells")
-
-
-@pytest.mark.nextflow
-@pytest.mark.serial
-def test_skipped_step_yields_null_and_downstream_completes(tmp_path: Path) -> None:
-    """W8, W9: no task, a null workflow output, and an admitted optional consumer still runs."""
-    produce = CommandLineTool("produce", Inputs(n=Input(cwl.int)), Outputs(result=_text_output()))
-    produce = produce.base_command("echo").stdout("out.txt").argument("produced", position=1)
-    consume = CommandLineTool(
-        "consume", Inputs(maybe=Input(cwl.string, required=False)), Outputs(done=Output(cwl.file, glob="done.txt"))
-    )
-    consume = consume.base_command("touch").argument("done.txt", position=1)
-    first = Step(produce, step_name="produce")
-    first.inputs.n = 0
-    first.when = "$(inputs.n > 0)"
-    second = Step(consume, step_name="consume")
-    second.inputs.maybe = first.outputs.result
-    root = Workflow([first, second], "null_cells")
-    root.outputs.result = first.outputs.result
-    result, observed = _run(root, tmp_path, "result")
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert observed["result"] == ["[]"]
-    assert not _ran(tmp_path, "out.txt")
-    assert _ran(tmp_path, "done.txt")
-
-
-@pytest.mark.nextflow
-@pytest.mark.serial
-def test_per_invocation_when_under_scatter(tmp_path: Path) -> None:
-    """W10: the predicate runs per invocation; the gather keeps null at the skipped position."""
-    step = _scatter_step("PAIR", "dotproduct", {"a": ["a", "b", "c"], "b": ["x", "y", "z"]})
-    step.when = "$(inputs.a !== 'b')"
-    root = Workflow([step], "scatter_when_cells")
-    root.outputs.line = step.outputs.line
-    result, observed = _run(root, tmp_path, "line")
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert observed["line"] == ["a-x", "[]", "c-z"]
-
-
-@pytest.mark.nextflow
-@pytest.mark.serial
-def test_condition_inside_an_inlined_subworkflow(tmp_path: Path) -> None:
-    """W11: the inlined inner step keeps its condition; the outer step still runs."""
-    inner = Step(_when_tool("inner"), step_name="inner")
-    inner.inputs.flag, inner.inputs.s, inner.inputs.n = True, "x", 3
-    inner.when = "$(inputs.n > 5)"
-    child = Workflow([inner], "child")
-    outer = Step(_when_tool("outer"), step_name="outer")
-    outer.inputs.flag, outer.inputs.s, outer.inputs.n = True, "x", 3
-    result, _ = _run(Workflow([child, outer], "inline_cells"), tmp_path)
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert (_ran(tmp_path, "inner.txt"), _ran(tmp_path, "outer.txt")) == (False, True)
