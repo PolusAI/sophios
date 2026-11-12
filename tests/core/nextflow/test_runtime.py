@@ -24,9 +24,6 @@ from sophios.input_output_nf import NF_OUTPUT_MARKER, write_nextflow_artifacts
 from sophios.nf_symbols import NEXTFLOW_SCRIPT_NAMES
 from sophios.nf_types import (
     ExecutableNextflowWorkflow,
-    NfArrayBinding,
-    NfCommand,
-    NfPort,
     NfProcess,
     NfResources,
 )
@@ -43,10 +40,6 @@ from .testkit import (
     assert_succeeded,
     command,
     execute_nextflow,
-    output_port,
-    run_nextflow,
-    single_process_workflow,
-    template,
 )
 
 
@@ -126,36 +119,6 @@ def _sophios_cli(home: Path, workflow: Path, cwl_dir: Path, *flags: str, cwd: Pa
     config = search_config(home / "config.json", [cwl_dir], [home], renaming_conventions=[], inference_rules={})
     return python_process("-m", "sophios.main", "--yaml", workflow, "--config_file", config, "--homedir", home, *flags,
                           cwd=cwd or home, capture_output=True, timeout=timeout)
-
-
-@pytest.mark.nextflow
-@pytest.mark.serial
-@pytest.mark.parametrize("count", [1, 2], ids=["one-element", "many-elements"])
-def test_array_of_directories_stages_every_element_for_one_process_call(count: int, tmp_path: Path) -> None:
-    sources = []
-    for index in range(count):
-        source = tmp_path / f"source_{index}"
-        source.mkdir()
-        (source / "inner.txt").write_text("inner\n", encoding="utf-8")
-        sources.append(str(source))
-    process = NfProcess(
-        "LIST_DIRECTORIES",
-        [NfPort("sources", "path", path_kind="directory", is_array=True)],
-        [output_port("result", "names.txt")],
-        NfCommand(
-            (template("echo"), NfArrayBinding("sources")),
-            stdout=template("names.txt"),
-        ),
-    )
-    workflow = single_process_workflow(
-        process, params={"sources": sources}, param_types={"sources": "Directory[]"}, output_port_name="result"
-    )
-    result = run_nextflow(workflow, tmp_path / "run")
-    assert_succeeded(result)
-    outputs = list((tmp_path / "run" / "work").rglob("names.txt"))
-    assert [path.read_text(encoding="utf-8") for path in outputs] == [
-        " ".join(f"gather_sources_{index + 1}/source_{index}" for index in range(count)) + "\n"
-    ]
 
 
 @pytest.mark.nextflow
@@ -806,6 +769,7 @@ def _staged_paths(draw: st.DrawFn) -> tuple[bool, bool, list[tuple[str, str]], b
 @given(_staged_paths())
 @example((False, True, [("source[0]*.txt", "alpha\n"), ("source[0]*.txt", "beta\n")], True))
 @example((False, True, [], True))
+@example((True, True, [("plain.txt", "first\n"), ("plain.txt", "second\n")], False))
 @example((False, False, [("source.txt", "runtime file object\n")], False))
 @example((True, False, [("source_directory[1]", "value with spaces")], True))
 @example((False, False, [("plain.txt", "\r")], False))

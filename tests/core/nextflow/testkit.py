@@ -231,15 +231,6 @@ def execute_nextflow(
     )
 
 
-def run_nextflow(
-    workflow: ExecutableNextflowWorkflow,
-    directory: Path,
-) -> "subprocess.CompletedProcess[str]":
-    """Write the four artifacts and execute them."""
-    write_nextflow_artifacts(workflow, directory)
-    return execute_nextflow(directory)
-
-
 def run_observed(
     workflow: ExecutableNextflowWorkflow, directory: Path, *arguments: str, emits: Sequence[str] | None = None
 ) -> tuple["subprocess.CompletedProcess[str]", dict[str, list[str]]]:
