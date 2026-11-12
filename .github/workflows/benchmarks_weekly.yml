@@ -104,10 +104,6 @@ jobs:
         id: setup
         run: 'true'
 
-      - name: Generate Sophios Validation Jsonschema
-        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
-        run: cd sophios/ && sophios --generate_schemas
-
       - name: Generate Sophios Python API Workflows (*.py -> *.wic)
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         # Corpus preparation: the corpus cases compile the *.wic files it writes.
