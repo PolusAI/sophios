@@ -1,0 +1,25 @@
+# Inputs, outputs, requirements and hints written as lists are read as mappings keyed by id or class, an id by
+# what follows its last #; a step's requirements and hints the same way.
+inputs:
+- id: a
+  type: string
+- id: '#nm'
+  type: string
+outputs:
+- id: o
+  type: File
+  outputSource: s/f
+- id: 'wf.cwl#p'
+  type: File
+requirements:
+- class: ScatterFeatureRequirement
+- class: ''
+hints:
+- class: DockerRequirement
+  dockerPull: x
+steps:
+  s:
+    requirements:
+    - class: InlineJavascriptRequirement
+    hints:
+    - class: InlineJavascriptRequirement

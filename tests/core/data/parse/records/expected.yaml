@@ -1,0 +1,36 @@
+why: "An input's value is a name, a literal, an edge, a raw CWL reference or a record. A mapping of WorkflowStepInput
+  fields alone is a record, never a literal, which sent {\"source\": \"x\"} to a tool once; written untagged, or with a
+  field CWL has no name for, a source that is no reference, a construct in a field or no value at all, it is reported."
+# Each document's diagnostics, by code, line and column in reading order; an accepted document reports none.
+documents:
+  inputs.wic: []
+  refused.wic:
+  - [STEP_INPUT_RECORD, 6, 10]
+  - [STEP_INPUT_RECORD, 7, 10]
+  - [STEP_INPUT_RECORD, 8, 10]
+  - [STEP_INPUT_RECORD, 9, 10]
+  - [STEP_INPUT_RECORD, 10, 10]
+  - [STEP_INPUT_RECORD, 11, 10]
+  - [STEP_INPUT_RECORD, 12, 10]
+  - [STEP_INPUT_RECORD, 13, 10]
+  - [STEP_INPUT_RECORD, 14, 10]
+  - [STEP_INPUT_RECORD, 15, 10]
+  - [STEP_INPUT_RECORD, 16, 10]
+  - [STEP_INPUT_RECORD, 17, 10]
+# What a document reads as: each node by its fields, a construct as its tag around what it carries.
+reads:
+  inputs.wic:
+    steps:
+    - id: s
+      inputs:
+        a: plain
+        b: {'!ii': {some: mapping}}
+        c: {'!ii': '{unclosed'}
+        d: {'!ii': {k: v}}
+        e: {'!ii': {source: x, pdb_code: 1aki}}
+        f: {'!*': edge}
+        g: {'!cwl': a/b}
+        h: {'!cwl': {source: [{'!*': a}, wf_in], linkMerge: merge_flattened}}
+        i: {'!cwl': {source: [{'!*': a}, wf_in], linkMerge: merge_flattened}}
+        j: {'!cwl': {source: [], default: 3}}
+        k: {'!cwl': {source: [], valueFrom: $(1)}}

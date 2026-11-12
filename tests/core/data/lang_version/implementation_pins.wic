@@ -1,0 +1,12 @@
+# Its one implementation pins a language version that does not exist; the body selected decides the version too.
+wic:
+  default_implementation: fast
+  implementations:
+    fast:
+      wic:
+        lang_version: 9.9.9
+      steps:
+      - id: touch
+        in:
+          filename: !ii empty.txt
+steps: []

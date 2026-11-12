@@ -1,0 +1,6 @@
+# Pinned to a version that exists, calling a workflow pinned to one that does not: every document's pin counts.
+wic:
+  lang_version: 0.0.1
+steps:
+- id: child
+  run: pins_none.wic

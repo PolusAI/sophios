@@ -1,0 +1,43 @@
+why: A step that cannot be read is reported once, where it is written, and the reading goes on, so one pass over a
+  file reports every fault in it and still returns a document. A step with no id is read through like any other,
+  so naming it does not bring a second round of faults from what was under it all along.
+# Each document's diagnostics, by code, line and column in reading order; an accepted document reports none.
+documents:
+  by_name.wic:
+  - [EXPECTED_SCALAR, 3, 5]
+  - [DUPLICATE_KEY, 6, 5]
+  - [EXPECTED_MAPPING, 7, 3]
+  in_a_sequence.wic:
+  - [MISSING_STEP_ID, 3, 3]
+  - [MISSING_STEP_ID, 5, 3]
+  - [DUPLICATE_KEY, 9, 5]
+  - [EXPECTED_MAPPING, 10, 3]
+  - [DUPLICATE_KEY, 13, 3]
+  - [MISSING_STEP_ID, 14, 3]
+  - [UNKNOWN_TAG, 16, 10]
+  - [MISPLACED_EDGE_DEF, 17, 10]
+  - [MISSING_STEP_ID, 18, 3]
+  - [UNKNOWN_TAG, 20, 8]
+  - [MISPLACED_EDGE_DEF, 21, 8]
+  - [UNKNOWN_TAG, 24, 8]
+  - [MISPLACED_EDGE_DEF, 25, 8]
+  - [MISSING_STEP_ID, 26, 3]
+  - [EXPECTED_SCALAR, 26, 5]
+  - [DUPLICATE_KEY, 29, 3]
+  - [MISSING_STEP_ID, 30, 3]
+  - [EMPTY_STEP_ID, 32, 7]
+  - [EXPECTED_MAPPING, 34, 7]
+  - [EXPECTED_SEQUENCE, 35, 8]
+  - [EXPECTED_SCALAR, 38, 5]
+  - [EXPECTED_SCALAR, 39, 11]
+  keys.wic: []
+# What a document reads as: each node by its fields. A step's own keys are read by name or as the CWL Sophios acts
+# on; any other key is CWL, kept as written.
+reads:
+  keys.wic:
+    steps:
+    - id: s
+      outputs: [f]
+      interpreted: {run: tool.cwl, scatter: [x], scatterMethod: dotproduct, when: $(true)}
+      passthrough: {doc: a step, label: a human label, touch: {}}
+    - {id: some_step.wic}

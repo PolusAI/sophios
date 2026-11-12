@@ -1,0 +1,7 @@
+# A pin YAML reads as the number 1.0, not as a version.
+wic:
+  lang_version: 1.0
+steps:
+- id: touch
+  in:
+    filename: !ii empty.txt

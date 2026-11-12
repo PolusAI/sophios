@@ -1,0 +1,53 @@
+wic:
+  steps:
+    (1, s):
+      wic:
+        namespace: dna
+    (2, t):
+      wic: {}
+steps:
+- id: s
+  in:
+    a: !ii x
+    b: !* e
+    c: !cwl a/b
+    d: !cwl
+      source: !* a
+      valueFrom: $(self)
+    e: !cwl
+      source:
+      - !* a
+      - b
+      linkMerge: merge_flattened
+      default:
+      - 1
+    f: !cwl
+      source:
+      - a
+      linkMerge: merge_nested
+    g: !ii '0'
+    h: !ii 'true'
+    i: !ii
+      a: !* e
+    j: !ii 0777
+    k: !ii 1.50
+    l: !ii yes
+    m: !ii 0x1f
+    n: !ii 1:30
+    o: !ii +5
+    p: !ii 00
+    q: !ii 1.0e+300
+    r: !ii .inf
+    s: !ii .nan
+    t: !ii on
+    u: !ii 2020-01-01
+    v: !ii null
+    w: !ii '0'
+    x: !ii ''
+    y: !ii a b
+  out:
+  - f: !& e
+  - g
+- id: t
+meta: !ii
+  a: 1

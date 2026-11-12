@@ -65,9 +65,9 @@ command line, `Workflow`, `Step`, `CommandLineTool`, or `compile_source`. A
 test that pins existing behaviour should fail under a plausible mutation of
 it. Markers are listed in [Validation and testing](../validation.md); a test
 that pulls images or runs a container is marked so that the quick lanes skip
-it. Every new error code lands with its provocation in
-`tests/core/provocations.py` and its explanation in `EXPLANATIONS`, or the
-suite fails.
+it. Every new error code lands with its provocation, a document under
+`tests/core/data/parse` or a callable in `tests/core/provocations.py`, and its
+explanation in `EXPLANATIONS`, or the suite fails.
 
 ## Before pushing
 

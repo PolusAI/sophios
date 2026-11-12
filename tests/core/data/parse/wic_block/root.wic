@@ -1,0 +1,16 @@
+# Keys the wic: block does not have, and values of the wrong shape, each reported at the node that is wrong.
+wic:
+  nonsense_key: 1
+  scatter: [x]                   # a step's key, not the document's
+  inlineable: sometimes
+  driver: pbs
+  namespace: ""
+  lang_version: 1.0
+  implementations: [a]
+  graphviz:
+    label: ""
+    style: bogus
+    color: red
+    ranksame: ["(1, a)", zz]
+steps:
+- id: s

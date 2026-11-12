@@ -1,0 +1,11 @@
+# An unknown tag on what the wic: block says about a step, and on a step keyed by name.
+wic:
+  steps:
+    (1, s): !foo {wic: {}}
+    (2, t):
+      wic: !foo {}
+steps:
+  touch: !foo {in: {}}
+  s:
+    in:
+      !ii a: b

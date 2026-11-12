@@ -1,0 +1,11 @@
+# Top-level hints, which no Python Workflow carries.
+hints:
+  ResourceRequirement:
+    coresMin: 1
+steps:
+- id: say
+  run:
+    class: CommandLineTool
+    baseCommand: "true"
+    inputs: {}
+    outputs: {}

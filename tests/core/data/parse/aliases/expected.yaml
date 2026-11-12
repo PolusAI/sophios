@@ -1,0 +1,26 @@
+why: An alias that leads back to the node it is in is a cycle, and one that widens past a budget a bomb. Either is
+  reported where it is reached, never followed, so reading neither raises nor hangs.
+# Each document's diagnostics, by code, line and column in reading order.
+documents:
+  blocks.wic:
+  - [RECURSIVE_ALIAS, 2, 6]
+  - [RECURSIVE_ALIAS, 6, 8]
+  cycles.wic:
+  - [RECURSIVE_ALIAS, 3, 6]
+  - [RECURSIVE_ALIAS, 4, 9]
+  - [RECURSIVE_ALIAS, 5, 18]
+  - [RECURSIVE_ALIAS, 6, 17]
+  - [RECURSIVE_ALIAS, 7, 9]
+  - [STEP_INPUT_RECORD, 7, 9]
+  - [RECURSIVE_ALIAS, 8, 12]
+  - [RECURSIVE_ALIAS, 12, 10]
+  - [RECURSIVE_ALIAS, 13, 10]
+  - [RECURSIVE_ALIAS, 14, 10]
+  - [RECURSIVE_ALIAS, 15, 10]
+  - [STEP_INPUT_RECORD, 15, 10]
+  - [RECURSIVE_ALIAS, 16, 10]
+  - [STEP_INPUT_RECORD, 16, 10]
+  laughs.wic:
+  - [RECURSIVE_ALIAS, 2, 10]
+  - [RECURSIVE_ALIAS, 2, 13]
+  - [RECURSIVE_ALIAS, 2, 16]

@@ -1,0 +1,5 @@
+# A document that pins no language version, so it compiles at the newest.
+steps:
+- id: touch
+  in:
+    filename: !ii empty.txt

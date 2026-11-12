@@ -1,0 +1,7 @@
+# Pinned to a language version that does not exist.
+wic:
+  lang_version: 9.9.9
+steps:
+- id: touch
+  in:
+    filename: !ii empty.txt

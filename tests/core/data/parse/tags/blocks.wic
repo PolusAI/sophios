@@ -1,0 +1,3 @@
+# An unknown tag on the wic: block, and on steps: in its two forms.
+wic: !foo {}
+steps: !foo {}

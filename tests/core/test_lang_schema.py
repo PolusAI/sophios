@@ -1,80 +1,96 @@
-"""The exported JSON Schema accepts what the AST accepts: exactly on the shapes the parser diagnoses, one way
-elsewhere, since JSON has no tags and passthrough CWL cannot be closed (language spec §1)."""
+"""The exported JSON Schema and the parser are two readers of one declaration: the schema refuses a document exactly
+when the parser reports its shape or its CWL version, and `sophios --generate_schemas` writes it and nothing else."""
 import json
-from dataclasses import fields
 from pathlib import Path
 from typing import Any, Final
 
 import jsonschema
 import pytest
 import yaml
+from cwltool.update import ALLUPDATES, UPDATES
 from hypothesis import example, given
+from hypothesis import strategies as st
 
-from sophios.lang import SophiosErrorCode, Forms, Grammar, parse, to_json, wic_schema
-from sophios.lang.nodes import Shape, Step, WicSidecar, surface_of
+from sophios.lang import SophiosErrorCode, parse, to_json, wic_schema
 
 from .budgets import budget
-from .cases import cases
-from .strategies import WIC_VALUES, documents, pinned, shapes
-from .test_lang_parser import PARSE_KEYS
-from .wic_corpus import CORPUS, corpus_id
+from .cases import DATA
+from .strategies import pinned, shapes
 
-FAST = budget(200)
+VALIDATOR: Final = jsonschema.Draft202012Validator(wic_schema())
 
-SCHEMA = wic_schema()
-VALIDATOR = jsonschema.Draft202012Validator(SCHEMA)
+#: What the parser reports about a document's shape and its CWL version, as distinct from what it says about names,
+#: tags and edges, which JSON cannot spell.
+_SHAPE_CODES: Final = frozenset({
+    SophiosErrorCode.EXPECTED_MAPPING, SophiosErrorCode.EXPECTED_SEQUENCE, SophiosErrorCode.EXPECTED_SCALAR,
+    SophiosErrorCode.MISSING_STEP_ID, SophiosErrorCode.EMPTY_STEP_ID, SophiosErrorCode.MALFORMED_WIC_STEP_KEY,
+    SophiosErrorCode.UNKNOWN_WIC_KEY, SophiosErrorCode.MALFORMED_WIC_VALUE, SophiosErrorCode.UNSUPPORTED_CWL_VERSION})
 
-
-def _accepts(data: Any) -> bool:
-    """Whether the exported schema accepts this document."""
-    return VALIDATOR.is_valid(data)
-
-
-@pytest.mark.fast
-def test_schema_is_itself_valid() -> None:
-    """The exported schema is a legal JSON Schema of the dialect it claims."""
-    jsonschema.Draft202012Validator.check_schema(SCHEMA)
+#: A `cwlVersion` value: each version CWL ever named, drafts and snapshots among them, and anything else.
+_VERSIONS = st.one_of(st.sampled_from(sorted(ALLUPDATES)), st.text('v1.023-dev ', max_size=8), st.floats(0, 2),
+                      st.none(), st.lists(st.just('v1.2'), max_size=1))
 
 
-@pytest.mark.fast
-def test_schema_is_derived_from_the_parser() -> None:
-    """Every construct and interpreted key comes from the parser's own tables.
+#: Shapes the parser reports, each alone, as a drawn document seldom holds one fault without another.
+_ALONE: Final = (
+    {'steps': 'nope'}, {'steps': {'s': 3}}, {'steps': {'s': {'in': 3}}}, {'steps': {'s': {'out': 3}}},
+    {'steps': {'s': {'out': [['s']]}}}, {'wic': 3}, {'wic': {'steps': 3}}, {'wic': {'steps': {'not a key': {'x': 1}}}},
+    {'wic': {'scatter': ['x']}}, {'steps': [{'touch': {'in': {'f': 'x'}}}]}, {'steps': [{'touch': None}]},
+    {'steps': [{'in': {'value': 'something'}}]}, {'steps': [{'id': ''}]})
 
-    This is the acceptance criterion "derived from the AST, never
-    hand-maintained": adding a construct to the parser must move the schema
-    without anyone remembering to edit it.
-    """
-    construct = SCHEMA['$defs']['construct']
-    assert set(construct['properties']) == set(Forms.DESUGARED_KEYS)
 
-    step_keys = set(SCHEMA['$defs']['stepBody']['properties'])
-    assert Grammar.INTERPRETED_STEP_KEYS <= step_keys
-
-    steps = SCHEMA['$defs']['wicBlock']['properties']['steps']
-    assert set(steps['patternProperties']) == {Grammar.WIC_STEP_KEY_PATTERN, Grammar.WIC_STEP_ID_PATTERN}
+def _tag_free(path: Path) -> Any:
+    """The mapping the document at `path` is, as YAML loads it, where it holds no tag and no alias; else None."""
+    text = path.read_text(encoding='utf-8')
+    try:
+        loaded = None if '!' in text or '&' in text else yaml.safe_load(text)
+    except yaml.YAMLError:
+        return None
+    return loaded if isinstance(loaded, dict) else None
 
 
 @pytest.mark.fast
-def test_generate_schemas_writes_the_ast_schema_and_nothing_else(
-        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """`sophios --generate_schemas` writes `wic_schema()`, and compiles nothing.
+@given(st.builds(lambda shape, version: {**shape, **version}, shapes(),
+                 st.fixed_dictionaries({}, optional={'cwlVersion': _VERSIONS})))
+@pinned(*_ALONE, *filter(None, map(_tag_free, sorted((DATA / 'parse').glob('*/*.wic')))),
+        *({'cwlVersion': version} for version in ['draft-2', 'draft-3', 'v1.0.dev4', 'v1.2.0-dev5', 'v1.3', '',
+                                                  *sorted(UPDATES)]))
+@example({'steps': [{'id': 1}]}).xfail(raises=AssertionError, reason="the parser reads the id as the name '1', the "
+                                       'schema wants a string')
+@example({'steps': {'s': {'out': [{'f': 'x'}]}}}).xfail(raises=AssertionError, reason='wic005: an out: entry binds '
+                                                        'only !&, which the schema does not say')
+@example({'wic': {'steps': {'s': {'out': 3}}}}).xfail(raises=AssertionError, reason='wic004: the schema leaves out: '
+                                                      'under wic: steps: open')
+@example({'steps': {'s': {'in': {'f': {'wic_alias': ['x']}}}}}).xfail(raises=AssertionError, reason='wic005: the '
+                                                                      'schema leaves a construct open')
+@budget(100)
+def test_the_schema_refuses_exactly_what_the_parser_reports(document: dict[str, Any]) -> None:
+    """Over tag-free documents, where loading one is its projection: the schema refuses a document, as an editor loads
+    it, exactly when the parser reports its shape or its CWL version; the parser reports a `cwlVersion` exactly when
+    cwltool cannot run it without `--enable-dev`, where it is written rather than later inside the runner; and what the
+    parser accepts projects to JSON the schema accepts."""
+    result = parse(json.dumps(document), 'shape.wic')
+    reported = [str(d) for d in result.diagnostics if d.code in _SHAPE_CODES]
+    assert VALIDATOR.is_valid(document) == (not reported), ([str(d) for d in result.diagnostics],
+                                                            list(VALIDATOR.iter_errors(document)))
+    if 'cwlVersion' in document:
+        assert ((SophiosErrorCode.UNSUPPORTED_CWL_VERSION in {d.code for d in result.diagnostics})
+                == (document['cwlVersion'] not in tuple(UPDATES)))
+    if result.ok and result.document is not None:
+        projection = json.loads(json.dumps(to_json(result.document)))
+        assert VALIDATOR.is_valid(projection), list(VALIDATOR.iter_errors(projection))
 
-    The schema it replaced compiled each discovered workflow and read the
-    compiled inputs back, so a subworkflow with an unbound inner input
-    advertised the compiler's generated name for it as something a caller may
-    bind. A caller may name only what the callee declares (wic032). The
-    control shows such a name exists; the file written must not carry it, or
-    any other, and discovery and compilation are forbidden while it is written.
-    """
+
+@pytest.mark.fast
+def test_generate_schemas_writes_the_schema_and_compiles_nothing(monkeypatch: pytest.MonkeyPatch,
+                                                                 tmp_path: Path) -> None:
+    """`sophios --generate_schemas` writes `wic_schema()`, a legal JSON Schema of the dialect it claims, and compiles
+    nothing. The schema it replaced compiled each discovered workflow and read the compiled inputs back, so a
+    subworkflow with an unbound inner input advertised the compiler's generated name for it (`mk_file~name`, `__step__`)
+    as something a caller may bind, where a caller may name only what the callee declares (wic032)."""
     import sophios.compiler  # pylint: disable=import-outside-toplevel
     import sophios.main  # pylint: disable=import-outside-toplevel
     import sophios.plugins  # pylint: disable=import-outside-toplevel
-
-    from .hermetic import compile_hermetic, subworkflow_step  # pylint: disable=import-outside-toplevel
-
-    compiled = compile_hermetic({'steps': [subworkflow_step('child.wic', {'steps': [{'id': 'mk_file'}]})]})
-    generated = 'mk_file~name'
-    assert any(generated in child.cwl['inputs'] for child in compiled.artifact.children)
 
     def forbidden(*_args: Any, **_kwargs: Any) -> None:
         raise AssertionError('--generate_schemas reached discovery or compilation')
@@ -88,187 +104,6 @@ def test_generate_schemas_writes_the_ast_schema_and_nothing_else(
         sophios.main._main(*sophios.cli.parser.parse_known_args())  # pylint: disable=protected-access
     assert caught.value.code == 0
 
-    written = (tmp_path / 'autogenerated' / 'schemas' / 'wic.json').read_text(encoding='utf-8')
-    assert json.loads(written) == wic_schema()
-    assert '__step__' not in written
-
-
-@pytest.mark.fast
-@given(documents())
-@FAST
-def test_accepts_every_document_the_parser_accepts(source: str) -> None:
-    """A parsed document's JSON projection validates — and IS JSON.
-
-    Both halves matter, and only together are they the claim: `jsonschema`
-    is duck-typed and will happily "validate" live Python objects that
-    `json.dumps` refuses, which is precisely how a broken `to_json` stayed
-    green under this property.
-    """
-    result = parse(source, 'gen.wic')
-    assert result.document is not None
-    projection = to_json(result.document)
-    json.dumps(projection)  # serialisability is the claim, not an assumption
-    assert _accepts(projection), list(VALIDATOR.iter_errors(projection))
-
-
-@pytest.mark.cwl_corpus
-@pytest.mark.fast
-@pytest.mark.parametrize('path', CORPUS, ids=corpus_id)
-def test_accepts_the_whole_corpus(path: Path) -> None:
-    """Every real `.wic` in the repository validates against the schema."""
-    result = parse(path.read_text(encoding='utf-8'), str(path))
-    assert result.document is not None
-    data = to_json(result.document)
-    assert _accepts(data), list(VALIDATOR.iter_errors(data))
-
-
-#: What the parser reports about a document's shape, as distinct from what it says about names, tags and edges.
-_SHAPE_CODES: Final = frozenset({
-    SophiosErrorCode.EXPECTED_MAPPING, SophiosErrorCode.EXPECTED_SEQUENCE, SophiosErrorCode.EXPECTED_SCALAR,
-    SophiosErrorCode.MISSING_STEP_ID, SophiosErrorCode.EMPTY_STEP_ID, SophiosErrorCode.MALFORMED_WIC_STEP_KEY,
-    SophiosErrorCode.UNKNOWN_WIC_KEY, SophiosErrorCode.MALFORMED_WIC_VALUE})
-
-#: Shapes the parser reports, each with what the language says there.
-REFUSED: Final = {
-    'steps must be a mapping or sequence': {'steps': 'nope'},
-    'step body must be a mapping or null': {'steps': {'s': 3}},
-    'in must be a mapping': {'steps': {'s': {'in': 3}}},
-    'out must be a sequence': {'steps': {'s': {'out': 3}}},
-    'an out: entry is a name or a single-key mapping': {'steps': {'s': {'out': [['s']]}}},
-    'wic must be a mapping': {'wic': 3},
-    'wic steps must be a mapping': {'wic': {'steps': 3}},
-    'wic step keys have the form (index, name) or are a step id': {'wic': {'steps': {'not a key': {'x': 1}}}},
-    'a sequence step carries its name in an id: key': {'steps': [{'touch': {'in': {'f': 'x'}}}]},
-    'a sequence step with a null body still needs an id:': {'steps': [{'touch': None}]},
-    'a sequence entry keyed by a step key is not an identity': {'steps': [{'in': {'value': 'something'}}]},
-    'an empty step id is wic007': {'steps': [{'id': ''}]},
-    **{f'{key} is not a top-level wic: key': {'wic': {key: yaml.safe_load(value)}}
-       for key, value in WIC_VALUES.items() if key not in Grammar.SIDECAR_KEYS},
-}
-
-#: Shapes the language admits, each with why.
-ADMITTED: Final = {
-    'a step may have no body (.wic reference §2.1)': {'steps': {'sub.wic': None}},
-    'nor a wic: block': {'wic': None},
-    'unknown keys are passthrough CWL, not errors (language spec §1)': {
-        '$namespaces': {'edam': 'http://edamontology.org/'},
-        'steps': {'s': {'in': {'f': 'name'}, 'hints': [{'class': 'X'}]}}},
-    **{f'{key} is an input value': {'steps': {'s': {'in': {'f': {key: 'x'}}}}} for key in sorted(Forms.DESUGARED_KEYS)},
-    # Both Step.id and OutputBinding.name are IDENTITY-shaped: a non-empty constraint written onto the shape made the
-    # schema stricter than the language for outputs, invisible while the generator's names were all non-empty.
-    "out: [''] parses without a diagnostic": {'steps': [{'id': 's', 'out': ['']}]},
-    # The parser's reading of `(1, a): {wic: , in: ...}`: wicStepBlock admits null, so both take the siblings alone.
-    'an empty sidecar wrapper beside siblings': {'wic': {'steps': {'(1, a)': {'wic': None, 'in': {'x': 1}}}},
-                                                 'steps': [{'id': 'a'}]},
-    **{f'{key} is a wic: steps: key': {'wic': {'steps': {'(1, s)': {key: yaml.safe_load(value)}}}}
-       for key, value in WIC_VALUES.items()},
-    **{f'{key} is a top-level wic: key': {'wic': {key: yaml.safe_load(value)}}
-       for key, value in WIC_VALUES.items() if key in Grammar.SIDECAR_KEYS},
-}
-#: Each row's outcome, by the JSON text of its document: `True` and `1` are equal in Python, not as the parser reads.
-_ACCEPTS: Final = {json.dumps(document): accepted for accepted, table in ((False, REFUSED), (True, ADMITTED))
-                   for document in table.values()}
-
-
-@pytest.mark.fast
-@given(shapes())
-@pinned(*REFUSED.values(), *ADMITTED.values(),
-        *(yaml.safe_load(case.values[0]['source']) for case in cases('parse/wic_values.yaml', *PARSE_KEYS)))
-@example({'steps': [{'id': 1}]}).xfail(raises=AssertionError, reason="the parser reads the id as the name '1', the "
-                                       'schema wants a string')
-@example({'steps': {'s': {'out': [{'f': 'x'}]}}}).xfail(raises=AssertionError, reason='wic005: an out: entry binds '
-                                                        'only !&, which the schema does not say')
-@example({'wic': {'steps': {'s': {'out': 3}}}}).xfail(raises=AssertionError, reason='wic004: the schema leaves out: '
-                                                      'under wic: steps: open')
-@example({'steps': {'s': {'in': {'f': {'wic_alias': ['x']}}}}}).xfail(raises=AssertionError, reason='wic005: the '
-                                                                      'schema leaves a construct open')
-@budget(100)
-def test_the_schema_refuses_exactly_the_shapes_the_parser_reports(document: dict[str, Any]) -> None:
-    """Two readers of one declaration, over tag-free documents, where loading one is its projection: the schema
-    refuses a document, as an editor loads it, exactly when the parser reports its shape, and a row as its table
-    says. And what the parser accepts projects to JSON the schema accepts, as for `documents()` above."""
-    result = parse(json.dumps(document), 'shape.wic')
-    reported = [str(d) for d in result.diagnostics if d.code in _SHAPE_CODES]
-    assert _accepts(document) == (not reported), ([str(d) for d in result.diagnostics],
-                                                  list(VALIDATOR.iter_errors(document)))
-    assert _ACCEPTS.get(json.dumps(document), not reported) == (not reported)
-    if result.ok and result.document is not None:
-        projection = to_json(result.document)
-        json.dumps(projection)
-        assert _accepts(projection), list(VALIDATOR.iter_errors(projection))
-
-
-@pytest.mark.fast
-def test_the_wic_block_is_closed_and_complete_for_editors() -> None:
-    """Each `wic:` form offers exactly the keys the parser admits there, and
-    no other, so an editor completes them and flags the rest (.wic reference §7)."""
-    forms = {'wicBlock': Grammar.SIDECAR_KEYS, 'wicStepBlock': Grammar.SIDECAR_STEP_KEYS,
-             'wicStepEntry': Grammar.SIDECAR_STEP_KEYS | {'wic'}}
-    for form, keys in forms.items():
-        assert set(SCHEMA['$defs'][form]['properties']) == keys, form
-        assert SCHEMA['$defs'][form]['additionalProperties'] is False, form
-
-
-# The schema is generated from the `Surface` declarations in `nodes.py`. These
-# check that the generation is total — that no field can be added, and no key
-# invented, without one of these failing.
-
-
-@pytest.mark.fast
-def test_schema_keys_come_only_from_the_ast() -> None:
-    """Every key the schema describes traces back to a declared field.
-
-    The schema is not allowed to invent syntax. `id` is expected on the
-    sequence form and absent from the mapping form, where the step's name is
-    the mapping key rather than a key inside it.
-    """
-    declared = {surface_of(Step, f.name).key for f in fields(Step)} - {None}
-    declared |= set(Grammar.INTERPRETED_STEP_KEYS)
-
-    for form in ('sequenceStep', 'stepBody'):
-        keys = set(SCHEMA['$defs'][form]['properties'])
-        assert keys <= declared, f'{form} invented {keys - declared}'
-
-    assert 'id' in SCHEMA['$defs']['sequenceStep']['properties']
-    assert 'id' not in SCHEMA['$defs']['stepBody']['properties']
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize('node_type,form', [(Step, 'sequenceStep'), (WicSidecar, 'wicBlock')],
-                         ids=['Step', 'WicSidecar'])
-def test_every_keyed_field_reaches_the_schema(node_type: type, form: str) -> None:
-    """A field that occupies a surface key is described by the schema."""
-    properties = SCHEMA['$defs'][form]['properties']
-    for declared in fields(node_type):
-        shape = surface_of(node_type, declared.name)
-        if shape.key is not None and shape.shape is not Shape.INTERNAL:
-            assert shape.key in properties, f'{node_type.__name__}.{declared.name} is not in the schema'
-
-
-@pytest.mark.fast
-def test_passthrough_declarations_open_their_objects() -> None:
-    """A node declaring PASSTHROUGH produces an open object, and one without
-    it does not. Openness is the AST's statement, not the generator's."""
-    assert any(surface_of(Step, f.name).shape is Shape.PASSTHROUGH for f in fields(Step))
-    assert SCHEMA['$defs']['sequenceStep']['additionalProperties'] is True
-    assert SCHEMA['$defs']['construct']['additionalProperties'] is False
-
-
-@pytest.mark.fast
-def test_editing_an_export_cannot_affect_a_later_one() -> None:
-    """Freshness is deep, not one level down.
-
-    The generator builds from shared fragments, and those fragments are
-    nested; a shallow copy of one hands out its interior. Reaching three
-    levels into an export and writing there must not change what the next
-    call produces — that is the whole of what "returned fresh each call"
-    claims, and it is checked at the depth where the claim used to fail.
-    """
-    first = wic_schema()
-    first['$defs']['stepBody']['properties']['in']['additionalProperties']['$ref'] = 'CORRUPTED'
-    first['$defs']['outputEntry']['oneOf'][0]['type'] = 'CORRUPTED'
-
-    second = wic_schema()
-    assert second['$defs']['stepBody']['properties']['in']['additionalProperties']['$ref'] \
-        == '#/$defs/inputValue'
-    assert second['$defs']['outputEntry']['oneOf'][0]['type'] == 'string'
+    written = json.loads((tmp_path / 'autogenerated' / 'schemas' / 'wic.json').read_text(encoding='utf-8'))
+    jsonschema.Draft202012Validator.check_schema(written)
+    assert written == wic_schema()

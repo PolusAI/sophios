@@ -1,0 +1,18 @@
+# Each form an input's value takes: a name, a literal, an edge, a raw CWL reference and a record.
+steps:
+  s:
+    in:
+      a: plain
+      b: {some: mapping}                      # untagged, a literal
+      c: !ii "{unclosed"                      # text YAML cannot load stays text
+      d: !ii {k: v}                           # a collection, wrapped once
+      e: {source: x, pdb_code: 1aki}          # not all fields of a record: a literal
+      f: !* edge
+      g: !cwl a/b
+      h: !cwl {source: [!* a, wf_in], linkMerge: merge_flattened}
+      i:
+        wic_raw_cwl:
+          source: [{wic_alias: a}, wf_in]
+          linkMerge: merge_flattened
+      j: !cwl {default: 3}                    # a default needs no source
+      k: !cwl {valueFrom: $(1)}               # nor does a valueFrom

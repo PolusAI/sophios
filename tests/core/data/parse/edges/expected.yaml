@@ -1,0 +1,42 @@
+why: "One construct, one verdict, in both spellings and every position. An edge is defined on an output, on the step
+  or in the wic: block for it; anywhere else the definition is reported, and the name it gave is kept, never dropped."
+# Each document's diagnostics, by code, line and column in reading order; an accepted document reports none.
+documents:
+  misplaced.wic:
+  - [MISPLACED_EDGE_DEF, 3, 6]
+  - [MISPLACED_EDGE_DEF, 4, 16]
+  - [UNKNOWN_TAG, 5, 7]
+  - [MISPLACED_EDGE_DEF, 5, 7]
+  - [MISPLACED_EDGE_DEF, 8, 12]
+  - [MISPLACED_EDGE_DEF, 13, 18]
+  - [MISPLACED_EDGE_DEF, 17, 8]
+  - [MISPLACED_EDGE_DEF, 18, 8]
+  - [MISPLACED_EDGE_DEF, 19, 16]
+  - [MISPLACED_EDGE_DEF, 20, 16]
+  - [MISPLACED_EDGE_DEF, 21, 8]
+  - [UNKNOWN_TAG, 22, 8]
+  - [MISPLACED_EDGE_DEF, 22, 8]
+  - [MISPLACED_EDGE_DEF, 23, 10]
+  - [MISPLACED_EDGE_DEF, 24, 8]
+  defined.wic: []
+# What a document reads as: each node by its fields, a construct as its tag around what it carries, a wic: step key
+# as [index, name].
+reads:
+  misplaced.wic:
+    steps:
+    - id: s
+      inputs: {a: e, b: e, c: {'!ii': {k: e}}, d: {'!ii': {k: e}}, f: '', g: x}
+      passthrough: {label: e, doc: e}
+    wic:
+      steps: [[1, s, {entries: {graphviz: {label: e}}}]]
+      entries: {graphviz: {label: e}}
+    passthrough: {top: x, top_desugared: x, both: x}
+  defined.wic:
+    steps:
+    - id: s
+      outputs: [f: {'!&': e}, g: {'!&': e2}, h: {'!&': e3}, plain, '']
+    - id: t
+    wic:
+      steps:
+      - [1, s, {entries: {out: [output_tpr_path: {wic_anchor: min.tpr}]}}]
+      - [2, t, {entries: {out: [output_tpr_path: {wic_anchor: min.tpr}]}}]
