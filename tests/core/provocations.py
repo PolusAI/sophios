@@ -34,6 +34,20 @@ def _provoke_workflow_run_failed() -> None:
         echo_workflow('provoke').run()
 
 
+def _provoke_nextflow_output_renamed() -> None:
+    """A workflow for a compute service on Nextflow with an output named `Made`, which Nextflow publishes as `_Made`."""
+    # pylint: disable=import-outside-toplevel
+    from sophios.api.python._workflow_runtime import service_pipeline
+    from sophios.api.python.tool_builder import CommandLineTool, Inputs, Output, Outputs, cwl
+    from sophios.api.python.workflow import Step, Workflow
+
+    make = Step(CommandLineTool('make', Inputs(), Outputs(made=Output(cwl.file, glob='made')))
+                .base_command('touch', 'made'))
+    workflow = Workflow([make], 'provoke')
+    workflow.outputs.Made = make.outputs.made
+    service_pipeline(workflow)
+
+
 #: One edit of the pipeline `import_edited` writes, for each import code: the file, the text replaced (every
 #: occurrence), its replacement, and text on the line the diagnostic names.
 IMPORT_EDITS: Final[dict[SophiosErrorCode, tuple[str, str, str, str]]] = {
@@ -90,6 +104,7 @@ COMPILED: Final[dict[SophiosErrorCode, Callable[[], object]]] = {
         resolve_lang_version, None, ('0.0.1', '0.0.2'), known=('0.0.1', '0.0.2')),
     SophiosErrorCode.INVALID_INFERENCE: _provoke_invalid_inference,
     SophiosErrorCode.WORKFLOW_RUN_FAILED: _provoke_workflow_run_failed,
+    SophiosErrorCode.NEXTFLOW_OUTPUT_RENAMED: _provoke_nextflow_output_renamed,
     **{code: partial(_import_edited, code) for code in IMPORT_EDITS},
 }
 
