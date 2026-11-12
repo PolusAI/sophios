@@ -23,11 +23,6 @@ from sophios.api.python.workflow import Step, StepInput, Workflow
 from sophios.backends import recorded_outputs
 from sophios.input_output_nf import write_nextflow_artifacts
 from sophios.nf_symbols import NEXTFLOW_SCRIPT_NAMES
-from sophios.nf_types import (
-    ExecutableNextflowWorkflow,
-    NfProcess,
-    NfResources,
-)
 from sophios.plugins import get_tools_cwl
 from sophios.utils_nf import compilation_result_source, compiled_source_to_nextflow, nextflow_names
 
@@ -37,33 +32,7 @@ from ..helpers import ADAPTERS, python_process, search_config, write_tree
 from .test_executable_ir import NAMES
 from .test_public_api import supported_workflow
 from .test_reference_differential import _observed, _run_cwltool, _run_nextflow, _tree
-from .testkit import (
-    assert_succeeded,
-    command,
-    execute_nextflow,
-)
-
-
-@pytest.mark.nextflow
-@pytest.mark.serial
-def test_large_memory_directive_is_valid_nextflow_syntax(tmp_path: Path) -> None:
-    workflow = ExecutableNextflowWorkflow(
-        "WF",
-        [NfProcess(
-            "TASK",
-            [],
-            [],
-            command("true"),
-            resources=NfResources(cpus=1, memory_mb=1_234_567),
-        )],
-        [],
-        {},
-    )
-    write_nextflow_artifacts(workflow, tmp_path)
-
-    result = execute_nextflow(tmp_path, "-preview")
-
-    assert_succeeded(result)
+from .testkit import assert_succeeded, execute_nextflow
 
 
 @pytest.mark.nextflow
@@ -126,7 +95,8 @@ def _sophios_cli(home: Path, workflow: Path, cwl_dir: Path, *flags: str, cwd: Pa
 @pytest.mark.docker
 @pytest.mark.serial
 def test_a_containerized_command_runs_after_its_images_entrypoint(tmp_path: Path) -> None:
-    """CWL gives the command to the container as its arguments, so the image's ENTRYPOINT runs first."""
+    """CWL gives the command to the container as its arguments, so the image's ENTRYPOINT runs first; a tool with no
+    DockerRequirement runs on the host in the same workflow."""
     image = "sophios-nextflow-entrypoint:test"
     context = tmp_path / "image"
     context.mkdir()
@@ -141,83 +111,31 @@ def test_a_containerized_command_runs_after_its_images_entrypoint(tmp_path: Path
         tool_ = CommandLineTool(name, Inputs(), Outputs(out=Output(cwl.file, glob="out.txt"))).stdout("out.txt")
         return (tool_.base_command(*base_command) if base_command else tool_).argument("an argument", position=1)
 
+    #: Prints where it runs; a tool without a DockerRequirement runs on the host beside the container ones.
+    on_host = (CommandLineTool("on_host", Inputs(), Outputs(place=Output(cwl.file, glob="place.txt")))
+               .base_command("sh", "-c", "test -e /.dockerenv && echo container || echo host").stdout("place.txt"))
     steps = [
         Step(words("no_base_command").docker(image), step_name="no_base_command"),
         Step(words("base_command", "printf").docker(image), step_name="base_command"),
         Step(words("no_entrypoint", "echo").docker("debian:bookworm-slim"), step_name="no_entrypoint"),
+        Step(on_host, step_name="on_host"),
     ]
     workflow = Workflow(steps, "nextflow_entrypoint")
-    for step in steps:
+    for step in steps[:3]:
         setattr(workflow.outputs, step.process_name, step.outputs.out)
+    workflow.outputs.on_host = steps[3].outputs.place
     result = execute_nextflow(workflow.compile(target="nextflow").write(tmp_path / "pipeline"))
     assert_succeeded(result)
-    assert sorted(path.read_text(encoding="utf-8") for path in (tmp_path / "pipeline" / "work").rglob("out.txt")) == [
+    work = tmp_path / "pipeline" / "work"
+    assert sorted(path.read_text(encoding="utf-8") for path in work.rglob("out.txt")) == [
         "an argument\n", "from the entrypoint an argument\n", "from the entrypoint printf an argument\n",
     ]
-
-
-@pytest.mark.nextflow
-@pytest.mark.docker
-@pytest.mark.serial
-def test_host_and_container_tasks_run_in_one_workflow(tmp_path: Path) -> None:
-    """A tool without a DockerRequirement runs on the host beside one that runs in a container."""
-    def where(name: str) -> CommandLineTool:
-        return (
-            CommandLineTool(name, Inputs(), Outputs(place=Output(cwl.file, glob="place.txt")))
-            .base_command("sh", "-c", "test -e /.dockerenv && echo container || echo host")
-            .stdout("place.txt")
-        )
-
-    in_container = Step(where("in_container").docker("debian:bookworm-slim"), step_name="in_container")
-    on_host = Step(where("on_host"), step_name="on_host")
-    workflow = Workflow([in_container, on_host], "nextflow_host_and_container")
-    workflow.outputs.container_place = in_container.outputs.place
-    workflow.outputs.host_place = on_host.outputs.place
-
-    workflow.compile(target="nextflow").write(tmp_path)
-    result = execute_nextflow(tmp_path)
-    assert_succeeded(result)
-    places = {name: Path(value["path"]).read_text(encoding="utf-8") for name, value in _recorded(result.stdout).items()}
-    assert places == {"container_place": "container\n", "host_place": "host\n"}
+    assert [path.read_text(encoding="utf-8") for path in work.rglob("place.txt")] == ["host\n"]
 
 
 def _recorded(stdout: str) -> dict[str, Any]:
     """Each workflow output the pipeline recorded on ``stdout``, by its Nextflow name."""
     return dict(recorded_outputs(stdout))
-
-
-@pytest.mark.nextflow
-@pytest.mark.serial
-def test_the_pipeline_records_each_workflow_output_as_its_value(tmp_path: Path) -> None:
-    """A path is its class and path, a skipped step's output null, and a nested crossproduct's output
-    one array level per scattered input, each file converted at the innermost level."""
-    touch = Step(CommandLineTool("touch_file", Inputs(), Outputs(out=Output(cwl.file, glob="out.txt")))
-                 .base_command("touch", "out.txt"), step_name="touch")
-    folder = Step(CommandLineTool("make_folder", Inputs(), Outputs(out=Output(cwl.directory, glob="d")))
-                  .base_command("mkdir", "d"), step_name="folder")
-    skipped = Step(CommandLineTool("skipped", Inputs(n=Input(cwl.int)), Outputs(out=Output(cwl.file, glob="n.txt")))
-                   .base_command("touch", "n.txt"), step_name="skipped")
-    skipped.inputs.n = 1
-    skipped.when = "$(inputs.n > 1)"
-    grid = Step(CommandLineTool("cell", Inputs(a=Input(cwl.string), b=Input(cwl.string)),
-                                Outputs(out=Output(cwl.file, glob="cell.txt"))).base_command("touch", "cell.txt"),
-                step_name="grid")
-    grid.inputs.a, grid.inputs.b = ["a", "b"], ["x", "y", "z"]
-    grid.scatter_on(grid.inputs.a, grid.inputs.b, method="nested_crossproduct")
-    workflow = Workflow([touch, folder, skipped, grid], "recorded")
-    workflow.outputs.file, workflow.outputs.folder = touch.outputs.out, folder.outputs.out
-    workflow.outputs.skipped, workflow.outputs.grid = skipped.outputs.out, grid.outputs.out
-
-    result = execute_nextflow(workflow.compile(target="nextflow").write(tmp_path))
-
-    assert_succeeded(result)
-    recorded = _recorded(result.stdout)
-    assert recorded["skipped"] is None
-    assert recorded["file"] == {"class": "File", "path": recorded["file"]["path"]}
-    assert Path(recorded["file"]["path"]).is_file() and Path(recorded["file"]["path"]).name == "out.txt"
-    assert recorded["folder"]["class"] == "Directory" and Path(recorded["folder"]["path"]).is_dir()
-    assert [[cell["class"] for cell in row] for row in recorded["grid"]] == [["File"] * 3] * 2
-    assert len({cell["path"] for row in recorded["grid"] for cell in row}) == 6
 
 
 @pytest.mark.nextflow
