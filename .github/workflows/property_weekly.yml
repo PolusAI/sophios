@@ -161,7 +161,7 @@ jobs:
       HYPOTHESIS_SEED: ${{ github.run_id }}
       NXF_ANSI_LOG: 'false'
       NXF_OFFLINE: 'true'
-      NXF_VER: '26.04.2'
+      NXF_VER: '26.10.5'
 
     steps:
       - uses: actions/checkout@v5
@@ -185,7 +185,7 @@ jobs:
           echo "${RUNNER_TEMP}" >> "${GITHUB_PATH}"
 
       - name: Verify pinned runtime
-        run: nextflow -version | grep 'version 26.04.2'
+        run: nextflow -version | grep 'version 26.10.5'
 
       - name: PyTest Nextflow Runtime Properties
         run: >-

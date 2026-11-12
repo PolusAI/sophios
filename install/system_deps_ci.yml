@@ -26,5 +26,5 @@ dependencies:
 # the Java Lint And Test pins for its Nextflow runtime tests (NXF_VER and java-version).
 # The package runs its own jar, so nothing it needs lives outside this
 # environment.
-  - nextflow=26.04.2
+  - nextflow=26.10.5
   - openjdk=17

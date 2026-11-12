@@ -156,7 +156,7 @@ activate the environment again, so that it points `JAVA_HOME` at its own
 Java rather than any other Java on the computer:
 
 ```bash
-conda install --channel conda-forge --channel bioconda nextflow=26.04.2 openjdk=17
+conda install --channel conda-forge --channel bioconda nextflow=26.10.5 openjdk=17
 conda activate sophios
 ```
 
