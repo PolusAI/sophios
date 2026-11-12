@@ -1,5 +1,6 @@
 """`sophios.compute` against the slurm driver (vjaganat90/compute, vasu_revamp; Node 26+) under fake Slurm and Toil.
-A local lane (`test_ci_coverage.LOCAL_ONLY`): `SOPHIOS_SLURM_DRIVER=<checkout>/packages/slurm-driver pytest <file>`."""
+A local lane (`test_ci_coverage.LOCAL_ONLY`): `SOPHIOS_SLURM_DRIVER=<checkout>/packages/slurm-driver pytest <file>`;
+with `SOPHIOS_NEXTFLOW_ENV=<a conda env holding nextflow>` it runs Nextflow runs too."""
 import getpass
 import json
 import os
@@ -12,6 +13,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import pytest
 import requests
@@ -21,10 +23,11 @@ from referencing.jsonschema import DRAFT202012
 
 from sophios import compute
 from sophios.compute import RunConfig
-from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Outputs, cwl
+from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
 from sophios.api.python.workflow import Step, Workflow
 from sophios.run_status import RunState, RunStatus
 from sophios.python_cwl_adapter import import_python_file
+from sophios.wic_types import TargetName
 
 pytestmark = [pytest.mark.skip_pypi_ci, pytest.mark.skipif(
     'SOPHIOS_SLURM_DRIVER' not in os.environ,
@@ -124,6 +127,46 @@ def _toil_cluster(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Cluster]
         (cluster.slurm / 'sbatch.then').write_text(
             "sed -e 's|--batchSystem slurm|--batchSystem single_machine|' -e 's|--singularity|--no-container|' "
             '"$script" > "$script.local" && mv "$script.local" "$script"\n', encoding='utf-8')
+        yield cluster
+
+
+#: A stand-in for Apptainer's `singularity`, which this machine has not, each call a line of `calls` beside it: `pull`
+#: makes the image file Nextflow names, and `exec` runs the command it is given on this machine, with no image, so
+#: with no runscript.
+_SINGULARITY = """#!/bin/bash
+echo "$*" >> "$(dirname "$0")/calls"
+case $1 in
+pull) echo image > "$3" ;;
+exec) while [ $# -gt 0 ] && [[ $1 != *.img ]]; do shift; done; shift; exec "$@" ;;
+*) exit 2 ;;
+esac
+"""
+
+
+@pytest.fixture(scope='module', name='nextflow_cluster')
+def _nextflow_cluster(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Cluster]:
+    """The driver under fake Slurm with real Nextflow, from the conda env SOPHIOS_NEXTFLOW_ENV names, in its fake Toil
+    env, with its Java, as TOIL_ENV holds them on the cluster: as the driver's own Nextflow lane runs it. The leader
+    runs Nextflow on this machine, and so does each task job Nextflow submits; a container's task runs through the
+    stand-in for `singularity`, on the PATH of the account's login environment."""
+    nextflow = os.environ.get('SOPHIOS_NEXTFLOW_ENV')
+    if nextflow is None:
+        pytest.skip('set SOPHIOS_NEXTFLOW_ENV to a conda env whose bin/ holds nextflow, and lib/jvm its Java')
+    root = tmp_path_factory.mktemp('nextflow_cluster')
+    with _serving(root, root / 'toil') as cluster:
+        (root / 'toil' / 'bin' / 'nextflow').unlink()
+        (root / 'toil' / 'bin' / 'nextflow').symlink_to(Path(nextflow) / 'bin' / 'nextflow')
+        (root / 'toil' / 'lib').symlink_to(Path(nextflow) / 'lib')
+        (root / 'apptainer').mkdir()
+        (root / 'apptainer' / 'singularity').write_text(_SINGULARITY, encoding='utf-8')
+        (root / 'apptainer' / 'singularity').chmod(0o755)
+        # Slurm's commands, which the Nextflow head runs, the stand-in, and macOS's md5, which Nextflow's launcher runs.
+        (cluster.slurm / 'login.env').write_text(
+            f'PATH={cluster.slurm}:{root / "apptainer"}:/usr/bin:/bin:/usr/sbin:/sbin\n', encoding='utf-8')
+        # Nextflow asks Slurm about its task jobs every half second, not every few.
+        (cluster.slurm / 'sbatch.then').write_text(
+            'echo "executor { pollInterval = \'500ms\'; queueStatInterval = \'1s\' }" '
+            '>> "$(dirname "$script")/service.config"\n', encoding='utf-8')
         yield cluster
 
 
@@ -438,3 +481,122 @@ def test_the_ichnaea_examples_run_on_the_service(cluster: Cluster, script: str, 
     if script == 'ichnaea_integrated':
         assert (cluster.shared / 'output_directory3').is_dir()
         assert 'WARNING' not in printed.err
+
+
+def _segments(root: str, scatter: bool, container: bool) -> Workflow:
+    """The owner's segmentation shape, but for its command, which reads its folder at `root`, and `./models`, and
+    copies them into its output folder, staged writable and given a name, which it returns: `cp -RL <input> models
+    <output>`; in a container, asking for a GPU, when `container`; scattered over two output folders, or one."""
+    inputs = Inputs(input=Input(cwl.directory, position=1), output=Input(cwl.directory, position=3),
+                    model=Input(cwl.directory))
+    tool = (CommandLineTool('segment', inputs, Outputs(output=Output(cwl.directory, glob='$(inputs.output.basename)')))
+            .base_command('cp', '-RL').argument('models', position=2)
+            .stage(inputs.output, writable=True).stage(inputs.model, entryname='models'))
+    if container:
+        tool = tool.gpu(device_count_min=1).docker('debian:bookworm-slim')
+    step = Step(tool, step_name='autoseg')
+    step.inputs.input, step.inputs.model = f'{root}/input_directory', f'{root}/model_directory'
+    step.inputs.output = ['segmentation-a', 'segmentation-b'] if scatter else 'segmentation'
+    if scatter:
+        step.scatter_on(step.inputs.output)
+    workflow = Workflow([step], 'autoseg')
+    workflow.outputs.segmentation = step.outputs.output
+    return workflow
+
+
+def _made(value: Any) -> Any:
+    """An output as both targets return it, wherever: a File or Directory, whose location is its path's, as its class,
+    basename and what it holds, a file's text or each file's in a folder, by its path there; a list item by item."""
+    match value:
+        case {'class': kind, 'location': location, 'path': str() as path, 'basename': basename}:
+            assert location == Path(path).as_uri() and Path(path).name == basename, value
+            held = Path(path).read_text('utf-8') if kind == 'File' else {
+                str(file.relative_to(path)): file.read_text('utf-8') for file in Path(path).rglob('*')
+                if file.is_file()}
+            return kind, basename, held
+        case list():
+            return [_made(item) for item in value]
+    return value
+
+
+def test_a_containerized_gpu_tool_returns_on_nextflow_the_output_folders_it_returns_on_cwl(
+        toil_cluster: Cluster, nextflow_cluster: Cluster) -> None:
+    """The owner's segmentation shape, with real Nextflow and real Toil, run with one folder given a name, its paths
+    absolute, and scattered over two, its paths relative to `basepath`. On Nextflow it runs in its container, through
+    the stand-in for `singularity`, which finds no runscript, and each task job asks Slurm for the GPU; on CWL with no
+    container and no GPU, which Toil refuses on a machine with neither. `outputs()` is the same, attached to or not:
+    the same names, the same shapes, the same basenames, holding the same files, each in the run's outputs folder.
+    The fake sbatch may give two jobs submitted at once one id, so one Nextflow run goes at a time."""
+    targets: tuple[tuple[Cluster, TargetName], ...] = ((toil_cluster, 'cwl'), (nextflow_cluster, 'nextflow'))
+    for cluster, _ in targets:
+        (cluster.shared / 'lab' / 'input_directory').mkdir(parents=True)
+        (cluster.shared / 'lab' / 'input_directory' / 'a.txt').write_text('a\n', encoding='utf-8')
+        (cluster.shared / 'lab' / 'model_directory').mkdir()
+        (cluster.shared / 'lab' / 'model_directory' / 'w.pt').write_text('w\n', encoding='utf-8')
+    held = {'input_directory/a.txt': 'a\n', 'models/w.pt': 'w\n'}
+    for scatter, made in ((False, {'segmentation': ('Directory', 'segmentation', held)}),
+                          (True, {'segmentation': [('Directory', 'segmentation-a', held),
+                                                   ('Directory', 'segmentation-b', held)]})):
+        runs = {target: compute.Service(cluster.url).submit(
+            _segments('lab' if scatter else str(cluster.shared / 'lab'), scatter, container=target == 'nextflow'),
+            RunConfig('segmented').basepath(str(cluster.shared)) if scatter else None, target=target)
+            for cluster, target in targets}
+        for cluster, target in targets:
+            run = runs[target]
+            assert _ended(cluster, run).state is RunState.COMPLETED, run.logs()
+            outputs = run.outputs()
+            assert outputs is not None and {name: _made(value) for name, value in outputs.items()} == made, target
+            assert compute.Service(cluster.url).attach(run.id).outputs() == outputs
+            assert {Path(entry['path']).parent for entry in (
+                outputs['segmentation'] if scatter else [outputs['segmentation']])} == {
+                cluster.shared / 'segmented' if scatter else cluster.directory(run) / 'out'}
+        assert len([path for path in nextflow_cluster.slurm.glob('*.script') if
+                    f'#SBATCH --comment=slurm-driver:{runs["nextflow"].id} --gres=gpu:1\n' in path.read_text('utf-8')
+                    ]) == (2 if scatter else 1)
+    calls = (nextflow_cluster.slurm.parent / 'apptainer' / 'calls').read_text('utf-8').splitlines()
+    assert {call.split(' ')[0] for call in calls} == {'pull', 'exec'}
+    assert all(call.endswith(' docker://debian:bookworm-slim') for call in calls if call.startswith('pull'))
+    assert len([call for call in calls if call.startswith('exec') and ' --nv ' in call]) == 3
+
+
+def test_outputs_of_one_file_name_and_a_folder_staged_writable_agree_on_nextflow_and_on_cwl(
+        toil_cluster: Cluster, nextflow_cluster: Cluster) -> None:
+    """With real Nextflow and real Toil: two outputs whose files share a name, declared out of the order of their
+    names, and a third returning one of those files again, land as the same copies on both, under the same names: the
+    outputs in the order of their names, each path copied once, under the first name no copy has taken. A folder
+    returned with a file of that name in it, which an output whose name sorts before the folder's returns too, holds
+    the file on both, which is not copied on its own. Each is read by its class and its path in the outputs folder:
+    Toil's basename of a copy named `_2` is the name before the copy. A tool that stages a folder writable and returns
+    something else reads the folder it is given, the user's files in it, on both: it is no output folder, which a
+    tool returns."""
+    say = (CommandLineTool('say', Inputs(word=Input(cwl.string, position=1)),
+                           Outputs(out=Output(cwl.file, glob='out.txt'))).base_command('echo').stdout('out.txt'))
+    first, second = Step(say, step_name='first'), Step(say, step_name='second')
+    data = Inputs(data=Input(cwl.directory, position=1))
+    count = Step(CommandLineTool('count', data, Outputs(n=Output(cwl.file, glob='n.txt')))
+                 .base_command('sh', '-c', 'ls "$0" | wc -l | tr -d " " > n.txt').stage(data.data, writable=True),
+                 step_name='count')
+    keep = Step(CommandLineTool('keep', Inputs(), Outputs(kept=Output(cwl.directory, glob='kept'),
+                                                          held=Output(cwl.file, glob='kept/out.txt')))
+                .base_command('sh', '-c', 'mkdir kept && echo kept > kept/out.txt'), step_name='keep')
+    first.inputs.word, second.inputs.word, count.inputs.data = 'first', 'second', 'plate1'
+    workflow = Workflow([first, second, count, keep], 'copies')
+    workflow.outputs.z, workflow.outputs.a = first.outputs.out, second.outputs.out
+    workflow.outputs.m, workflow.outputs.n = first.outputs.out, count.outputs.n
+    workflow.outputs.k, workflow.outputs.b = keep.outputs.kept, keep.outputs.held
+    targets: tuple[tuple[Cluster, TargetName], ...] = ((toil_cluster, 'cwl'), (nextflow_cluster, 'nextflow'))
+    for cluster, _ in targets:
+        (cluster.shared / 'plate1').mkdir()
+        (cluster.shared / 'plate1' / 'a.tif').write_text('a.tif', encoding='utf-8')
+        (cluster.shared / 'plate1' / 'b.tif').write_text('b.tif', encoding='utf-8')
+    runs = {target: compute.Service(cluster.url).submit(workflow, RunConfig('copies').basepath(str(cluster.shared)),
+                                                        target=target) for cluster, target in targets}
+    for cluster, target in targets:
+        run, folder = runs[target], cluster.shared / 'copies'
+        assert _ended(cluster, run).state is RunState.COMPLETED, run.logs()
+        assert {name: (value['class'], str(Path(value['path']).relative_to(folder)))
+                for name, value in (run.outputs() or {}).items()} == {
+            'a': ('File', 'out.txt'), 'b': ('File', 'kept/out.txt'), 'k': ('Directory', 'kept'),
+            'm': ('File', 'out.txt_2'), 'n': ('File', 'n.txt'), 'z': ('File', 'out.txt_2')}, target
+        assert {str(path.relative_to(folder)): path.read_text('utf-8') for path in folder.rglob('*') if path.is_file()
+                } == {'out.txt': 'second\n', 'out.txt_2': 'first\n', 'n.txt': '2\n', 'kept/out.txt': 'kept\n'}, target
