@@ -23,6 +23,8 @@ from sophios.wic_types import StepId, Tool, Tools
 
 from .helpers import ADAPTERS, EACH_RUNNER, no_preflight, run_cli, run_local_process, search_config, write_tree
 
+pytestmark = pytest.mark.package
+
 #: Its script by `$include`, its data by a relative default: both beside it.
 RELCAT: Final = '''cwlVersion: v1.2
 class: CommandLineTool

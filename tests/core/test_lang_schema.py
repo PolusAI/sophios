@@ -111,6 +111,7 @@ def test_accepts_every_document_the_parser_accepts(source: str) -> None:
     assert _accepts(projection), list(VALIDATOR.iter_errors(projection))
 
 
+@pytest.mark.cwl_corpus
 @pytest.mark.fast
 @pytest.mark.parametrize('path', CORPUS, ids=corpus_id)
 def test_accepts_the_whole_corpus(path: Path) -> None:

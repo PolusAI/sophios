@@ -23,6 +23,8 @@ from .helpers import REPO_ROOT, shipped_tools
 from .test_setup import home_with_shipped_tools, use_home
 from .wic_reading import read_wic
 
+pytestmark = pytest.mark.package
+
 COOKBOOK = REPO_ROOT / 'docs' / 'cookbook'
 #: A pair is a `.py` beside a `.wic` of the same stem. A `.wic` without a `.py`
 #: is a subworkflow a pair calls; its Python lives in the caller's script.

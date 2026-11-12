@@ -7,6 +7,8 @@ from sophios import input_output as io
 
 from .helpers import run_cli, write_tree
 
+pytestmark = pytest.mark.package
+
 
 @pytest.mark.fast
 def test_a_config_file_that_does_not_exist_leaves_the_users_config_alone(

@@ -30,6 +30,8 @@ from .helpers import ADAPTERS, live_workflow, no_preflight, run_cli, search_conf
 from .hermetic import compile_hermetic, subworkflow_step
 from .synthetic_tools import SYNTHETIC_NS, SYNTHETIC_TOOLS
 
+pytestmark = pytest.mark.package
+
 ADAPTER_PATH: Final = ADAPTERS / 'file_watchers' / 'cwl_subinterpreter.cwl'
 TOOLS: Final[Tools] = {
     **SYNTHETIC_TOOLS,

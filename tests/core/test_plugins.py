@@ -1,5 +1,6 @@
 """Behavioural coverage for `sophios.plugins` transforms that reach emitted CWL, and for discovery; the oracle cannot
 import it (FORBIDDEN in test_hermeticity.py), as importing reads the config. Partial failure is covered here too: what
+
 `--partial_failure_enable` writes, through the command line, and the rule a tool is written by, over every form its
 outputs take, the list among them, which the command line's canonical form never shows."""
 import copy
@@ -26,6 +27,8 @@ from sophios.wic_types import Yaml
 from .budgets import budget
 from .cases import cases, match
 from .helpers import ADAPTERS, run_cli, search_config, write_tree
+
+pytestmark = pytest.mark.package
 
 
 #: A case's tool, but for what it says itself: a stub, never run.

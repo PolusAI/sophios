@@ -5,6 +5,8 @@ import pytest
 
 from .helpers import EACH_RUNNER, run_local_process
 
+pytestmark = pytest.mark.package
+
 SAY = '''cwlVersion: v1.2
 class: CommandLineTool
 baseCommand: echo

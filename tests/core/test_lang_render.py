@@ -180,6 +180,7 @@ def test_rendering_is_idempotent(source: str) -> None:
     assert once == render(reparsed)
 
 
+@pytest.mark.cwl_corpus
 @pytest.mark.fast
 @pytest.mark.parametrize('path', CORPUS, ids=corpus_id)
 def test_corpus_round_trips(path: Path) -> None:

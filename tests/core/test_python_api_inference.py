@@ -23,6 +23,8 @@ from .budgets import budget
 from .helpers import search_config
 from .synthetic_tools import clt
 
+pytestmark = pytest.mark.package
+
 RENAMINGS = (("data", "file"),)
 
 

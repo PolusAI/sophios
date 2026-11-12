@@ -39,6 +39,8 @@ from .strategies import author_names, pinned
 from .synthetic_tools import clt, registered
 from .test_lang_parser import FAST
 
+pytestmark = pytest.mark.package
+
 
 @pytest.mark.fast
 def test_an_error_with_no_diagnostics_is_unrepresentable() -> None:

@@ -1,7 +1,10 @@
 name: Python Matrix Weekly
 
-# The Nextflow tests on every Python Sophios supports, on Ubuntu: the plain
-# ones the package job runs on 3.11, and the ones that run Nextflow.
+# The whole suite on every Python Sophios supports, on Ubuntu, set up as Lint And
+# Test sets up its Linux leg. The corpora need the sibling repositories, which
+# the other lanes check out: cwl_corpus is Run Workflows' and Lint And Test's,
+# nextflow_corpus is Run Workflows', and skip_pypi_ci is what a hosted runner
+# cannot run.
 
 on:
   schedule:
@@ -11,8 +14,12 @@ on:
 permissions:
   contents: read
 
+defaults:
+  run:
+    shell: bash -l {0}
+
 jobs:
-  nextflow:
+  suite:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -21,8 +28,14 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v6
+      - name: Setup miniforge
+        uses: conda-incubator/setup-miniconda@v4.0.1
         with:
+          miniforge-variant: Miniforge3
+          miniforge-version: 24.7.1-2
+          environment-file: install/system_deps.yml
+          activate-environment: wic
+          channels: conda-forge
           python-version: ${{ matrix.python }}
 
       - uses: actions/setup-java@v5
@@ -31,7 +44,7 @@ jobs:
           java-version: '17'
 
       - name: Install Sophios
-        run: pip install ".[test]"
+        run: pip install -e ".[all_except_runner_src]"
 
       - name: Install pinned Nextflow
         env:
@@ -42,10 +55,10 @@ jobs:
           echo "${RUNNER_TEMP}" >> "${GITHUB_PATH}"
           NXF_ANSI_LOG=false "${RUNNER_TEMP}/nextflow" -version | grep 'version 26.10.5'
 
-      - name: PyTest Nextflow
-        timeout-minutes: 20
+      - name: PyTest the suite without its corpora
+        timeout-minutes: 60
         env:
           NXF_ANSI_LOG: "false"
           NXF_OFFLINE: "true"
           NXF_VER: "26.10.5"
-        run: pytest tests/core/nextflow -m "not nextflow_corpus"
+        run: pytest tests -m "not cwl_corpus and not nextflow_corpus and not skip_pypi_ci"

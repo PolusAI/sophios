@@ -9,6 +9,8 @@ from sophios.api.python.workflow import Inference, Workflow
 
 from .helpers import adapter_step
 
+pytestmark = pytest.mark.package
+
 
 def _workflow() -> Workflow:
     """`touch` feeds `append` by an edge written here, and `append` feeds `cat` by an edge inference adds."""

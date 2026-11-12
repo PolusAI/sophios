@@ -1,4 +1,5 @@
-"""Every test in the repository is collected by some configured lane, but those of a `LOCAL_ONLY` file, run by hand.
+"""Every test in the repository is collected by some pull-request or weekly lane, but those of a `LOCAL_ONLY`
+file, run by hand.
 
 A test that no lane names is a test that never runs, and nothing else notices:
 the suite is green, the file is present, and the claim it makes is unchecked.
@@ -99,10 +100,15 @@ def _collect_all(argvs: list[list[str]]) -> list[set[str]]:
     return selected
 
 
+#: The release lane selects every test not marked skip_pypi_ci or nextflow, so counting it would hide a test
+#: that no pull-request or weekly lane runs.
+RELEASE_LANE: Final = 'test_and_publish_pypi.yml'
+
+
 def _lane_argvs() -> list[list[str]]:
-    """Every distinct pytest invocation the lanes make."""
+    """Every distinct pytest invocation the pull-request and weekly lanes make."""
     return [list(argv) for argv in sorted({tuple(argv) for lane in sorted(WORKFLOWS.glob('*.yml'))
-                                           for argv in _invocations(lane)})]
+                                           if lane.name != RELEASE_LANE for argv in _invocations(lane)})]
 
 
 @pytest.mark.fast
@@ -154,8 +160,8 @@ def test_the_corpus_lane_round_trips_every_wic_root_through_the_python_api() -> 
     `test_python_api_from_wic.py` parametrizes its two properties over every
     `.wic` root `search_paths_wic` reaches. Only `run_workflows.yml` writes a
     config that reaches the mm-workflows and image-workflows roots; the
-    packaging lane also selects the file, but checks out neither corpus, so
-    there the properties see the repository's own roots and nothing else.
+    package job does not select the file, and checks out neither corpus, so
+    the properties would see the repository's own roots and nothing else.
     """
     properties = {
         'tests/core/test_python_api_from_wic.py::test_a_wic_file_and_its_python_objects_compile_alike',
@@ -224,7 +230,7 @@ LOCAL_ONLY: Final = frozenset({'tests/core/test_compute_service.py'})
 
 @pytest.mark.slow
 def test_no_test_is_collected_by_nothing() -> None:
-    """Every test the repository defines is selected by some lane, but those
+    """Every test the repository defines is selected by some pull-request or weekly lane, but those
     of a `LOCAL_ONLY` file, which no lane selects.
 
     Slow because it asks pytest once per distinct invocation -- about thirty

@@ -196,6 +196,7 @@ def test_class_is_written_while_inputs_outputs_and_version_are_not() -> None:
     assert compiled['cwlVersion'] == CWL_VERSION, 'a supplied cwlVersion must not win'
 
 
+@pytest.mark.package
 @pytest.mark.fast
 @pytest.mark.parametrize('key', sorted(Grammar.INTERPRETED_STEP_KEYS))
 def test_every_declared_key_is_interpreted(key: str) -> None:

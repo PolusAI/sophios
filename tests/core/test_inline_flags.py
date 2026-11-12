@@ -19,6 +19,8 @@ from .cases import cases
 from .hermetic import compile_hermetic, subworkflow_step
 from .test_setup import workflow_paths
 
+pytestmark = pytest.mark.package
+
 MK_FILE: Yaml = {'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'a'}}}
 
 

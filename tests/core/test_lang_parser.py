@@ -151,6 +151,7 @@ def test_diagnostic_spans_index_real_source(text: str) -> None:
         assert diagnostic.span.start_line <= max(len(text.splitlines()), 1) + 1
 
 
+@pytest.mark.cwl_corpus
 @pytest.mark.fast
 @pytest.mark.parametrize('path', CORPUS, ids=corpus_id)
 def test_corpus_files_parse(path: Path) -> None:
@@ -164,6 +165,7 @@ def test_corpus_files_parse(path: Path) -> None:
     assert result.ok, [str(d) for d in result.diagnostics]
 
 
+@pytest.mark.cwl_corpus
 @pytest.mark.fast
 def test_corpus_is_not_empty() -> None:
     """Discovery must find workflows, or the corpus property passes vacuously.

@@ -9,6 +9,8 @@ import pytest
 import sophios
 import sophios.cli
 
+pytestmark = pytest.mark.package
+
 
 def _import_copy(root: Path, built_as: str | None) -> subprocess.CompletedProcess[str]:
     """Import a copy of the package from `root`, built as `built_as` if given; it reports a version of its own only if

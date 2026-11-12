@@ -7,6 +7,8 @@ import yaml
 from sophios.lang import parse, wic_schema
 from sophios.lang.render import render
 
+pytestmark = pytest.mark.package
+
 SOURCE = 'steps:\n- id: touch\n  in:\n    f: !ii empty.txt\n  out:\n  - file: !& out\n'
 
 

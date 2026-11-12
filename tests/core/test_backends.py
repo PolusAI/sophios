@@ -24,6 +24,8 @@ from .budgets import budget
 from .helpers import adapter_step, write_tree
 from .nextflow.testkit import runtime_workflow
 
+pytestmark = pytest.mark.package
+
 
 def _argv(request: RunRequest) -> list[str]:
     return list(backends.backend(request.target, request.runner).launch(request).argv)

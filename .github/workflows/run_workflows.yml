@@ -227,9 +227,8 @@ jobs:
       run: cd sophios/ && pytest tests/core/test_python_api_workflow.py -k "not test_compile_python_workflows"
 
     # Workflow.from_wic and write_wic over every .wic root the config reaches.
-    # Only here does the config reach the mm-workflows and image-workflows
-    # roots: the packaging lane, which also selects this file, checks out
-    # neither, so a round trip that breaks on those roots alone was green.
+    # No other lane runs this round trip over the mm-workflows and
+    # image-workflows roots, so a break on those roots alone would be green.
     - name: PyTest Python API from .wic (corpus round trip)
       if: ${{ !cancelled() && steps.setup.outcome == 'success' && steps.corpus.outcome == 'success' }}
       run: cd sophios/ && pytest tests/core/test_python_api_from_wic.py
