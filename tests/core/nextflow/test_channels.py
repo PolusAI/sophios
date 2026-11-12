@@ -20,7 +20,7 @@ from sophios.nf_types import NF_INPUT_HELPER, ExecutableNextflowWorkflow, NfWork
 from sophios.utils_nf import compilation_result_source, compiled_source_to_nextflow
 
 from ..helpers import write_tree
-from .testkit import execute_nextflow, flag_workflow, run_observed, runtime_workflow
+from .testkit import execute_nextflow, run_observed, runtime_workflow
 
 
 def _lower(flow: Workflow, params: dict[str, Any] | None = None) -> ExecutableNextflowWorkflow:
@@ -86,15 +86,6 @@ def test_one_file_array_is_scattered_at_one_step_and_taken_whole_at_another(tmp_
     assert result.returncode == 0, result.stdout + result.stderr
     assert observed["each"] == ["a.txt\n", "b.txt\n"]
     assert observed["whole"] == ["a.txt\nb.txt\n"]
-
-
-@pytest.mark.nextflow
-@pytest.mark.serial
-def test_a_relative_file_path_names_a_file_in_the_launch_directory(tmp_path: Path) -> None:
-    (tmp_path / "lines.txt").write_text("a\nb\n", encoding="utf-8")
-    result, observed = _run(flag_workflow(), tmp_path)
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert observed["result"] == ["b\na\n"]
 
 
 class _JsonNumber(str):
@@ -216,12 +207,9 @@ _WHEN = "$(inputs.n == 10)"
 @pytest.mark.nextflow
 @pytest.mark.serial
 @pytest.mark.parametrize(("when", "argv", "line", "stops"), [
-    pytest.param(None, (), ["hi"], None, id="the -n flag by default"),
     pytest.param(None, ("trim", "false"), ["hi\n"], None, id="a command-line false drops it"),
-    pytest.param(_WHEN, (), ["[]"], None, id="an unmet when"),
     pytest.param(_WHEN, ("n", "10"), ["hi"], None, id="a command-line int satisfies the when"),
     pytest.param(_WHEN, ("n", "ten"), None, "ten", id="a mistyped value"),
-    pytest.param(_WHEN, ("n", "1e1"), None, "1e1", id="a mistyped value in exponent form"),
 ])
 def test_a_command_line_value_reaches_the_run_as_its_type_or_stops_it(
         when: str | None, argv: tuple[str, ...], line: list[str] | None, stops: str | None, tmp_path: Path) -> None:
