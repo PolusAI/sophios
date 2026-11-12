@@ -7,7 +7,7 @@ name: Property Weekly
 # Hermetic: every input is generated (workflows over tests/core/synthetic_tools.py),
 # so nothing here needs a plugin checkout, a config, a container or the
 # self-hosted runner. The nextflow-properties job alone installs Java and the
-# pinned Nextflow, as nextflow.yml does, and runs only the runtime properties.
+# pinned Nextflow, as Lint And Test does, and runs only the runtime properties.
 # It replaces the weekly fuzz job, which sampled an
 # environment-dependent schema that no longer exists.
 #
@@ -133,8 +133,8 @@ jobs:
           --hypothesis-seed="$HYPOTHESIS_SEED" --junitxml=property-reports/api-runtime.xml
 
       # The Nextflow target's compile-side properties: lowering, the executable
-      # model, rendering and reading a pipeline back. Runs under Nextflow stay
-      # in nextflow.yml, which installs it.
+      # model, rendering and reading a pipeline back. Runs under Nextflow are
+      # Lint And Test's, which installs it.
       - name: PyTest Nextflow Target Properties
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         timeout-minutes: 30
@@ -148,8 +148,8 @@ jobs:
           path: property-reports/
           retention-days: 30
 
-  # The runtime properties need Java and the pinned Nextflow. nextflow.yml keeps
-  # running them at scale 1 on push and pull request.
+  # The runtime properties need Java and the pinned Nextflow. Lint And Test keeps
+  # running them at scale 1 on every pull request.
   nextflow-properties:
     concurrency:
       group: ${{ github.workflow }}-nextflow-${{ github.ref }}
