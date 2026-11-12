@@ -168,6 +168,8 @@ def _is_plain_cwl_workflow(path: Path) -> bool:
         root = yaml.compose(path.read_text(encoding='utf-8'), Loader=yaml.SafeLoader)
     except (OSError, UnicodeDecodeError, yaml.YAMLError):
         return False
+    if root is None:  # an empty file
+        return False
     top = _entries(root)
     if 'cwlVersion' not in top or 'wic' in top:
         return False

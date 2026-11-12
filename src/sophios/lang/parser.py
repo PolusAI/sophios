@@ -1075,6 +1075,7 @@ def _literal(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> Any:
         return node.value
     except _UNREADABLE:
         read = yaml.compose(node.value, Loader=yaml.SafeLoader)
+        assert read is not None  # a non-empty scalar composes to a node
         diags.error(SophiosErrorCode.UNKNOWN_TAG, f'YAML cannot read this value as {_tag_name(read.tag)}',
                     SourceSpan.of(file, node))
         return node.value
