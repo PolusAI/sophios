@@ -47,22 +47,6 @@ on:
         required: true
         type: string
 
-  # Python Matrix Weekly calls this with one Python and Ubuntu alone; a dispatch
-  # runs the defaults.
-  workflow_call:
-    inputs:
-      event_type: {type: string, default: ''}
-      commit_message: {type: string, default: ''}
-      sender_repo: {type: string, default: ''}
-      sender_repo_owner: {type: string, default: ''}
-      wic_owner: {type: string, required: true}
-      wic_ref: {type: string, required: true}
-      mm-workflows_owner: {type: string, required: true}
-      mm-workflows_ref: {type: string, required: true}
-      image-workflows_owner: {type: string, required: true}
-      image-workflows_ref: {type: string, required: true}
-      python-version: {type: string, default: '3.11'}
-      os: {type: string, default: '["ubuntu-latest", "windows-latest"]'}
 # See https://github.com/orgs/community/discussions/15690
 # For workflow_dispatch, the commit message, repo, and branch name are not displayed by default.
 # The name is the commit subject, plus a paired mm-workflows or image-workflows
@@ -98,7 +82,7 @@ jobs:
     # See https://docs.github.com/en/actions/using-workflows/workflow-syntax-for-github-actions#concurrency
     # This will prevent DOS attacks from people blasting the CI with rapid fire commits.
     concurrency:
-      group: ${{ github.workflow }}-${{ matrix.os }}-${{ inputs.python-version }}-${{ github.ref }}-${{ inputs.sender_repo }}-${{ inputs.mm-workflows_ref}}
+      group: ${{ github.workflow }}-${{ matrix.os }}-${{ github.ref }}-${{ inputs.sender_repo }}-${{ inputs.mm-workflows_ref}}
       cancel-in-progress: true
     strategy:
       fail-fast: false
@@ -106,7 +90,7 @@ jobs:
         # NOTE: Due to 10X minute multiplier, do NOT run on macos-latest on every push!
         # https://docs.github.com/en/billing/managing-billing-for-github-actions/about-billing-for-github-actions#minute-multipliers
         # Run on macos on a separate weekly schedule.
-        os: ${{ fromJSON(inputs.os || '["ubuntu-latest", "windows-latest"]') }}
+        os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -169,7 +153,7 @@ jobs:
           environment-file: sophios/install/system_deps.yml
           activate-environment: wic
           channels: conda-forge
-          python-version: "${{ inputs.python-version || '3.11' }}.*"
+          python-version: "3.11.*"
 
       - name: Setup miniforge (windows)
         if: runner.os == 'Windows'
@@ -180,7 +164,7 @@ jobs:
           environment-file: sophios/install/system_deps_windows.yml
           activate-environment: wic
           channels: conda-forge
-          python-version: "${{ inputs.python-version || '3.11' }}.*"
+          python-version: "3.11.*"
 
       - name: Install Sophios
         run: cd sophios/ && pip install -e ".[all_except_runner_src]"
@@ -376,14 +360,14 @@ jobs:
           echo "${RUNNER_TEMP}" >> "${GITHUB_PATH}"
           NXF_ANSI_LOG=false "${RUNNER_TEMP}/nextflow" -version | grep 'version 26.10.5'
 
-      - name: PyTest Nextflow
+      - name: PyTest Nextflow Runtime
         if: ${{ runner.os == 'Linux' && !cancelled() && steps.setup.outcome == 'success' }}
         timeout-minutes: 20
         env:
           NXF_ANSI_LOG: "false"
           NXF_OFFLINE: "true"
           NXF_VER: "26.10.5"
-        run: cd sophios/ && pytest tests/core/nextflow -m "not nextflow_corpus"
+        run: cd sophios/ && pytest tests/core/nextflow -m "nextflow and not nextflow_corpus"
 
       # NOTE: The steps below are for repository_dispatch only. For all other steps, please insert above
       # this comment.
@@ -407,7 +391,7 @@ jobs:
 
       # See token.md
       - name: Generate a token
-        if: ${{ !cancelled() && inputs.sender_repo }}
+        if: ${{ !cancelled() }}
         id: generate_token
         uses: actions/create-github-app-token@v3
         with:
@@ -424,8 +408,8 @@ jobs:
         # repository_dispatch sends the signal. A cancelled run is no verdict: a superseded
         # run's commit is no longer the head and the run that replaced it reports, so it
         # replies nothing. https://github.com/actions/runner/issues/834#issuecomment-907096707
-        # Use inputs.sender_repo to reply the original sender; a call from Python Matrix Weekly has none.
-        if: ${{ !cancelled() && inputs.sender_repo }}
+        # Use inputs.sender_repo to reply the original sender.
+        if: ${{ !cancelled() }}
         uses: ./sophios/.github/my_actions/reply_sender/ # Must start with ./
         with:
           github_repository: ${{ github.repository }}
