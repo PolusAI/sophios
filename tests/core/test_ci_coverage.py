@@ -198,8 +198,10 @@ def test_only_the_corpus_lane_runs_the_nextflow_corpus() -> None:
 #:
 #: `test_compute_service.py` runs `sophios.compute` against the slurm driver,
 #: which lives in a private repository Sophios CI cannot check out. Its lane is
-#: local: `SOPHIOS_SLURM_DRIVER=<driver checkout>/packages/slurm-driver pytest
-#: tests/core/test_compute_service.py -m skip_pypi_ci`. It expires when Sophios
+#: local: `SOPHIOS_SLURM_DRIVER=<driver checkout>/packages/slurm-driver
+#: SOPHIOS_NEXTFLOW_ENV=<a conda env holding nextflow> pytest
+#: tests/core/test_compute_service.py -m skip_pypi_ci`; without
+#: SOPHIOS_NEXTFLOW_ENV its Nextflow tests skip. It expires when Sophios
 #: CI can check the driver out: then a lane step names the file, and the entry
 #: goes.
 LOCAL_ONLY: Final = frozenset({'tests/core/test_compute_service.py'})
