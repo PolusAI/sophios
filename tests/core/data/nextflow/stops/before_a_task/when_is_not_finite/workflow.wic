@@ -1,0 +1,6 @@
+# 7 / (7 - 7) is Infinity in JavaScript, and Infinity > 0 is true: cwltool runs the step.
+# Sophios stops instead: a condition that divides by zero is taken for a mistake.
+steps:
+- id: touch_c
+  in: {i: !ii 7}
+  when: $(inputs.i / (inputs.i - 7) > 0)

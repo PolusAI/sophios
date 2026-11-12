@@ -1,0 +1,4 @@
+# Two directories called data, from different places, are both entries of one working directory.
+steps:
+- id: list_both
+  in: {a: !ii one/data, b: !ii two/data}

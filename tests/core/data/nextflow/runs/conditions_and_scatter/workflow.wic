@@ -1,0 +1,109 @@
+# Conditions and scatter: which steps run, what a skipped step leaves behind, and what each scatter job reads.
+# A step that must be skipped runs never_runs, which fails the run if it is ever started.
+inputs:
+  go: boolean      # the job gives true
+  no_go: boolean   # the job gives false
+  maybe: int?      # no value is given for it
+  xs: int[]        # the job gives [1, 2, 3]
+
+steps:
+# A condition on a workflow input, and one on a number written here.
+- id: up                  # ok
+  run: say_ok
+  in: {go: go, n: !ii 1}
+  out: [result: !& up_said]
+  when: $(inputs.go)
+- id: up_skipped          # null
+  run: never_runs
+  in: {go: no_go, n: !ii 1}
+  out: [result: !& up_skipped_said]
+  when: $(inputs.go)
+- id: counted             # ok
+  run: say_ok
+  in: {go: go, n: !ii 1}
+  out: [result: !& counted_said]
+  when: $(inputs.n > 0)
+- id: uncounted           # null
+  run: never_runs
+  in: {go: go, n: !ii 0}
+  out: [result: !& uncounted_said]
+  when: $(inputs.n > 0)
+# A condition may read an input the step gives and its tool does not declare.
+- id: carried             # ok
+  run: say_ok
+  in: {go: no_go, n: !ii 1, enabled: !cwl {source: go}}
+  when: $(inputs.enabled)
+
+# Three operands: an upstream output, a workflow input and an optional input nobody gave.
+- id: gated               # 1 2 3: all three hold
+  run: numbers_if
+  in: {prev: !* up_said, flag: go, xs: xs, maybe: maybe}
+  when: $(inputs.prev !== null && inputs.flag && inputs.maybe === null)
+- id: gated_prev_last     # 1 2 3: the tool declares the upstream input last
+  run: numbers_if_prev_last
+  in: {prev: !* up_said, flag: go, xs: xs, maybe: maybe}
+  when: $(inputs.prev !== null && inputs.flag && inputs.maybe === null)
+- id: gated_after_skip    # null: the upstream step was skipped
+  run: numbers_if
+  in: {prev: !* up_skipped_said, flag: go, xs: xs, maybe: maybe}
+  when: $(inputs.prev !== null && inputs.flag && inputs.maybe === null)
+- id: gated_flag_false    # null: the workflow input is false
+  run: numbers_if
+  in: {prev: !* up_said, flag: no_go, xs: xs, maybe: maybe}
+  when: $(inputs.prev !== null && inputs.flag && inputs.maybe === null)
+
+# A skipped step leaves null, and a step that reads it into an optional input still runs.
+- id: after_skip          # done.txt
+  run: touch_done
+  in: {maybe: !* uncounted_said}
+
+# One value from a conditional step reaches every job of a scattered step.
+- id: write_note          # shared
+  in: {text: !ii shared, after: !* counted_said}
+  out: [note: !& noted]
+- id: copy_note           # a.txt, b.txt, c.txt, each holding "shared"
+  scatter: [name]
+  scatterMethod: dotproduct
+  in: {note: !* noted, name: !ii [a, b, c]}
+
+# A gathered array is scattered again, beside one File every job reads; over one input the three methods agree.
+- id: echo_item           # 1, 2, 3
+  scatter: [item]
+  scatterMethod: dotproduct
+  in: {item: !ii ['1', '2', '3']}
+  out: [out: !& items]
+- id: cat_pair            # 1 REF, 2 REF, 3 REF
+  scatter: [f]
+  scatterMethod: dotproduct
+  in: {f: !* items, r: !ii ref.txt}
+- id: cat_pair_flat       # the same three
+  run: cat_pair
+  scatter: [f]
+  scatterMethod: flat_crossproduct
+  in: {f: !* items, r: !ii ref.txt}
+- id: cat_pair_nested     # the same three, in one array
+  run: cat_pair
+  scatter: [f]
+  scatterMethod: nested_crossproduct
+  in: {f: !* items, r: !ii ref.txt}
+
+# A nested crossproduct over two inputs: one array per element of the first.
+- id: pair_nested         # [a-x, a-y], [b-x, b-y]
+  run: pair
+  scatter: [first, second]
+  scatterMethod: nested_crossproduct
+  in: {first: !ii [a, b], second: !ii [x, y]}
+
+# A condition is decided for each scatter job; the gathered array keeps null where a job was skipped.
+- id: pair_unless_b       # a-x, null, c-z
+  run: pair
+  scatter: [first, second]
+  scatterMethod: dotproduct
+  in: {first: !ii [a, b, c], second: !ii [x, y, z]}
+  when: $(inputs.first !== 'b')
+- id: pair_unless_skipped # a-0.2, null, c-0: the first job sleeps longest and finishes last
+  run: pair_after_sleeping
+  scatter: [first, seconds]
+  scatterMethod: dotproduct
+  in: {first: !ii [a, b, c], seconds: !ii ['0.2', '0.1', '0'], skipped: !ii '0.1'}
+  when: $(inputs.seconds !== inputs.skipped)

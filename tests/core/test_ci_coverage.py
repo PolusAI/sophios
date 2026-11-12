@@ -417,11 +417,12 @@ WINDOWS_EXCLUDED: Final = frozenset({
     # One cwltool run of a one-step tool that fails, in about two seconds. That the Nextflow target refuses the
     # glob is checked on every leg by test_capabilities.py; only cwltool shows CWL refuses it too.
     'tests/core/nextflow/test_reference_differential.py::test_neither_runner_takes_an_entrys_object_as_a_glob',
-    # One append step run under cwltool, in about two seconds. Lint And Test's Linux Nextflow step collects it, so the
-    # Windows leg gives up nothing it ran; the tool's compiled form is checked on every leg by
-    # test_example_scripts.py's ground truth and the cookbook pairs.
-    'tests/core/nextflow/test_shipped_append.py::'
-    'test_the_shipped_append_tool_appends_the_message_as_written_under_cwltool',
+    # Seven example workflows run under Nextflow, six of them under cwltool too, and nine that stop, in about
+    # forty-five seconds together. Lint And Test's Linux Nextflow step collects them, so the Windows leg gives up
+    # nothing it ran.
+    'tests/core/nextflow/test_runtime.py::test_an_example_workflow_runs_under_nextflow_as_under_cwltool',
+    'tests/core/nextflow/test_runtime.py::test_a_run_stops_before_a_step_whose_inputs_it_cannot_decide',
+    'tests/core/nextflow/test_runtime.py::test_a_run_stops_at_a_task_that_leaves_no_one_answer',
     # Four batches of up to twelve small workflows, each run under Nextflow and under cwltool, in about ten
     # seconds; and one batch of four, whose tools run in containers, in about ten more. Lint And Test's Linux
     # Nextflow step collects them, so the Windows leg gives up nothing it ran; what each lowers to is checked on

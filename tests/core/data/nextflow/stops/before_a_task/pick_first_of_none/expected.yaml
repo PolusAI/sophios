@@ -1,0 +1,5 @@
+why: first_non_null of two absent inputs has nothing to pick, so the step cannot be given a value.
+step: pick
+says: 'first_non_null finds 0 values that are not null'
+unwritten: stdout
+cwltool: fails

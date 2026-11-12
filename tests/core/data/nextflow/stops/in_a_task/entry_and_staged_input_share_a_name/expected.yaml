@@ -1,0 +1,5 @@
+why: A writable entry and an input Nextflow stages beside it cannot both be called data, so the task stops; the
+  limit is the Nextflow target's own, and cwltool runs the step.
+step: list_both
+says: 'InitialWorkDirRequirement entry already exists in the task directory: data'
+cwltool: runs

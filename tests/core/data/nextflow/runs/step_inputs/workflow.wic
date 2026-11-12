@@ -1,0 +1,82 @@
+# Step inputs: what a step reads when an input has several sources, a default, or a choice among them.
+# Every step prints what it read, so the outputs expected.yaml states are the semantics, under any runner.
+inputs:
+  x: string
+  y: string
+  unset: string?   # no value is given for it
+  given: string?   # the job gives "g"
+
+steps:
+# Sources: two files from a scattered step, one from each of two lone steps.
+- id: write_each
+  run: write_name
+  scatter: [name]
+  scatterMethod: dotproduct
+  in: {name: !ii [a, b]}
+  out: [file: !& each]
+- id: write_one
+  run: write_name
+  in: {name: !ii c}
+  out: [file: !& one]
+- id: write_two
+  run: write_name
+  in: {name: !ii d}
+  out: [file: !& two]
+# A step that is skipped, and one that runs: their outputs are null and "only".
+- id: skipped
+  run: say_if
+  in: {text: !ii never, go: !ii false}
+  out: [said: !& skipped_said]
+  when: $(inputs.go)
+- id: ran
+  run: say_if
+  in: {text: !ii only, go: !ii true}
+  out: [said: !& ran_said]
+  when: $(inputs.go)
+
+# linkMerge: several sources join in order.
+- id: cat_flat          # a b c: the scattered step's files flattened with a lone one
+  run: cat_files
+  in:
+    files: !cwl {source: [!* each, !* one], linkMerge: merge_flattened}
+- id: cat_nested        # d c: scalar files nested into one array, the default merge
+  run: cat_files
+  in:
+    files: !cwl {source: [!* two, !* one]}
+- id: cat_single        # c: one merge_nested source is an array of one
+  run: cat_files
+  in:
+    files: !cwl {source: [!* one], linkMerge: merge_nested}
+- id: say_nested        # x y z: workflow inputs join the same way
+  run: say_words
+  in:
+    words: !cwl {source: [x, y]}
+- id: say_single        # x: and one of them, merge_nested, is an array of one
+  run: say_words
+  in:
+    words: !cwl {source: [x], linkMerge: merge_nested}
+
+# default: the value of an input with no source, or with a null one; never of a given value.
+- id: default_unsourced   # d1
+  run: say_word
+  in: {words: !cwl {default: d1}}
+- id: default_for_absent  # d2
+  run: say_word
+  in: {words: !cwl {source: unset, default: d2}}
+- id: default_not_taken   # g
+  run: say_word
+  in: {words: !cwl {source: given, default: d3}}
+- id: default_after_skip  # d4
+  run: say_word
+  in: {words: !cwl {source: !* skipped_said, default: d4}}
+
+# pickValue: choose among the joined sources, skipping nulls.
+- id: pick_first          # g: the first of the two that are not null
+  run: say_word
+  in: {words: !cwl {source: [unset, !* skipped_said, given, x], pickValue: first_non_null}}
+- id: pick_only           # only
+  run: say_word
+  in: {words: !cwl {source: [!* skipped_said, !* ran_said], pickValue: the_only_non_null}}
+- id: pick_all            # g only
+  run: say_words
+  in: {words: !cwl {source: [given, !* skipped_said, !* ran_said, unset], pickValue: all_non_null}}

@@ -1,0 +1,8 @@
+# the_only_non_null needs exactly one source that is not null, and the job gives neither.
+inputs:
+  a: string?
+  b: string?
+steps:
+- id: pick
+  run: echo
+  in: {message: !cwl {source: [a, b], pickValue: the_only_non_null}}

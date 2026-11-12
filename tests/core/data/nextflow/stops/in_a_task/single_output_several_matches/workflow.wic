@@ -1,0 +1,4 @@
+# A File output takes one match: here its pattern matches two files.
+steps:
+- id: touch_names
+  in: {names: !ii [a.txt, b.txt]}

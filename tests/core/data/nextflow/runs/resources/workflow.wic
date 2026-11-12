@@ -1,0 +1,5 @@
+# Resources: the tool asks for 2 cores, 64 MiB and two CUDA devices. A run does not show what a process asked for,
+# so the pipeline written for this workflow is kept beside it, as workflow.nf and nextflow.config. cwltool runs the
+# tool only on a machine that has the devices, so expected.yaml states what the step makes, with no reference run.
+steps:
+- id: make_dir

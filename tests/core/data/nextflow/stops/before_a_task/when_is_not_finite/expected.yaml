@@ -1,0 +1,6 @@
+why: A subexpression of a condition that is not finite stops the run before the step, on Sophios's own rule;
+  JavaScript, and so cwltool, goes on.
+step: touch_c
+says: 'is Infinity'
+unwritten: c.txt
+cwltool: runs

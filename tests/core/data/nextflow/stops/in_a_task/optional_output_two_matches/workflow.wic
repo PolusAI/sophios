@@ -1,0 +1,4 @@
+# A File? output takes no match or one: here its pattern matches two files.
+steps:
+- id: maybe_log
+  in: {names: !ii [unmatched.txt, a.log, b.log]}

@@ -1,0 +1,4 @@
+why: A File output is one file; two matches are not one.
+step: touch_names
+says: 'Incorrect number of output files'
+cwltool: fails

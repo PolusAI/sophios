@@ -1,0 +1,14 @@
+# Nesting: a child workflow is called as a step, and its steps run as if they were written here.
+steps:
+- id: write_source
+  in: {message: !ii nested composition}
+  out: [result: !& written]
+- id: child.wic           # copies the message, scatters, and calls grandchild.wic
+  in: {source: !* written}
+  out: [copy: !& copied]
+- id: count_lines         # an outer step reads what the child made: 1
+  in: {source: !* copied}
+- id: sibling.wic         # a second call copies the same message; its steps do not collide with the first call's
+  in: {source: !* written}
+- id: touch_n             # runs here, although grandchild.wic skips the same tool
+  in: {n: !ii 3}

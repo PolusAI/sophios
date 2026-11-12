@@ -1,0 +1,50 @@
+# Commands: what reaches a tool's command line, and where its output goes. The tools echo, echo_3 and append are the
+# ones Sophios ships in cwl_adapters; the others are beside this file.
+steps:
+# No edge is written between these two: touch_file's File is inferred into copy_file.
+- id: touch_file
+  in: {filename: !ii message.txt}
+- id: copy_file
+
+# A shipped tool's output read by two tools written here.
+- id: emit
+  run: echo
+  in: {message: !ii 'mixed construction, one backend'}
+  out: [stdout: !& emitted]
+- id: copy_emitted
+  run: copy_file
+  in: {source: !* emitted}
+- id: count_bytes
+  in: {source: !* emitted}
+
+# Text is given to the command as written: spaces stay in one argument, and shell syntax is not run.
+- id: three_words
+  run: echo_3
+  in: {message1: !ii spaces remain, message2: !ii one, message3: !ii argument}
+- id: a_dollar
+  run: echo
+  in: {message: !ii a literal costs $5}
+- id: an_ampersand
+  run: echo_3
+  in: {message1: !ii literal, message2: !ii '&&', message3: !ii text is not shell syntax}
+- id: append              # one line is added to its own copy of greeting.txt, which is left as it was
+  in: {file: !ii greeting.txt, str: !ii "Hello;  it's $(echo substituted) * a\\tb\\nc 100%s"}
+
+# shellQuote: false is the one way to write shell syntax, and stdout and stderr take the whole command's output.
+- id: shell_redirect      # redirected.txt holds the one quoted word
+- id: three_commands      # out.txt holds the first two lines, err.txt the third
+
+# Bindings: a true flag is its prefix and a false one nothing; an array takes its prefix once; an optional input is
+# its prefix and value, apart or joined, or nothing when it has none; a float is printed as written.
+- id: print_bindings
+  in: {verbose: !ii true, quiet: !ii false, ratios: !ii [0.5, 1.25], tag: !ii a b, label: !ii x, scale: !ii 2.5}
+
+# One output read by two steps, from a tool that asks for 2 cores and 64 MiB.
+- id: produce
+  out: [result: !& data]
+- id: read_once
+  run: cat_file
+  in: {source: !* data}
+- id: read_again
+  run: cat_file
+  in: {source: !* data}

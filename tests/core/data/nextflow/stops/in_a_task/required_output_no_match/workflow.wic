@@ -1,0 +1,4 @@
+# The tool declares out.txt, the first match of its glob, and writes nothing.
+steps:
+- id: write_nothing
+  in: {message: !ii nothing is written}
