@@ -332,6 +332,13 @@ class SophiosErrorCode(StrEnum):
         '`script:`) is lang_version 0.1.0 syntax.',
         'Remove the pin (`wic: lang_version:`, `--lang_version` or `compile(lang_version=)`), or set it to the '
         'version the message names.')
+    NEXTFLOW_OUTPUT_RENAMED = _explained(
+        'wic061',
+        'Submitting to a compute service under `target="nextflow"`: a workflow output whose name Nextflow does not '
+        'keep, such as `Result`, which the pipeline would publish, and the service report, as `_Result`; or a '
+        'step\'s output, named `<step>~<port>`, which a workflow that declares no output returns.',
+        'Rename the output to the name the message gives, or to another that Nextflow keeps; in a workflow that '
+        'declares no output, declare each output to return, under a name Nextflow keeps.')
 
     # --- Python API. The document is valid; the call was not. ---
     INVALID_INPUT_VALUE = _explained(
