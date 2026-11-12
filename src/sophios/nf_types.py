@@ -24,10 +24,12 @@ NF_INPUT_HELPER = "__sophios_input_9f72e"
 NF_STEP_INPUT_HELPER = "__sophios_step_input_9f72e"
 NF_FLOAT_TEXT_HELPER = "__sophios_float_text_9f72e"
 NF_OUTPUT_HELPER = "__sophios_output_9f72e"
+# The service form's channel of every workflow output's value, in the entry workflow (design §4.5).
+NF_OUTPUTS_NAME = "__sophios_outputs_9f72e"
 NF_INTERNAL_IDENTIFIERS = frozenset({
     NF_SHELL_QUOTE_HELPER, NF_LOAD_CONTENTS_HELPER, NF_FINITE_HELPER, NF_ROUND_HELPER,
     NF_SCATTER_INDEX_NAME, NF_NEST_HELPER, NF_INPUT_HELPER, NF_STEP_INPUT_HELPER, NF_FLOAT_TEXT_HELPER,
-    NF_OUTPUT_HELPER,
+    NF_OUTPUT_HELPER, NF_OUTPUTS_NAME,
 })
 _PATH_KINDS = {"File": "file", "Directory": "directory"}
 # A workflow parameter's declared type, which the generated pipeline checks

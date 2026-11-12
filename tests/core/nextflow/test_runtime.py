@@ -18,6 +18,7 @@ from hypothesis import example, given, strategies as st
 import pytest
 
 from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
+from sophios.api.python._workflow_runtime import ServicePipeline, service_pipeline
 from sophios.api.python.workflow import Step, StepInput, Workflow
 from sophios.backends import recorded_outputs
 from sophios.nf_symbols import NEXTFLOW_SCRIPT_NAMES
@@ -129,6 +130,136 @@ def test_a_containerized_command_runs_after_its_images_entrypoint(tmp_path: Path
         "an argument\n", "from the entrypoint an argument\n", "from the entrypoint printf an argument\n",
     ]
     assert [path.read_text(encoding="utf-8") for path in work.rglob("place.txt")] == ["host\n"]
+
+
+def _run_service(pipeline: ServicePipeline, directory: Path) -> "subprocess.CompletedProcess[str]":
+    """Run the service form in `directory` as a service runs it (design §4.5): its only configuration copies each
+    output into `out`, and Nextflow prints the outputs object on stdout, alone: its agent mode, which prints the run's
+    progress around the object, is off.
+    """
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "main.nf").write_text(pipeline.script, encoding="utf-8")
+    (directory / "params.json").write_text(json.dumps(pipeline.params), encoding="utf-8")
+    (directory / "service.config").write_text("workflow.output.mode = 'copy'\n", encoding="utf-8")
+    env = {**os.environ, "NXF_AGENT_MODE": "false", "NXF_ANSI_LOG": "false", "NXF_HOME": str(directory / ".nxf-home"),
+           "NXF_OFFLINE": "true"}
+    return subprocess.run(
+        ["nextflow", "-C", "service.config", "-q", "run", "main.nf", "-params-file", "params.json", "-work-dir", "work",
+         "-output-dir", str(directory / "out"), "-output-format", "json"],
+        cwd=directory, env=env, text=True, capture_output=True, timeout=90, check=False,
+    )
+
+
+@pytest.mark.nextflow
+@pytest.mark.serial
+def test_the_service_form_publishes_each_output_as_a_cwl_run_returns_it(tmp_path: Path) -> None:
+    """design §4.5: the outputs object Nextflow prints is the run's outputs in the CWL shape, each path in the
+    outputs folder, placed as a CWL run places it: a file, a text, a null, a scattered array of output folders the
+    tool filled, a scattered file in a subfolder, a file two outputs return, a folder with a file of that name in it,
+    which an output whose name sorts before the folder's returns too, and a file of the folder's name, whose output's
+    name sorts between those two. The outputs are copied in the order of their names, so the scattered file, whose
+    output sorts before the file of its name, is copied first, each copy at the top of the folder, the later two of
+    that name with _2 and _3; the file returned twice is copied once; the file in the returned folder is at its place
+    in the folder's copy, never copied on its own, so the file of the folder's name is copied before the folder, which
+    takes _2. A task's HOME is its task directory."""
+    inputs = Inputs(out_dir=Input(cwl.directory, flag="--outDir", position=1))
+    fill = Step(CommandLineTool("fill", inputs, Outputs(
+        filled=Output(cwl.directory, glob="$(inputs.out_dir.basename)"))).base_command(
+            "sh", "-c", 'printf written > "$2/result.txt"', "fill").stage(inputs.out_dir, writable=True),
+        step_name="fill")
+    fill.inputs.out_dir = ["seg-a", "seg-b"]
+    fill.scatter_on(fill.inputs.out_dir)
+    note = Step(CommandLineTool("note", Inputs(), Outputs(
+        note=Output(cwl.file, glob="note.txt"),
+        text=Output(cwl.string, glob="note.txt", load_contents=True, output_eval="$(self[0].contents)"),
+        absent=Output(cwl.file, glob="absent.txt", required=False))).base_command(
+            "sh", "-c", 'test "$HOME" = "$PWD" && echo noted').stdout("note.txt"), step_name="note")
+    tell = Step(CommandLineTool("tell", Inputs(word=Input(cwl.string, position=1)), Outputs(
+        told=Output(cwl.file, glob="sub/note.txt"))).base_command("sh", "-c", 'mkdir sub; echo "$0" > sub/note.txt'),
+        step_name="tell")
+    tell.inputs.word = ["alpha", "beta"]
+    tell.scatter_on(tell.inputs.word)
+    keep = Step(CommandLineTool("keep", Inputs(), Outputs(
+        kept=Output(cwl.directory, glob="kept"), held=Output(cwl.file, glob="kept/note.txt"))).base_command(
+            "sh", "-c", "mkdir kept && echo kept > kept/note.txt"), step_name="keep")
+    mark = Step(CommandLineTool("mark", Inputs(), Outputs(kept=Output(cwl.file, glob="kept"))).base_command(
+        "sh", "-c", "echo mark > kept"), step_name="mark")
+    workflow = Workflow([fill, note, tell, keep, mark], "service_outputs")
+    workflow.outputs.folders = fill.outputs.filled
+    workflow.outputs.note = note.outputs.note
+    workflow.outputs.text = note.outputs.text
+    workflow.outputs.absent = note.outputs.absent
+    workflow.outputs.heard = tell.outputs.told
+    workflow.outputs.twice = note.outputs.note
+    workflow.outputs.kept = keep.outputs.kept
+    workflow.outputs.inner = keep.outputs.held
+    workflow.outputs.keep = mark.outputs.kept
+    for name in ("seg-a", "seg-b"):  # A service makes each output folder empty, by its name, as the driver does.
+        (tmp_path / name).mkdir()
+
+    result = _run_service(service_pipeline(workflow), tmp_path)
+    assert_succeeded(result)
+    out = tmp_path / "out"
+    assert json.loads(result.stdout) == {
+        "folders": [{"class": "Directory", "path": str(out / name)} for name in ("seg-a", "seg-b")],
+        "note": {"class": "File", "path": str(out / "note.txt_3")},
+        "text": "noted\n",
+        "absent": None,
+        "heard": [{"class": "File", "path": str(out / name)} for name in ("note.txt", "note.txt_2")],
+        "twice": {"class": "File", "path": str(out / "note.txt_3")},
+        "kept": {"class": "Directory", "path": str(out / "kept_2")},
+        "inner": {"class": "File", "path": str(out / "kept_2" / "note.txt")},
+        "keep": {"class": "File", "path": str(out / "kept")},
+    }
+    assert {str(path.relative_to(out)): path.read_text(encoding="utf-8") for path in out.rglob("*") if path.is_file()
+            } == {"seg-a/result.txt": "written", "seg-b/result.txt": "written", "note.txt": "alpha\n",
+                  "note.txt_2": "beta\n", "note.txt_3": "noted\n", "kept_2/note.txt": "kept\n", "kept": "mark\n"}
+    assert [path for path in out.rglob("*") if path.is_symlink()] == []
+
+
+#: The runscript Apptainer 1.4.5 wrote for an OCI image whose ENTRYPOINT is `python3 -m ichnaea.segmentation` and
+#: whose CMD is `--help`, as it is in that image.
+RUNSCRIPT = DATA / "nextflow" / "service" / "ichnaea.runscript"
+
+
+@pytest.mark.nextflow
+@pytest.mark.docker
+@pytest.mark.serial
+def test_a_service_task_runs_its_command_after_the_images_runscript(tmp_path: Path) -> None:
+    """design §4.5: as `singularity run --no-eval` does, a task's script runs the command after the image's
+    runscript, each word as given, with no shell evaluation; with no runscript, as on this host, the command alone.
+
+    The script Nextflow wrote runs again in a Linux container holding the real runscript, a stand-in for the
+    entrypoint's program recording the words it gets.
+    """
+    word = "a $HOME \"q\" 'b' `id` $(id) \\ c"
+    tool = CommandLineTool("words", Inputs(word=Input(cwl.string, position=3)), Outputs(
+        out=Output(cwl.file, glob="out.txt")))
+    step = Step(tool.argument("printf", position=1).argument("%s|", position=2).stdout("out.txt")
+                .docker("debian:bookworm-slim"), step_name="words")
+    step.inputs.word = word
+    workflow = Workflow([step], "service_words")
+    workflow.outputs.out = step.outputs.out
+    result = _run_service(service_pipeline(workflow), tmp_path / "pipeline")
+    assert_succeeded(result)
+    assert (tmp_path / "pipeline" / "out" / "out.txt").read_text(encoding="utf-8") == f"{word}|"
+
+    image = tmp_path / "image"
+    image.mkdir()
+    shutil.copy(next((tmp_path / "pipeline" / "work").rglob(".command.sh")), image / ".command.sh")
+    shutil.copy(RUNSCRIPT, tmp_path / "runscript")
+    (tmp_path / "python3").write_text("#!/bin/sh\nprintf '%s\\0' \"$@\" > argv\n", encoding="utf-8")
+    for program in ("runscript", "python3"):
+        (tmp_path / program).chmod(0o755)
+    ran = subprocess.run(
+        ["docker", "run", "--rm", "--network", "none", "-v", f"{image}:/task", "-w", "/task",
+         "-v", f"{tmp_path / 'runscript'}:/.singularity.d/runscript:ro",
+         "-v", f"{tmp_path / 'python3'}:/usr/local/bin/python3:ro",
+         "debian:bookworm-slim", "bash", "-ue", ".command.sh"],
+        capture_output=True, text=True, timeout=120, check=False)
+    assert ran.returncode == 0, ran.stderr
+    assert (image / "argv").read_text(encoding="utf-8").split("\0")[:-1] == [
+        "-m", "ichnaea.segmentation", "printf", "%s|", word]
 
 
 def _recorded(stdout: str) -> dict[str, Any]:

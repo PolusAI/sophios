@@ -153,6 +153,10 @@ class SophiosErrorCode(StrEnum):
     #: Slurm on a site cannot run the run: a command, a setting of yours there, a partition, or a GPU step.
     SITE_SLURM = 'wic062'
 
+    #: A workflow output sent to a compute service under `target="nextflow"` whose name Nextflow does not
+    #: keep: the pipeline would publish it, and the service report it, under another name.
+    NEXTFLOW_OUTPUT_RENAMED = 'wic063'
+
     #: --- Python API. The document is valid; the call was not. ---
     INVALID_INPUT_VALUE = 'api001'
     INVALID_STEP = 'api002'
@@ -540,8 +544,8 @@ EXPLANATIONS: Final[Mapping[SophiosErrorCode, Explanation]] = {
         'Check the id, the host and `root=`: the line `submit()` printed, `repr(run)`, attaches to the run.'),
     SophiosErrorCode.SITE_NEXTFLOW_CONTAINER: Explanation(
         Kind.MACHINE,
-        "A Nextflow process with a container, on a site whose `container_engine` is not `docker`: the Nextflow target "
-        'runs containers with Docker only.',
+        "A Nextflow process with a container, on a site whose `container_engine` is not `docker`: the pipeline "
+        '`compile()` writes, which a site runs, runs containers with Docker only.',
         "Run it on a site with Docker, `container_engine='docker'`, or with `target='cwl'`."),
     SophiosErrorCode.SITE_DEFAULT_MEMORY: Explanation(
         Kind.MACHINE,
@@ -558,6 +562,13 @@ EXPLANATIONS: Final[Mapping[SophiosErrorCode, Explanation]] = {
         'Do what the message names: load the module that provides Slurm with `modules=`, ask the administrators to '
         'turn on accounting, correct your login profile there, or name the partition with `partition=` or '
         '`gpu_partition=`.'),
+    SophiosErrorCode.NEXTFLOW_OUTPUT_RENAMED: Explanation(
+        Kind.DOCUMENT,
+        'Submitting to a compute service under `target="nextflow"`: a workflow output whose name Nextflow does not '
+        'keep, such as `Result`, which the pipeline would publish, and the service report, as `_Result`; or a '
+        'step\'s output, named `<step>~<port>`, which a workflow that declares no output returns.',
+        'Rename the output to the name the message gives, or to another that Nextflow keeps; in a workflow that '
+        'declares no output, declare each output to return, under a name Nextflow keeps.'),
     SophiosErrorCode.INVALID_INPUT_VALUE: Explanation(
         Kind.CALL,
         'A value bound to a step input that the input cannot take.',

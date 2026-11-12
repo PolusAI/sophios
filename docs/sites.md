@@ -128,15 +128,16 @@ refused there with a code:
 | `target='cwl'`, `runner='cwltool'` | Refused, `wic058`: Toil runs the same CWL on a machine and on a cluster alike | Refused, `wic058` |
 | `target='nextflow'` | Nextflow's local executor: at most `max_parallel` tasks at once (`executor.queueSize`, which the site adds to the run's `nextflow.config`). Its outputs stay in its work folder, where the Nextflow target leaves them | Nextflow's Slurm executor: each task a Slurm job of its own, at most `max_parallel` in Slurm's queue, on the run's partition with the steps' time, or, for a step that asks for a GPU, on the partition with GPUs, asking for its GPUs; its outputs in its work folder. The site sets all of it in the run's `nextflow.config` |
 
-A site needs Toil 9.5.0 and Nextflow 26.04.2 or later; `check` reads
-each one's version. A runner pulls the images its steps need as it runs,
-so they must be in a registry the site can pull from. The Nextflow target runs containers with Docker only: on a site
-whose `container_engine` is not `docker`, such as a `Slurm` with its
-default, `singularity`, each step with a container is refused with
-`wic060`, by name, and a workflow whose steps have none runs. A Toil step
-whose tool declares no memory gets 4 GiB there (`--defaultMemory 4Gi`),
-and Toil refuses to start it on a machine with less: `check` notes each
-such step, `wic061`. The tool's own `ramMin` wins.
+A site needs Toil 9.5.0 and Nextflow 26.04.2 or later; `check` reads each
+one's version. A runner pulls the images its steps need as it runs, so
+they must be in a registry the site can pull from. The pipeline
+`compile()` writes, which a site runs, runs containers with Docker only:
+on a site whose `container_engine` is not `docker`, such as a `Slurm`
+with its default, `singularity`, each step with a container is refused
+with `wic060`, by name, and a workflow whose steps have none runs. A Toil
+step whose tool declares no memory gets 4 GiB there (`--defaultMemory
+4Gi`), and Toil refuses to start it on a machine with less: `check` notes
+each such step, `wic061`. The tool's own `ramMin` wins.
 
 `check` and `submit` take the workflow and these options:
 

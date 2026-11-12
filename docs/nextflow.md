@@ -515,6 +515,31 @@ whose command can render empty, with no `baseCommand`, no `arguments` and no
 bound input but optional, boolean or array ones: CWL then gives its container
 no arguments, so the image runs its `CMD`; name the program in `baseCommand`.
 
+## On a compute service
+
+A workflow submitted to a [compute service](compute.md) with
+`target="nextflow"` is sent as one pipeline file, which differs from the one
+`compile()` writes in three ways. Its containers run under Singularity
+(Apptainer): each task runs its command after the image's runscript, as
+`singularity run --no-eval` does, so the image's `ENTRYPOINT` runs first, as
+it does through CWL, and nothing on the host reads the image; a process that
+asks for GPUs has them bound with `--nv`. Every task's `HOME` is its task
+directory, as through CWL, so a tool that writes under its home can. And it
+publishes every workflow output into the run's outputs folder, so a run's
+`outputs()` returns them by their names, a scattered one as an array, each
+`File` and `Directory` with its `class`, `location`, `path` and `basename`, as
+on CWL, where Toil adds `size`, `checksum`, `nameroot`, `nameext` and a
+`Directory`'s `listing`. Each path is placed as a CWL run places it: a path
+inside a folder the workflow also returns is at its place in that folder's
+copy, and every other path is copied once, the outputs in the order of their
+names, under its own name or, when a copy has taken it, the name and `_2`,
+`_3` and on, so a file globbed in a subfolder lands at the top, two of one
+name land as `out.txt` and `out.txt_2`, and a file two outputs return is
+copied once. A workflow output whose name Nextflow would change, such as
+`Result`, which it publishes as `_Result`, is refused with
+[`wic063`](error_codes.md), and so is each output of a workflow that declares
+none, named `<step>~<port>`: declare the outputs to return.
+
 ## GPUs
 
 `cwltool:CUDARequirement`, as a requirement or a hint, becomes the

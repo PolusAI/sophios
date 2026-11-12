@@ -44,6 +44,9 @@ from sophios.cli import default_compilation_settings, get_args, get_known_and_un
 from sophios.runtime_inputs import output_target_inputs, resolve_file_formats, runner_job_inputs
 from sophios.utils import convert_args_dict_to_args_list
 from sophios.utils_cwl import tool_process
+from sophios.input_output_nf import nextflow_params, render_nextflow
+from sophios.nf_types import ExecutableNextflowWorkflow
+from sophios.utils_nf import nextflow_names
 from sophios.wic_types import DEFAULT_BASEPATH, CompilerOptions, GraphSettings, Json, StepId, Tool, Tools
 
 from ._inference import Inference
@@ -583,6 +586,49 @@ def service_document(workflow: "Workflow", *, tool_registry: Tools | None = None
     result = compile_workflow_result(workflow, tool_registry=tool_registry, inference=inference)
     artifact = _one_document(workflow, result)
     return ServiceDocument(copy.deepcopy(artifact.cwl), resolve_file_formats(artifact.job_inputs), result.realtime)
+
+
+class ServicePipeline(NamedTuple):
+    """What a remote service is sent to run `workflow` on Nextflow: see `service_pipeline`."""
+
+    #: The model the pipeline is rendered from.
+    nextflow_workflow: ExecutableNextflowWorkflow
+    #: The pipeline in its service form (design_docs/sophios_nextflow_backend.md §4.5), one file.
+    script: str
+    #: Its parameters, as `nextflow_params.json` holds them: every path as written.
+    params: Json
+    #: The real-time analyses the workflow declares, which no service runs.
+    realtime: tuple[Declaration, ...]
+
+
+def service_pipeline(workflow: "Workflow", *, tool_registry: Tools | None = None,
+                     inference: Inference = Inference()) -> ServicePipeline:
+    """Compile `workflow` to the pipeline a service runs on Nextflow, which publishes every output under its own name.
+
+    Raises:
+        SophiosError: The workflow does not compile, or an output's name is not one Nextflow keeps (`wic063`): a
+            client that attaches to the run later reads the outputs by the names the pipeline published. A workflow
+            that declares no output has its steps' outputs, each named `<step>~<port>`, which Nextflow never keeps.
+        NotLowered: The Nextflow target cannot run the workflow, as `compile(target="nextflow")` raises it.
+    """
+    result = compile_workflow_result(workflow, tool_registry=tool_registry, inference=inference)
+    view = _view(workflow, result)
+    executable = targets.TARGETS["nextflow"].lower(result, view).model
+    renamed = {name: published for published, name in nextflow_names(view)["outputs"].items() if published != name}
+
+    def refusal(name: str, published: str) -> str:
+        if "~" not in name:
+            return (f"workflow output {name!r} would be published as {published!r}, since Nextflow does not keep its "
+                    f"name, and a service reports each output by its published name; rename it, as to {published!r}")
+        step, port = name.rsplit("~", 1)
+        return (f"the workflow declares no output, so it returns the output {port!r} of its step {step!r} as {name!r}, "
+                f"a name Nextflow does not keep, and a service reports each output by its published name; declare "
+                f"each output to return, under a name Nextflow keeps, such as {published!r}")
+    if renamed:
+        raise SophiosError(Diagnostic(Severity.ERROR, SophiosErrorCode.NEXTFLOW_OUTPUT_RENAMED, refusal(*names))
+                           for names in renamed.items())
+    return ServicePipeline(executable, render_nextflow(executable, service=True), nextflow_params(executable),
+                           result.realtime)
 
 
 def compiled_workflow_from_result(

@@ -264,6 +264,20 @@ def _provoke_when_not_boolean() -> None:
         'provoke'))))
 
 
+def _provoke_nextflow_output_renamed() -> None:
+    """A workflow for a compute service on Nextflow with an output named `Made`, which Nextflow publishes as `_Made`."""
+    # pylint: disable=import-outside-toplevel
+    from sophios.api.python._workflow_runtime import service_pipeline
+    from sophios.api.python.tool_builder import CommandLineTool, Inputs, Output, Outputs, cwl
+    from sophios.api.python.workflow import Step, Workflow
+
+    make = Step(CommandLineTool('make', Inputs(), Outputs(made=Output(cwl.file, glob='made')))
+                .base_command('touch', 'made'))
+    workflow = Workflow([make], 'provoke')
+    workflow.outputs.Made = make.outputs.made
+    service_pipeline(workflow)
+
+
 #: One edit of the pipeline `import_edited` writes, for each import code: the file, the text replaced (every
 #: occurrence), its replacement, and text on the line the diagnostic names.
 IMPORT_EDITS: Final[dict[SophiosErrorCode, tuple[str, str, str, str]]] = {
@@ -420,6 +434,7 @@ COMPILED: Final[dict[SophiosErrorCode, Callable[[], object]]] = {
     SophiosErrorCode.SITE_DEFAULT_MEMORY: partial(_provoke_site, runner='toil-cwl-runner'),
     # This computer has no sbatch.
     SophiosErrorCode.SITE_SLURM: partial(_provoke_site, site='Slurm'),
+    SophiosErrorCode.NEXTFLOW_OUTPUT_RENAMED: _provoke_nextflow_output_renamed,
     **{code: partial(_import_edited, code) for code in IMPORT_EDITS},
 }
 
