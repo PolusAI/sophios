@@ -364,8 +364,8 @@ class SophiosErrorCode(StrEnum):
         kind=Kind.MACHINE)
     SITE_NEXTFLOW_CONTAINER = _explained(
         'wic064',
-        "A Nextflow process with a container, on a site whose `container_engine` is not `docker`: the Nextflow target "
-        'runs containers with Docker only.',
+        "A Nextflow process with a container, on a site whose `container_engine` is not `docker`: the pipeline "
+        '`compile()` writes, which a site runs, runs containers with Docker only.',
         "Run it on a site with Docker, `container_engine='docker'`, or with `target='cwl'`.",
         kind=Kind.MACHINE)
     SITE_DEFAULT_MEMORY = _explained(
@@ -385,6 +385,13 @@ class SophiosErrorCode(StrEnum):
         'turn on accounting, correct your login profile there, or name the partition with `partition=` or '
         '`gpu_partition=`.',
         kind=Kind.MACHINE)
+    NEXTFLOW_OUTPUT_RENAMED = _explained(
+        'wic067',
+        'Submitting to a compute service under `target="nextflow"`: a workflow output whose name Nextflow does not '
+        'keep, such as `Result`, which the pipeline would publish, and the service report, as `_Result`; or a '
+        'step\'s output, named `<step>~<port>`, which a workflow that declares no output returns.',
+        'Rename the output to the name the message gives, or to another that Nextflow keeps; in a workflow that '
+        'declares no output, declare each output to return, under a name Nextflow keeps.')
 
     # --- Python API. The document is valid; the call was not. ---
     INVALID_INPUT_VALUE = _explained(

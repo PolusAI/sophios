@@ -225,12 +225,12 @@ class _Site:
 
     def _engine_refused(self, runner: Runner, lowered: Lowered[Any]) -> list[Diagnostic]:
         """`wic064` at each process with a container, when the runner's engine is not the site's: a CWL runner takes
-        the site's, and Nextflow's is Docker, the Nextflow target's."""
+        the site's, and Nextflow's is Docker, which the pipeline a site runs needs."""
         if runner.container_engine == self.container_engine:
             return []
         steps = nextflow_names(lowered.view)['processes']
-        return [_error(Code.SITE_NEXTFLOW_CONTAINER, f"step '{steps[process.name]}' runs in a container, and the "
-                       f'Nextflow target runs containers with Docker only, which {self.host}\'s container_engine='
+        return [_error(Code.SITE_NEXTFLOW_CONTAINER, f"step '{steps[process.name]}' runs in a container, and a site "
+                       f'runs Nextflow\'s containers with Docker only, which {self.host}\'s container_engine='
                        f"{self.container_engine!r} is not: use container_engine='docker', or target='cwl'")
                 for process in lowered.model.processes if process.container is not None]
 
@@ -424,7 +424,7 @@ class Machine(_Site):
         host: How `ssh` names it: a `Host` of `~/.ssh/config`, `host`, or `user@host`.
         root: The folder there that relative paths are read against, and where `sophios/runs/<id>` is made.
         bin: The folder there that holds the runners, and what they need (the Java Nextflow runs on); first on PATH.
-        container_engine: The engine a CWL runner runs containers with; the Nextflow target's need Docker.
+        container_engine: The engine a CWL runner runs containers with; the Nextflow pipeline a site runs needs Docker.
         modules: Environment modules each job loads first.
 
     Raises:
