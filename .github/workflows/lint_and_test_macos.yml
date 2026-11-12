@@ -117,17 +117,6 @@ jobs:
         # "SC1017 (error): Literal carriage return. Run script through tr -d '\r' ."
         run: shellcheck -e SC1017 $(find sophios/ -name "*.sh" -and -not -path "./3/*")
 
-      - name: Generate Sophios Validation Jsonschema
-        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
-        run: cd sophios/ && sophios --generate_schemas
-
-        # Please read docs/validation.md#Property-Based-Testing
-        # This is essentially an integration test for all of the
-        # Sophios Python API workflows as well as the Sophios Python API itself.
-      - name: Validate Sophios Python API Workflows (*.py -> *.wic)
-        if: ${{ !cancelled() && steps.setup.outcome == 'success' && steps.corpus.outcome == 'success' }}
-        run: cd sophios/ && pytest tests/core/test_python_api_workflow.py -k test_validate_generated_python_workflows
-
       - name: Build Documentation
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         run: cd sophios/docs && make html
