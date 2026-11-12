@@ -2,12 +2,11 @@
 
 # pylint: disable=missing-function-docstring
 
-from pathlib import Path
 from typing import Any
 
 import pytest
 
-from sophios.input_output_nf import render_nextflow, write_nextflow_artifacts
+from sophios.input_output_nf import render_nextflow
 from sophios.nf_expr import parse
 from sophios.nf_types import (
     ExecutableNextflowWorkflow,
@@ -19,8 +18,7 @@ from sophios.nf_types import (
 )
 from sophios.utils_nf import compiled_source_to_nextflow
 
-from .testkit import (
-    command, execute_nextflow, output_port, step, synthetic_source, tool, workflow_doc)
+from .testkit import command, output_port, step, synthetic_source, tool, workflow_doc
 
 STRINGS = {"type": "array", "items": "string"}
 FILES = {"type": "array", "items": "File"}
@@ -186,25 +184,6 @@ def test_two_gathered_arrays_on_an_unscattered_step_stage_under_separate_prefixe
         "    path x, arity: '0..*', stageAs: 'gather_x_*/*'\n"
         "    path y, arity: '0..*', stageAs: 'gather_y_*/*'\n"
     ) in rendered
-
-
-@pytest.mark.nextflow
-@pytest.mark.serial
-@pytest.mark.parametrize(
-    ("second", "more"),
-    [("PAIR", "a x 20\nb y 20\nc z 20\n"), ("PAIR2", "x a 20\ny b 20\nz c 20\n")],
-    ids=["same_producer", "second_producer"],
-)
-def test_a_scattered_step_stages_two_gathered_arrays_of_same_named_files(
-    tmp_path: Path, second: str, more: str
-) -> None:
-    run = tmp_path / "run"
-    write_nextflow_artifacts(_two_gathered_arrays_into_use(second), run)
-    result = execute_nextflow(run)
-    assert result.returncode == 0, result.stdout + result.stderr
-    used = list((run / "work").glob("*/*/used.txt"))
-    assert len(used) == 2
-    assert {path.read_text(encoding="utf-8") for path in used} == {"a x 20\nb y 20\nc z 20\n" + more}
 
 
 @pytest.mark.fast

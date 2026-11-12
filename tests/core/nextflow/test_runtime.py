@@ -3,6 +3,7 @@
 # pylint: disable=missing-function-docstring,protected-access
 
 from collections import Counter
+from collections.abc import Sequence
 from dataclasses import replace
 from functools import partial
 import itertools
@@ -11,14 +12,14 @@ import os
 from pathlib import Path
 import shlex
 import subprocess
-from typing import Any
+from typing import Any, NamedTuple
 
 from hypothesis import example, given, strategies as st
 import pytest
 
 from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
 from sophios.api.python._workflow_runtime import compile_workflow_result
-from sophios.api.python.workflow import Step, Workflow
+from sophios.api.python.workflow import Step, StepInput, Workflow
 from sophios.input_output_nf import NF_OUTPUT_MARKER, write_nextflow_artifacts
 from sophios.nf_symbols import NEXTFLOW_SCRIPT_NAMES
 from sophios.nf_types import (
@@ -457,112 +458,190 @@ def test_a_command_receives_the_arguments_cwltool_gives_it(
 
 
 _WORD = st.text(st.characters(codec="utf-8", exclude_characters="\x00"), max_size=12)
+_INT = st.integers(-2**31, 2**31 - 1)
 _METHODS = ["dotproduct", "flat_crossproduct", "nested_crossproduct"]
-#: A step: its method; its scattered inputs, each `(kind, words)` or `("File", j)` for step j's gathered Files; an
-#: unscattered string, File or File array of words or of step j's, or an int its tool writes as `$(inputs.shared)0`;
-#: whether its File output declares `$(self[0])`; and whether its first input is the first step's first.
-_Step = tuple[str, list[tuple[str, Any]], tuple[str, Any] | None, bool, bool]
+_END = "end of an array of words"
+_TYPES = {"string": cwl.string, "File": cwl.file, "int": cwl.int}
 
 
-def _printed(spec: _Step, printed: list[Any]) -> Any:
+class _Step(NamedTuple):
+    """A step: its method; its scattered inputs, each `(kind, words)` for string, File (a word is its text) or int, or
+    `("File", j)` for step j's gathered Files; its other inputs, each `(kind, value)`: a string, int or File of
+    text, a File that is step j's unscattered output, or a File[] or string[] of words, of step j's gathered Files,
+    of step j's first scattered input (`("shares", j)`) or of several steps' outputs merge_flattened (`("merge", js)`);
+    an int is written by the tool as `$(inputs.shared0)0`. Then: whether its File output declares `$(self[0])`; whether
+    its first input is the first step's first; and the name its output shares with other steps', if it has one."""
+    method: str
+    inputs: list[tuple[str, Any]]
+    broadcasts: Sequence[tuple[str, Any]] = ()
+    single: bool = False
+    shares: bool = False
+    basename: str | None = None
+
+
+def _array(value: Any, steps: list[_Step], printed: list[Any]) -> list[str]:
+    """The texts of the elements a File[] or string[] input holds."""
+    if isinstance(value, int):
+        return list(printed[value])
+    if not isinstance(value, tuple):
+        return list(value)
+    tag, source = value
+    if tag == "shares":
+        return list(steps[source].inputs[0][1])
+    return [text for index in source for text in (printed[index] if isinstance(printed[index], list) else [
+        printed[index]])]
+
+
+def _printed(spec: _Step, steps: list[_Step], printed: list[Any]) -> Any:
     """What CWL v1.2 (WorkflowStep, scatterMethod) gives a step whose task prints its arguments joined by `-`: one task
     per index (None if unequal), every combination, or nested one level per input; the rest reach each whole."""
-    method, inputs, broadcast, *_ = spec
-
-    def words(source: Any) -> Any:
-        return printed[source] if isinstance(source, int) else source
-    kind, value = broadcast or ("", "")
-    tail = [] if not kind else [
-        "".join(words(value)) if kind == "File[]" else f"{value}0" if kind == "int" else value]
-    lists = [words(source) for _, source in inputs]
+    def words(source: Any) -> list[str]:
+        return [str(word) for word in (printed[source] if isinstance(source, int) else source)]
+    tail = ["".join(_array(value, steps, printed)) if kind.endswith("[]") else f"{value}0" if kind == "int" else
+            printed[value] if isinstance(value, int) else value for kind, value in spec.broadcasts]
+    lists = [words(source) for _, source in spec.inputs]
 
     def nested(combination: list[str], rest: list[list[str]]) -> Any:
         return "-".join([*combination, *tail]) if not rest else [nested([*combination, word], rest[1:])
                                                                  for word in rest[0]]
-    if not lists or method == "nested_crossproduct":
+    if not lists or spec.method == "nested_crossproduct":
         return nested([], lists)
-    if method == "dotproduct":
+    if spec.method == "dotproduct":
         return [nested(list(row), []) for row in zip(*lists)] if len(set(map(len, lists))) == 1 else None
     return [nested(list(combination), []) for combination in itertools.product(*lists)]
 
 
 @st.composite
 def _scatters(draw: st.DrawFn) -> list[_Step]:
-    """1..5 steps; one may read an earlier scattering, non-nesting step's gathered Files; dotproduct inputs are equally
-    long unless the draw says otherwise, so later steps run; S3's mismatch stays an @example."""
+    """1..5 steps; one may read earlier scattering, non-nesting steps' gathered Files, once or twice, or an unscattered
+    step's File; dotproduct inputs are equally long unless the draw says otherwise, so later steps run; S3's mismatch
+    stays an @example."""
     steps: list[_Step] = []
     printed: list[Any] = []
     for _ in range(draw(st.integers(1, 5))):
         method = draw(st.sampled_from(_METHODS))
-        gathered = [index for index, (step, values) in enumerate(zip(steps, printed))
-                    if step[1] and step[0] != "nested_crossproduct" and values is not None]
-        shares = bool(steps and steps[0][1]) and draw(st.booleans())
-        first = [steps[0][1][0]] if shares else []
-        if draw(st.booleans()) and gathered:
+        ran = [index for index, values in enumerate(printed) if values is not None]
+        gathered = [index for index in ran if steps[index].inputs and steps[index].method != "nested_crossproduct"]
+        whole = [index for index in ran if not steps[index].inputs]
+        literal = {kind: [index for index, step in enumerate(steps) if step.inputs and step.inputs[0][0] == kind
+                          and isinstance(step.inputs[0][1], list)] for kind in ("File", "string")}
+        shares = bool(steps and steps[0].inputs) and draw(st.booleans())
+        first = [steps[0].inputs[0]] if shares else []
+        for _ in range(draw(st.integers(0, 2)) if gathered else 0):
             first.append(("File", draw(st.sampled_from(gathered))))
         lengths = [len(source if isinstance(source, list) else printed[source]) for _, source in first]
         size = (lengths[0] if lengths else draw(st.integers(0, 3))) if method == "dotproduct" and draw(
             st.integers(0, 7)) else None
-        inputs = first + [(draw(st.sampled_from(["string", "File"])), draw(st.lists(
-            _WORD, min_size=size or 0, max_size=3 if size is None else size))) for _ in range(draw(st.integers(
-                0, 3 - len(first))))]
-        broadcast = draw(st.none() | st.tuples(st.sampled_from(["string", "File"]), _WORD) | st.tuples(
-            st.just("int"), st.integers(-2**31, 2**31 - 1)) | st.tuples(st.just("File[]"), st.lists(
-                _WORD, max_size=2) | (st.sampled_from(gathered) if gathered else st.nothing())))
-        steps.append((method, inputs, broadcast, draw(st.booleans()), shares))
-        printed.append(_printed(steps[-1], printed))
+
+        inputs = first + [(kind, draw(st.lists(_INT if kind == "int" else _WORD, min_size=size or 0,
+                                               max_size=3 if size is None else size)))
+                          for kind in draw(st.lists(st.sampled_from(["string", "File", "int"]),
+                                                    max_size=3 - len(first)))]
+        kinds: list[Any] = [
+            st.tuples(st.sampled_from(["string", "File"]), _WORD), st.tuples(st.just("int"), _INT),
+            st.tuples(st.sampled_from(["File[]", "string[]"]), st.lists(_WORD, max_size=2))]
+        for tag in ("File", "string"):
+            if literal[tag]:
+                kinds.append(st.tuples(st.just(f"{tag}[]"), st.tuples(
+                    st.just("shares"), st.sampled_from(literal[tag]))))
+        if whole:
+            kinds.append(st.tuples(st.just("File"), st.sampled_from(whole)))
+        if gathered:
+            kinds.append(st.tuples(st.just("File[]"), st.sampled_from(gathered)))
+        if len(gathered + whole) > 1:
+            kinds.append(st.tuples(st.just("File[]"), st.tuples(st.just("merge"), st.lists(
+                st.sampled_from(gathered + whole), min_size=2, max_size=3, unique=True))))
+        steps.append(_Step(method, inputs, draw(st.lists(st.one_of(kinds), max_size=3)), draw(st.booleans()), shares,
+                           draw(st.none() | st.sampled_from(["out.txt", "piece.txt"]))))
+        printed.append(_printed(steps[-1], steps, printed))
     return steps
+
+
+def _staged(root: Path, name: str, words: list[str]) -> list[str]:
+    """Each word in a file of its own under `root`: two scalar inputs of one basename collide in a Nextflow task."""
+    paths = [root / f"{name}{index}.txt" for index in range(len(words))]
+    for path, word in zip(paths, words):
+        path.write_text(word, encoding="utf-8")
+    return list(map(str, paths))
+
+
+def _scatter_reads(spec: _Step) -> tuple[dict[str, Input], list[str], list[tuple[str, int]], list[str]]:
+    """What the task of `spec` takes and prints: its ports, the script part that prints each input and shifts it off
+    (an array ends at a word no draw can make), the arguments it is given, and the inputs staged as entries of their
+    own, which are Files that are another step's output, all sharing a name."""
+    ports, reads, arguments, entries, position = {}, [], [], [], 1
+    for name, kind, value, is_input in [(f"in{n}", kind, source, True) for n, (kind, source) in enumerate(
+            spec.inputs)] + [(f"shared{n}", kind, value, False) for n, (kind, value) in enumerate(spec.broadcasts)]:
+        if kind == "File" and isinstance(value, int):
+            ports[name] = Input(cwl.file, position=None)
+            entries.append(name)
+            reads.append(f"cat -- {name}.txt")
+        elif kind.endswith("[]"):
+            ports[name] = Input(cwl.array(_TYPES[kind[:-2]]), position=position)
+            arguments.append((_END, position + 1))
+            reads.append(f'while [ "$1" != "{_END}" ]; do {"cat --" if kind == "File[]" else "printf %s"} "$1"; '
+                         'shift; done; shift')
+            position += 2
+        else:
+            ports[name] = Input(_TYPES[kind], position=None if kind == "int" and not is_input else position)
+            if kind == "int" and not is_input:
+                arguments.append((f"$(inputs.{name})0", position))
+            reads.append('cat -- "$1"; shift' if kind == "File" else 'printf %s "$1"; shift')
+            position += 1
+    return ports, reads, arguments, entries
+
+
+def _scatter_step(index: int, spec: _Step) -> Step:
+    """Step `index` of a scatter workflow: a task that prints each of its inputs, joined by `-`."""
+    ports, reads, arguments, entries = _scatter_reads(spec)
+    # Each task sleeps up to 0.3 s by what it prints, so the tasks of a step finish out of order. A step's file is
+    # named after it: a task writing the name of a staged input would write through it.
+    script = ('sleep "0.$(( $({ printf %s "$*"; ' + "".join(f"cat -- {name}.txt; " for name in entries) +
+              '} | cksum | cut -d" " -f1) % 4 ))"; ' + "; printf -; ".join(reads))
+    output = spec.basename or f"s{index}.txt"
+    inputs = Inputs(**ports)
+    tool = CommandLineTool(f"each{index}", inputs, Outputs(
+        out=Output(cwl.file, glob=output, output_eval="$(self[0])" if spec.single else None),
+        text=Output(cwl.string, glob=output, load_contents=True, output_eval="$(self[0].contents)")))
+    for name in entries:
+        tool.stage(getattr(inputs, name), entryname=f"{name}.txt")
+    for value, where in arguments:
+        tool.argument(value, position=where)
+    return Step(tool.base_command("sh", "-c", script, f"s{index}").stdout(output), step_name=f"s{index}")
 
 
 def _scatter_workflow(steps: list[_Step], root: Path) -> tuple[Workflow, list[list[str]]]:
     """`steps` as a workflow, each File written under `root`, and each step's scattered sources by their names."""
-    built, sources = [], []
-
-    def staged(name: str, words: list[str]) -> list[str]:
-        """Each word in a file of its own: two scalar inputs of one basename collide in a Nextflow task."""
-        paths = [root / f"{name}{index}.txt" for index in range(len(words))]
-        for path, word in zip(paths, words):
-            path.write_text(word, encoding="utf-8")
-        return list(map(str, paths))
-
-    for index, (_method, inputs, broadcast, single, shares) in enumerate(steps):
-        reads = [f'cat -- "${n}"' if kind == "File" else f'printf %s "${n}"' for n, (kind, _) in enumerate(inputs, 1)]
-        ports = {f"in{n}": Input(cwl.file if kind == "File" else cwl.string, position=n + 1)
-                 for n, (kind, _) in enumerate(inputs)}
-        if broadcast:
-            reads.append({"File": f'cat -- "${len(inputs) + 1}"', "File[]": f'shift {len(inputs)}; for f; do cat -- '
-                          '"$f"; done'}.get(broadcast[0], f'printf %s "${len(inputs) + 1}"'))
-            ports["shared"] = Input({"string": cwl.string, "int": cwl.int, "File": cwl.file, "File[]": cwl.array(
-                cwl.file)}[broadcast[0]], position=None if broadcast[0] == "int" else len(inputs) + 1)
-        # Each task sleeps up to 0.3 s by what it prints, so the tasks of a step finish out of order. A step's file is
-        # named after it: a task writing the name of a staged input would write through it.
-        script = 'sleep "0.$(( $(printf %s "$*" | cksum | cut -d" " -f1) % 4 ))"; ' + "; printf -; ".join(reads)
-        tool = CommandLineTool(f"each{index}", Inputs(**ports), Outputs(
-            out=Output(cwl.file, glob=f"s{index}.txt", output_eval="$(self[0])" if single else None),
-            text=Output(cwl.string, glob=f"s{index}.txt", load_contents=True, output_eval="$(self[0].contents)")))
-        if broadcast and broadcast[0] == "int":
-            tool.argument("$(inputs.shared)0", position=len(inputs) + 1)
-        built.append(Step(tool.base_command("sh", "-c", script, f"s{index}").stdout(f"s{index}.txt"),
-                          step_name=f"s{index}"))
-        sources.append([f"s{source}.out" if isinstance(source, int) else "s0_0" if shares and n == 0 else
-                        f"s{index}_{n}" for n, (_, source) in enumerate(inputs)])
+    built = [_scatter_step(index, spec) for index, spec in enumerate(steps)]
+    sources = [[f"s{source}.out" if isinstance(source, int) else "s0_0" if spec.shares and n == 0 else
+                f"s{index}_{n}" for n, (_, source) in enumerate(spec.inputs)] for index, spec in enumerate(steps)]
     flow = Workflow(built, "scatter")
-    for index, (step, (method, inputs, broadcast, *_)) in enumerate(zip(built, steps)):
-        for n, ((kind, source), name) in enumerate(zip(inputs, sources[index])):
+
+    def shared(index: int, n: int, kind: str, value: Any) -> Any:
+        """What step `index` takes for its `n`th unscattered input."""
+        if isinstance(value, tuple) and value[0] == "merge":
+            return StepInput(source=[built[source].outputs.out for source in value[1]], link_merge="merge_flattened")
+        if isinstance(value, tuple):
+            return getattr(flow.inputs, sources[value[1]][0])
+        if kind != "int" and isinstance(value, int):
+            return built[value].outputs.out
+        if kind == "File[]":
+            return _staged(root, f"{index}_shared{n}", value)
+        if kind == "File":  # A metacharacter names a file, not a pattern.
+            return _staged(root, f"{index}_reference[1]*{n}", [value])[0]
+        return value
+
+    for index, (step, spec) in enumerate(zip(built, steps)):
+        for n, ((kind, source), name) in enumerate(zip(spec.inputs, sources[index])):
             if isinstance(source, int):
                 setattr(step.inputs, f"in{n}", built[source].outputs.out)
                 continue
-            setattr(step.inputs, f"in{n}", getattr(flow.inputs, name).as_type(cwl.array(
-                cwl.file if kind == "File" else cwl.string)))
-            setattr(flow.inputs, name, staged(name + "_", source) if kind == "File" else source)
-        if inputs:
-            step.scatter_on(*(getattr(step.inputs, f"in{n}") for n in range(len(inputs))), method=method)
-        if broadcast and broadcast[0] == "File[]":
-            step.inputs.shared = built[broadcast[1]].outputs.out if isinstance(broadcast[1], int) else staged(
-                f"{index}_shared", broadcast[1])
-        elif broadcast:  # A metacharacter names a file, not a pattern.
-            step.inputs.shared = staged(f"{index}_reference[1]*", [broadcast[1]])[0] if broadcast[0] == "File" else (
-                broadcast[1])
+            setattr(step.inputs, f"in{n}", getattr(flow.inputs, name).as_type(cwl.array(_TYPES[kind])))
+            setattr(flow.inputs, name, _staged(root, name + "_", source) if kind == "File" else source)
+        if spec.inputs:
+            step.scatter_on(*(getattr(step.inputs, f"in{n}") for n in range(len(spec.inputs))), method=spec.method)
+        for n, (kind, value) in enumerate(spec.broadcasts):
+            setattr(step.inputs, f"shared{n}", shared(index, n, kind, value))
         setattr(flow.outputs, f"s{index}_out", step.outputs.out)
         setattr(flow.outputs, f"s{index}_text", step.outputs.text)
     return flow, sources
@@ -576,7 +655,14 @@ def _f(*words: str) -> tuple[str, list[str]]:
     return ("File", list(words))
 
 
-_PAIRS = ("dotproduct", [_s("a", "b", "c"), _s("x", "y", "z")], ("int", 2), False, False)
+def _i(*numbers: int) -> tuple[str, list[int]]:
+    return ("int", list(numbers))
+
+
+#: Steps whose Files are all called out.txt, or piece.txt.
+_NAMED = ("dotproduct", [_s("a", "b", "c"), _s("x", "y", "z")], [("int", 2)], False, False, "out.txt")
+_SWAPPED = ("dotproduct", [_s("x", "y", "z"), _s("a", "b", "c")], [("int", 2)], False, False, "out.txt")
+_PAIRS = ("dotproduct", [_s("a", "b", "c"), _s("x", "y", "z")], [("int", 2)], False, False)
 
 
 @pytest.mark.nextflow
@@ -584,65 +670,110 @@ _PAIRS = ("dotproduct", [_s("a", "b", "c"), _s("x", "y", "z")], ("int", 2), Fals
 @budget(3)
 @given(_scatters())
 # S1, S2, S9 and S10 (design §6, Topology): two and three inputs pair by index; a scalar or a File reaches every task.
-@example([("dotproduct", [_s("a", "b", "c"), _s("2", "1", "0")], None, False, False),
-          ("dotproduct", [_s("a", "b", "c"), _s("x", "y", "z"), _s("0", "0", "0")], None, False, False),
-          ("dotproduct", [_s("a", "b"), _s("x", "y")], ("string", "0"), False, False),
-          ("dotproduct", [_f("firstA\n", "firstB\n"), _f("secondA\n", "secondB\n")], ("File", "shared\n"), False,
+@example([("dotproduct", [_s("a", "b", "c"), _s("2", "1", "0")], [], False, False),
+          ("dotproduct", [_s("a", "b", "c"), _s("x", "y", "z"), _s("0", "0", "0")], [], False, False),
+          ("dotproduct", [_s("a", "b"), _s("x", "y")], [("string", "0")], False, False),
+          ("dotproduct", [_f("firstA\n", "firstB\n"), _f("secondA\n", "secondB\n")], [("File", "shared\n")], False,
            False)])
 # S5, S6, S7, S8 and S11: the first input outermost, flat or one level per input; every output per invocation.
-@example([("flat_crossproduct", [_s("a", "b"), _s("1", "0")], None, False, False),
-          ("flat_crossproduct", [_s("a", "b"), _s("x", "y", "z"), _s("0")], None, False, False),
-          ("nested_crossproduct", [_s("a", "b"), _s("1", "0", "0")], None, False, False),
-          ("nested_crossproduct", [_s("a", "b"), _s("x", "y"), _s("0")], None, False, False)])
+@example([("flat_crossproduct", [_s("a", "b"), _s("1", "0")], [], False, False),
+          ("flat_crossproduct", [_s("a", "b"), _s("x", "y", "z"), _s("0")], [], False, False),
+          ("nested_crossproduct", [_s("a", "b"), _s("1", "0", "0")], [], False, False),
+          ("nested_crossproduct", [_s("a", "b"), _s("x", "y"), _s("0")], [], False, False)])
 # S4, S6 and S8 empty: no task, an empty dimension keeps its outer shape; an empty unscattered File array.
-@example([("dotproduct", [_s(), _s()], None, False, False),
-          ("flat_crossproduct", [_s("a"), _s(), _s("0")], None, False, False),
-          ("nested_crossproduct", [_s("a", "b"), _s(), _s("0")], None, False, False),
-          ("dotproduct", [_s("a", "b"), _s("x", "y")], ("File[]", []), False, False)])
+@example([("dotproduct", [_s(), _s()], [], False, False),
+          ("flat_crossproduct", [_s("a"), _s(), _s("0")], [], False, False),
+          ("nested_crossproduct", [_s("a", "b"), _s(), _s("0")], [], False, False),
+          ("dotproduct", [_s("a", "b"), _s("x", "y")], [("File[]", [])], False, False)])
 # One parameter scattered at two steps, `$(self[0])` declared; one unscattered File is a list of one, not a bare Path.
-@example([("dotproduct", [_s("alpha", "beta", "gamma")], ("string", "shared"), True, False),
-          ("dotproduct", [_s("alpha", "beta", "gamma")], ("string", "shared"), True, True),
-          ("dotproduct", [_s("a", "b"), _s("x", "y")], ("File[]", ["shared\n"]), False, False),
-          ("dotproduct", [_s("alpha", "beta")], ("File", "shared file\n"), False, False)])
+@example([("dotproduct", [_s("alpha", "beta", "gamma")], [("string", "shared")], True, False),
+          ("dotproduct", [_s("alpha", "beta", "gamma")], [("string", "shared")], True, True),
+          ("dotproduct", [_s("a", "b"), _s("x", "y")], [("File[]", ["shared\n"])], False, False),
+          ("dotproduct", [_s("alpha", "beta")], [("File", "shared file\n")], False, False)])
 # An empty scatter beside an unscattered step ends; File elements and a File broadcast (S10 of one input).
-@example([("dotproduct", [_s()], None, False, False), ("dotproduct", [], None, False, False),
-          ("dotproduct", [_f("alpha\n", "beta\n")], ("File", "shared file\n"), False, False),
-          ("dotproduct", [_f("a\n", "b\n")], ("File", "shared\n"), False, False)])
+@example([("dotproduct", [_s()], [], False, False), ("dotproduct", [], [], False, False),
+          ("dotproduct", [_f("alpha\n", "beta\n")], [("File", "shared file\n")], False, False),
+          ("dotproduct", [_f("a\n", "b\n")], [("File", "shared\n")], False, False)])
 # S3: unequal lengths fail the run naming each input and its length; no task runs truncated.
-@example([("dotproduct", [_s("a", "b"), _s("x")], None, False, False),
-          ("dotproduct", [_s("a", "b"), _s("0")], None, False, False)])
+@example([("dotproduct", [_s("a", "b"), _s("x")], [], False, False),
+          ("dotproduct", [_s("a", "b"), _s("0")], [], False, False)])
 # S12, S13, S14: three gathered Files scattered again beside Files, gathered into one step and, apart, into another,
 # and staged whole in every task of a scattered step.
-@example([_PAIRS, ("dotproduct", [("File", 0), _f("1\n", "2\n", "3\n")], None, False, False),
-          ("dotproduct", [], ("File[]", 1), False, False), ("dotproduct", [], ("File[]", 0), False, False),
-          ("dotproduct", [_s("p", "q"), _s("r", "s")], ("File[]", 0), False, False)])
+@example([_PAIRS, ("dotproduct", [("File", 0), _f("1\n", "2\n", "3\n")], [], False, False),
+          ("dotproduct", [], [("File[]", 1)], False, False), ("dotproduct", [], [("File[]", 0)], False, False),
+          ("dotproduct", [_s("p", "q"), _s("r", "s")], [("File[]", 0)], False, False)])
 # A gather of one file reaches a step, scattered or not, as a list.
-@example([("dotproduct", [_s("a"), _s("x")], ("int", 2), False, False),
-          ("dotproduct", [("File", 0), _f("1\n")], None, False, False), ("dotproduct", [], ("File[]", 1), False, False),
-          ("dotproduct", [_s("p", "q"), _s("r", "s")], ("File[]", 0), False, False),
-          ("flat_crossproduct", [_s("p", "q"), _s("r", "s")], ("File[]", 0), False, False)])
+@example([("dotproduct", [_s("a"), _s("x")], [("int", 2)], False, False),
+          ("dotproduct", [("File", 0), _f("1\n")], [], False, False), ("dotproduct", [], [("File[]", 1)], False, False),
+          ("dotproduct", [_s("p", "q"), _s("r", "s")], [("File[]", 0)], False, False),
+          ("flat_crossproduct", [_s("p", "q"), _s("r", "s")], [("File[]", 0)], False, False)])
 # Three gathered Files in every task of a flat_crossproduct; a nested step over a gathered array and an input array.
-@example([_PAIRS, ("flat_crossproduct", [_s("p", "q"), _s("r", "s")], ("File[]", 0), False, False),
-          ("nested_crossproduct", [("File", 0), _f("x", "y", "z")], None, False, False)])
+@example([_PAIRS, ("flat_crossproduct", [_s("p", "q"), _s("r", "s")], [("File[]", 0)], False, False),
+          ("nested_crossproduct", [("File", 0), _f("x", "y", "z")], [], False, False)])
+# One array scattered at one step and taken whole at another: strings, then Files.
+@example([("dotproduct", [_s("x", "y z")], [], False, False),
+          ("dotproduct", [], [("string[]", ("shares", 0))], False, False)])
+@example([("dotproduct", [_f("a.txt\n", "b.txt\n")], [], False, False),
+          ("dotproduct", [], [("File[]", ("shares", 0))], False, False)])
+# Two gathered arrays of same-named Files staged for a scattered step, flat and nested, from one producer and two.
+@example([_NAMED, ("dotproduct", [_s("p", "q"), _s("r", "s")], [("File[]", 0), ("File[]", 0)], False, False)])
+@example([_NAMED, _SWAPPED, ("dotproduct", [_s("p", "q"), _s("r", "s")], [("File[]", 0), ("File[]", 1)], False, False)])
+@example([_NAMED, _SWAPPED,
+          ("nested_crossproduct", [_s("p", "q"), _s("r", "s")], [("File[]", 0), ("File[]", 1)], False, False)])
+# One gathered array rescattered twice, its Files finishing out of order (the first task sleeps longest).
+@example([("dotproduct", [_s("b", "a"), _s("0", "1")], [], False, False, "out.txt"),
+          ("nested_crossproduct", [("File", 0), ("File", 0)], [], False, False)])
+# Four scatter shapes, an empty one among them, each gathered into its own File[] of one scattered tally.
+@example([("dotproduct", [_i(2001, 2002)], [], False, False, "out.txt"),
+          ("dotproduct", [_i(2001, 2001, 2002, 2002), _s("north", "south", "north", "west")], [("File[]", 0)], False,
+           False, "piece.txt"),
+          ("flat_crossproduct", [_i(2002, 2003), _s("north", "south")],
+           [("string", "beta")], False, False, "piece.txt"),
+          ("dotproduct", [_i(2002, 2003)], [("string", "delta"), ("string[]", ["north", "west"])], False, False,
+           "piece.txt"),
+          ("dotproduct", [_i(), _s()], [("string", "gamma")], False, False, "piece.txt"),
+          ("dotproduct", [_s("alpha", "beta", "delta", "gamma")],
+           [("File[]", 1), ("File[]", 2), ("File[]", 3), ("File[]", 4)], False, False)])
+# One step per lane, then a report of the lanes' headers and both lanes' pieces.
+@example([("dotproduct", [_i(2001, 2001, 2002, 2002), _i(11, 12, 1, 2)], [("string", "lane_a")], False, False,
+           "piece.txt"),
+          ("dotproduct", [_i(2002, 2002), _i(6, 7)], [("string", "lane_b")], False, False, "piece.txt"),
+          ("dotproduct", [], [("File[]", ["lane_a header\n", "lane_b header\n"]), ("File[]", 0), ("File[]", 1)], False,
+           False)])
+# A year's unscattered File reaches every task of that year's step; another step reads both years' merged; a report
+# gathers the steps' outputs.
+@example([("dotproduct", [], [("int", 2001)], False, False, "out.txt"),
+          ("dotproduct", [], [("int", 2002)], False, False, "out.txt"),
+          ("dotproduct", [_s("north", "south")], [("File", 0)], False, False),
+          ("dotproduct", [_s("north", "west")], [("File", 1)], False, False),
+          ("dotproduct", [_i(2001, 2001, 2002, 2002), _s("north", "south", "north", "west")],
+           [("File[]", ("merge", [0, 1]))], False, False),
+          ("dotproduct", [], [("File[]", 2), ("File[]", 3), ("File[]", 4)], False, False)])
+# Scattered groups, one empty, merge_flattened into one input of a scattered tally.
+@example([("dotproduct", [_i(2001, 2002), _s("north", "south")], [("string", "alpha")], False, False, "piece.txt"),
+          ("flat_crossproduct", [_i(2002, 2003), _s("north", "west")], [("string", "beta")], False, False, "piece.txt"),
+          ("dotproduct", [_i(), _s()], [("string", "gamma")], False, False, "piece.txt"),
+          ("dotproduct", [_s("alpha", "beta", "gamma")], [("File[]", ("merge", [0, 1, 2]))], False, False)])
 def test_a_scatter_records_what_cwl_defines_for_its_method(
-        tmp_path_factory: pytest.TempPathFactory, steps: list[_Step]) -> None:
+        tmp_path_factory: pytest.TempPathFactory, drawn: list[_Step]) -> None:
     """design §6, Topology: each step's outputs, File and captured text, are recorded as `_printed` gives them, in
     invocation order whatever order its tasks finish in, from one task per value."""
+    steps = [_Step(*spec) for spec in drawn]
     root = tmp_path_factory.mktemp("scatter")
     flow, sources = _scatter_workflow(steps, root)
     printed: list[Any] = []
     for spec in steps:
-        printed.append(_printed(spec, printed))
+        printed.append(_printed(spec, steps, printed))
     result = execute_nextflow(flow.compile(target="nextflow").write(root / "run"))
     output = f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
-    # Each task's command is `sh -c <script> <step name> ...`.
-    tasks = Counter(shlex.split(path.read_text(encoding="utf-8").split("\n", 1)[1])[3]
-                    for path in (root / "run" / "work").rglob(".command.sh"))
+    # Each task's command is `sh -c <script> <step name> ...`, after the lines linking any entries.
+    tasks = Counter(shlex.split(text[text.index("\n'sh' '-c'"):])[3] for text in (
+        path.read_text(encoding="utf-8") for path in (root / "run" / "work").rglob(".command.sh")))
     if None in printed:
         mismatched = [index for index, values in enumerate(printed) if values is None]
         assert result.returncode != 0 and any(f"s{i}: dotproduct scatter inputs have mismatched lengths: " + ", ".join(
             f"{name}={len(printed[source] if isinstance(source, int) else source)}"
-            for name, (_, source) in zip(sources[i], steps[i][1])) in output for i in mismatched), output
+            for name, (_, source) in zip(sources[i], steps[i].inputs)) in output for i in mismatched), output
         assert not any(tasks[f"s{index}"] for index in mismatched), tasks
         return
     assert result.returncode == 0, output

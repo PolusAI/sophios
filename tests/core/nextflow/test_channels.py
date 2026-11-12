@@ -48,46 +48,6 @@ def test_a_dry_run_stops_at_its_first_task_and_writes_nothing(tmp_path: Path) ->
     assert not list((tmp_path / "work").rglob("copy.txt"))
 
 
-def _scattered_and_whole(item: Any, read: str) -> Workflow:
-    """One array input scattered at one step and taken whole at another: ``read`` prints a value."""
-    each_tool = CommandLineTool(
-        "each_value", Inputs(value=Input(item, position=1)), Outputs(line=Output(cwl.file, glob="each.txt"))
-    ).base_command(read).stdout("each.txt")
-    whole_tool = CommandLineTool(
-        "all_values", Inputs(every=Input(cwl.array(item), position=1)), Outputs(line=Output(cwl.file, glob="all.txt"))
-    ).base_command(read).stdout("all.txt")
-    each, whole = Step(each_tool, step_name="each_value"), Step(whole_tool, step_name="all_values")
-    flow = Workflow([each, whole], "shared")
-    each.inputs.value = flow.inputs.shared.as_type({"type": "array", "items": item})
-    whole.inputs.every = flow.inputs.shared
-    each.scatter_on(each.inputs.value)
-    flow.outputs.each, flow.outputs.whole = each.outputs.line, whole.outputs.line
-    return flow
-
-
-@pytest.mark.nextflow
-@pytest.mark.serial
-def test_one_string_array_is_scattered_at_one_step_and_taken_whole_at_another(tmp_path: Path) -> None:
-    flow = _scattered_and_whole(cwl.string, "echo")
-    result, observed = _run(flow, tmp_path, params={"shared": ["x", "y z"]})
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert observed["each"] == ["x\n", "y z\n"]
-    assert observed["whole"] == ["x y z\n"]
-
-
-@pytest.mark.nextflow
-@pytest.mark.serial
-def test_one_file_array_is_scattered_at_one_step_and_taken_whole_at_another(tmp_path: Path) -> None:
-    for name in ("a.txt", "b.txt"):
-        (tmp_path / name).write_text(f"{name}\n", encoding="utf-8")
-    flow = _scattered_and_whole(cwl.file, "cat")
-    files = [str(tmp_path / "a.txt"), {"class": "File", "path": str(tmp_path / "b.txt")}]
-    result, observed = _run(flow, tmp_path, params={"shared": files})
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert observed["each"] == ["a.txt\n", "b.txt\n"]
-    assert observed["whole"] == ["a.txt\nb.txt\n"]
-
-
 class _JsonNumber(str):
     """Number text the params file holds as it is: Python writes no JSON number past the double range."""
 
