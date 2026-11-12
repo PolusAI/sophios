@@ -403,15 +403,15 @@ WINDOWS_EXCLUDED: Final = frozenset({
     # runner is checked on every leg by the file's other tests.
     'tests/core/test_quiet.py::test_a_failing_step_is_named_with_its_status_below_its_own_messages',
     'tests/core/test_quiet.py::test_a_quiet_run_keeps_a_file_the_tool_names_as_its_stdout',
-    # One six-step workflow run under Nextflow and under cwltool, in about four seconds. Only the Nextflow
-    # lane, on Linux, collects it, so the Windows leg gives up nothing it ran; what the references render
+    # One six-step workflow run under Nextflow and under cwltool, in about four seconds. Only Lint And Test's
+    # Linux Nextflow step collects it, so the Windows leg gives up nothing it ran; what the references render
     # is checked on every leg by the renderer's tests.
     'tests/core/nextflow/test_reference_differential.py::'
     'test_a_path_inputs_references_mean_under_nextflow_what_they_mean_under_cwltool',
     # One cwltool run of a one-step tool that fails, in about two seconds. That the Nextflow target refuses the
     # glob is checked on every leg by test_capabilities.py; only cwltool shows CWL refuses it too.
     'tests/core/nextflow/test_reference_differential.py::test_neither_runner_takes_an_entrys_object_as_a_glob',
-    # One append step run under cwltool, in about two seconds. Only the Nextflow lane, on Linux, collects it, so the
+    # One append step run under cwltool, in about two seconds. Lint And Test's Linux Nextflow step collects it, so the
     # Windows leg gives up nothing it ran; the tool's compiled form is checked on every leg by
     # test_example_scripts.py's ground truth and the cookbook pairs.
     'tests/core/nextflow/test_shipped_append.py::'
@@ -420,7 +420,7 @@ WINDOWS_EXCLUDED: Final = frozenset({
     # test_run_local.py is POSIX-only already, so the Windows leg gives up nothing it ran.
     'tests/core/test_run_local.py::test_the_runner_prints_no_rdflib_encoding_warning',
     # Seven runs (four pinned, three drawn) of a one-step tool under Nextflow and under cwltool, in about twelve
-    # seconds. Only the Nextflow lane, on Linux, collects it, so the Windows leg gives up nothing it ran.
+    # seconds. Lint And Test's Linux Nextflow step collects it, so the Windows leg gives up nothing it ran.
     'tests/core/nextflow/test_runtime.py::test_a_command_receives_the_arguments_cwltool_gives_it',
 })
 
