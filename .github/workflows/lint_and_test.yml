@@ -341,6 +341,34 @@ jobs:
         # Also, cannot run on Windows (natively) yet
         run: cd sophios/ && pytest -k test_scattering_scaling
 
+      # Pipelines run under the pinned Nextflow: tests/core/nextflow, marked `nextflow`. The corpus
+      # under Nextflow is Run Workflows'. Nextflow does not run on Windows.
+      - name: Setup Java for Nextflow
+        if: ${{ runner.os == 'Linux' && !cancelled() && steps.setup.outcome == 'success' }}
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install pinned Nextflow
+        if: ${{ runner.os == 'Linux' && !cancelled() && steps.setup.outcome == 'success' }}
+        env:
+          NXF_VER: "26.04.2"
+        run: |
+          curl --fail --silent --show-error https://get.nextflow.io | bash
+          install -m 0755 nextflow "${RUNNER_TEMP}/nextflow"
+          echo "${RUNNER_TEMP}" >> "${GITHUB_PATH}"
+          NXF_ANSI_LOG=false "${RUNNER_TEMP}/nextflow" -version | grep 'version 26.04.2'
+
+      - name: PyTest Nextflow Runtime
+        if: ${{ runner.os == 'Linux' && !cancelled() && steps.setup.outcome == 'success' }}
+        timeout-minutes: 20
+        env:
+          NXF_ANSI_LOG: "false"
+          NXF_OFFLINE: "true"
+          NXF_VER: "26.04.2"
+        run: cd sophios/ && pytest tests/core/nextflow -m "nextflow and not nextflow_corpus"
+
       # NOTE: The steps below are for repository_dispatch only. For all other steps, please insert above
       # this comment.
 
