@@ -225,11 +225,9 @@ module = [
     "mergedeep.*",
     "networkx.*",
     "matplotlib.*",
-    "ipywidgets.*",
     "scipy.*",
     "ruamel.*",
     "toil.*",
-    "version.*",
     "podman.*",
 ]
 ignore_missing_imports = true
