@@ -1,0 +1,27 @@
+# Outputs: which file a glob names, and what an optional or a single File output is for none, one or several matches.
+steps:
+# A glob is matched as CWL matches it: braces, a lone dollar and a backtick are ordinary characters.
+- id: brace_named         # a{b,c}.txt, not the decoy ab.txt
+- id: dollar_named        # out$name.txt
+- id: backtick_named      # `report.txt
+  in: {name: !ii report}
+- id: first_of_braces     # out{1,2}.txt: $(self[0]) of a glob that can match only one file
+  in: {message: !ii one match only}
+
+# File? is null for no match and the file for one, whether the glob is a name or a pattern.
+- id: named_absent        # null
+  run: maybe_named
+  in: {names: !ii [other.txt]}
+- id: named_present       # maybe.txt
+  run: maybe_named
+  in: {names: !ii [maybe.txt]}
+- id: pattern_none        # null
+  run: maybe_log
+  in: {names: !ii [unmatched.txt]}
+- id: pattern_one         # a.log
+  run: maybe_log
+  in: {names: !ii [unmatched.txt, a.log]}
+
+# A File output whose pattern matches one file is that file.
+- id: touch_names         # a.txt
+  in: {names: !ii [a.txt]}

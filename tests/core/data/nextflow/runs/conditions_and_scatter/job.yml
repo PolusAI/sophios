@@ -1,0 +1,3 @@
+go: true
+no_go: false
+xs: [1, 2, 3]

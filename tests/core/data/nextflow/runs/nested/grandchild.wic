@@ -1,0 +1,7 @@
+# Two levels down: the condition stays with its step, which is skipped.
+steps:
+- id: touch_n             # null: 3 is not above 5
+  in: {n: !ii 3}
+  when: $(inputs.n > 5)
+- id: write_source
+  in: {message: !ii two levels down}

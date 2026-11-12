@@ -1,5 +1,5 @@
-"""Step-input default, linkMerge and pickValue lowering (design §6, Topology); their runs are cases in
-tests/core/data/nextflow/runs.yaml."""
+"""Step-input default, linkMerge and pickValue lowering (design §6, Topology); their runs are the example
+tests/core/data/nextflow/runs/step_inputs and the pickValue stops beside it."""
 
 # pylint: disable=missing-function-docstring
 

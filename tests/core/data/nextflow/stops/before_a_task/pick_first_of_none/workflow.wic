@@ -1,0 +1,8 @@
+# first_non_null needs one source that is not null, and the job gives neither.
+inputs:
+  a: string?
+  b: string?
+steps:
+- id: pick
+  run: echo
+  in: {message: !cwl {source: [a, b], pickValue: first_non_null}}

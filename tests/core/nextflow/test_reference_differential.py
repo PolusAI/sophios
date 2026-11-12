@@ -10,6 +10,7 @@ import io
 import json
 from pathlib import Path
 from typing import Any, cast
+from urllib.parse import unquote, urlsplit
 
 import pytest
 
@@ -130,11 +131,16 @@ def _tree(path: Path) -> Any:
 
 
 def _observed(value: Any) -> Any:
-    """An output's class, basename and contents; never its path."""
+    """An output as a runner-independent observer sees it: a File's or Directory's class, basename and contents,
+    never its path; null and a string, number or boolean as they are."""
     if isinstance(value, list):
         return [_observed(item) for item in value]
-    path = Path(value["path"])
-    return {"class": value["class"], "basename": path.name, "contents": _tree(path)}
+    if not isinstance(value, dict):
+        return value
+    # cwltool gives a Directory it left where its step made it a location and no path, and an entry it captured the
+    # path of the file the entry links to: the name is the object's.
+    path = Path(value["path"] if "path" in value else unquote(urlsplit(value["location"]).path))
+    return {"class": value["class"], "basename": value.get("basename", path.name), "contents": _tree(path)}
 
 
 def _snapshot(values: dict[str, Any]) -> dict[str, Any]:
@@ -148,17 +154,25 @@ def _run_nextflow(workflow: Workflow, directory: Path) -> dict[str, Any]:
     return dict(recorded_outputs(result.stdout))
 
 
-def _run_cwltool(main: Callable[..., int], workflow: Workflow, directory: Path) -> dict[str, Any]:
+def _cwltool(main: Callable[..., int], workflow: Workflow, directory: Path) -> tuple[int, str, str]:
+    """cwltool's exit code, output object and messages for the CWL `workflow` compiles to, written in `directory`.
+    Each output stays where its step left it: moved into one directory, two steps' out.txt could not both keep
+    the name."""
     compiled = workflow.compile()
     document, job = compiled.write_cwl(directory), compiled.write_job_inputs(directory)
     stdout, stderr = io.StringIO(), io.StringIO()
     code = main(
-        ["--quiet", "--outdir", str(directory / "out"), "--tmpdir-prefix", f"{directory}/tmp/",
+        ["--quiet", "--leave-outputs", "--leave-tmpdir", "--tmpdir-prefix", f"{directory}/tmp/",
          "--tmp-outdir-prefix", f"{directory}/tmp_out/", str(document), str(job)],
         stdout=stdout, stderr=stderr,
     )
-    assert code == 0, stderr.getvalue()
-    return cast(dict[str, Any], json.loads(stdout.getvalue()))
+    return code, stdout.getvalue(), stderr.getvalue()
+
+
+def _run_cwltool(main: Callable[..., int], workflow: Workflow, directory: Path) -> dict[str, Any]:
+    code, outputs, messages = _cwltool(main, workflow, directory)
+    assert code == 0, messages
+    return cast(dict[str, Any], json.loads(outputs))
 
 
 @pytest.mark.nextflow

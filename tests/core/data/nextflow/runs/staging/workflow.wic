@@ -1,0 +1,24 @@
+# Staging: what InitialWorkDirRequirement puts in a step's working directory, and what a glob then finds there.
+# Every tool reads or captures the one file write_source makes, lines.txt.
+steps:
+- id: write_source
+  in: {message: !ii staged content}
+  out: [result: !& written]
+
+- id: copy_named_after_source   # lines.txt.copy: an output named after the input's basename
+  in: {source: !* written}
+- id: stage_own_basename        # the bare entry $(inputs.source) is lines.txt, which the command reads
+  in: {source: !* written}
+- id: stage_and_read            # entryname gives the entry the name the command hard-codes
+  in: {source: !* written}
+- id: capture_own_entry         # a pattern, and the input's own basename, each capture the entry: lines.txt twice
+  in: {source: !* written}
+  out: [same: !& captured]
+- id: copy_captured             # a later step reads the captured entry: lines.txt.copy
+  run: copy_named_after_source
+  in: {source: !* captured}
+- id: capture_renamed_entry     # a pattern captures the entry under its entryname: renamed.txt
+  in: {source: !* written}
+
+- id: plugin                    # a writable Directory entry is the tool's own copy, captured by its basename
+  in: {outDir: !ii plugin_out}

@@ -3,9 +3,15 @@
 from collections.abc import Sequence
 import copy
 import os
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
+
+import pytest
+import yaml
+
+from sophios.api.python.workflow import Workflow
 
 from sophios.cli import default_compilation_settings
 from sophios.compiler import compile_source, resolved_view
@@ -26,10 +32,13 @@ from sophios.nf_types import (
     NfWorkflowInputConnection,
     NfWorkflowOutputConnection,
 )
+from sophios.plugins import get_tools_cwl
 from sophios.utils_cwl import desugar_into_canonical_normal_form
 from sophios.utils_nf import NEXTFLOW
 from sophios.wic_types import StepId, Tool, Yaml
 
+from ..cases import DATA
+from ..helpers import ADAPTERS
 from ..hermetic import bundle
 from ..synthetic_tools import SYNTHETIC_NS
 
@@ -264,3 +273,22 @@ def run_observed(
         emit: (directory / f"{emit}.sink").read_text(encoding="utf-8").split("\x01")
         for emit in names if (directory / f"{emit}.sink").exists()
     }
+
+
+def examples(group: str) -> list[Any]:
+    """Each example directory of tests/core/data/nextflow/<group>, by its name."""
+    return [pytest.param(path, id=path.name) for path in sorted((DATA / "nextflow" / group).iterdir()) if path.is_dir()]
+
+
+def example_workflow(folder: Path, directory: Path) -> Workflow:
+    """A copy of the example `folder` at `directory`, and the workflow its `workflow.wic` is: read with the tools and
+    child workflows beside it and the tools Sophios ships, its inputs given the values of `job.yml`. A relative path in
+    it is read against the working directory, which the caller makes `directory`."""
+    shutil.copytree(folder, directory)
+    tools = get_tools_cwl({"search_paths_cwl": {"global": [str(directory), str(ADAPTERS)]}})
+    children = {"global": {path.stem: path for path in directory.glob("*.wic") if path.name != "workflow.wic"}}
+    workflow = Workflow.from_wic(directory / "workflow.wic", tool_registry=tools, workflow_paths=children)
+    job = directory / "job.yml"
+    for name, value in (yaml.safe_load(job.read_text(encoding="utf-8")) if job.exists() else {}).items():
+        setattr(workflow.inputs, name, value)
+    return workflow

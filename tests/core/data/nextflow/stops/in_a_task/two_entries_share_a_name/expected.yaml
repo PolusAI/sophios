@@ -1,0 +1,4 @@
+why: Two entries cannot both be called data in one directory.
+step: list_both
+says: 'InitialWorkDirRequirement entry already exists in the task directory: data'
+cwltool: fails

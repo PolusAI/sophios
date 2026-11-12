@@ -1,0 +1,8 @@
+# Run from the command line in another directory: the two relative paths are read beside this file.
+steps:
+  copy_into:
+    in:
+      outDir: !ii made          # made beside this file and left empty: the tool writes into its own copy
+      source: !ii source.txt
+    out:
+    - outDir: !& made

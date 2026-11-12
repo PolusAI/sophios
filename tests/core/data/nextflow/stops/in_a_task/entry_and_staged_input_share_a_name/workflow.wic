@@ -1,0 +1,6 @@
+# Two directories called data, from different places: `a` is an entry of the working directory, `b` an input of the
+# command line. cwltool keeps `b` elsewhere and lists it. A Nextflow task stages both in its one directory, so
+# Sophios stops the task instead of putting one inside the other.
+steps:
+- id: list_both
+  in: {a: !ii one/data, b: !ii two/data}

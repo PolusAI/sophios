@@ -1,0 +1,6 @@
+# A second child running the tool child.wic runs.
+inputs:
+  source: {type: File}
+steps:
+- id: copy_file
+  in: {source: source}

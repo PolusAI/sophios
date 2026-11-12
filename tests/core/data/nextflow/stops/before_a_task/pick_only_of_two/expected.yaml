@@ -1,0 +1,5 @@
+why: the_only_non_null of two given inputs has two to pick from, so the step cannot be given one value.
+step: pick
+says: 'the_only_non_null finds 2 values that are not null'
+unwritten: stdout
+cwltool: fails

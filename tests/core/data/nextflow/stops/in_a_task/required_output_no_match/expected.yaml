@@ -1,0 +1,4 @@
+why: A required File output with no match is no value, never an empty result.
+step: write_nothing
+says: 'Missing output file(s) `out.txt`'
+cwltool: fails

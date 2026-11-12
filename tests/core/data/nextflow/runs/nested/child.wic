@@ -1,0 +1,13 @@
+# One level down: a step reading the input, a scatter, and a call one level further.
+inputs:
+  source: {type: File}
+outputs:
+  copy: {type: File, outputSource: copy_file/result}
+steps:
+- id: copy_file
+  in: {source: source}
+- id: echo_each           # a scatter inside a child: a, b
+  scatter: [item]
+  scatterMethod: dotproduct
+  in: {item: !ii [a, b]}
+- id: grandchild.wic

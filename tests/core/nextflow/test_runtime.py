@@ -10,29 +10,27 @@ import json
 import os
 from pathlib import Path
 import shlex
+import shutil
 import subprocess
 from typing import Any, NamedTuple
 
 from hypothesis import example, given, strategies as st
 import pytest
+import yaml
 
 from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
-from sophios.api.python._workflow_runtime import compile_workflow_result
 from sophios.api.python.workflow import Step, StepInput, Workflow
 from sophios.backends import recorded_outputs
-from sophios.input_output_nf import write_nextflow_artifacts
 from sophios.nf_symbols import NEXTFLOW_SCRIPT_NAMES
-from sophios.plugins import get_tools_cwl
-from sophios.compiler import resolved_view
-from sophios.utils_nf import nextflow_names
+from sophios.run_status import RunState, RunStatus
 
 from ..budgets import budget
-from ..cases import cases, match
-from ..helpers import ADAPTERS, python_process, search_config, write_tree
+from ..cases import DATA, case_dirs
+from ..helpers import python_process, search_config
 from .test_executable_ir import NAMES
 from .test_public_api import supported_workflow
-from .test_reference_differential import _observed, _run_cwltool, _run_nextflow, _tree
-from .testkit import assert_succeeded, execute_nextflow, lowered
+from .test_reference_differential import _cwltool, _observed, _run_cwltool, _run_nextflow, _tree
+from .testkit import assert_succeeded, example_workflow, examples, execute_nextflow
 
 
 @pytest.mark.nextflow
@@ -161,62 +159,108 @@ def test_two_workflows_started_from_one_base_path_each_run_their_own_pipeline(tm
         assert (base / f"nextflow_{name}" / ".nextflow.log").is_file()
 
 
-def _seen(value: Any) -> Any:
-    """A recorded output as test_reference_differential observes one, null and a string, number or boolean as it is,
-    a path also as whether it is a symlink (`link`)."""
-    if not isinstance(value, (dict, list)):
-        return value
-    if isinstance(value, list):
-        return [_seen(item) for item in value]
-    return {**_observed(value), "link": Path(value["path"]).is_symlink()}
+def _example(folder: Path, directory: Path, monkeypatch: pytest.MonkeyPatch) -> Workflow:
+    """The workflow of the example `folder`, read from its copy at `directory` (`example_workflow`), which is made the
+    working directory. Nextflow is kept from asking the network for a newer release."""
+    workflow = example_workflow(folder, directory)
+    monkeypatch.chdir(directory)
+    monkeypatch.setenv("NXF_OFFLINE", "true")
+    return workflow
 
 
-def _case_files(case: dict[str, Any]) -> dict[str, str]:
-    """A case's files: each tool a CommandLineTool but for what it leaves out, a workflow of one step per tool unless
-    it gives its `steps`, after its `inputs` (name: type), each child workflow, and its other files."""
-    tools = case.get("tools", {})
-    return {
-        **{f"{stem}.cwl": json.dumps({"cwlVersion": "v1.2", "class": "CommandLineTool", "inputs": {}, "outputs": {},
-                                      **tool}) for stem, tool in tools.items()},
-        "workflow.wic": (f"inputs: {json.dumps(case['inputs'])}\n" if "inputs" in case else "") + "steps:\n" + (
-            case.get("steps") or "".join(f"- id: {stem}\n" for stem in tools)),
-        **{f"{stem}.wic": text for stem, text in case.get("children", {}).items()},
-        **case.get("files", {}),
-    }
+def _files(directory: Path) -> dict[str, Any]:
+    """What `directory` holds, each file as its text."""
+    return {path.name: _tree(path) for path in directory.iterdir()}
+
+
+def _kept(directory: Path, before: dict[str, Any]) -> bool:
+    """Whether a run left every file `directory` held `before` it as it was."""
+    return {name: found for name, found in _files(directory).items() if name in before} == before
 
 
 @pytest.mark.nextflow
 @pytest.mark.serial
-@pytest.mark.parametrize("case", cases("nextflow/runs.yaml", "tools", "inputs", "params", "steps", "children", "files",
-                                       "outputs", "fails", "never", "rendered"))
-def test_a_workflow_runs_as_its_case_says(
-        case: dict[str, Any], tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A case's workflow, its tools written beside it or among cwl_adapters, runs to each of its `outputs`, a workflow
-    output by its Sophios name, observed as its class, basename and contents, or `fails` showing the text given, no
-    output unlisted, and a `rendered` match of the script written; the files beside it are left as they were
-    (tests/core/cases.py reads each form); an output's `link` is whether it is a symlink, and no task made a file
-    named in `never`; `params` are the values of its workflow inputs."""
-    write_tree(tmp_path, _case_files(case))
-    monkeypatch.chdir(tmp_path)
-    inputs = {path.name: _tree(path) for path in tmp_path.iterdir() if path.suffix not in (".wic", ".cwl")}
-    tools = get_tools_cwl({"search_paths_cwl": {"global": [str(tmp_path), str(ADAPTERS)]}})
-    children = {"global": {path.stem: path for path in tmp_path.glob("*.wic") if path.name != "workflow.wic"}}
-    compiled = compile_workflow_result(Workflow.from_wic(tmp_path / "workflow.wic", tool_registry=tools,
-                                                         workflow_paths=children), tool_registry=tools)
-    write_nextflow_artifacts(lowered(compiled, case.get("params", {})), tmp_path)
-    if "rendered" in case:
-        assert match(case["rendered"], (tmp_path / "workflow.nf").read_text(encoding="utf-8"))
-    result = execute_nextflow(tmp_path)
-    output = f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
-    if "fails" in case:
-        assert result.returncode != 0 and (case["fails"] is True or case["fails"] in output), output
-    else:
-        assert result.returncode == 0, output
-        names = nextflow_names(resolved_view(compiled))["outputs"]
-        observed = {names[key]: _seen(value) for key, value in _recorded(result.stdout).items()}
-        assert match(case["outputs"], observed) and observed.keys() == case["outputs"].keys()
-    assert not [name for name in case.get("never", []) if list((tmp_path / "work").rglob(name))]
-    assert {path.name: _tree(path) for path in tmp_path.iterdir() if path.name in inputs} == inputs
+@pytest.mark.needs_cwltool
+@pytest.mark.parametrize("folder", examples("runs"))
+def test_an_example_workflow_runs_under_nextflow_as_under_cwltool(
+        folder: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Each directory of tests/core/data/nextflow/runs is a workflow to read and to run: `workflow.wic`, the tools
+    and child workflows it names, `job.yml` for its inputs, and `expected.yaml` stating every output by class,
+    basename and contents. Run as Nextflow it gives exactly those outputs, and so does cwltool, the reference runner,
+    for the CWL the same workflow compiles to: the statement is CWL's answer, not Sophios's. The two runners agreeing
+    is not enough, since a compiler that reversed a list of sources would reverse it for both. Both leave the files
+    beside the workflow as they were. An example with no `reference` run here is run as Nextflow only. A
+    `workflow.nf` and `nextflow.config` are the pipeline written, for what no run shows."""
+    import cwltool.main  # pylint: disable=import-outside-toplevel
+
+    stated = yaml.safe_load((folder / "expected.yaml").read_text(encoding="utf-8"))
+    for runner in ("nextflow", "cwltool")[:1 if stated.get("reference") == "none" else 2]:
+        directory = tmp_path / runner
+        workflow = _example(folder, directory, monkeypatch)
+        before = _files(directory)
+        if runner == "nextflow":
+            ran = workflow.run(target="nextflow", basepath=str(directory / "out"))
+            assert ran is not None and isinstance(ran.outputs, dict)
+            outputs = ran.outputs
+        else:
+            outputs = _run_cwltool(cwltool.main.main, workflow, directory)
+        assert {name: _observed(value) for name, value in outputs.items()} == stated["outputs"], runner
+        assert _kept(directory, before), f"{runner} changed a file beside the workflow"
+    pipeline = tmp_path / "nextflow" / "out" / "nextflow_workflow"
+    for written in ("workflow.nf", "nextflow.config"):
+        if (folder / written).exists():
+            assert (pipeline / written).read_text(encoding="utf-8") == (folder / written).read_text(encoding="utf-8")
+
+
+def _stopped(folder: Path, expected: dict[str, Any], tmp_path: Path,
+             monkeypatch: pytest.MonkeyPatch) -> tuple[RunStatus, Path]:
+    """An example the Nextflow target runs and cannot finish: the run fails, an error line of its log or the error the
+    run raised names the step `expected` names, the run's log or Nextflow's says why as `expected` says, and the files
+    beside the workflow are left as they were. cwltool `fails` on the same workflow too, or `runs` it, as `expected`
+    says: where it runs, the stop is a rule of Sophios's own. Returns the run's status and its work directory."""
+    import cwltool.main  # pylint: disable=import-outside-toplevel
+
+    directory = tmp_path / "nextflow"
+    workflow = _example(folder, directory, monkeypatch)
+    before = _files(directory)
+    handle = workflow.start(target="nextflow", basepath=str(directory / "out"))
+    status = handle.wait()
+    assert status.state is RunState.FAILED, handle.logs()
+    logs, pipeline = handle.logs(), directory / "out" / "nextflow_workflow"
+    raised = [line for line in logs.splitlines() if "ERROR" in line or expected["says"] in line]
+    assert any(expected["step"] in line for line in raised), logs
+    assert expected["says"] in logs + (pipeline / ".nextflow.log").read_text(encoding="utf-8"), logs
+    assert _kept(directory, before)
+    reference = _example(folder, tmp_path / "cwltool", monkeypatch)
+    code, _, messages = _cwltool(cwltool.main.main, reference, tmp_path / "cwltool")
+    assert ("fails" if code else "runs") == expected["cwltool"], messages
+    return status, pipeline / "work"
+
+
+@pytest.mark.nextflow
+@pytest.mark.serial
+@pytest.mark.needs_cwltool
+@pytest.mark.parametrize("folder, expected",
+                         case_dirs("nextflow/stops/before_a_task", "step", "says", "unwritten", "cwltool"))
+def test_a_run_stops_before_a_step_whose_inputs_it_cannot_decide(
+        folder: Path, expected: dict[str, Any], tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A pickValue that finds no one value, and a `when` holding a subexpression that is not finite, stop the run
+    naming the step and why (`_stopped`) before any task of it is started: no task failed, and none wrote the step's
+    file."""
+    status, work = _stopped(folder, expected, tmp_path, monkeypatch)
+    assert not status.steps and not list(work.rglob(expected["unwritten"]))
+
+
+@pytest.mark.nextflow
+@pytest.mark.serial
+@pytest.mark.needs_cwltool
+@pytest.mark.parametrize("folder, expected", case_dirs("nextflow/stops/in_a_task", "step", "says", "cwltool"))
+def test_a_run_stops_at_a_task_that_leaves_no_one_answer(
+        folder: Path, expected: dict[str, Any], tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Two files for an output that takes one, none for an output that needs one, and two entries of one name in a
+    working directory stop the run naming the step and why (`_stopped`): no output is picked, and no entry is put
+    inside another."""
+    _stopped(folder, expected, tmp_path, monkeypatch)
 
 
 _TEXT = st.text(st.characters(codec="utf-8", exclude_characters="\x00"))
@@ -764,49 +808,22 @@ def test_a_captured_text_is_the_files_utf8_up_to_the_cwl_limit(
         assert _recorded(result.stdout)["captured"] == text
 
 
-#: A tool that copies its source into an output-target Directory, which it captures.
-_COPY_INTO = """cwlVersion: v1.2
-class: CommandLineTool
-baseCommand: cp
-requirements:
-  InitialWorkDirRequirement:
-    listing:
-    - entry: $(inputs.outDir)
-      writable: true
-inputs:
-  outDir:
-    type: Directory
-  source:
-    type: File
-outputs:
-  outDir:
-    type: Directory
-    outputBinding:
-      glob: $(inputs.outDir.basename)
-arguments:
-- $(inputs.source)
-- $(inputs.outDir.basename)/copied.txt
-"""
-
-
 @pytest.mark.nextflow
 @pytest.mark.serial
 def test_the_command_line_runs_the_nextflow_target_with_paths_read_beside_the_workflow(tmp_path: Path) -> None:
-    """Started from elsewhere, the run reads a relative path beside the `.wic` file, makes the output directory
-    named there, which the tool's writable copy leaves empty, and writes the output object under the Sophios
-    name of the output."""
-    write_tree(tmp_path, {
-        "copy_into.cwl": _COPY_INTO, "source.txt": "copied text\n",
-        "w.wic": "steps:\n  copy_into:\n    in:\n      outDir: !ii made\n      source: !ii source.txt\n"
-                 "    out:\n    - outDir: !& made\n"})
+    """tests/core/data/nextflow/command_line is a workflow naming a file and an output directory by relative paths.
+    Started from elsewhere, the run reads both beside the `.wic` file, makes the output directory there, which the
+    tool's writable copy leaves empty, and writes the output object under the Sophios name of the output."""
+    home = tmp_path / "beside"
+    shutil.copytree(DATA / "nextflow" / "command_line", home)
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
-    result = _sophios_cli(tmp_path, tmp_path / "w.wic", tmp_path, "--target", "nextflow", "--run_local", "--basepath",
+    result = _sophios_cli(home, home / "workflow.wic", home, "--target", "nextflow", "--run_local", "--basepath",
                           "out", cwd=elsewhere, timeout=180)
     assert_succeeded(result)
-    assert not (tmp_path / "autogenerated").exists()
-    assert (tmp_path / "made").is_dir() and not any((tmp_path / "made").iterdir())
-    outputs = json.loads((elsewhere / "out" / "output_w.json").read_text(encoding="utf-8"))
+    assert not (home / "autogenerated").exists()
+    assert (home / "made").is_dir() and not any((home / "made").iterdir())
+    outputs = json.loads((elsewhere / "out" / "output_workflow.json").read_text(encoding="utf-8"))
     made = outputs["copy_into~outDir"]
     assert (made["class"], made["basename"]) == ("Directory", "made")
     assert (Path(made["path"]) / "copied.txt").read_text(encoding="utf-8") == "copied text\n"
