@@ -113,13 +113,13 @@ def _artifacts(root: CompilationArtifact) -> list[CompilationArtifact]:
 
 @pytest.mark.skip_pypi_ci
 @pytest.mark.slow
-@pytest.mark.parametrize("yml_path_str, yml_path", yml_paths_tuples_on_push)
+@pytest.mark.parametrize("yml_path_str, yml_path", yml_paths_tuples_on_push + yml_paths_partial_failure)
 def test_run_workflows_on_push(yml_path_str: str, yml_path: Path, cwl_runner: str,
                                corpus_registry: CorpusRegistry) -> None:
     """Runs every workflow auto-discovered from the directories in 'search_paths_wic',
-       except the fragments, intensive workflows and partial failures that the
-       config_ci.json files list."""
-    args = get_args(str(yml_path))
+       except the fragments and intensive workflows that the config_ci.json files list;
+       those listed as partial failures run with --partial_failure_enable."""
+    args = get_args(str(yml_path), ['--partial_failure_enable'] if yml_path_str in run_partial_failures else [])
     run_workflows(yml_path_str, yml_path, cwl_runner, args, corpus_registry)
 
 
@@ -177,15 +177,6 @@ def test_inline_flags_change_nothing_for_a_workflow_that_calls_none(
 
 
 # partial failure tests
-@pytest.mark.skip_pypi_ci
-@pytest.mark.parametrize("yml_path_str, yml_path", yml_paths_partial_failure)
-def test_run_partial_failures_pass(yml_path_str: str, yml_path: Path, cwl_runner: str,
-                                   corpus_registry: CorpusRegistry) -> None:
-    """Run workflows allowing partial failures. yml files of workflows which are known to have failure steps"""
-    args = get_args(str(yml_path), ['--partial_failure_enable'])
-    run_workflows(yml_path_str, yml_path, cwl_runner, args, corpus_registry)
-
-
 @pytest.mark.parametrize("yml_path_str, yml_path", yml_paths_partial_failure)
 def test_run_partial_failures_fail_without_flag(yml_path_str: str, yml_path: Path, cwl_runner: str,
                                                 corpus_registry: CorpusRegistry) -> None:

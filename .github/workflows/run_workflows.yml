@@ -257,14 +257,6 @@ jobs:
       if: ${{ !cancelled() && steps.setup.outcome == 'success' && steps.corpus.outcome == 'success' }}
       run: cd sophios/ && pytest tests/core/test_examples.py -k test_run_workflows_on_push --workers "${PYTEST_WORKERS}" --cwl_runner cwltool --durations=0 # --cov
 
-    # test_run_partial_failures_pass is skip_pypi_ci, so the packaging lane
-    # excludes it, and every other invocation of this file selects a different
-    # -k — it ran nowhere. Its sibling test_run_partial_failures_fail_without_flag
-    # carries no marker and is already covered by default collection.
-    - name: PyTest Run Partial Failures
-      if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
-      run: cd sophios/ && pytest tests/core/test_examples.py -k test_run_partial_failures_pass --cwl_runner cwltool
-
     # The corpus workflows the Nextflow target supports, compiled with it and
     # run under Nextflow with Docker: tests/core/nextflow/test_corpus.py. The
     # steps above run them under cwltool, which never reaches the Nextflow
