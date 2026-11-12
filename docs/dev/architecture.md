@@ -208,11 +208,13 @@ for a `StepInput` default against the working directory.
   `Watcher` per plan beside the runner.
 - `sophios.compute` sends a workflow to the compute service, the cluster's
   slurm driver. It compiles through the runtime adapter's `service_document`,
-  which is `compile()` without the local run's Directory literals for output folders,
-  checks the request against its copy of the service's
-  `run-request.schema.json`, and follows the run over HTTP on the service's
-  Unix socket, reached through the user's own `ssh`. It is not part of the
-  Python API, and never goes through the pre-flight.
+  which is `compile()` without the local run's Directory literals for output
+  folders, or, for a Nextflow submission, its `service_pipeline`, the
+  pipeline's service form (`render_nextflow(model, service=True)`), checks the
+  request against its copy of the service's `run-request.schema.json`, and
+  follows the run over HTTP on the service's Unix socket, reached through the
+  user's own `ssh`. It is not part of the Python API, and never goes through
+  the pre-flight.
 - `sophios.sites` runs a workflow on another computer over the user's own
   `ssh` (`design_docs/sites-design.md`). It compiles and lowers through the
   runtime adapter's `lowered_for_site`, calls the backend's `write` into a

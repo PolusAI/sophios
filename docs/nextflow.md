@@ -517,7 +517,7 @@ no arguments, so the image runs its `CMD`; name the program in `baseCommand`.
 
 ## On a compute service
 
-A workflow submitted to a [compute service](compute.md) with
+A workflow submitted to a [compute service](compute.md#on-nextflow) with
 `target="nextflow"` is sent as one pipeline file, which differs from the one
 `compile()` writes in three ways. Its containers run under Singularity
 (Apptainer): each task runs its command after the image's runscript, as

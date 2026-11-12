@@ -399,9 +399,10 @@ def recorded_outputs(stdout: str) -> Iterator[tuple[str, Json]]:
 
 
 def _cwl_objects(value: Any) -> Any:
-    """`value` with each path the pipeline recorded made a CWL File or Directory object."""
+    """`value` with each path the pipeline recorded made a CWL File or Directory object; one that has its location,
+    as a CWL runner's has, is that object already, and stays as it is."""
     match value:
-        case {'class': 'File' | 'Directory' as kind, 'path': str() as path}:
+        case {'class': 'File' | 'Directory' as kind, 'path': str() as path} if 'location' not in value:
             return {'class': kind, 'location': Path(path).as_uri(), 'path': path, 'basename': Path(path).name}
         case list():
             return [_cwl_objects(item) for item in value]

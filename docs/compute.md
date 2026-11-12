@@ -2,8 +2,10 @@
 
 How do I run a workflow on the cluster? `sophios.compute` compiles a workflow
 built with the Python API and sends it to the cluster's compute service, the
-slurm driver of PolusAI/compute, which runs it with Toil on Slurm: the Toil
-leader as one Slurm job, and each step as a Slurm job of its own.
+slurm driver of PolusAI/compute, which runs it on Slurm, as CWL with Toil or,
+with `target='nextflow'`, as a Nextflow pipeline with Nextflow
+([On Nextflow](#on-nextflow)): the leader, Toil or Nextflow, as one Slurm
+job, and each step as a Slurm job of its own.
 
 `sophios.compute` is a core feature of Sophios, but it is **not part of the
 Python API**: nothing under `sophios.api.python` exports or documents it, and
@@ -117,13 +119,14 @@ the request, each problem at the request's field, such as `leader.time`.
 | `RunConfig(folder)` | The outputs folder, the request's `workflowOutDir`: the folder on the cluster every output lands in, relative to `basepath` when one is set, and then required, else absolute; missing (the service creates it) or empty, and used by no run that has not ended |
 | `RunConfig()` | No outputs folder, and so no `basepath`: the outputs land in the run's own folder |
 | `.basepath(path)` | The directory on the cluster that relative paths are relative to: those the tools read, and the outputs folder, which it requires, and which is then never absolute; required when a tool reads a relative path. An output folder given a name is made in the run, never there |
-| `.leader(partition=, time=, memory=)` | The Toil leader's Slurm job, which lasts as long as the run |
+| `.leader(partition=, time=, memory=)` | The leader's Slurm job, which runs Toil or Nextflow as long as the run lasts |
 | `.steps(partition=, gpu_partition=, time=)` | Where step jobs go, those that ask for a GPU to `gpu_partition`, and how long each may run |
-| `.log_level(level)` | Toil's log level: `DEBUG`, `INFO` (the default), `WARNING` or `ERROR` |
+| `.log_level(level)` | Toil's log level: `DEBUG`, `INFO` (the default), `WARNING` or `ERROR`; a Nextflow run does not use it |
 
 `submit` and `build_request` take the workflow and a `RunConfig`, or none;
-besides, `tool_registry=` and `inference=` say how the workflow compiles, as
-`Workflow.compile` takes them.
+besides, `target=` says what the service runs, `'cwl'` (the default) or
+`'nextflow'`, as `Workflow.run` takes it, and `tool_registry=` and
+`inference=` say how the workflow compiles, as `Workflow.compile` takes them.
 
 ## Where the outputs go
 
@@ -140,12 +143,16 @@ it returns is in those folders, where they are, and nothing is copied.
 | A file output, `glob='results/p1/out.tsv'` | `<run>/out/out.tsv` | `/lab/run7/out.tsv` |
 | A directory output, `glob='tiles'` | `<run>/out/tiles/` | `/lab/run7/tiles/` |
 | An output folder given a name, `'masks'` | `<run>/out/masks/` | `/lab/run7/masks/` |
-| An output folder given an absolute path, `'/lab/masks/p1'` | `/lab/masks/p1/`, in place | refused: a run written in place names no outputs folder |
+| An output folder given an absolute path, `'/lab/masks/p1'` | `/lab/masks/p1/`, in place; refused on Nextflow | refused: a run written in place names no outputs folder |
 
 Toil copies the outputs into the outputs folder once, after the whole run
-has succeeded. The copy keeps each output's own name alone, so
-`results/p1/out.tsv` lands as `out.tsv`, and two outputs of one run with
-one name land as `out.tsv` and `out.tsv_2`. A completed run's `outputs()`
+has succeeded, in the order of the outputs' names. The copy keeps each
+file's own name alone, so `results/p1/out.tsv` lands as `out.tsv`, and two
+files of one name land as `out.tsv` and `out.tsv_2`, the first copied under
+its own; a file two outputs return is copied once, and a file inside a
+folder the run also returns is at its place in that folder's copy, never
+copied on its own. A Nextflow pipeline copies them alike, once every output
+has completed ([On Nextflow](#on-nextflow)). A completed run's `outputs()`
 names where each output is.
 
 An **output folder** is a `Directory` input that a tool writes into and
@@ -156,7 +163,7 @@ them itself, whatever they are called and however deep in the workflow.
   empty in the run, never anywhere `basepath` points, and copied into the
   outputs folder under that name. The name is one folder name: `seg/p1`
   would land as `p1`, and is refused.
-- **Given an absolute path**, it is written there by its tool, once, in
+- **Given an absolute path**, on CWL, it is written there by its tool, once, in
   place, and never copied: what very large outputs need, and the path means
   the same in every run. It needs `cwlVersion` v1.1 or later; Sophios
   compiles to v1.2. A tool that cannot write it in place without changing
@@ -237,7 +244,8 @@ run that has not ended, nor any folder you named.
 ### When a run fails
 
 A run that fails or is cancelled leaves its outputs folder empty: Toil
-copies the outputs only once the whole run has succeeded. A folder written
+copies the outputs only once the whole run has succeeded, and the service
+empties the folder of what Nextflow copied before it failed. A folder written
 in place keeps what its tool wrote, whatever becomes of the run; as Toil
 runs a failed step again once, it may also hold what a failed attempt
 wrote.
@@ -245,6 +253,51 @@ wrote.
 The service refuses any new run while the disk that holds its runs is
 full, 90% by default (its `MAX_DISK_PERCENT`), saying so; it makes room as
 it deletes the runs that ended long enough ago.
+
+## On Nextflow
+
+`service.submit(workflow, config, target='nextflow')` runs the workflow as
+the pipeline Sophios's [Nextflow target](nextflow.md) lowers it to, with
+Nextflow, as `workflow.run(target='nextflow')` does locally; everything else,
+the `RunConfig`, the `Run` and every call on it, is as on CWL. The service
+needs contract 3.1.0 or later; one of 3.0.0 refuses the submission in one
+line, before anything is sent. What differs:
+
+- **The pipeline** is sent as one file, in the form a service runs
+  ([On a compute service](nextflow.md#on-a-compute-service)). A workflow
+  the Nextflow target cannot run raises `NotLowered`, a `ValueError`, as
+  `compile(target='nextflow')` and a local run do, and so does an input
+  given as a URL, which the target does not take.
+- **Containers** run under Singularity (Apptainer) on the cluster, each
+  task's command after the image's runscript, so the image's `ENTRYPOINT`
+  runs first, as through CWL; a step that asks for a GPU gets one, bound into
+  its container. A task's `HOME` is its task directory, as through CWL: the
+  container has no home of yours. Nextflow pulls each image into the
+  service's image cache once, apart from the copy CWL runs use: the first
+  Nextflow run of an image pulls it again.
+- **Outputs** are published: each output the workflow declares lands in the
+  outputs folder, placed as on CWL, once every output has completed, and
+  `outputs()` returns them by their names, each `File` and `Directory`
+  with its `class`, `location`, `path` and `basename`, the copy's name, also
+  for a run you attach to; a CWL run's also carry what Toil adds, `size`,
+  `checksum`, `nameroot`, `nameext` and a `Directory`'s `listing`, and keep
+  as a renamed copy's `basename` the name it had before. Declare the
+  outputs, `workflow.outputs.masks = segment.outputs.output`, each under a
+  name Nextflow keeps: one it would change, such as a step's
+  `segment~output`, which every undeclared output is, or `Masks`, is refused
+  with [`wic063`](error_codes.md).
+- **An output folder**, which Sophios finds as the service does on CWL,
+  given a name is sent as the empty folder the service makes in the run,
+  which the pipeline fills and publishes under that name, in the outputs
+  folder, as on CWL. One given an absolute path is refused, naming the
+  input: nothing is written in place, so give it a name.
+- **Inputs** are the pipeline's parameters: a refusal names one as the
+  pipeline does, `autoseg_output` for the step `autoseg`'s input `output`,
+  where CWL names it `autoseg~output`. Every path goes as written, as on CWL.
+- **The log**, `logs()`, is what Nextflow printed, its error report among it
+  when the run failed; **the steps** are the Slurm jobs of Nextflow's tasks,
+  each named after its process: the step `autoseg` of the workflow `autoseg`
+  is `_autoseg:autoseg`, and so is each of its scattered instances.
 
 ## Following a run
 
@@ -270,12 +323,12 @@ print(run.logs())
 | `status()` | Where the run is, without blocking: a `RunStatus` | The same, asked anew of the service |
 | `wait(timeout=None)` | Blocks until the run ends, and returns its `RunStatus`: a run that failed or was cancelled is returned, not raised. After `timeout` seconds it raises `TimeoutError`, and the run goes on | The same, asking every 10 s and printing a line per change of the run's state and of each step's, the run's end last; Ctrl-C leaves the run going |
 | `outputs()` | The workflow's output object once the run has completed; `None` until then | The same |
-| `logs()` | Everything the runner has printed so far | `leader.log`, Toil's log of the whole run, so far; `''` until Slurm has started the leader |
+| `logs()` | Everything the runner has printed so far | `leader.log`, the leader's log of the whole run, Toil's or what Nextflow printed, so far; `''` until Slurm has started the leader |
 | `cancel()` | Stops the run: `True` once it is `CANCELLED`, by this call or before; `False` when it had ended `COMPLETED` or `FAILED`, which it stays | The same, for a run you submitted and every job of it in Slurm's queue: sent once, then waited for as `wait(300)` waits: a run that has not ended within five minutes raises `TimeoutError`, its cancel still recorded |
 | `collect(timeout=None)`, `workflow.run()` | `wait()`, then the run's `RunResult`; a run that did not complete raises `WorkflowRunError` | Local only |
 | `id`, `Service.attach(id)` | None | On the cluster only: the run's id, the workflow's name, the UTC time and four hex digits, which `attach` follows from any session or machine |
 | `warnings` | None | On the cluster only: what the service warned of when it accepted the run, also printed then |
-| `slurm_job` | None | On the cluster only: the Slurm job id of the run's Toil leader, for `squeue` and `sacct` |
+| `slurm_job` | None | On the cluster only: the Slurm job id of the run's leader, for `squeue` and `sacct` |
 
 The states are those of a local run: `QUEUED`, `RUNNING`, then `COMPLETED`,
 `FAILED` or `CANCELLED`, which never change. A run that did not complete
@@ -285,7 +338,10 @@ has its `reason`, such as the step that failed and its exit code.
 
 `build_request(workflow, config)` returns the request `submit` sends, with
 the same arguments: the workflow compiled into one document,
-every process inline, its inputs, and what `config` sets. Its shape is
+every process inline, its inputs, and what `config` sets. With
+`target='nextflow'` it also names its `engine`, `nextflow`, and the document
+is the pipeline's one file, `{'files': {'main.nf': ...}}`, and its inputs the
+pipeline's parameters. Its shape is
 `run-request.schema.json`, Sophios's copy of the service's own schema, which
 the service also serves at `GET /run-request.schema.json`. Sophios checks
 every request against it before sending, and the service again on arrival.
@@ -303,7 +359,9 @@ codes belong to the compute client alone: a `ComputeError` is never a
 - `cmp001`, `RequestRefused`: Sophios or the service refused the request: a
   path, a name, an output folder, a partition or a time the cluster cannot
   use, a folder that is not empty or that a run going on uses, a disk too
-  full for a new run, or a real-time analysis; or a cancel of a run another
+  full for a new run, or a real-time analysis; on Nextflow, too, an output
+  folder given an absolute path, or a service of contract 3.0.0, which runs
+  no Nextflow; or a cancel of a run another
   account submitted; or there is no such run, as when the service has
   deleted it. Each problem is a line, at the input or field it is about; do
   what it says. A relative path sent without `basepath` says to give it, and
@@ -322,5 +380,5 @@ codes belong to the compute client alone: a `ComputeError` is never a
 
 A run that fails raises nothing, as a local one started with `start()`
 does: `wait()` returns its status, `FAILED`, whose `reason` says why, and
-`run.logs()` holds Toil's log of the whole run, which is empty when Slurm
-never started the leader: the `reason` then says why.
+`run.logs()` holds the leader's log of the whole run, which is empty when
+Slurm never started the leader: the `reason` then says why.

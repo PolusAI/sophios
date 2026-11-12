@@ -1,7 +1,8 @@
 """Run a workflow on a Slurm cluster, through the cluster's compute service (the slurm driver).
 
 A core feature, but not part of the Python API: `sophios.api.python` neither exports nor knows it. It takes a
-`Workflow` built with that API, compiles it, and sends it with its inputs as one request:
+`Workflow` built with that API, compiles it, to CWL, which the service runs with Toil, or, with `target='nextflow'`,
+to a Nextflow pipeline, which it runs with Nextflow, and sends it with its inputs as one request:
 
     from sophios.compute import RunConfig, Service
 
@@ -24,10 +25,10 @@ there, `~` and `$VARIABLE`s included. A path a tool reads is a path on the clust
 one, and so without `basepath`, the run's own folder on the cluster. An output folder (a Directory input a tool
 writes into and returns) given as a name, such as `segmentation`, is made in the run, never read against `basepath`,
 and lands in the outputs folder under that name; one given as an absolute path is written there by its tool, in
-place, never copied. A run's output folders are all names or all absolute paths, and a run that writes them in place
-returns them alone, and plain values, and names no outputs folder, so no `basepath`. The request's shape is
-`run-request.schema.json`, a copy of the service's own: Sophios checks every request against it before sending, and
-the service again on arrival.
+place, never copied, on CWL alone. A run's output folders are all names or all absolute paths, and a run that writes
+them in place returns them alone, and plain values, and names no outputs folder, so no `basepath`. The request's
+shape is `run-request.schema.json`, a copy of the service's own: Sophios checks every request against it before
+sending, and the service again on arrival.
 """
 import json
 import os
@@ -51,10 +52,13 @@ import requests
 import urllib3
 from jsonschema import Draft202012Validator
 
+from . import targets
 from .api.python._inference import Inference
-from .api.python._workflow_runtime import service_document
+from .api.python._workflow_runtime import ServicePipeline, service_document, service_pipeline
+from .backends import _cwl_objects
+from .nf_types import NfLiteral, NfWorkflowInputConnection
 from .run_status import RunState, RunStatus, StepStatus
-from .wic_types import Json, Tools
+from .wic_types import Json, TargetName, Tools
 
 if TYPE_CHECKING:
     from .api.python.workflow import Workflow
@@ -147,7 +151,7 @@ class RunConfig:
     def leader(self, *, partition: str | None = None,
                time: str | None = None,  # pylint: disable=redefined-outer-name  # the request's name
                memory: str | None = None) -> 'RunConfig':
-        """The Toil leader's Slurm job, which lasts as long as the run: its partition, time limit and memory."""
+        """The leader's Slurm job, Toil's or Nextflow's, lasting as long as the run: its partition, time, memory."""
         return self._merge('leader', partition=partition, time=time, memory=memory)
 
     def steps(self, *, partition: str | None = None, gpu_partition: str | None = None,
@@ -156,7 +160,7 @@ class RunConfig:
         return self._merge('steps', partition=partition, gpu_partition=gpu_partition, time=time)
 
     def log_level(self, level: Literal['DEBUG', 'INFO', 'WARNING', 'ERROR']) -> 'RunConfig':
-        """Toil's log level."""
+        """Toil's log level; a Nextflow run does not use it."""
         self._fields['logLevel'] = level
         return self
 
@@ -175,42 +179,96 @@ def new_run_id(name: str, now: datetime | None = None) -> str:
     return f'{base}-{stamp}-{secrets.token_hex(2)}'
 
 
-def build_request(workflow: 'Workflow', config: RunConfig | None = None, *, tool_registry: Tools | None = None,
+def build_request(workflow: 'Workflow', config: RunConfig | None = None, *,
+                  target: TargetName = 'cwl', tool_registry: Tools | None = None,
                   inference: Inference = Inference()) -> Json:
     """The request `POST /runs` takes to run `workflow` as `config` says, as `Service.submit` sends it.
 
     Args:
-        workflow: The workflow, compiled here into one document with its inputs.
+        workflow: The workflow, compiled here, with its inputs.
         config: Everything of the request but the workflow and its inputs; None for the service's settings, the
             outputs in the run's own folder.
+        target: What the service runs: `'cwl'`, the workflow compiled into one CWL document, with Toil; or
+            `'nextflow'`, the pipeline the Nextflow target lowers it to, in the form a service runs, with Nextflow.
         tool_registry: Tools the workflow's steps may name, besides those it was built with.
         inference: How unbound inputs are connected.
 
     Raises:
-        SophiosError: The workflow does not compile, with Sophios's own codes.
-        RequestRefused: A real-time analysis, or a value the schema does not take; every one is a line.
+        SophiosError: The workflow does not compile, with Sophios's own codes; for Nextflow, too, an output whose
+            name Nextflow does not keep (`wic063`).
+        ValueError: No target has that name, as `Workflow.compile` raises it.
+        NotLowered: `'nextflow'`, and a workflow the Nextflow target cannot run, as `Workflow.compile` raises it.
+        RequestRefused: A real-time analysis, an output folder given an absolute path to Nextflow, or a value the
+            schema does not take; every one is a line.
     """
-    document = service_document(workflow, tool_registry=tool_registry, inference=inference)
-    if document.realtime:
+    if targets.target(target).name == 'nextflow':
+        pipeline = service_pipeline(workflow, tool_registry=tool_registry, inference=inference)
+        realtime, compiled, inputs = pipeline.realtime, {'files': {'main.nf': pipeline.script}}, _params(pipeline)
+    else:
+        document = service_document(workflow, tool_registry=tool_registry, inference=inference)
+        realtime, compiled, inputs = document.realtime, document.cwl, document.job_inputs
+    if realtime:
         raise RequestRefused(*(f'{declaration.document} declares the real-time analysis {declaration.analysis!r}, '
                                'which the compute service never runs; remove it, or run the workflow locally'
-                               for declaration in document.realtime))
-    return request_for(new_run_id(workflow.process_name), document.cwl, document.job_inputs, config)
+                               for declaration in realtime))
+    return request_for(new_run_id(workflow.process_name), compiled, inputs, config, target=target)
 
 
-def request_for(run_id: str, cwl: Json, job_inputs: Json, config: RunConfig | None = None) -> Json:
-    """The request to run the compiled document `cwl` with `job_inputs` as the run `run_id`, as `config` says: what
-    `build_request` builds once it has compiled the workflow.
+def request_for(run_id: str, workflow: Json, inputs: Json, config: RunConfig | None = None, *,
+                target: TargetName = 'cwl') -> Json:
+    """The request to run the compiled `workflow` with `inputs` on `target` as the run `run_id`, as `config` says:
+    what `build_request` builds once it has compiled the workflow. Only a Nextflow request names its engine, so a
+    CWL request is one a service of contract 3.0.0 takes too.
 
     Raises:
-        RequestRefused: As `build_request` raises it, but for a real-time analysis.
+        ValueError: No target has that name, as `Workflow.compile` raises it.
+        RequestRefused: As `build_request` raises it, but for a real-time analysis or an output folder.
     """
     given = config._fields if config is not None else {}  # pylint: disable=protected-access
-    request: Json = {'id': run_id, 'workflow': cwl, 'inputs': job_inputs, **given}
+    engine = {'engine': 'nextflow'} if targets.target(target).name == 'nextflow' else {}
+    request: Json = {'id': run_id, **engine, 'workflow': workflow, 'inputs': inputs, **given}
     problems = [_schema_problem(error) for error in _VALIDATOR.iter_errors(request)]
     if problems:
         raise RequestRefused(*problems)
     return request
+
+
+def _params(pipeline: ServicePipeline) -> Json:
+    """The pipeline's parameters as the service takes them, every path as written: each File and Directory at its
+    location, and each output folder given a name the empty folder the service makes in the run.
+
+    An output folder is a Directory input its process stages writable and a Directory output's glob names, as the
+    service finds one in a CWL workflow; the pipeline publishes it, filled, under its name in the outputs folder.
+
+    Raises:
+        RequestRefused: An output folder given an absolute path, which only a CWL run writes in place; one line each.
+    """
+    model = pipeline.nextflow_workflow
+    made = {(process.name, port.name) for process in model.processes for port in process.inputs
+            if port.entry and port.entry.copy and port.name in {
+                segment.name for output in process.outputs if output.glob and output.path_kind == 'directory'
+                for segment in output.glob.segments if not isinstance(segment, NfLiteral)}}
+    folders = {edge.from_port for edge in model.connections
+               if isinstance(edge, NfWorkflowInputConnection) and (edge.to_process, edge.to_port) in made}
+    in_place: list[str] = []
+
+    def sent(name: str, value: Any) -> Any:
+        match value:
+            case {'class': 'Directory', 'path': str() as path} if name in folders:
+                if path.startswith('/'):
+                    in_place.append(f'input {name}: {path} is an output folder given an absolute path, which only '
+                                    "target='cwl' writes there, in place: give it a name, such as 'masks', and it "
+                                    'lands in the outputs folder under that name')
+                return {'class': 'Directory', 'basename': path, 'listing': []}
+            case {'class': 'File' | 'Directory' as kind, 'path': str() as path}:
+                return {'class': kind, 'location': path}
+            case list():
+                return [sent(name, item) for item in value]
+        return value
+    params = {name: sent(name, value) for name, value in pipeline.params.items()}
+    if in_place:
+        raise RequestRefused(*in_place)
+    return params
 
 
 def _key(name: str) -> str:
@@ -476,22 +534,29 @@ class Service:
         follows them."""
         self._client.close()
 
-    def submit(self, workflow: 'Workflow', config: RunConfig | None = None, *, tool_registry: Tools | None = None,
+    def submit(self, workflow: 'Workflow', config: RunConfig | None = None, *,
+               target: TargetName = 'cwl', tool_registry: Tools | None = None,
                inference: Inference = Inference()) -> 'Run':
-        """Send `workflow` to run as `config` says, and return its run at once, having printed its id and every
-        warning.
+        """Send `workflow` to run as `config` says, on `target`, and return its run at once, having printed its id
+        and every warning.
 
-        Every argument is `build_request`'s. It may be sent again, under the same id, while the service cannot be
-        reached or is busy.
+        Every argument is `build_request`'s: `target='nextflow'` runs the pipeline the Nextflow target lowers the
+        workflow to, with Nextflow, as `Workflow.run(target='nextflow')` does locally. It may be sent again, under
+        the same id, while the service cannot be reached or is busy.
 
         Raises:
             SophiosError: The workflow does not compile; nothing is sent.
-            RequestRefused: Sophios or the service refused the request: see `build_request`.
+            ValueError: As `build_request` raises it, `NotLowered` included; nothing is sent.
+            RequestRefused: Sophios or the service refused the request: see `build_request`; or the service runs no
+                Nextflow, being of contract 3.0.0.
             ServiceUnavailable: The service could not be reached, stayed busy, failed, speaks another contract, or
                 something else answered in its place.
         """
-        request = build_request(workflow, config, tool_registry=tool_registry, inference=inference)
+        request = build_request(workflow, config, target=target, tool_registry=tool_registry, inference=inference)
         self._client.speaks()
+        if target == 'nextflow' and self._client.contract == '3.0.0':
+            raise RequestRefused(f'the compute service at {self._client.url} speaks contract 3.0.0, which runs no '
+                                 "Nextflow, as 3.1.0 does: upgrade the service, or submit with target='cwl'")
         posted = self._client.call('POST', '/runs', body=request, run=request['id'], timeout=_SUBMIT_TIMEOUT)
         answer = self._client.answer(posted)
         run = Run(self._client, answer)
@@ -532,7 +597,7 @@ class Run:
 
     @property
     def slurm_job(self) -> str | None:
-        """The Slurm job id of the run's Toil leader, for `squeue` and `sacct`."""
+        """The Slurm job id of the run's leader, which runs Toil or Nextflow, for `squeue` and `sacct`."""
         job = self._answer.get('slurmJobId')
         return None if job is None else str(job)
 
@@ -591,12 +656,13 @@ class Run:
             raise
 
     def outputs(self) -> Json | None:
-        """The workflow's output object, once the run COMPLETED; else None."""
+        """The workflow's output object, once the run COMPLETED; else None. Each File and Directory has its class,
+        location, path and basename; on CWL, Toil adds size, checksum, nameroot, nameext and a Directory's listing."""
         return self.status().outputs
 
     def logs(self) -> str:
-        """`leader.log`, Toil's log of the whole run, so far: '' until Slurm has started the run's leader, and for good
-        when it never does, as the local handle's is '' with no log.
+        """`leader.log`, the log of the whole run, Toil's or what Nextflow printed, so far: '' until Slurm has started
+        the run's leader, and for good when it never does, as the local handle's is '' with no log.
 
         Raises:
             RequestRefused: As `status` raises it.
@@ -637,10 +703,14 @@ def _show_warnings(run: Run) -> None:
 
 
 def _status(answer: Json) -> RunStatus:
-    """A run's answer as a `RunStatus`; its fields Sophios does not know are left out, and no message is parsed."""
+    """A run's answer as a `RunStatus`; its fields Sophios does not know are left out, and no message is parsed.
+    Each File and Directory a Nextflow run published, its class and path, gains its location and basename, its
+    copy's name, from the answer alone, so a run attached to later reads the same."""
     steps = tuple(StepStatus(_step_name(entry), RunState(entry['state'])) for entry in answer.get('steps') or ())
+    outputs = answer.get('outputs')
     return RunStatus(RunState(answer['state']), answer.get('reason'), _time(answer.get('startedAt')),
-                     _time(answer.get('endedAt')), steps, answer.get('outputs'))
+                     _time(answer.get('endedAt')), steps,
+                     None if outputs is None else {name: _cwl_objects(value) for name, value in outputs.items()})
 
 
 def _step_name(entry: Json) -> str:
