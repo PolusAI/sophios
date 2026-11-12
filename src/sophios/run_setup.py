@@ -18,7 +18,7 @@ from sophios.lang.diagnostics import Diagnostic
 from sophios.runtime_inputs import normalize_artifact_job_inputs
 from sophios.utils_nf import local_locations_as_paths
 
-ModelT_co = TypeVar('ModelT_co', covariant=True)
+ModelT = TypeVar('ModelT')
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,11 +46,11 @@ class Settings:  # pylint: disable=too-many-instance-attributes
 
 
 @dataclass(frozen=True, slots=True)
-class Lowered(Generic[ModelT_co]):
+class Lowered(Generic[ModelT]):
     """What a target made of one compilation (`sophios.targets`): its model, the notes it made, and the resolved
     view it read, with this run's values and the outputs it keeps."""
 
-    model: ModelT_co
+    model: ModelT
     notes: tuple[Diagnostic, ...]
     view: ResolvedWorkflow
 
