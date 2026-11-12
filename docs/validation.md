@@ -53,8 +53,8 @@ Three kinds of test carry the promises the documentation makes:
   CI includes `docs/tutorials/`, `docs/cookbook/` and the external workflow
   repositories, is compiled. Every push also runs them, except those the
   directory's `config_ci.json` lists as `fragments` (they read an input or
-  edge a parent supplies), `intensive` (the weekly lane runs those) or
-  `run_partial_failures`. `tests/core/test_examples.py` drives it.
+  edge a parent supplies) or `intensive` (the weekly lane runs those);
+  those named `run_partial_failures` run with `--partial_failure_enable`. `tests/core/test_examples.py` drives it.
 - **The catalog.** `test_the_error_codes_page_says_what_the_code_says` keeps
   `docs/error_codes.md` equal to `EXPLANATIONS`; every code has a provocation
   in `tests/core/provocations.py` and an explanation, or the suite fails.
