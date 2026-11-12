@@ -377,12 +377,15 @@ def nextflow_failed_steps(lines: Iterable[str]) -> dict[str, int | None]:
     return failed
 
 
-def _recorded_outputs(stdout: str) -> Iterator[tuple[str, Json]]:
-    """Each workflow output the pipeline printed, by its Nextflow name, as `input_output_nf` renders the record."""
-    marker = f'{io_nf.NF_OUTPUT_MARKER} '
+def recorded_outputs(stdout: str) -> Iterator[tuple[str, Json]]:
+    """Each workflow output the pipeline printed, by its Nextflow name, as `input_output_nf` renders the record.
+
+    A record may follow other text on its line: the launcher's download notice has no newline.
+    """
     for line in stdout.splitlines():
-        if line.startswith(marker):
-            name, value = json.loads(line[len(marker):])
+        _, found, record = line.partition(f'{io_nf.NF_OUTPUT_MARKER} ')
+        if found:
+            name, value = json.loads(record)
             yield name, value
 
 
@@ -484,7 +487,7 @@ class NextflowBackend:
                   for process, status in nextflow_failed_steps(_log_lines(log)).items()}
         if exit_code != 0:
             return Outcome(None, None, failed)
-        outputs = {names['outputs'][name]: _cwl_objects(value) for name, value in _recorded_outputs(stdout)}
+        outputs = {names['outputs'][name]: _cwl_objects(value) for name, value in recorded_outputs(stdout)}
         summary = basepath / f'output_{request.workflow_name}.json'
         summary.write_text(json.dumps(outputs, indent=4) + '\n', encoding='utf-8')
         return Outcome(outputs, summary, failed)
