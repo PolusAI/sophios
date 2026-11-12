@@ -234,24 +234,10 @@ jobs:
       if: ${{ !cancelled() && steps.setup.outcome == 'success' && steps.corpus.outcome == 'success' }}
       run: cd sophios/ && pytest tests/core/test_python_api_from_wic.py
 
-    - name: PyTest Run REST Core Tests
+    - name: PyTest Contrib (REST core and WFB, ICT to CLT, WFB payload)
       if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
       # NOTE: Do NOT add coverage to PYPY CI runs https://github.com/tox-dev/tox/issues/2252
-      run: cd sophios/ && pytest tests/contrib/test_rest_api.py -k test_rest_core --cwl_runner cwltool
-
-    - name: PyTest Run REST WFB Tests
-      if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
-      # NOTE: Do NOT add coverage to PYPY CI runs https://github.com/tox-dev/tox/issues/2252
-      run: cd sophios/ && pytest tests/contrib/test_rest_api.py -k test_rest_wfb --cwl_runner cwltool
-
-    - name: PyTest Run ICT to CLT conversion Tests
-      if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
-      # NOTE: Do NOT add coverage to PYPY CI runs https://github.com/tox-dev/tox/issues/2252
-      run: cd sophios/ && pytest tests/contrib/test_ict_to_clt_conversion.py -k test_ict_to_clt
-
-    - name: PyTest Run update wfb payload Tests
-      if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
-      run: cd sophios/ && pytest tests/contrib/test_fix_payload.py -k test_fix
+      run: cd sophios/ && pytest tests/contrib --cwl_runner cwltool
 
     - name: PyTest Run Workflows
       if: ${{ !cancelled() && steps.setup.outcome == 'success' && steps.corpus.outcome == 'success' }}
