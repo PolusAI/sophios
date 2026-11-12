@@ -1,17 +1,13 @@
-"""Multi-step workflows written in Sophios and run by pinned Nextflow, each report compared with a literal; every
-workflow has its own builder function, which test_import.py's fixed point reads too."""
+"""Multi-step workflows written in Sophios, each with its own builder function, which test_import.py's fixed point
+reads; test_runtime.py's scatter property runs their shapes."""
 
 # pylint: disable=missing-function-docstring
 
 from pathlib import Path
 from typing import Any
 
-import pytest
-
 from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
 from sophios.api.python.workflow import Step, StepInput, Workflow
-
-from .testkit import execute_nextflow
 
 # One line per region the task covers.
 _EMIT = 'group=$1; year=$2; shift 2; for region in "$@"; do printf "%s %s %s\\n" "$group" "$year" "$region"; done'
@@ -43,15 +39,6 @@ def _report(**files: Any) -> Step:
     for name, source in files.items():
         setattr(report.inputs, name, source)
     return report
-
-
-def _run_report(workflow: Workflow, directory: Path, *arguments: str) -> str:
-    """Write ``workflow``'s pipeline, run it with ``arguments``, and read the one report it writes."""
-    run = execute_nextflow(workflow.compile(target="nextflow").write(directory), *arguments)
-    assert run.returncode == 0, f"stdout:\n{run.stdout}\nstderr:\n{run.stderr}"
-    reports = list((directory / "work").rglob("report.txt"))
-    assert len(reports) == 1, f"no single report was written:\n{run.stdout}"
-    return reports[0].read_text(encoding="utf-8")
 
 
 # Modelled on Matthew's repo, main.nf.
@@ -111,30 +98,6 @@ def plan_workflow() -> Workflow:
     return Workflow([fetch, *groups.values(), tally, _report(tallies=tally.outputs.tally)], "plan")
 
 
-@pytest.mark.nextflow
-@pytest.mark.serial
-def test_four_scatter_shapes_feed_one_scattered_tally(tmp_path: Path) -> None:
-    """Every group's pieces reach every task of the tally; the empty scatter's tally still runs."""
-    assert _run_report(plan_workflow(), tmp_path) == """\
-alpha 4
-alpha 2001 north data
-alpha 2001 south data
-alpha 2002 north data
-alpha 2002 west data
-beta 4
-beta 2002 north
-beta 2002 south
-beta 2003 north
-beta 2003 south
-delta 4
-delta 2002 north
-delta 2002 west
-delta 2003 north
-delta 2003 west
-gamma 0
-"""
-
-
 # The (year, month) pairs of each lane.
 _LANES = {"lane_a": [(2001, 11), (2001, 12), (2002, 1), (2002, 2)], "lane_b": [(2002, 6), (2002, 7)]}
 
@@ -156,25 +119,6 @@ def months_workflow(headers: Path) -> Workflow:
     report = _report(headers=[{"class": "File", "path": str(headers / lane / "header.txt")} for lane in _LANES],
                      **{name: step.outputs.piece for name, step in steps.items()})
     return Workflow([*steps.values(), report], "months")
-
-
-@pytest.mark.nextflow
-@pytest.mark.serial
-def test_one_step_per_lane_runs_one_task_per_month(tmp_path: Path) -> None:
-    """One task per (year, month) pair of each lane, after the lanes' headers."""
-    for lane in _LANES:
-        (tmp_path / lane).mkdir()
-        (tmp_path / lane / "header.txt").write_text(f"{lane} header\n", encoding="utf-8")
-    assert _run_report(months_workflow(tmp_path), tmp_path) == """\
-lane_a header
-lane_b header
-lane_a 2001-11
-lane_a 2001-12
-lane_a 2002-01
-lane_a 2002-02
-lane_b 2002-06
-lane_b 2002-07
-"""
 
 
 # Modelled on Matthew's repo, nlcd.nf.
@@ -207,22 +151,6 @@ def summaries_workflow() -> Workflow:
     return Workflow([*fetches, *summaries.values(), across, report], "summaries")
 
 
-@pytest.mark.nextflow
-@pytest.mark.serial
-def test_unscattered_outputs_reach_every_task_of_a_scattered_step(tmp_path: Path) -> None:
-    """Each summary task keeps its year's file; the merged step keeps its own year's from all of them."""
-    assert _run_report(summaries_workflow(), tmp_path) == """\
-2001 north data
-2001 south data
-2002 north data
-2002 west data
-alpha 2001 north data
-alpha 2001 south data
-alpha 2002 north data
-alpha 2002 west data
-"""
-
-
 # Modelled on Matthew's repo, quality.nf.
 def tallies_workflow() -> Workflow:
     """Scattered groups, one with no tasks, merge_flattened into one input of a scattered tally."""
@@ -247,23 +175,6 @@ def tallies_workflow() -> Workflow:
     tally.scatter_on(tally.inputs.group)
 
     return Workflow([*groups.values(), tally, _report(tallies=tally.outputs.tally)], "tallies")
-
-
-@pytest.mark.nextflow
-@pytest.mark.serial
-def test_a_tally_per_group_reads_every_groups_pieces_merged_into_one_input(tmp_path: Path) -> None:
-    """Each group's tally counts its own pieces among every group's."""
-    assert _run_report(tallies_workflow(), tmp_path) == """\
-alpha 2
-alpha 2001 north
-alpha 2002 south
-beta 4
-beta 2002 north
-beta 2002 west
-beta 2003 north
-beta 2003 west
-gamma 0
-"""
 
 
 # Modelled on Matthew's repo, quality.nf.
