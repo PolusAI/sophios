@@ -1,0 +1,118 @@
+# Conditions and step inputs the Nextflow target refuses, all in one workflow: lowering it reports every refusal
+# expected.yaml lists for this file, at once. As CWL the workflow is valid; each refusal is the target's, with its own
+# code. The other .wic files here are each refused for one reason, which is reported only when nothing else is.
+inputs:
+  x: {type: string, default: x}
+  y: {type: string, default: y}
+  xs: {type: 'string[]', default: [x]}
+  maybe: {type: 'string?', default: m}
+  maybe_n: {type: 'int?', default: 2}
+  maybe_file: {type: 'File?', default: {class: File, path: a.txt}}
+  bound: {type: string, default: b, inputBinding: {position: 1}}   # a workflow input is bound by the steps that read it
+
+steps:
+# A `when` reads the step's own inputs, which a tool's default is not; it gives a boolean, in the safe subset; it
+# compares an optional input only with null.
+- id: reads_a_tool_default
+  run: count_default
+  in: {m: !ii 1}
+  when: $(inputs.n > 3)
+- id: not_a_boolean
+  run: count
+  in: {n: !ii 3}
+  when: $(inputs.n + 1)
+- id: outside_the_subset
+  run: count
+  in: {n: !ii 3}
+  when: $(inputs.n ** 2)
+- id: may_be_null
+  run: count
+  in: {n: maybe_n}
+  when: $(inputs.n > 1)
+
+# A skipped step's output is null, which an optional value port takes and a required one, a path or an array does not;
+# an array output has no null to stand for a skipped step.
+- id: maybe_text
+  run: count
+  in: {n: !ii 1}
+  out: [text: !& maybe_text]
+  when: $(inputs.n > 0)
+- id: needs_text
+  run: say
+  in: {word: !* maybe_text}
+- id: reads_maybe_twice
+  run: say_maybe_twice
+  in: {word: !* maybe_text}
+- id: make_maybe_files
+  run: make_files
+  in: {n: !ii 1}
+  out: [file: !& maybe_file, files: !& maybe_files]
+  when: $(inputs.n > 0)
+- id: shows_file
+  run: show_maybe
+  in: {file: !* maybe_file}
+- id: maybe_texts
+  run: count
+  scatter: [n]
+  in: {n: !ii [1, 2]}
+  out: [text: !& maybe_texts]
+  when: $(inputs.n == 1)
+- id: needs_texts
+  run: say_all
+  in: {words: !* maybe_texts}
+
+# A step input joins its sources and takes a default as the idioms can, or is refused.
+- id: merge_deep
+  run: say_all
+  in: {words: !cwl {source: [x, y], linkMerge: merge_deep}}
+- id: any_non_null
+  run: say
+  in: {word: !cwl {source: [x, y], linkMerge: merge_flattened, pickValue: any_non_null}}
+- id: pick_from_one
+  run: say
+  in: {word: !cwl {source: x, pickValue: first_non_null}}
+- id: default_beside_a_merge
+  run: say_all
+  in: {words: !cwl {source: [x, y], default: d}}
+- id: array_default
+  run: say_all
+  in: {words: !cwl {default: [d]}}
+- id: mistyped_default
+  run: say
+  in: {word: !cwl {default: 1}}
+- id: pick_over_an_array
+  run: say
+  in: {word: !cwl {source: [xs, y], pickValue: first_non_null}}
+- id: default_over_an_array
+  run: say_all
+  in: {words: !cwl {source: xs, default: [d]}}
+- id: nested_array
+  run: say_all
+  in: {words: !cwl {source: [xs, y]}}
+- id: null_element
+  run: say_all
+  in: {words: !cwl {source: [maybe, y]}}
+- id: list_to_one
+  run: say
+  in: {word: !cwl {source: [x, y]}}
+- id: one_to_list
+  run: say_all
+  in: {words: !cwl {source: [x, y], pickValue: first_non_null}}
+- id: path_default
+  run: show
+  in: {file: !cwl {source: maybe_file, default: {class: File, path: a.txt}}}
+- id: value_from
+  run: say
+  in: {word: !cwl {source: x, valueFrom: $(self)}}
+- id: scattered_join
+  run: say
+  scatter: [word]
+  in: {word: !cwl {source: [xs], linkMerge: merge_flattened}}
+- id: reads_bound
+  run: say
+  in: {word: bound}
+
+outputs:
+  files: {type: 'File[]', outputSource: make_maybe_files/files}
+requirements:
+  StepInputExpressionRequirement: {}

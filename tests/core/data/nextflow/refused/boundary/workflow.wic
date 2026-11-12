@@ -1,0 +1,35 @@
+# The workflow boundary, names, numbers and resources the Nextflow target refuses, all in one workflow: lowering it
+# reports every refusal expected.yaml lists for this file, at once. The other .wic files here are each refused for one
+# reason, which is reported only when nothing else is.
+inputs:
+  message: string                                      # no value: a required input needs one
+  listed: {type: string, default: [not, scalar]}       # a default is a JSON scalar
+  out-dir: {type: string, default: first}              # two names that normalize alike would be one parameter
+  out_dir: {type: string, default: second}
+  a_long: long
+  a_double: double
+
+steps:
+- id: says_message
+  run: say
+  in: {word: message}
+- id: says_listed
+  run: say
+  in: {word: listed}
+- id: says_out_dir
+  run: say
+  in: {word: out-dir}
+- id: says_out_dir_again
+  run: say
+  in: {word: out_dir}
+- id: colliding_ports
+- id: runtime_glob
+- id: classless
+- id: wide_numbers
+  in: {a_long: a_long, a_double: a_double}
+- id: resources
+
+outputs:
+  long_out: {type: long, outputSource: wide_numbers/long_out}
+  double_out: {type: double, outputSource: wide_numbers/double_out}
+  forwarded: {type: string, outputSource: message}       # a workflow output that forwards an input has no process

@@ -1,0 +1,6 @@
+# A when the safe subset refuses: < compares numbers, and the message is a string.
+steps:
+  echo:
+    in:
+      message: !ii hi
+    when: $(inputs.message < "27")

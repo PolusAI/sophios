@@ -1,0 +1,8 @@
+# A workflow input and the parameter a tool's default makes for defaulted~message would normalize to one name.
+inputs:
+  defaulted_message: {type: string, default: given}
+steps:
+- id: says_defaulted
+  run: say
+  in: {word: defaulted_message}
+- id: defaulted

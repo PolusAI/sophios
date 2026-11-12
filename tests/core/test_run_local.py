@@ -685,10 +685,11 @@ def test_each_python_front_door_prints_the_nextflow_notes_and_the_run_carries_th
     result = gpu_workflow().run(target='nextflow')
     gpu_workflow().start(target='nextflow').wait()
     asyncio.run(run_async())
-    assert [line for line in capsys.readouterr().err.splitlines() if '[wic046]' in line] == CUDA_NOTES * 3
+    printed = [line for line in capsys.readouterr().err.splitlines() if '[wic046]' in line]
     assert result is not None
     cuda = [note for note in result.diagnostics if note.code is SophiosErrorCode.UNCHECKED_CUDA_FIELD]
-    assert [str(note) for note in cuda] == CUDA_NOTES
+    assert [(str(note.severity), str(note.code), note.locator and note.locator.step) for note in cuda] == CUDA_NOTES
+    assert [str(note) for note in cuda] * 3 == printed
 
 
 @pytest.mark.fast

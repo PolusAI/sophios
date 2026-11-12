@@ -15,7 +15,8 @@ arguments:
 - {position: 8, valueFrom: '>&2', shellQuote: false}
 - {position: 9, valueFrom: ;, shellQuote: false}
 - {position: 10, valueFrom: 'true'}
-inputs: {}
+inputs:
+  flag: {type: boolean, inputBinding: {position: 11, valueFrom: --literal, shellQuote: false}}   # text, not a flag
 stdout: out.txt
 stderr: err.txt
 outputs:

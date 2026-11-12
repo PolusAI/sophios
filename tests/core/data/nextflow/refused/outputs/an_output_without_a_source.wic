@@ -1,0 +1,6 @@
+# A workflow output names the step output it comes from; this one names none.
+outputs:
+  o: {type: File}
+steps:
+- id: read_text
+  in: {text: !ii hi}

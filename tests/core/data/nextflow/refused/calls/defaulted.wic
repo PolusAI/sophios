@@ -1,0 +1,6 @@
+# Copy the source it is given, or a default one.
+inputs:
+  source: {type: File, default: {class: File, path: fallback.txt}}
+steps:
+- id: copy
+  in: {source: source}

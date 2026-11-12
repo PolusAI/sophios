@@ -14,6 +14,7 @@ from urllib.parse import unquote, urlsplit
 
 import pytest
 
+from sophios.api.python.nextflow import NotLowered
 from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
 from sophios.api.python.workflow import Step, Workflow
 from sophios.backends import recorded_outputs
@@ -180,7 +181,10 @@ def _run_cwltool(main: Callable[..., int], workflow: Workflow, directory: Path) 
 @pytest.mark.needs_cwltool
 def test_a_path_inputs_references_mean_under_nextflow_what_they_mean_under_cwltool(tmp_path: Path) -> None:
     """Plain File and Directory inputs, an entry linked and a writable one copied, and scattered elements of
-    both, each referenced plainly, by path and by basename, as an argument, the stdout target and a glob."""
+    both, each referenced plainly, by path and by basename, as an argument, the stdout target and a glob. The one
+    cell left out, an entry under its own basename globbed by its plain reference, neither runner takes: CWL reads
+    `$(inputs.x)` as the Directory object, and a glob must be a string, so cwltool fails the step, and the Nextflow
+    target refuses it when compiling instead of running what CWL does not (design §6)."""
     import cwltool.main  # pylint: disable=import-outside-toplevel
 
     observed, problems = {}, []
@@ -199,29 +203,21 @@ def test_a_path_inputs_references_mean_under_nextflow_what_they_mean_under_cwlto
     ]
     assert not problems, "\n".join(problems)
 
+    _neither_globs_an_entrys_object(cwltool.main.main, tmp_path / "object_glob")
 
-@pytest.mark.needs_cwltool
-def test_neither_runner_takes_an_entrys_object_as_a_glob(tmp_path: Path) -> None:
-    """The one cell the workflow above leaves out: an entry under its own basename globbed by its plain reference.
-    CWL reads `$(inputs.x)` as the Directory object, and a glob must be a string, so cwltool fails the step; the
-    Nextflow target refuses it when compiling instead of running what CWL does not (design §6)."""
-    import cwltool.main  # pylint: disable=import-outside-toplevel
 
+def _neither_globs_an_entrys_object(main: Callable[..., int], directory: Path) -> None:
+    """A writable entry globbed by its plain reference: refused by the Nextflow target, failed by cwltool."""
     fill = CommandLineTool("fill", Inputs(x=Input(cwl.directory, position=1)),
                            Outputs(o=Output(cwl.directory, glob="$(inputs.x)"))).base_command("touch")
     step = Step(fill.stage(fill.inputs.x, writable=True), step_name="fill")
-    (tmp_path / "in.d").mkdir()
-    step.inputs.x = tmp_path / "in.d"
+    (directory / "in.d").mkdir(parents=True)
+    step.inputs.x = directory / "in.d"
     workflow = Workflow([step], "object_glob")
     workflow.outputs.o = step.outputs.o
-    with pytest.raises(ValueError, match=r"\$\(inputs\.x\) is the File or Directory object, which CWL does not"):
+    with pytest.raises(NotLowered) as refused:
         workflow.compile(target="nextflow")
-    compiled = workflow.compile()
-    document, job = compiled.write_cwl(tmp_path / "cwl"), compiled.write_job_inputs(tmp_path / "cwl")
-    stderr = io.StringIO()
-    code = cwltool.main.main(
-        ["--quiet", "--outdir", str(tmp_path / "out"), "--tmpdir-prefix", f"{tmp_path}/tmp/",
-         "--tmp-outdir-prefix", f"{tmp_path}/tmp_out/", str(document), str(job)],
-        stdout=io.StringIO(), stderr=stderr,
-    )
-    assert code != 0 and "Resolved glob patterns must be strings" in stderr.getvalue(), stderr.getvalue()
+    assert [(refusal.code.value, refusal.subject) for refusal in refused.value.refusals] == [
+        ("nf-s046", "fill.cwl: outputs.o.outputBinding.glob")]
+    code, _, messages = _cwltool(main, workflow, directory)
+    assert code != 0 and "Resolved glob patterns must be strings" in messages, messages

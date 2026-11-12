@@ -1,0 +1,6 @@
+# Echo the long it is given.
+inputs:
+  source: long
+steps:
+- id: take_long
+  in: {n: source}

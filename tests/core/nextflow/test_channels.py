@@ -2,11 +2,9 @@
 
 # pylint: disable=missing-function-docstring
 
-from dataclasses import replace
 import json
 import math
 from pathlib import Path
-import re
 import subprocess
 from typing import Any
 
@@ -33,17 +31,6 @@ def _run(
     """Lower `flow` with `params` as its workflow input values, run it, and read each workflow output (run_observed)."""
     workflow = flow if isinstance(flow, ExecutableNextflowWorkflow) else _lower(flow, params)
     return run_observed(workflow, directory, *arguments)
-
-
-@pytest.mark.nextflow
-@pytest.mark.serial
-def test_a_dry_run_stops_at_its_first_task_and_writes_nothing(tmp_path: Path) -> None:
-    write_nextflow_artifacts(runtime_workflow(), tmp_path)
-    result = execute_nextflow(tmp_path, "-stub-run")
-    assert result.returncode == 1, result.stdout + result.stderr
-    assert NF_STUB_MESSAGE in result.stdout + result.stderr
-    assert not list((tmp_path / "work").rglob("message.txt"))
-    assert not list((tmp_path / "work").rglob("copy.txt"))
 
 
 class _JsonNumber(str):
@@ -83,10 +70,18 @@ _ENTRY_CASES: list[tuple[Any, str, Any]] = [
 ]
 
 
+_WHEN = "$(inputs.n == 10)"
+#: A value given on the command line, and the line the run writes or the value the check stops it at.
+_COMMAND_LINE = [(None, ("trim", "false"), ["hi\n"], None), (_WHEN, ("n", "10"), ["hi"], None),
+                 (_WHEN, ("n", "ten"), None, "ten")]
+
+
 @pytest.mark.nextflow
 @pytest.mark.serial
 def test_the_entry_check_passes_exact_values_and_stops_every_other(tmp_path: Path) -> None:
-    """Every case runs through the generated check under the pinned Nextflow, its value read from JSON."""
+    """Every case runs through the generated check under the pinned Nextflow, its value read from JSON; and a value
+    given on the command line reaches the run as its type, so a false drops a flag and an int satisfies a when, or
+    the check stops the run before any task."""
     (tmp_path / "f.txt").write_text("f", encoding="utf-8")
     (tmp_path / "d").mkdir()
     (tmp_path / "workflow.nf").write_text(
@@ -124,16 +119,22 @@ workflow {{
             assert outcome == [True, expected], (value, declared)
             if declared == "float":  # == does not tell -0.0 from 0.0
                 assert math.copysign(1, outcome[1]) == math.copysign(1, expected), (value, declared)
+    for index, case in enumerate(_COMMAND_LINE):
+        _given_on_the_command_line(tmp_path / f"argv{index}", *case)
 
 
-@pytest.mark.fast
-@pytest.mark.parametrize("declared", ["File?", "Directory?"])
-def test_no_model_holds_an_absent_path_the_entry_check_stops(declared: str) -> None:
-    """Sophios never writes a parameter value its own entry check stops, read by a step or not."""
-    workflow = runtime_workflow()
-    with pytest.raises(ValueError, match=re.escape(f"workflow input 'unread' is an absent optional {declared},")):
-        replace(workflow, params={**workflow.params, "unread": []},
-                param_types={**workflow.param_types, "unread": declared})
+def _given_on_the_command_line(directory: Path, when: str | None, argv: tuple[str, str], line: list[str] | None,
+                               stops: str | None) -> None:
+    """The echo flow run with `argv` on the command line writes `line`, or the check stops it at `stops`."""
+    workflow = _lower(_echo_flow(when))
+    result, observed = _run(workflow, directory, f"--{_param(workflow, argv[0])}", argv[1])
+    if stops is None:
+        assert result.returncode == 0 and observed["line"] == line, result.stdout + result.stderr
+    else:
+        assert result.returncode != 0
+        assert f"Sophios workflow input '{_param(workflow, 'n')}' must be int, not '{stops}'" in (
+            result.stdout + result.stderr)
+        assert not (directory / "work").exists() or not list((directory / "work").glob("*/*"))
 
 
 def _echo_flow(when: str | None = None) -> Workflow:
@@ -159,37 +160,17 @@ def _param(workflow: ExecutableNextflowWorkflow, port: str) -> str:
     )
 
 
-_WHEN = "$(inputs.n == 10)"
-
-
 @pytest.mark.nextflow
 @pytest.mark.serial
-@pytest.mark.parametrize(("when", "argv", "line", "stops"), [
-    pytest.param(None, ("trim", "false"), ["hi\n"], None, id="a command-line false drops it"),
-    pytest.param(_WHEN, ("n", "10"), ["hi"], None, id="a command-line int satisfies the when"),
-    pytest.param(_WHEN, ("n", "ten"), None, "ten", id="a mistyped value"),
-])
-def test_a_command_line_value_reaches_the_run_as_its_type_or_stops_it(
-        when: str | None, argv: tuple[str, ...], line: list[str] | None, stops: str | None, tmp_path: Path) -> None:
-    workflow = _lower(_echo_flow(when))
-    arguments = (f"--{_param(workflow, argv[0])}", argv[1]) if argv else ()
-    result, observed = _run(workflow, tmp_path, *arguments)
-    if stops is None:
-        assert result.returncode == 0, result.stdout + result.stderr
-        assert observed["line"] == line
-    else:
-        assert result.returncode != 0
-        assert f"Sophios workflow input '{_param(workflow, 'n')}' must be int, not '{stops}'" in (
-            result.stdout + result.stderr)
-        assert not (tmp_path / "work").exists() or not list((tmp_path / "work").glob("*/*"))
-
-
-@pytest.mark.nextflow
-@pytest.mark.serial
-def test_the_v1_script_parser_stops_the_run_before_any_task(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The v1 parser would convert a command-line value before the entry check sees it."""
+def test_a_run_nextflow_cannot_run_as_cwl_does_stops_before_any_task(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A dry run stops at its first task, whose stub refuses it, and the v1 script parser, which would convert a
+    command-line value before the entry check sees it, stops the run before any task; neither writes a file."""
+    write_nextflow_artifacts(runtime_workflow(), tmp_path / "dry")
+    result = execute_nextflow(tmp_path / "dry", "-stub-run")
+    assert result.returncode == 1 and NF_STUB_MESSAGE in result.stdout + result.stderr, result.stdout + result.stderr
+    assert not list((tmp_path / "dry" / "work").rglob("*.txt"))
     monkeypatch.setenv("NXF_SYNTAX_PARSER", "v1")
-    result, _ = _run(_echo_flow(), tmp_path)
-    assert result.returncode != 0
-    assert NF_PARSER_MESSAGE in result.stdout + result.stderr
-    assert not (tmp_path / "work").exists() or not list((tmp_path / "work").glob("*/*"))
+    result, _ = _run(_echo_flow(), tmp_path / "v1")
+    assert result.returncode != 0 and NF_PARSER_MESSAGE in result.stdout + result.stderr
+    assert not (tmp_path / "v1" / "work").exists() or not list((tmp_path / "v1" / "work").glob("*/*"))

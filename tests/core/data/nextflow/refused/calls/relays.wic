@@ -1,0 +1,18 @@
+# A workflow output relaying a nested input nothing binds would be dropped without a word, so the input is refused,
+# once, at the call that leaves it unbound, however many calls surround it and through a step output.
+outputs:
+  passed: {type: 'File?', outputSource: relay/passed}
+  inside: {type: 'File?', outputSource: two_calls/passed}
+  bound: {type: 'File?', outputSource: two_calls/bound}
+  forwarded: {type: 'File?', outputSource: forward/passed}
+steps:
+- id: relay
+  run: relay.wic
+- id: two_calls
+  run: relay_inside.wic
+- id: relayed
+  run: relay.wic
+  out: [passed: !& passed]
+- id: forward
+  run: relay.wic
+  in: {extra: !* passed}

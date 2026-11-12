@@ -1,0 +1,50 @@
+# Calls the Nextflow target refuses, all in one workflow: lowering it reports every refusal expected.yaml lists for
+# this file, at once. A call is inlined, so what it or the workflow it calls says is lowered or refused before the
+# boundary is crossed. The other .wic files here are the workflows called, and relays.wic is refused on its own.
+steps:
+- id: write
+  out: [result: !& written]
+- id: write_all
+  out: [result: !& all_written]
+
+# A call's input takes one source as it is, computes nothing, and replaces the called workflow's default.
+- id: joined
+  run: copy_source.wic
+  in: {source: !cwl {source: [!* written, !* written], linkMerge: merge_nested, pickValue: first_non_null, default: 1}}
+- id: computed
+  run: copy_source.wic
+  in: {source: !cwl {source: !* written, valueFrom: $(self)}}
+- id: defaulted
+  run: defaulted.wic
+  in: {source: !* written}
+
+# A call is not scattered or conditional, and its requirements and hints are judged at each step that inherits them.
+- id: scattered
+  run: copy_source.wic
+  scatter: [source]
+  in: {source: !* all_written}
+- id: conditional
+  run: copy_source.wic
+  in: {source: !* written}
+  when: $(true)
+- id: hinted_first
+  run: with_hints.wic
+  in: {source: !* written}
+- id: hinted_second
+  run: with_hints.wic
+  in: {source: !* written}
+- id: required
+  run: with_requirements.wic
+  in: {source: !* written}
+
+# A called workflow's ports are judged as the root's are, so a field cannot disappear in inlining.
+- id: ports
+  run: ports.wic
+  in: {source: !* all_written}
+- id: make_long
+  out: [n: !& long]
+- id: long_input
+  run: long_input.wic
+  in: {source: !* long}
+- id: long_output
+  run: long_output.wic

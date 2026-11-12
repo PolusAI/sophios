@@ -1,0 +1,7 @@
+# A required workflow input given an explicit null by its job, an_explicit_null.yml: a null is no value.
+inputs:
+  message: string
+steps:
+- id: says
+  run: say
+  in: {word: message}

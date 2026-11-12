@@ -409,14 +409,11 @@ WINDOWS_EXCLUDED: Final = frozenset({
     # runner is checked on every leg by the file's other tests.
     'tests/core/test_quiet.py::test_a_failing_step_is_named_with_its_status_below_its_own_messages',
     'tests/core/test_quiet.py::test_a_quiet_run_keeps_a_file_the_tool_names_as_its_stdout',
-    # One six-step workflow run under Nextflow and under cwltool, in about four seconds. Only Lint And Test's
-    # Linux Nextflow step collects it, so the Windows leg gives up nothing it ran; what the references render
-    # is checked on every leg by the renderer's tests.
+    # One six-step workflow run under Nextflow and under cwltool, and one one-step tool cwltool fails, in about six
+    # seconds. Only Lint And Test's Linux Nextflow step collects it, so the Windows leg gives up nothing it ran; which
+    # references the target refuses is checked on every leg by the staging family of test_capabilities.py.
     'tests/core/nextflow/test_reference_differential.py::'
     'test_a_path_inputs_references_mean_under_nextflow_what_they_mean_under_cwltool',
-    # One cwltool run of a one-step tool that fails, in about two seconds. That the Nextflow target refuses the
-    # glob is checked on every leg by test_capabilities.py; only cwltool shows CWL refuses it too.
-    'tests/core/nextflow/test_reference_differential.py::test_neither_runner_takes_an_entrys_object_as_a_glob',
     # Seven example workflows run under Nextflow, six of them under cwltool too, and nine that stop, in about
     # forty-five seconds together. Lint And Test's Linux Nextflow step collects them, so the Windows leg gives up
     # nothing it ran.
@@ -426,7 +423,7 @@ WINDOWS_EXCLUDED: Final = frozenset({
     # Four batches of up to twelve small workflows, each run under Nextflow and under cwltool, in about ten
     # seconds; and one batch of four, whose tools run in containers, in about ten more. Lint And Test's Linux
     # Nextflow step collects them, so the Windows leg gives up nothing it ran; what each lowers to is checked on
-    # every leg by the lowering's data cases and the import's fixed point.
+    # every leg by the import's fixed point.
     'tests/core/nextflow/test_step_only_differential.py::'
     'test_inherited_docker_requirements_and_greeting_if_run_as_under_cwltool',
     'tests/core/nextflow/test_step_only_differential.py::'

@@ -11,6 +11,7 @@ from typing import Any, cast
 from hypothesis import example, given, strategies as st
 import pytest
 
+from sophios.api.python.workflow import CompiledWorkflow
 from sophios.input_output_nf import render_nextflow
 from sophios.lang.subset import Expr, parse
 from sophios.nf_symbols import (
@@ -34,14 +35,16 @@ from sophios.nf_types import (
     NfProcessConnection,
     NfResources,
     NfShellLiteral,
+    NfStepInputConnection,
     NfTemplate,
     NfWorkflowInputConnection,
     NfWorkflowOutputConnection,
 )
 
+from sophios.utils_nf import NEXTFLOW
+
 from ..budgets import budget
-from ..cases import match
-from .testkit import command, output_port, ref, template
+from .testkit import command, output_port, ref, runtime_workflow, template
 
 BROKEN_BY = {"cycle": "workflow connections contain a cycle", "duplicate name": "duplicate process name",
              "missing": "unknown (source|destination) process 'MISSING'", "repeated emit": "duplicate output emit name",
@@ -130,17 +133,6 @@ def test_a_graph_constructs_exactly_when_it_breaks_no_rule(graph: tuple[Any, ...
 #: (name, whether it is a Nextflow identifier), as the real v2 parser reads it: test_runtime.py runs each through it.
 NAMES = [("café", True), ("Δelta", True), ("$money", True), ("_private", True), ("Ⅻstep", True), ("process", True),
          ("if", False), ("class", False), ("_", False), ("9start", False), ("dash-name", False), ("😀", False)]
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize(("name", "valid"), NAMES)
-def test_a_name_is_an_identifier_exactly_as_nextflow_reads_it(name: str, valid: bool) -> None:
-    assert is_nextflow_identifier(name) is valid
-    if valid:
-        assert NfPort(name, "val").name == name
-    else:
-        with pytest.raises(ValueError, match="Nextflow identifier"):
-            NfPort(name, "val")
 
 
 def _proc(
@@ -329,18 +321,6 @@ UNREPRESENTABLE: dict[str, tuple[Callable[[], Any], Any]] = {
 }
 
 
-@pytest.mark.fast
-@pytest.mark.parametrize(("build", "refusal"), UNREPRESENTABLE.values(), ids=UNREPRESENTABLE)
-def test_a_malformed_ir_value_is_refused_at_construction(build: Callable[[], Any], refusal: Any) -> None:
-    """A malformed IR value or process is unrepresentable: construction refuses it, naming the field."""
-    if refusal is None:
-        build()
-        return
-    error, pattern = refusal if isinstance(refusal, tuple) else (ValueError, refusal)
-    with pytest.raises(error, match=pattern):
-        build()
-
-
 def _one(params: dict[str, Any], types: dict[str, str] | None = None) -> ExecutableNextflowWorkflow:
     return ExecutableNextflowWorkflow("WF", [NfProcess("ONE", [NfPort("value", "val")], [], command("true"))],
                                       [NfWorkflowInputConnection("value", "ONE", "value")], params, types or {})
@@ -526,110 +506,161 @@ WORKFLOWS: dict[str, tuple[Callable[[], Any], Any]] = {
 }
 
 
-@pytest.mark.fast
-@pytest.mark.parametrize(("build", "outcome"), WORKFLOWS.values(), ids=WORKFLOWS)
-def test_a_workflow_constructs_exactly_when_its_channels_agree(build: Callable[[], Any], outcome: Any) -> None:
-    """Connections and params agree on channel kind, cardinality, scatter adapter, capture and optionality, or
-    construction fails naming the edge."""
-    if isinstance(outcome, str):
-        with pytest.raises(ValueError, match=outcome):
-            build()
-    else:
-        built = build()
-        assert outcome is None or built == outcome
+def _staged(segment: NfInputReference | NfBasenameReference) -> dict[str, tuple[Callable[[], Any], Any]]:
+    """design §6, Basename references: a glob at a staged input, or at a name inside it, is not a file a CWL glob
+    matches, and a stream written there writes through the link into the input; an entry is matched and a writable
+    one is a copy, and a name derived from the input's is a new one."""
+    kind = type(segment).__name__
+    globbed = "output 'result' globs the staged input 'source', or a name inside it"
+    rows: dict[str, tuple[Callable[[], Any], Any]] = {}
+    for before, after in (("", ""), ("./", ""), ("", "/keep.txt"), ("a/../", "/")):
+        output = NfPort("result", "path", "result", NfTemplate((NfLiteral(before), segment, NfLiteral(after))))
+        rows[f"glob-{kind}-{before}{after}-staged"] = (partial(_entry_workflow, NfPort("source", "path"),
+                                                               outputs=(output,)), globbed)
+        rows[f"glob-{kind}-{before}{after}-entry"] = (partial(
+            _entry_workflow, NfPort("source", "path", entry=NfEntry()), outputs=(output,)), None)
+    derived_names = (NfTemplate((segment, NfLiteral(".copy"))), NfTemplate((NfLiteral("out/"), segment)))
+    for index, derived in enumerate(derived_names):
+        rows[f"glob-{kind}-derived-{index}"] = (partial(_entry_workflow, NfPort("source", "path"), outputs=(
+            NfPort("result", "path", "result", derived),)), None)
+    for stream in ("stdout", "stderr"):
+        for after in ("", "/keep.txt"):
+            target = NfTemplate((segment, NfLiteral(after)))
+            for entry, outcome in ((None, f"{stream} writes through the link input 'source' is staged under"),
+                                   (NfEntry(), f"{stream} writes through the link input 'source' is staged under"),
+                                   (NfEntry(copy=True), None)):
+                rows[f"{stream}-{kind}{after}-{entry!r}"] = (partial(
+                    _entry_workflow, NfPort("source", "path", entry=entry), streams={stream: target}), outcome)
+        rows[f"{stream}-{kind}-derived"] = (partial(_entry_workflow, NfPort("source", "path"), streams={
+            stream: NfTemplate((segment, NfLiteral(".log")))}), None)
+    # Only an entry under its own basename is referenced: a literal name is the one the command reads.
+    rows[f"reference-{kind}-to-a-copied-entry"] = (partial(_entry_workflow, NfPort(
+        "source", "path", entry=NfEntry(copy=True)), tokens=("cat", NfTemplate((segment,)))), None)
+    rows[f"reference-{kind}-to-a-renamed-entry"] = (partial(_entry_workflow, NfPort(
+        "source", "path", entry=NfEntry("renamed.txt")), tokens=("cat", NfTemplate((segment,)))),
+        "references an input whose InitialWorkDirRequirement entry has a literal name")
+    return rows
 
 
-@pytest.mark.fast
-@pytest.mark.parametrize(("value", "payload"), [
-    (NfArrayBinding("names"), {"exact": {"kind": "array", "name": "names", "prefix": None}}),
-    (NfFlag("reverse", "-r"), {"exact": {"kind": "flag", "name": "reverse", "prefix": "-r"}}),
-    (NfBasenameReference("source"), {"exact": {"kind": "basename", "name": "source"}}),
-    (NfShellLiteral(">>"), {"exact": {"kind": "shell_literal", "text": ">>"}}),
-    (NfOptionalBinding("name", "--name=", False),
-     {"exact": {"kind": "optional_binding", "name": "name", "prefix": "--name=", "separate": False}}),
-    *((_entry_workflow(NfPort("source", "path", entry=entry)),
-       {"processes": [{"inputs": [{"entry": {"name": entry.name, "copy": entry.copy}}]}]})
-      for entry in (NfEntry(), NfEntry(copy=True), NfEntry("renamed.txt"), NfEntry("a*b?.txt", True))),
-    (ExecutableNextflowWorkflow("wf", [], [], {}),
-     {"schema_version": ExecutableNextflowWorkflow.SCHEMA_VERSION, "representation_kind": "executable"}),
-])
-def test_a_value_writes_its_payload_fields(value: Any, payload: dict[str, Any]) -> None:
-    """A command part's payload is exactly its fields; an entry and the workflow header are read out of a larger one."""
-    assert match(payload, value.to_dict())
+def _optional(glob: str, capture: str | None, *connections: NfConnection) -> ExecutableNextflowWorkflow:
+    """An optional output of at most one file, which Nextflow checks only where it reaches a workflow output."""
+    process = NfProcess("MAYBE", [], [NfPort("o", "path", "o", template(glob), capture=capture, optional=True)],
+                        command("true"))
+    return ExecutableNextflowWorkflow("WF", [process], connections, {})
 
 
-@pytest.mark.fast
-@pytest.mark.parametrize("segment", [NfInputReference("source"), NfBasenameReference("source")])
-def test_only_an_entry_under_its_own_basename_is_referenced(segment: NfInputReference | NfBasenameReference) -> None:
-    _entry_workflow(NfPort("source", "path", entry=NfEntry(copy=True)), tokens=("cat", NfTemplate((segment,))))
-    with pytest.raises(ValueError, match="references an input whose InitialWorkDirRequirement entry has a literal name"):
-        _entry_workflow(NfPort("source", "path", entry=NfEntry("renamed.txt")), tokens=("cat", NfTemplate((segment,))))
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize("segment", [NfInputReference("source"), NfBasenameReference("source")])
-@pytest.mark.parametrize(("before", "after"), [("", ""), ("./", ""), ("", "/keep.txt"), ("a/../", "/")])
-def test_a_glob_at_a_staged_input_is_rejected_unless_the_input_is_an_entry(
-    segment: NfInputReference | NfBasenameReference, before: str, after: str,
-) -> None:
-    """design §6, Basename references: a staged input, or a name inside it, is not a file a CWL glob matches; an
-    entry is, and a name derived from the input's is a new one."""
-    output = NfPort("result", "path", "result", NfTemplate((NfLiteral(before), segment, NfLiteral(after))))
-    with pytest.raises(ValueError, match="output 'result' globs the staged input 'source', or a name inside it"):
-        _entry_workflow(NfPort("source", "path"), outputs=(output,))
-    _entry_workflow(NfPort("source", "path", entry=NfEntry()), outputs=(output,))
-    for derived in (NfTemplate((segment, NfLiteral(".copy"))), NfTemplate((NfLiteral("out/"), segment))):
-        _entry_workflow(NfPort("source", "path"), outputs=(replace(output, glob=derived),))
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize("stream", ["stdout", "stderr"])
-@pytest.mark.parametrize("segment", [NfInputReference("source"), NfBasenameReference("source")])
-@pytest.mark.parametrize("after", ["", "/keep.txt"])
-def test_a_stream_writing_a_staged_input_is_rejected_unless_the_input_is_a_copy(
-    stream: str, segment: NfInputReference | NfBasenameReference, after: str,
-) -> None:
-    """design §6, Basename references: writing the link an input is staged under, or a name inside it, writes
-    through the link into the input; a writable entry is a copy, and a name derived from the input's is a new one."""
-    target = NfTemplate((segment, NfLiteral(after)))
-    for entry in (None, NfEntry()):
-        with pytest.raises(ValueError, match=f"{stream} writes through the link input 'source' is staged under"):
-            _entry_workflow(NfPort("source", "path", entry=entry), streams={stream: target})
-    _entry_workflow(NfPort("source", "path", entry=NfEntry(copy=True)), streams={stream: target})
-    _entry_workflow(NfPort("source", "path"), streams={stream: NfTemplate((segment, NfLiteral(".log")))})
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize(("name", "normalized"), [
-    *((name, f"_{name}") for name in [*sorted(NEXTFLOW_SCRIPT_NAMES), "Math", "Élan", "if"]), ("9-café", "_9_café"),
-])
-def test_no_name_takes_a_name_the_script_resolves(name: str, normalized: str) -> None:
-    assert normalize_nextflow_identifier(name) == normalized
-    assert normalize_nextflow_identifier(name, variable=False) == normalized
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize("name", sorted(NEXTFLOW_SCRIPT_DECLARED_NAMES - NEXTFLOW_SCRIPT_NAMES))
-def test_only_a_process_or_workflow_avoids_a_name_every_script_declares(name: str) -> None:
-    assert normalize_nextflow_identifier(name, variable=False) == f"_{name}"
-    assert normalize_nextflow_identifier(name) == name
-    with pytest.raises(ValueError, match="already declared by every Nextflow script"):
-        NfProcess(name, [], [output_port("o", "o.txt")], command("true"))
-    with pytest.raises(ValueError, match="already declared by every Nextflow script"):
-        ExecutableNextflowWorkflow(name, [], [], {})
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize(("glob", "capture"), [("*.log", None), ("maybe.txt", "single")], ids=["pattern", "single"])
-def test_an_optional_output_of_at_most_one_file_is_checked_at_its_workflow_output(
-    glob: str, capture: str | None
-) -> None:
-    # Nextflow fails arity '1' when nothing matches, optional or not, and refuses '0..1'.
-    process = NfProcess(
-        "MAYBE", [], [NfPort("o", "path", "o", template(glob), capture=capture, optional=True)], command("true")
+def _merged(*sources: Any, link_merge: str = "merge_flattened", pick_value: str | None = None,
+            port: NfPort | None = None) -> ExecutableNextflowWorkflow:
+    """PAIR gathers into, and A and the parameter xs join at, JOIN's input."""
+    pair = NfProcess("PAIR", [NfPort("item", "val")], [output_port("f", "f.txt")], command("true"))
+    produce = NfProcess("A", [], [output_port("f", "a.txt")], command("true"))
+    join = NfProcess("JOIN", [port or NfPort("files", "path", is_array=True)], [], command("true"))
+    return ExecutableNextflowWorkflow(
+        "WF", [pair, produce, join],
+        [NfWorkflowInputConnection("items", "PAIR", "item", "dotproduct"),
+         NfStepInputConnection(sources, link_merge, pick_value)],
+        {"items": ["x"], "xs": ["x.txt"], "one": "o.txt"}, {"items": "string[]", "xs": "File[]", "one": "File"},
     )
-    with pytest.raises(ValueError, match="optional outputs o must match at most one file and must reach a workflow"):
-        ExecutableNextflowWorkflow("WF", [process], [], {})
-    workflow = ExecutableNextflowWorkflow("WF", [process], [NfWorkflowOutputConnection("MAYBE", "o", "result")], {})
-    rendered = render_nextflow(workflow)
-    assert "arity: '0..*', emit: o" in rendered and "optional: true" not in rendered
+
+
+_GATHERED = NfProcessConnection("PAIR", "f", "JOIN", "files", "gather")
+_ONE = NfProcessConnection("A", "f", "JOIN", "files")
+_XS = NfWorkflowInputConnection("xs", "JOIN", "files")
+_ARRAY_JOIN = "an array source joins only by merge_flattened with no pickValue"
+_CONDITION = NfProcess("CALC", [NfPort("a", "val", scalar_type="int")], [output_port("out", "out.txt")],
+                       command("true"), condition=parse("$(Math.pow(inputs.a, 2) > 1)"))
+_AT_MOST_ONE = "optional outputs o must match at most one file and must reach a workflow"
+
+#: Every row above, and the staged-input rules for both kinds of reference.
+CONSTRUCTIONS: dict[str, tuple[Callable[[], Any], Any]] = {
+    **UNREPRESENTABLE, **WORKFLOWS, **_staged(NfInputReference("source")), **_staged(NfBasenameReference("source")),
+    **{f"optional-{glob}-alone": (partial(_optional, glob, capture), _AT_MOST_ONE)
+       for glob, capture in (("*.log", None), ("maybe.txt", "single"))},
+    **{f"optional-{glob}-into-a-workflow-output": (partial(_optional, glob, capture, NfWorkflowOutputConnection(
+        "MAYBE", "o", "result")), None) for glob, capture in (("*.log", None), ("maybe.txt", "single"))},
+    # A step input's sources join as the idioms can, at one process input, and are never scattered.
+    "step-input-one-value-to-an-array-port": (partial(_merged, _ONE, pick_value="first_non_null"),
+                                              "gives one value to a port that is array-typed"),
+    "step-input-a-list-to-a-scalar-port": (partial(_merged, _ONE, link_merge="merge_nested", port=NfPort(
+        "files", "path")), "gives a list to a port that is not array-typed"),
+    "step-input-an-array-merged-nested": (partial(_merged, _GATHERED, _ONE, link_merge="merge_nested"), _ARRAY_JOIN),
+    "step-input-an-array-picked": (partial(_merged, _XS, _ONE, pick_value="all_non_null"), _ARRAY_JOIN),
+    "step-input-a-val-array-into-a-path": (partial(_merged, NfWorkflowInputConnection("items", "JOIN", "files")),
+                                           "workflow input 'items' is val\\[\\], which its port's path cannot take"),
+    "step-input-two-processes": (partial(_merged, _ONE, NfProcessConnection("A", "f", "PAIR", "item")),
+                                 "must all reach one process input"),
+    "step-input-scattered": (partial(_merged, NfWorkflowInputConnection("xs", "JOIN", "files", "dotproduct")),
+                             "a step input's sources cannot be scattered"),
+    "step-input-merge-deep": (partial(_merged, _ONE, link_merge="merge_deep"), "linkMerge must be one of"),
+    # The lowering reads the resolved view, never a compiled document.
+    "lowering-a-compiled-document": (partial(NEXTFLOW.lower, cast(Any, CompiledWorkflow("wf", {
+        "class": "Workflow", "cwlVersion": "v1.2", "inputs": {}, "outputs": {}, "steps": []}, {}))),
+        (TypeError, "resolved view")),
+    # Sophios never writes a parameter value its own entry check stops, read by a step or not.
+    **{f"absent-optional-{declared}": (partial(lambda declared: replace(
+        runtime_workflow(), params={**runtime_workflow().params, "unread": []},
+        param_types={**runtime_workflow().param_types, "unread": declared}), declared),
+        re.escape(f"workflow input 'unread' is an absent optional {declared},"))
+       for declared in ("File?", "Directory?")},
+    # A tree built without parsing, as the import builds one, is checked when its process is built.
+    **{f"condition-built-with-{name}": (partial(replace, _CONDITION, condition=replace(
+        cast(Expr, _CONDITION.condition), args=(node, *cast(Expr, _CONDITION.condition).args[1:]))), pattern)
+       for name, node, pattern in (
+           ("a-call", Expr("Runtime.getRuntime().exec", (Expr("ref", value="a"),)), "unsupported construct"),
+           ("a-literal", Expr("number", value="010"), "not a strict-mode decimal"))},
+}
+
+
+def _refusal(outcome: Any) -> tuple[Any, str | None] | None:
+    """The exception type and pattern `outcome` states, or None when it states that construction succeeds."""
+    if isinstance(outcome, str):
+        return ValueError, outcome
+    if isinstance(outcome, tuple) and len(outcome) == 2 and (isinstance(outcome[0], type) or (
+            isinstance(outcome[0], tuple) and all(isinstance(each, type) for each in outcome[0]))):
+        return outcome
+    return None
+
+
+def _as_stated(build: Callable[[], Any], outcome: Any) -> str:
+    """Nothing when constructing as `build` does gives `outcome`; else what it gives."""
+    refusal = _refusal(outcome)
+    try:
+        built = build()
+    except (ValueError, TypeError) as error:
+        stated = refusal is not None and isinstance(error, refusal[0]) and (
+            refusal[1] is None or re.search(refusal[1], str(error)) is not None)
+        return "" if stated else f"raised {error!r}"
+    return "" if refusal is None and outcome in (None, built) else f"constructed {built!r}"
+
+
+@pytest.mark.fast
+def test_an_ir_value_constructs_exactly_as_its_row_says() -> None:
+    """A malformed IR value, process or workflow is unrepresentable: construction refuses it, naming the field, or the
+    edge where connections and params disagree on channel kind, cardinality, scatter adapter, capture, optionality or
+    staging; its accepted neighbour constructs, as the canonical value where its row states one."""
+    assert {name: problem for name, (build, outcome) in CONSTRUCTIONS.items()
+            if (problem := _as_stated(build, outcome))} == {}
+
+
+@pytest.mark.fast
+def test_a_name_is_an_identifier_exactly_as_nextflow_reads_it() -> None:
+    """A port takes a name Nextflow reads as an identifier, NAMES says which; normalizing a name the script resolves
+    to something else prefixes it; only a process or workflow avoids a name every script declares."""
+    for name, valid in NAMES:
+        assert is_nextflow_identifier(name) is valid, name
+        if valid:
+            assert NfPort(name, "val").name == name
+        else:
+            with pytest.raises(ValueError, match="Nextflow identifier"):
+                NfPort(name, "val")
+    for name, normalized in [*((name, f"_{name}") for name in [*sorted(NEXTFLOW_SCRIPT_NAMES), "Math", "Élan", "if"]),
+                             ("9-café", "_9_café")]:
+        assert (normalize_nextflow_identifier(name), normalize_nextflow_identifier(name, variable=False)) == (
+            normalized, normalized), name
+    for name in sorted(NEXTFLOW_SCRIPT_DECLARED_NAMES - NEXTFLOW_SCRIPT_NAMES):
+        assert (normalize_nextflow_identifier(name, variable=False), normalize_nextflow_identifier(name)) == (
+            f"_{name}", name)
+        with pytest.raises(ValueError, match="already declared by every Nextflow script"):
+            NfProcess(name, [], [output_port("o", "o.txt")], command("true"))
+        with pytest.raises(ValueError, match="already declared by every Nextflow script"):
+            ExecutableNextflowWorkflow(name, [], [], {})

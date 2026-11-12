@@ -1,0 +1,12 @@
+# Call relay.wic, binding nothing, or binding the input x it leaves unbound.
+inputs:
+  x: File?
+outputs:
+  passed: {type: 'File?', outputSource: relay/passed}
+  bound: {type: 'File?', outputSource: relay_x/passed}
+steps:
+- id: relay
+  run: relay.wic
+- id: relay_x
+  run: relay.wic
+  in: {extra: x}

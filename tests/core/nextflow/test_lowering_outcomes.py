@@ -2,11 +2,11 @@
 refusal for each construct it cannot lower, or the compile's own `SophiosError` (design_docs/one-target-table-design.md
 §5). Any other exception is a crash: an uncoded refusal a case has not reached yet.
 """
-import contextlib
+import copy
 from typing import Any
 
 import pytest
-from hypothesis import given, strategies as st
+from hypothesis import example, given, strategies as st
 
 from sophios.ir.resolved import NotLowered
 from sophios.lang.diagnostics import SophiosError
@@ -76,8 +76,7 @@ _PLAIN_VALUE = st.one_of(st.sampled_from(["a", "a.txt", "dir"]), st.integers(0, 
 
 @st.composite
 def _cases(draw: st.DrawFn) -> dict[str, Any]:
-    """A one-step case of `tests/core/data/nextflow/rejected`'s `tool` form, its tool drawn from the shapes CWL takes
-    and from shapes it does not."""
+    """A one-step case (testkit.one_step), its tool drawn from the shapes CWL takes and from shapes it does not."""
     odd = draw(st.booleans())
     inputs = draw(st.dictionaries(st.sampled_from(["x", "y", "xs"]), _INPUT if odd else _PLAIN_INPUT, max_size=3))
     outputs = draw(st.dictionaries(st.sampled_from(["o", "p"]), _OUTPUT if odd else _PLAIN_OUTPUT, max_size=2))
@@ -131,10 +130,42 @@ def _workflows(draw: st.DrawFn) -> dict[str, Any]:
             "job": {"name": draw(_PLAIN_VALUE), "names": ["a", "b"], "flag": draw(_PLAIN_VALUE)}}
 
 
+def _written_out(cwl_type: Any) -> Any:
+    """`cwl_type` with CWL's shorthand written out: `T[]` as `{type: array, items: T}`, `T?` as `[null, T]`."""
+    if isinstance(cwl_type, list):
+        return [_written_out(each) for each in cwl_type]
+    if isinstance(cwl_type, str) and cwl_type.endswith("?"):
+        return ["null", _written_out(cwl_type[:-1])]
+    if isinstance(cwl_type, str) and cwl_type.endswith("[]"):
+        return {"type": "array", "items": _written_out(cwl_type[:-2])}
+    return cwl_type
+
+
+def _outcome(case: dict[str, Any]) -> Any:
+    """The model `case` lowers to, the codes of its refusals, or that it does not compile."""
+    try:
+        return lowered_case(case)[0]
+    except NotLowered as refused:
+        return [refusal.code for refusal in refused.refusals]
+    except SophiosError:
+        return "does not compile"
+
+
 @pytest.mark.fast
 @budget(60)
 @given(_cases() | _workflows())
+# A valueFrom YAML reads as a boolean, a requirement that is not a mapping, and a list input given one value.
+@example({"tool": {"id": "T", "inputs": {}, "outputs": {}, "arguments": [{"valueFrom": True}]}, "out": [], "job": {}})
+@example({"tool": {"id": "T", "inputs": {}, "outputs": {}, "requirements": {"DockerRequirement": "ubuntu"}},
+          "out": [], "job": {}})
+@example({"tool": {"id": "T", "inputs": {"xs": {"type": "string[]", "inputBinding": {"position": 1}}}, "outputs": {}},
+          "out": [], "job": {"xs": "a"}})
 def test_lowering_ends_in_a_model_a_coded_refusal_or_a_compile_error(case: dict[str, Any]) -> None:
-    """Whatever a tool says, lowering it to Nextflow lowers it, refuses it with a code, or never compiles."""
-    with contextlib.suppress(NotLowered, SophiosError):
-        lowered_case(case)
+    """Whatever a tool says, lowering it to Nextflow lowers it, refuses it with a code, or never compiles; and its
+    input types written out, as CWL reads its shorthand (CWL v1.2, Type DSL), it ends the same way."""
+    outcome = _outcome(case)
+    if "tool" in case:
+        written = copy.deepcopy(case)
+        for port in written["tool"]["inputs"].values():
+            port["type"] = _written_out(port["type"])
+        assert _outcome(written) == outcome

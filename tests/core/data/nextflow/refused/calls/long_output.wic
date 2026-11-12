@@ -1,0 +1,5 @@
+# Give a long.
+outputs:
+  result: {type: long, outputSource: make_long/n}
+steps:
+- id: make_long

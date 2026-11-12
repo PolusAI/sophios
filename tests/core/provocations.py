@@ -416,20 +416,31 @@ def _provoke_partial_failure() -> None:
 
 
 def _provoke_nextflow_refusal(code: SophiosErrorCode) -> None:
-    """The first case of tests/core/data/nextflow/rejected whose refusals name `code`, lowered to Nextflow; the
-    refusals raised as Sophios raises any error."""
+    """The first root of tests/core/data/nextflow/refused whose refusals name `code`, lowered to Nextflow, or for the
+    one code no file can provoke, a NaN written in Python; the refusals raised as Sophios raises any error."""
     # pylint: disable=import-outside-toplevel
-    from sophios.ir.resolved import NotLowered
-    from sophios.lang.diagnostics import SophiosError
+    from .cases import case_dirs
+    from .nextflow.testkit import refusal_of
 
-    from .cases import cases
-    from .nextflow.testkit import lowered_case
+    for family in case_dirs('nextflow/refused', 'roots'):
+        directory, expected = family.values
+        for root, refusals in expected['roots'].items():
+            if any(refusal[0] == str(code) for refusal in refusals):
+                raise SophiosError(refusal_of(directory / root).diagnostics)
+    _provoke_not_a_number()
 
-    case = next(param.values[0] for param in cases(
-        'nextflow/rejected', 'tool', 'out', 'job', 'workflow', 'tools', 'error', 'findings', 'codes')
-        if str(code) in param.values[0].get('codes', ()))
+
+def _provoke_not_a_number() -> None:
+    """A float given NaN in Python, which no file can write and the parameters' JSON cannot hold."""
+    # pylint: disable=import-outside-toplevel
+    from sophios.api.python.nextflow import NotLowered
+    from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Outputs, cwl
+    from sophios.api.python.workflow import Step, Workflow
+
+    ratio = Step(CommandLineTool('ratio', Inputs(x=Input(cwl.float, position=1)), Outputs()).base_command('echo'))
+    ratio.inputs.x = float('nan')
     try:
-        lowered_case(case)
+        Workflow([ratio], 'provoke').compile(target='nextflow')
     except NotLowered as refused:
         raise SophiosError(refused.diagnostics) from None
 

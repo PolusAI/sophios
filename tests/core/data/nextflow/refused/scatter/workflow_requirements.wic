@@ -1,0 +1,9 @@
+# A workflow's requirement is consumed, or refused naming itself, at each tool step that inherits it.
+requirements:
+  ScatterFeatureRequirement: {method: dotproduct}
+  SoftwareRequirement: {packages: []}
+steps:
+- id: each_word
+  run: say
+  scatter: [word]
+  in: {word: !ii [a, b]}

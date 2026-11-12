@@ -1,0 +1,6 @@
+# A ShellCommandRequirement beside a DockerRequirement is refused where its inherited half is written, which the tool's
+# file does not hold.
+requirements:
+  ShellCommandRequirement: {}
+steps:
+- id: on_the_host

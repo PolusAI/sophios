@@ -1,0 +1,38 @@
+why: A `when` is a boolean of the step's own inputs in the safe subset, with at least one input to decide on; a skipped
+  step's null reaches only an optional value port; a step input joins its sources and takes a default as the idioms
+  can; a workflow input's default is a scalar and the steps that read it bind it; an optional File needs a value.
+# Each refusal: its code, its step, and its subject (a tool's file and field, or a port).
+roots:
+  a_when_on_a_step_with_no_inputs.wic:
+  - [nf-s012, no_inputs, null]
+  an_absent_optional_file.wic:
+  - [nf-s020, null, null]
+  workflow.wic:
+  - [nf-s011, reads_a_tool_default, null]
+  - [wic056, not_a_boolean, null]
+  - [nf-s010, outside_the_subset, null]
+  - [nf-s010, may_be_null, null]
+  - [nf-s031, make_maybe_files, 'make_files.cwl: outputs.files.type']
+  - [nf-s017, null, 'xs']
+  - [nf-s017, null, 'maybe_file']
+  - [nf-s021, null, 'bound']
+  - [nf-s019, value_from, 'word']
+  - [nf-s013, make_maybe_files, null]
+  - [nf-s013, needs_text, 'word']
+  - [nf-s013, reads_maybe_twice, 'word']
+  - [nf-s013, shows_file, 'file']
+  - [nf-s013, needs_texts, 'words']
+  - [nf-s055, merge_deep, 'words']
+  - [nf-s055, any_non_null, 'word']
+  - [nf-s018, pick_from_one, 'word']
+  - [nf-s018, default_beside_a_merge, 'words']
+  - [nf-s017, array_default, 'words']
+  - [nf-s017, mistyped_default, 'word']
+  - [nf-s018, pick_over_an_array, 'word']
+  - [nf-s017, default_over_an_array, 'words']
+  - [nf-s018, nested_array, 'words']
+  - [nf-s018, null_element, 'words']
+  - [nf-s018, list_to_one, 'word']
+  - [nf-s018, one_to_list, 'words']
+  - [nf-s017, path_default, 'file']
+  - [nf-s006, scattered_join, 'word']

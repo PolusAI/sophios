@@ -1,0 +1,7 @@
+# Give back the optional file it is given.
+inputs:
+  extra: File?
+outputs:
+  passed: {type: 'File?', outputSource: extra}
+steps:
+- id: write
