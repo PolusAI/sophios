@@ -1,0 +1,30 @@
+name: Python Matrix Weekly
+
+# Lint And Test on every Python Sophios supports, on Ubuntu alone.
+
+on:
+  schedule:
+    - cron: '0 0 * * 5'
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+  pull-requests: read
+
+jobs:
+  lint_and_test:
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.11', '3.12', '3.13', '3.14']
+    uses: ./.github/workflows/lint_and_test.yml
+    with:
+      python-version: ${{ matrix.python }}
+      os: '["ubuntu-latest"]'
+      wic_owner: ${{ github.repository_owner }}
+      wic_ref: ${{ github.ref_name }}
+      mm-workflows_owner: ${{ github.repository_owner }}
+      mm-workflows_ref: main
+      image-workflows_owner: ${{ github.repository_owner }}
+      image-workflows_ref: main
