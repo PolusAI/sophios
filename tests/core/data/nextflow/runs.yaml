@@ -418,7 +418,7 @@
     only~line: {class: File, basename: out.txt, contents: "only\n"},
     every~line: {class: File, basename: out.txt, contents: "x only\n"}}
 - id: pick_value_finding_no_one_value-first_non_null-of-none
-  why: A pickValue that finds no one value stops the run before the step runs, naming the count it found.
+  why: &why_pick_none A pickValue that finds no one value stops the run before the step runs, naming the count it found.
   tools: {pick: *tool_say_word}
   inputs: {a: 'string?', b: 'string?'}
   params: {a: null, b: null}
@@ -428,7 +428,7 @@
   never: [out.txt]
   fails: 'Sophios step input pick.words: first_non_null finds 0 values that are not null'
 - id: pick_value_finding_no_one_value-the_only_non_null-of-none
-  why: &why_pick_none A pickValue that finds no one value stops the run before the step runs, naming the count it found.
+  why: *why_pick_none
   tools: {pick: *tool_say_word}
   inputs: {a: 'string?', b: 'string?'}
   params: {a: null, b: null}
