@@ -1,0 +1,6 @@
+# No step is called missing.
+outputs:
+  r: {type: File, outputSource: missing/result}
+steps:
+- id: read_text
+  in: {text: !ii hi}

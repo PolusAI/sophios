@@ -1,0 +1,7 @@
+# A workflow's requirements are a mapping or a list.
+requirements: ScatterFeatureRequirement
+steps:
+- id: each_word
+  run: say
+  scatter: [word]
+  in: {word: !ii [a, b]}

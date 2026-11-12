@@ -1,0 +1,4 @@
+# A step's required input bound by nothing: the input the compiler makes for it has no value, and the step owns it.
+steps:
+- id: needs_word
+  run: say

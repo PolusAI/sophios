@@ -122,7 +122,7 @@ the pointer nor the file stays:
 - nothing in the docs promised it: `docs/cli-reference.md`, `docs/running.md` and `docs/checks-and-errors.md` name
   `error_<workflow>.txt` only for a failure Sophios did not expect, and `docs/nextflow.md` named it nowhere;
 - one test pinned it, `test_nextflow_cli_conversion_error_is_concise_and_actionable`, now folded into
-  `test_a_refusal_is_reported_on_stderr_as_a_diagnostic`, which keeps its point: a refusal leaves none of the four
+  `tests/core/nextflow/test_public_api.py`, which keeps its point: a refusal leaves none of the four
   files an earlier write left;
 - a refusal is a reported problem, which exit 1 already describes as "its diagnostics are on stderr"; the file is
   for a traceback, and a refusal has none. The crash handler keeps its `error_<stem>.txt`.
@@ -191,7 +191,7 @@ released; when Nextflow learns a construct its code is retired and its row says 
 is refused for its type (`nf-s048`) too, and an array step output is refused at its producer (`nf-s031`).
 `nf-s007`, a `nested_crossproduct` result read by a later step: two scattered inputs make an array of arrays, which
 the reading port must declare (`nf-s048`) or Link refuses (`wic023`), and one scattered input is a `dotproduct`,
-which lowers (`tests/core/data/nextflow/rejected/scatter.yaml`, `a_nested_crossproduct_result_read_by_a_later_step`).
+which lowers (`tests/core/data/nextflow/refused/scatter`, step `reads_pairs`).
 Each stays its own code: the scatter is its own construct, and a target that learns nested arrays still refuses it.
 
 **The list** is `docs/error_codes.md`; `test_the_error_codes_page_says_what_the_code_says` keeps it equal to the
@@ -220,8 +220,8 @@ Refusals a case still reaches stay, coded, and so do the listing checks a tool w
 
 ## 7. Tests, and what was measured
 
-Every rejected case (`tests/core/data/nextflow/rejected/*.yaml`) names its refusals' codes in order, and new cases
-reach each code and each family of §5 no case reached. Other tests pin the table against `--target` and the
+Every refused family (`tests/core/data/nextflow/refused/<family>`) names its refusals' codes in order, and new
+cases reach each code and each family of §5 no case reached. Other tests pin the table against `--target` and the
 `Literal`, an unknown target, a refusal's layout from Python and the command line, `check()` returning refusals,
 `--explain nf-s007`, and `--allow_raw_cwl` under Nextflow.
 

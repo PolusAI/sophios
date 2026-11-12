@@ -1,0 +1,7 @@
+# An optional File with no value has no lowering, even where a pickValue would pass over it.
+inputs:
+  no_file: File?
+steps:
+- id: pick_a_file
+  run: show
+  in: {file: !cwl {source: [no_file, no_file], pickValue: first_non_null}}

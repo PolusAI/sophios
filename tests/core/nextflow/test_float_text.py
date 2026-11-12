@@ -10,13 +10,10 @@ import pytest
 
 from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
 from sophios.api.python.workflow import Step, StepInput, Workflow
-from sophios.input_output_nf import (
-    NF_FLOAT_TEXT_FUNCTION, nextflow_params, render_nextflow, write_nextflow_artifacts,
-)
-from sophios.nf_types import NfPort, NfProcess, NfTemplate
+from sophios.input_output_nf import write_nextflow_artifacts
 
 from .test_channels import _lower
-from .testkit import command, execute_nextflow, output_port, ref, single_process_workflow, template
+from .testkit import execute_nextflow
 
 
 def _doubles() -> list[float]:
@@ -89,33 +86,3 @@ def test_every_float_reaches_the_command_as_python_prints_it(tmp_path: Path) -> 
     expected = [*map(repr, doubles), *(str(json.loads(text)) for text in hand),
                 given["a"], f"--b={given['b']}", given["c"], given["d"], "1e-07", "-0.0"]
     assert printed.splitlines() == expected
-
-
-def _float_workflow(tokens: tuple[str | NfTemplate, ...], param_type: str) -> str:
-    process = NfProcess("SHOW", [NfPort("x", "val")], [output_port("result", "out.txt")],
-                        command(*tokens, stdout="out.txt"))
-    return render_nextflow(single_process_workflow(
-        process, params={"x": 0.5}, param_types={"x": param_type}, output_port_name="result"))
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize(("tokens", "param_type", "emitted"), [
-    (("echo", template(ref("x"))), "float", True),
-    (("echo",), "float", False),
-    (("echo", template(ref("x"))), "string", False),
-], ids=["rendered", "not-rendered", "no-float"])
-def test_the_float_text_helper_is_emitted_only_where_a_float_is_rendered(
-    tokens: tuple[str | NfTemplate, ...], param_type: str, emitted: bool,
-) -> None:
-    assert (NF_FLOAT_TEXT_FUNCTION in _float_workflow(tokens, param_type)) is emitted
-
-
-@pytest.mark.fast
-def test_the_params_file_holds_each_float_as_its_python_text() -> None:
-    """A JSON number zero reaches Nextflow without its sign, so every float is written as the text the check reads."""
-    process = NfProcess("SHOW", [NfPort("x", "val"), NfPort("xs", "val", is_array=True), NfPort("n", "val")],
-                        [output_port("result", "out.txt")], command("echo", stdout="out.txt"))
-    workflow = single_process_workflow(
-        process, params={"x": -0.0, "xs": [1e-07, 5], "n": 2},
-        param_types={"x": "float", "xs": "float[]", "n": "int"}, output_port_name="result")
-    assert nextflow_params(workflow) == {"x": "-0.0", "xs": ["1e-07", 5], "n": 2}

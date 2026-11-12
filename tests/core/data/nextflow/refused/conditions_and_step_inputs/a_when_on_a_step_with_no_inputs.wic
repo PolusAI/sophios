@@ -1,0 +1,5 @@
+# A step decides its condition each time its inputs arrive, so a step with none has nothing to gate on.
+steps:
+- id: no_inputs
+  run: touch_done
+  when: $(true)

@@ -1,0 +1,77 @@
+# Commands, bindings and variables the Nextflow target refuses, all in one workflow: lowering it reports every refusal
+# expected.yaml lists for this file, at once. The tools above the blank line in the steps are refused field by field;
+# each tool below it holds one binding the lowering cannot write, which is refused for the whole step. The other .wic
+# file here is refused for one reason, which is reported only when nothing else is.
+steps:
+- id: absent_values              # none of its optional inputs has a value
+- id: env_list
+  in: {s: !ii v, n: !ii 1, f: !ii x.txt}
+- id: env_map
+- id: flags
+  in: {bools: !ii [true, false], bare_bools: !ii [true, false], maybe_bools: !ii [true, false],
+       short_bools: !ii [true, false], typed_bools: !ii [true], aliased: !ii true, literal: !ii true,
+       suffixed: !ii true, other: !ii false}
+- id: unquoted
+  in: {message: !ii hi, text: !ii Hello}
+- id: unquoted_without_shell
+- id: prefixed_shell_input
+  in: {text: !ii Hello}
+- id: computed_binding
+  in: {a: !ii 3, b: !ii 1.5}
+- id: computed
+  in: {a: !ii 3, b: !ii 1.5, c: !ii 1, d: !ii 1, e: !ii 1, f: !ii 1}
+- id: values_read_as_paths
+  in: {s: !ii x, n: !ii 1, x: !ii 1.5, f: !ii x.txt}
+- id: containers
+- id: tool_fields
+- id: requirements_as_a_name
+  in: {x: !ii a}
+- id: arguments_as_a_string
+  in: {x: !ii a}
+- id: double
+  in: {x: !ii 1}
+- id: make_lists
+  out: [files: !& files, lists: !& lists]
+- id: per_item
+  in: {files: !* files}
+- id: lists
+  in: {lists: !* lists}
+
+- id: empty_prefix
+  in: {b: !ii true}
+- id: blank_prefix
+  in: {b: !ii true}
+- id: separate_false_string
+  in: {v: !ii x}
+- id: separate_false_boolean
+  in: {v: !ii true}
+- id: separate_null_string
+  in: {v: !ii x}
+- id: separate_null_boolean
+  in: {v: !ii true}
+- id: array_value_from
+  in: {xs: !ii [x]}
+- id: array_separate_false
+  in: {xs: !ii [a, b]}
+- id: argument_position_true
+- id: optional_boolean_value_from
+  in: {b: !ii true, s: !ii x}
+- id: empty_in_a_container
+  in: {verbose: !ii false}
+- id: dollar_runtime
+  in: {x: !ii v}
+- id: dollar_javascript
+  in: {x: !ii v}
+- id: dollar_property
+  in: {x: !ii v}
+- id: dollar_self
+  in: {x: !ii v}
+# The argument is refused, not the absence of a value a skipped step would leave, or that the step leaves.
+- id: maybe_text
+  in: {n: !ii 2}
+  out: [text: !& maybe_text]
+  when: $(inputs.n > 1)
+- id: after_a_skipped_step
+  run: runtime_beside_an_optional
+  in: {v: !* maybe_text}
+- id: runtime_beside_an_optional

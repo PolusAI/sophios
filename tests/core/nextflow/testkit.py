@@ -17,12 +17,12 @@ from sophios.cli import default_compilation_settings
 from sophios.compiler import compile_source, resolved_view
 from sophios.input_output_nf import write_nextflow_artifacts
 from sophios.ir.artifacts import CompilationResult
+from sophios.ir.frontdoor import bundle_from_disk
 from sophios.ir.resolved import NotLowered
 from sophios.lang.diagnostics import Diagnostic
 from sophios.nf_types import (
     ExecutableNextflowWorkflow,
     NfCommand,
-    NfFlag,
     NfInputReference,
     NfLiteral,
     NfPort,
@@ -155,6 +155,20 @@ def lowered_case(data: Yaml) -> tuple[ExecutableNextflowWorkflow, tuple[Diagnost
                                         outputs=list(document.get("outputs", {}))))
 
 
+def refusal_of(root: Path) -> NotLowered:
+    """What the Nextflow target refuses of the `.wic` file `root`, read as the command line reads a file, with the
+    tools and the other workflows of its directory, given the values of the `.yml` of its name beside it, if any."""
+    tools = get_tools_cwl({"search_paths_cwl": {"global": [str(root.parent)]}})
+    others = {"global": {path.stem: path for path in root.parent.glob("*.wic") if path != root}}
+    result = compile_source(bundle_from_disk(root, others, tools), default_compilation_settings(), quiet=True)
+    job = root.with_suffix(".yml")
+    try:
+        lowered(result, yaml.safe_load(job.read_text(encoding="utf-8")) if job.exists() else None)
+    except NotLowered as refused:
+        return refused
+    raise AssertionError(f"{root} is lowered: the Nextflow target refuses nothing of it")
+
+
 def refusal_lines(refused: NotLowered) -> list[str]:
     """Each refusal's owner and message: `step '<step>': <message>`, or `workflow '<name>': <message>`. Its span,
     which the line the document is written at decides, and its code, which a case names as its `codes`, are left
@@ -187,49 +201,6 @@ def runtime_workflow() -> ExecutableNextflowWorkflow:
         ],
         {"message": "hello from Sophios"}, {"message": "string"},
     )
-
-
-def flag_workflow() -> ExecutableNextflowWorkflow:
-    """A one-process pipeline whose command carries a conditional flag token."""
-    process = NfProcess(
-        "SORT",
-        [NfPort("reverse", "val"), NfPort("source", "path")],
-        [output_port("result", "sorted.txt")],
-        NfCommand(
-            (
-                template("sort"),
-                NfFlag("reverse", "-r"),
-                template(ref("source")),
-            ),
-            stdout=template("sorted.txt"),
-        ),
-    )
-    return ExecutableNextflowWorkflow(
-        "PIPELINE",
-        [process],
-        [
-            NfWorkflowInputConnection("reverse", "SORT", "reverse"),
-            NfWorkflowInputConnection("source", "SORT", "source"),
-            NfWorkflowOutputConnection("SORT", "result", "result"),
-        ],
-        {"reverse": True, "source": "lines.txt"}, {"reverse": "boolean", "source": "File"},
-    )
-
-
-def single_process_workflow(
-    process: NfProcess,
-    *,
-    params: dict[str, Any],
-    param_types: dict[str, str],
-    output_port_name: str,
-) -> ExecutableNextflowWorkflow:
-    """Wire every process input to a same-named workflow input plus one emit."""
-    connections = [
-        NfWorkflowInputConnection(port.name, process.name, port.name)
-        for port in process.inputs
-    ]
-    output_connection = NfWorkflowOutputConnection(process.name, output_port_name, "result")
-    return ExecutableNextflowWorkflow("PIPELINE", [process], [*connections, output_connection], params, param_types)
 
 
 def assert_succeeded(result: "subprocess.CompletedProcess[str]") -> None:

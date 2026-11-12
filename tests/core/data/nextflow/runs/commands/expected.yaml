@@ -14,7 +14,7 @@ outputs:
   three_commands~result: {class: File, basename: out.txt, contents: "first\nsecond\n"}
   three_commands~errors: {class: File, basename: err.txt, contents: "third\n"}
   print_bindings~result: {class: File, basename: bindings.txt,
-    contents: "hello  there\n-v\n--ratio\n0.5\n1.25\n--tag\na b\n--label=x\n2.5\n"}
+    contents: "hello  there\n-v\n--ratio\n0.5\n1.25\n--tag\na b\n--label=x\n2.5\n--again\n"}
   produce~result: {class: File, basename: data.txt, contents: fanout}
   read_once~result: {class: File, basename: read.txt, contents: fanout}
   read_again~result: {class: File, basename: read.txt, contents: fanout}

@@ -1,50 +1,79 @@
-"""The import is the renderer's exact inverse over the workflows Sophios compiles (design §4.2): written files import
-to a workflow that compiles back to the same model, layout-only rewrites included; edits stop at the line they name."""
+"""The import is the renderer's exact inverse over the workflows Sophios compiles (design §4.2): the pipeline of each
+example workflow imports to a workflow that compiles back to the same model, layout-only rewrites included; an edit
+outside the subset stops the import at the line it names."""
 
 # pylint: disable=missing-function-docstring
 
 from collections.abc import Callable
+import contextlib
 from contextlib import suppress
 from dataclasses import dataclass
-from functools import cache
+from functools import cache, partial
 import json
 import os
 from pathlib import Path
 import re
-import shutil
 import tempfile
 import time
 from typing import Any
 
-from hypothesis import given, strategies as st
+from hypothesis import example, given, strategies as st
 import pytest
 
 from sophios.api.python._ports import ParameterNamespace
 from sophios.api.python.nextflow import import_nextflow
 from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
-from sophios.api.python.workflow import Inference, Step, StepInput, Workflow
+from sophios.api.python.workflow import Inference, StepInput, Workflow
 from sophios.input_output_nf import (
     NEXTFLOW_CONFIG,
     NEXTFLOW_PARAMS,
     NEXTFLOW_SCRIPT,
     NF_HELPER_FUNCTIONS,
-    Idiom,
-    Idioms,
     write_nextflow_artifacts,
 )
 from sophios.lang.diagnostics import SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
 from sophios.nf_reader import read_nextflow
 from sophios.nf_types import ExecutableNextflowWorkflow
-from sophios.python_cwl_adapter import import_python_file
 
 from ..budgets import budget
+from ..cases import DATA
 from ..hermetic import network_refused
 from ..provocations import IMPORT_EDITS, import_edited
 from .test_phase3_cells import calculator_workflow, predicates_workflow
-from .test_real_world_examples import (flags_workflow, months_workflow, plan_workflow, summaries_workflow,
-                                       tallies_workflow)
-from ..helpers import REPO_ROOT
+from .testkit import example_workflow, examples
+
+#: The example workflows of tests/core/data/nextflow/runs, by name.
+RUNS = [param.values[0].name for param in examples("runs")]
+_FILES = (NEXTFLOW_SCRIPT, NEXTFLOW_PARAMS, NEXTFLOW_CONFIG)
+
+
+@cache
+def _model(name: str) -> ExecutableNextflowWorkflow:
+    """The model the example `name` compiles to, read and compiled in a copy of its directory; `calculator` is the
+    subset differential's thirty conditions."""
+    if name == "calculator":
+        return calculator_workflow().compile(target="nextflow").nextflow_workflow
+    with tempfile.TemporaryDirectory() as scratch:
+        directory = Path(scratch) / name
+        workflow = example_workflow(DATA / "nextflow" / "runs" / name, directory)
+        with contextlib.chdir(directory):
+            return workflow.compile(target="nextflow").nextflow_workflow
+
+
+@cache
+def _texts(name: str | None) -> dict[str, str]:
+    """The three files written for the example `name`, or for the one-step workflow `import_edited` writes (None)."""
+    with tempfile.TemporaryDirectory() as directory:
+        if name is None:
+            import_edited(directory, NEXTFLOW_SCRIPT, "", "")
+        else:
+            write_nextflow_artifacts(_model(name), directory)
+        return {file: (Path(directory) / file).read_text(encoding="utf-8") for file in _FILES}
+
+
+def _imported(directory: Path) -> ExecutableNextflowWorkflow:
+    return import_nextflow(directory).compile(target="nextflow", inference=Inference(enabled=False)).nextflow_workflow
 
 
 def _echo(name: str, **inputs: Input) -> CommandLineTool:
@@ -53,230 +82,28 @@ def _echo(name: str, **inputs: Input) -> CommandLineTool:
         "echo").stdout(f"{name}.txt")
 
 
-def _bindings() -> Workflow:
-    """A flag, a prefixed array, a joined optional, both kinds of entry, a piped shell literal, variables, and
-    braces in globs: escaped in a pattern, kept as written in a literal name."""
-    inputs = Inputs(v=Input(cwl.boolean, position=1, flag="-v"),
-                    xs=Input(cwl.array(cwl.string), position=2, flag="--x"),
-                    name=Input(cwl.string, required=False, position=3, flag="--name=", separate=False),
-                    src=Input(cwl.file), out=Input(cwl.directory))
-    tool = (CommandLineTool("bind", inputs, Outputs(
-        res=Output(cwl.directory, glob="$(inputs.out.basename)"),
-        one=Output(cwl.file, glob="one.txt", output_eval="$(self[0])"),
-        maybe=Output(cwl.file, glob="*.log", required=False), braced=Output(cwl.file, glob="a{b}.txt"),
-        named=Output(cwl.file, glob="$(inputs.out.basename)\\\\{x}")))
-        .base_command("prog").argument("2>&1 | tee", shell_quote=False, position=4)
-        .argument("$(inputs.out.basename)", position=5).shell_command()
-        .stage(inputs.src, entryname="renamed.txt").stage(inputs.out, writable=True)
-        .stdout("o.txt").env_var("A", "lit $x").env_var("B", "$(inputs.name)"))
-    step = tool.to_step()
-    step.inputs.v, step.inputs.xs, step.inputs.src, step.inputs.out = True, ["p", "q"], "/data/s.txt", "/data/o"
-    step.inputs.name = "n"
-    workflow = Workflow([step], "bindings")
-    workflow.outputs.res, workflow.outputs.one, workflow.outputs.maybe = (
-        step.outputs.res, step.outputs.one, step.outputs.maybe)
-    return workflow
+@pytest.mark.parametrize("name", RUNS)
+def test_the_pipeline_of_an_example_imports_to_its_model(
+        name: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The three files written for each example of tests/core/data/nextflow/runs, alone in a directory and read with
+    the network refused, import to a workflow that compiles to the model they were written from; no path a parameter
+    names is looked at: not `nextflow_workflow.json`, no tool registry, no input file."""
+    model = _model(name)
+    for file, text in _texts(name).items():
+        (tmp_path / file).write_text(text, encoding="utf-8")
+    named = {item["path"] for value in model.to_dict()["params"].values()
+             for item in (value if isinstance(value, list) else [value]) if isinstance(item, dict)}
+    looked: list[str] = []
+    stat = os.stat
 
+    def recording(path: Any, *args: Any, **kwargs: Any) -> os.stat_result:
+        looked.append(os.fspath(path) if isinstance(path, (str, os.PathLike)) else str(path))
+        return stat(path, *args, **kwargs)
 
-def _crossproduct() -> Workflow:
-    """A conditional flat crossproduct gathered into an array, a step input picking a value, a conditional step
-    whose output's name holds a `_`, so the name of its channel, `ch_use_o_txt`, splits more than one way."""
-    pair = _echo("pair", item=Input(cwl.string, position=1), tag=Input(cwl.string, position=2)).to_step()
-    use = CommandLineTool("use", Inputs(files=Input(cwl.array(cwl.file), position=1), n=Input(cwl.int, position=2)),
-                          Outputs(o_txt=Output(cwl.file, glob="o.txt"))).base_command("cat").stdout(
-        "o.txt").to_step()
-    join = _echo("join", words=Input(cwl.string, position=1)).to_step()
-    workflow = Workflow([pair, use, join], "crossproduct")
-    pair.inputs.item, pair.inputs.tag = ["i", "j"], ["1", "2"]
-    pair.scatter_on(pair.inputs.item, pair.inputs.tag, method="flat_crossproduct")
-    use.inputs.files = pair.outputs.out
-    use.inputs.n = 3
-    use.when = "$(inputs.n > 1)"
-    join.inputs.words = StepInput(source=[workflow.inputs.a.as_type("string?"), workflow.inputs.b.as_type("string?")],
-                                  link_merge="merge_nested", pick_value="first_non_null")
-    workflow.outputs.o, workflow.outputs.j = use.outputs.o_txt, join.outputs.out
-    return workflow
-
-
-def _scatters(method: str) -> Callable[[], Workflow]:
-    def build() -> Workflow:
-        """A scatter over two inputs, an unscattered output into every task, and its outputs gathered."""
-        first = _echo("first", word=Input(cwl.string, position=1)).to_step()
-        pair = _echo("pair", a=Input(cwl.string, position=1), b=Input(cwl.int, position=2),
-                     context=Input(cwl.file, position=3)).to_step()
-        first.inputs.word = "context"
-        pair.inputs.a, pair.inputs.b, pair.inputs.context = ["x", "y"], [1, 2], first.outputs.out
-        pair.scatter_on(pair.inputs.a, pair.inputs.b, method=method)
-        steps: list[Step] = [first, pair]
-        if method != "nested_crossproduct":
-            report = CommandLineTool("report", Inputs(files=Input(cwl.array(cwl.file), position=1)),
-                                     Outputs(r=Output(cwl.file, glob="r.txt"))).base_command("cat").stdout("r.txt")
-            steps.append(report.to_step())
-            steps[-1].inputs.files = pair.outputs.out
-        workflow = Workflow(steps, f"scatter_{method}")
-        workflow.outputs.pairs = pair.outputs.out
-        return workflow
-    return build
-
-
-def _resources() -> Workflow:
-    """An image, cores, fractional memory, GPUs with a capability list, file text, and a float into a command."""
-    tool = (CommandLineTool("res", Inputs(ratio=Input(cwl.float, position=1, flag="--ratio")),
-                            Outputs(text=Output(cwl.string, glob="t.txt", load_contents=True,
-                                                output_eval="$(self[0].contents)"),
-                                    made=Output(cwl.directory, glob="made")))
-            .base_command("run").docker("registry.io/a b:{1}'\"").resources(cores_min=2, ram_min=1.5)
-            .gpu(cuda_version_min="11.7", device_count_min=2, extra={"cudaComputeCapability": ["7.0", "8.0"]}))
-    step = tool.to_step()
-    step.inputs.ratio = 0.1
-    workflow = Workflow([step], "resources")
-    workflow.outputs.text, workflow.outputs.made = step.outputs.text, step.outputs.made
-    return workflow
-
-
-def _directories() -> Workflow:
-    """A Directory output into a Directory input, directly and gathered from a scatter."""
-    make = CommandLineTool("make", Inputs(name=Input(cwl.string, position=1)),
-                           Outputs(d=Output(cwl.directory, glob="$(inputs.name)"))).base_command("mkdir").to_step()
-    each = CommandLineTool("each", Inputs(dir=Input(cwl.directory, position=1), n=Input(cwl.string, position=2)),
-                           Outputs(d=Output(cwl.directory, glob="$(inputs.n)"))).base_command("cp", "-r").to_step()
-    every = CommandLineTool("every", Inputs(dirs=Input(cwl.array(cwl.directory), position=1)),
-                            Outputs(o=Output(cwl.file, glob="o.txt"))).base_command("ls").stdout("o.txt").to_step()
-    make.inputs.name = "made"
-    each.inputs.dir, each.inputs.n = make.outputs.d, ["a", "b"]
-    each.scatter_on(each.inputs.n)
-    every.inputs.dirs = each.outputs.d
-    workflow = Workflow([make, each, every], "directories")
-    workflow.outputs.o = every.outputs.o
-    return workflow
-
-
-def _unary_whens() -> Workflow:
-    """Conditions of nested unary operators, whose canonical text is not a decrement, and of each spelling the
-    Groovy text writes as another's (`===`, `!==`, a unary `+`, null on the left, `!(x == null)`), with the other."""
-    whens = ("$(-(-inputs.x) > 0)", "$(- -inputs.x > 0)", "$(+(+inputs.x) > 0)", "$(-(-3) > inputs.x)",
-             "$(inputs.s === 'it\"s' && !(inputs.o == null))", "$(inputs.s !== 'x' && null != inputs.o)")
-    steps = [_echo(f"w{index}", x=Input(cwl.int, position=1), s=Input(cwl.string, position=2),
-                   o=Input(cwl.string, required=False)).to_step() for index in range(len(whens))]
-    workflow = Workflow(steps, "whens")
-    for step, when in zip(steps, whens):
-        step.inputs.x, step.inputs.s, step.inputs.o = 2, "it\"s", workflow.inputs.o.as_type("string?")
-        step.when = when
-        setattr(workflow.outputs, step.process_name, step.outputs.out)
-    return workflow
-
-
-def _streams() -> Workflow:
-    """Each stream redirected, a shell literal `>` that is not one, and two adjacent shell literals, which the model
-    merges."""
-    redirected = CommandLineTool("streams", Inputs(src=Input(cwl.file)), Outputs(
-        out=Output(cwl.file, glob="out.txt"), err=Output(cwl.file, glob="err.txt"))).base_command("cat").stdin(
-        "$(inputs.src.path)").stdout("out.txt").stderr("err.txt")
-    literal = CommandLineTool("literal", Inputs(), Outputs(o=Output(cwl.file, glob="o.txt"))).base_command(
-        "echo").argument(">", shell_quote=False, position=1).argument("o.txt", position=2).argument(
-        "&&", shell_quote=False, position=3).argument("true", shell_quote=False, position=4).shell_command()
-    first, second = redirected.to_step(), literal.to_step()
-    first.inputs.src = "/data/in.txt"
-    workflow = Workflow([first, second], "streams")
-    workflow.outputs.out, workflow.outputs.err, workflow.outputs.o = (
-        first.outputs.out, first.outputs.err, second.outputs.o)
-    return workflow
-
-
-def _merged() -> Workflow:
-    """Two outputs merged flat into one array input."""
-    one, two = (_echo(name, w=Input(cwl.string, position=1)).to_step() for name in ("one", "two"))
-    cat = CommandLineTool("cat", Inputs(files=Input(cwl.array(cwl.file), position=1)),
-                          Outputs(o=Output(cwl.file, glob="o.txt"))).base_command("cat").stdout("o.txt").to_step()
-    one.inputs.w, two.inputs.w = "1", "2"
-    workflow = Workflow([one, two, cat], "merged")
-    cat.inputs.files = StepInput(source=[one.outputs.out, two.outputs.out], link_merge="merge_flattened")
-    workflow.outputs.o = cat.outputs.o
-    return workflow
-
-
-def _valued() -> Workflow:
-    """Values bound on workflow inputs: text CWL and Groovy escape, ints, files, an empty optional array; a required int
-    given to an optional binding, an optional int to a condition, a literal `$(` after a reference, a glob's brace."""
-    count = CommandLineTool("count", Inputs(
-        word=Input(cwl.string, position=1), n=Input(cwl.int, required=False, position=2, flag="--n"),
-        files=Input(cwl.array(cwl.file), position=3), main=Input(cwl.file, position=4, flag="--in=", separate=False),
-        tag=Input(cwl.string, position=5, flag=" --tag=", separate=False),
-        extras=Input(cwl.array(cwl.string), position=6, flag="--extra")),
-        Outputs(o=Output(cwl.file, glob="$(inputs.word).txt"), braced=Output(cwl.file, glob="$(inputs.word){x}.txt"))
-    ).base_command("wc", "$(not) \\${x}").argument("a \\$(b) \\\\ c", position=7).stdout(
-        "$(inputs.word).txt").to_step()
-    again = _echo("again", word=Input(cwl.string, position=1), k=Input(cwl.int)).to_step()
-    again.when = "$(inputs.k > 1)"
-    workflow = Workflow([count, again], "valued")
-    word = workflow.inputs.word.as_type("string")
-    count.inputs.word, count.inputs.n, again.inputs.word = word, workflow.inputs.n.as_type("int"), word
-    count.inputs.files, count.inputs.main = workflow.inputs.files.as_type("File[]"), "/data/main.txt"
-    count.inputs.tag, again.inputs.k = "t", workflow.inputs.k.as_type("int")
-    count.inputs.extras = workflow.inputs.extras.as_type("string[]?")
-    workflow.inputs.unread.as_type("string")
-    workflow.inputs.word, workflow.inputs.n, workflow.inputs.k, workflow.inputs.unread = "w'\"$x", 3, 2, "kept"
-    workflow.inputs.files, workflow.inputs.extras = ["/data/a.txt", {"class": "File", "path": "/data/b.txt"}], []
-    workflow.outputs.o, workflow.outputs.again = count.outputs.o, again.outputs.out
-    return workflow
-
-
-def _renamed() -> Workflow:
-    """Names normalization gives a leading `_`, which the import keeps: a capitalized step with a value written on
-    it, a capitalized tool input, workflow input and workflow output, and a reserved step name."""
-    fetch = _echo("Fetch", word=Input(cwl.string, position=1), N=Input(cwl.int, position=2)).to_step()
-    task = _echo("task", word=Input(cwl.string, position=1)).to_step()
-    workflow = Workflow([fetch, task], "renamed")
-    fetch.inputs.word, fetch.inputs.N, task.inputs.word = "x", workflow.inputs.X.as_type("int"), "y"
-    workflow.inputs.X = 1
-    workflow.outputs.Out, workflow.outputs.t = fetch.outputs.out, task.outputs.out
-    return workflow
-
-
-def _nested() -> Workflow:
-    """A subworkflow, inlined, whose input comes from an outer step."""
-    write = _echo("write", message=Input(cwl.string, position=1)).to_step()
-    write.inputs.message = "nested composition"
-    copy = CommandLineTool("copy_file", Inputs(source=Input(cwl.file, position=1)),
-                           Outputs(result=Output(cwl.file, glob="copy.txt"))).base_command("cp").argument(
-        "copy.txt", position=2).to_step(step_name="inner_copy")
-    child = Workflow([copy], "child")
-    copy.inputs.source = child.inputs.source
-    child.inputs.source = write.outputs.out
-    child.outputs.result = copy.outputs.result
-    workflow = Workflow([write, child], "root")
-    workflow.outputs.copied = child.outputs.result
-    return workflow
-
-
-def _conditions() -> Workflow:
-    """A condition on a step of one input, which branches that input's channel, and on a scattered step, which
-    branches the scatter combined with its other inputs, one of them an optional File with a value."""
-    one = _echo("one", n=Input(cwl.int, position=1)).to_step()
-    each = _echo("each", word=Input(cwl.string, position=1), n=Input(cwl.int, position=2),
-                 f=Input(cwl.file, required=False)).to_step()
-    workflow = Workflow([one, each], "conditions")
-    one.inputs.n, one.when = 2, "$(inputs.n > 1)"
-    each.inputs.word, each.inputs.n, each.inputs.f = ["a", "b"], 3, workflow.inputs.f.as_type("File?")
-    workflow.inputs.f = "/data/f.txt"
-    each.scatter_on(each.inputs.word)
-    each.when = "$(inputs.n > 2)"
-    workflow.outputs.one, workflow.outputs.each = one.outputs.out, each.outputs.out
-    return workflow
-
-
-def _file_references() -> Workflow:
-    """`.path` references, which the import writes back with `.path`, since CWL reads a plain File or Directory
-    reference as the object: an argument that starts with one, and an entry's glob, alone and inside text."""
-    fill = CommandLineTool("fill", Inputs(src=Input(cwl.file), out=Input(cwl.directory)), Outputs(
-        filled=Output(cwl.directory, glob="$(inputs.out.path)"),
-        copy=Output(cwl.file, glob="$(inputs.out.path)/copy.txt"))).base_command("cp").argument(
-        "$(inputs.src.path)", position=1).argument("$(inputs.out.path)/copy.txt", position=2)
-    step = fill.stage(fill.inputs.out, writable=True).to_step()
-    step.inputs.src, step.inputs.out = "/data/in.txt", "/data/out"
-    workflow = Workflow([step], "file_references")
-    workflow.outputs.filled, workflow.outputs.copy = step.outputs.filled, step.outputs.copy
-    return workflow
+    monkeypatch.setattr(os, "stat", recording)
+    with network_refused() as attempts:
+        imported = _imported(tmp_path)
+    assert (imported, attempts, named & set(looked)) == (model, [], set())
 
 
 def _flag_first() -> Workflow:
@@ -287,66 +114,9 @@ def _flag_first() -> Workflow:
     return Workflow([step], "flag_first")
 
 
-def _cookbook(name: str, **values: Any) -> Callable[[], Workflow]:
-    """A cookbook workflow over this checkout's tools, its inputs given `values`."""
-    def build() -> Workflow:
-        module = import_python_file(f"cookbook_{name}", REPO_ROOT / "docs" / "cookbook" / f"{name}.py")
-        setattr(module, "ADAPTERS", REPO_ROOT / "cwl_adapters")
-        workflow: Workflow = module.workflow()
-        for key, value in values.items():
-            setattr(workflow.inputs, key, value)
-        return workflow
-    return build
-
-
-def _waits() -> Workflow:
-    """A step-only input fed by a step output (resolved-view design §9, example 2): echo reads nothing of touch's,
-    and runs after it."""
-    touch = Step(clt_path=REPO_ROOT / "cwl_adapters" / "touch.cwl")
-    echo = Step(clt_path=REPO_ROOT / "cwl_adapters" / "echo.cwl")
-    touch.inputs.filename, echo.inputs.message = "db", "query"
-    workflow = Workflow([touch, echo], "waits")
-    echo.inputs.after = StepInput(source=touch.outputs.file)
-    workflow.outputs.said = echo.outputs.stdout
-    return workflow
-
-
-CASES: dict[str, Callable[[], Workflow]] = {
-    "bindings": _bindings, "crossproduct": _crossproduct, "dotproduct": _scatters("dotproduct"),
-    "flat_crossproduct": _scatters("flat_crossproduct"), "nested_crossproduct": _scatters("nested_crossproduct"),
-    "resources": _resources, "directories": _directories, "unary_whens": _unary_whens, "streams": _streams,
-    "merged": _merged, "valued": _valued, "renamed": _renamed, "nested": _nested, "conditions": _conditions,
-    "file_references": _file_references, "flag_first": _flag_first,
-    # Step-only inputs a process carries: one a when reads, and one fed by a step output.
-    "when": _cookbook("when", loud=True), "greeting_if": _cookbook("greeting_if", show=False), "waits": _waits,
-    # The one workflow in examples/ the Nextflow target compiles.
-    "helloworld_pyapi": lambda: import_python_file(
-        "helloworld_pyapi", REPO_ROOT / "examples" / "scripts" / "helloworld_pyapi.py").workflow(),
-    "plan": plan_workflow, "months": lambda: months_workflow(Path("/data")), "summaries": summaries_workflow,
-    "tallies": tallies_workflow, "flags": flags_workflow,
-    "calculator": calculator_workflow, "predicates": predicates_workflow,
-}
-_FILES = (NEXTFLOW_SCRIPT, NEXTFLOW_PARAMS, NEXTFLOW_CONFIG)
-
-
-def _compiled(name: str) -> ExecutableNextflowWorkflow:
-    return CASES[name]().compile(target="nextflow").nextflow_workflow
-
-
-def _imported(directory: Path) -> ExecutableNextflowWorkflow:
-    return import_nextflow(directory).compile(target="nextflow", inference=Inference(enabled=False)).nextflow_workflow
-
-
-@pytest.mark.parametrize("name", CASES)
-def test_the_import_of_a_compiled_pipeline_compiles_to_its_model(name: str, tmp_path: Path) -> None:
-    model = _compiled(name)
-    write_nextflow_artifacts(model, tmp_path)
-    assert _imported(tmp_path) == model
-
-
 def test_a_pipeline_v0_7_0_wrote_imports() -> None:
     """v0.7.0 indented a script's lines, and wrote a command that starts with a flag without parentheses."""
-    assert _imported(Path(__file__).parents[1] / "data" / "nextflow" / "v0.7.0") == _compiled("flag_first")
+    assert _imported(DATA / "nextflow" / "v0.7.0") == _flag_first().compile(target="nextflow").nextflow_workflow
 
 
 # Text with what CWL, Groovy and the shell each escape. A base command is not interpolated, so any text is
@@ -433,49 +203,13 @@ def _generated(draw: st.DrawFn) -> Workflow:
 
 @budget(100)
 @given(_generated())
+@example(calculator_workflow())
+@example(predicates_workflow())
 def test_the_import_of_a_generated_tool_compiles_to_its_model(workflow: Workflow) -> None:
+    """Pinned: the conditions the subset differential runs, which each operator of the subset writes."""
     compiled = workflow.compile(target="nextflow")
     with tempfile.TemporaryDirectory() as directory:
         assert _imported(compiled.write(directory)) == compiled.nextflow_workflow
-
-
-#: The forms the reader reads by filling them and looking up what it read, as `ch_{process}_{emit}` splits more
-#: than one way: the reader matches every other form.
-_LOOKED_UP = (Idioms.PROCESS_OUTPUT, Idioms.CONDITIONAL_OUTPUT)
-
-
-def test_every_idiom_is_written_and_read_for_some_case(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """For some case, the renderer fills each form with holes in the idiom table, and the reader matches it."""
-    used: set[Idiom] = set()
-
-    def recording(method: Callable[..., Any]) -> Callable[..., Any]:
-        def record(idiom: Idiom, *args: Any, **holes: Any) -> Any:
-            if found := method(idiom, *args, **holes):
-                used.add(idiom)
-            return found
-        return record
-
-    with monkeypatch.context() as patch:
-        patch.setattr(Idiom, "fill", recording(Idiom.fill))
-        for name in CASES:
-            write_nextflow_artifacts(_compiled(name), tmp_path / name)
-    filled = set(used)
-    used.clear()
-    with monkeypatch.context() as patch:
-        patch.setattr(Idiom, "match", recording(Idiom.match))
-        patch.setattr(Idiom, "find", recording(Idiom.find))
-        for name in CASES:
-            read_nextflow(tmp_path / name)
-    idioms = {name: idiom for name, idiom in vars(Idioms).items() if isinstance(idiom, Idiom)}
-    assert [name for name, idiom in idioms.items() if idiom not in filled] == []
-    assert [name for name, idiom in idioms.items() if idiom not in used and idiom not in _LOOKED_UP] == []
-
-
-def test_every_hole_is_read_once() -> None:
-    """Each hole of each form, named the first time or again, opens an atomic group that ends where the next hole's
-    opens: matching never goes back into a hole it has read, so it is linear in the length of the line."""
-    patterns = {name: idiom.pattern.pattern for name, idiom in vars(Idioms).items() if isinstance(idiom, Idiom)}
-    assert [name for name, pattern in patterns.items() if pattern.count("(?P") != pattern.count("(?>(?P")] == []
 
 
 _STRINGS = re.compile(r"'(?:[^'\\]|\\.)*'|\"(?:[^\"\\]|\\.)*\"")
@@ -599,128 +333,110 @@ LAYOUTS: tuple[Layout, ...] = (
 )
 
 
-def _everything(files: dict[str, str], layouts: tuple[Layout, ...] = LAYOUTS) -> dict[str, str]:
-    # The process blocks are found by their unchanged layout, so they move first.
-    for layout in layouts:
-        files = layout.apply(files)
-    return files
-
-
-LAYOUTS += (Layout("all at once", _everything, "Each rewrite above is layout, so their composition is."),)
-
-
-@pytest.mark.parametrize("layout", LAYOUTS, ids=[layout.name for layout in LAYOUTS])
-@pytest.mark.parametrize("name", CASES)
-def test_layout_leaves_the_import_unchanged(layout: Layout, name: str, tmp_path: Path) -> None:
-    model = _compiled(name)
-    write_nextflow_artifacts(model, tmp_path)
-    files = {file: (tmp_path / file).read_text(encoding="utf-8") for file in _FILES}
-    for file, text in layout.apply(files).items():
-        (tmp_path / file).write_bytes(text.encode("utf-8"))
-    assert _imported(tmp_path) == model
+@budget(10)
+@given(chosen=st.sets(st.sampled_from(LAYOUTS)))
+@example(chosen=set(LAYOUTS))
+def test_layout_leaves_the_import_unchanged(chosen: set[Layout]) -> None:
+    """Any of the rewrites above, alone or together, applied to the pipeline of each example: the import is the model
+    the pipeline was written from. Every pipeline is rewritten for every set drawn, and for all the rewrites at once."""
+    for name in RUNS:
+        files = _texts(name)
+        # In the order above: the process blocks are found by their unchanged layout, so they move first.
+        for layout in LAYOUTS:
+            files = layout.apply(files) if layout in chosen else files
+        with tempfile.TemporaryDirectory() as scratch:
+            for file, text in files.items():
+                (Path(scratch) / file).write_bytes(text.encode("utf-8"))
+            assert _imported(Path(scratch)) == _model(name), name
 
 
 _CODE = SophiosErrorCode
 _DEEP = 3000  # nested deeper than Python's default recursion limit, 1000
-# More edits than one per code: the constructs the import is most often handed.
-_EDITS = [
-    *((code, *edit) for code, edit in IMPORT_EDITS.items()),
-    (_CODE.IMPORT_FOREIGN_STATEMENT, NEXTFLOW_SCRIPT, "    greet(message)\n", "    greet(message.view())\n", ".view()"),
-    (_CODE.IMPORT_FOREIGN_STATEMENT, NEXTFLOW_SCRIPT, "nextflow.enable.dsl=2\n",
-     "nextflow.enable.dsl=2\ninclude { X } from './x'\n", "include"),
-    (_CODE.IMPORT_FOREIGN_STATEMENT, NEXTFLOW_SCRIPT, "\nworkflow {\n",
-     "\nworkflow.onComplete { println('done') }\nworkflow {\n", "onComplete"),
-    (_CODE.IMPORT_FOREIGN_STATEMENT, NEXTFLOW_SCRIPT, "    input:\n", "    cpus params.threads\n    input:\n", "cpus"),
-    (_CODE.IMPORT_FOREIGN_STATEMENT, NEXTFLOW_SCRIPT, "    greet(message)\n",
-     "    greet(message)\n    other(message)\n", "other("),
-    # A second block of a process, which nothing else would read.
-    (_CODE.IMPORT_FOREIGN_STATEMENT, NEXTFLOW_SCRIPT, "\nworkflow provoke {\n",
-     '\nprocess greet {\n    script:\n    """\n    rm o\n    """\n}\n\nworkflow provoke {\n', "process greet"),
-    (_CODE.IMPORT_FOREIGN_SCRIPT, NEXTFLOW_SCRIPT, "    exit 1\n", "    exit 0\n", "stub:"),
-    (_CODE.IMPORT_MISMATCH, NEXTFLOW_SCRIPT, "    val message\n", "    val message, arity: '1'\n", "arity"),
-    # Only a command with no shell literal is written on one line, where a literal's `;` would end the command.
-    (_CODE.IMPORT_MISMATCH, NEXTFLOW_SCRIPT, "('echo')} ", "('echo')} ; ", "('echo')} ;"),
-    # Text after a script's opening quotes is in the script, quotes open one only after `script:` or `stub:`, and a
-    # lone carriage return ends no line.
-    (_CODE.IMPORT_FOREIGN_STATEMENT, NEXTFLOW_SCRIPT, '    script:\n    """\n', '    script:\n    """ \n', '"""'),
-    (_CODE.IMPORT_FOREIGN_STATEMENT, NEXTFLOW_SCRIPT, "    input:\n", '    input:\n    """\n', '"""'),
-    (_CODE.IMPORT_FOREIGN_STATEMENT, NEXTFLOW_SCRIPT, "    input:\n", "    input:\r", "input:"),
-    # A value the compile writes otherwise, as a text parameter's 3 is "3", or not at all.
-    (_CODE.IMPORT_PARAMS, NEXTFLOW_PARAMS, '"hi"', "3", '"message": 3'),
-    (_CODE.IMPORT_PARAMS, NEXTFLOW_PARAMS, '"hi"', "null", '"message": null'),
-    # The compile renames a capitalized workflow, and refuses an empty command word.
-    (_CODE.IMPORT_UNWRITABLE, NEXTFLOW_SCRIPT, "provoke", "Provoke", "workflow Provoke"),
-    (_CODE.IMPORT_UNWRITABLE, NEXTFLOW_SCRIPT, "('echo')", "('')", "workflow provoke"),
-    # After a script's closing quotes, a comment is layout but code is not.
-    (_CODE.IMPORT_FOREIGN_DECLARATION, NEXTFLOW_SCRIPT, '    """\n\n    stub:', '    """ x\n\n    stub:', " x"),
-    # A byte that is not UTF-8, the 0xff \udcff stands for, in each file; nesting deeper than Python recurses in a
-    # call, a script's interpolation and the params file; and an integer longer than Python converts.
-    (_CODE.IMPORT_FOREIGN_STATEMENT, NEXTFLOW_SCRIPT, "    val message\n", "    val message // \udcff\n",
-     "val message"),
-    (_CODE.IMPORT_PARAMS, NEXTFLOW_PARAMS, '"hi"', '"h\udcffi"', '"message"'),
-    (_CODE.IMPORT_CONFIG, NEXTFLOW_CONFIG, "false", "false // \udcff", "false //"),
-    (_CODE.IMPORT_FOREIGN_STATEMENT, NEXTFLOW_SCRIPT, "greet(message)",
-     "greet(" + "(" * _DEEP + "message" + ")" * _DEEP + ")", "greet((("),
-    (_CODE.IMPORT_FOREIGN_SCRIPT, NEXTFLOW_SCRIPT, "${__sophios_shell_quote_9f72e('echo')}",
-     "${" + "(" * _DEEP + "__sophios_shell_quote_9f72e('echo')" + ")" * _DEEP + "}", "${((("),
-    (_CODE.IMPORT_PARAMS, NEXTFLOW_PARAMS, '"hi"', "[" * _DEEP + "]" * _DEEP, '"message": [[['),
-    (_CODE.IMPORT_PARAMS, NEXTFLOW_PARAMS, '"hi"', "9" * 5000, "{"),
-]
-# A value Sophios never writes, on each kind of line that holds one, in a case whose pipeline has that line: the
-# import stops at that line, not at the process or workflow the line is in.
-_VALUE_EDITS = [
-    (_CODE.IMPORT_FOREIGN_STATEMENT, NEXTFLOW_SCRIPT, "container 'registry.io/a b:{1}\\'\"'", "container ''",
-     "container ''", "resources"),
-    (_CODE.IMPORT_FOREIGN_STATEMENT, NEXTFLOW_SCRIPT, "cpus 2", "cpus 0", "cpus 0", "resources"),
-    (_CODE.IMPORT_FOREIGN_STATEMENT, NEXTFLOW_SCRIPT, 'memory "1.5 MB"', 'memory "0 MB"', 'memory "0 MB"', "resources"),
-    (_CODE.IMPORT_FOREIGN_STATEMENT, NEXTFLOW_SCRIPT, "cudaVersionMin: '11.7'", "cudaVersionMin: ['11.7']",
-     "cudaVersionMin: ['11.7']", "resources"),
-    (_CODE.IMPORT_FOREIGN_STATEMENT, NEXTFLOW_SCRIPT, "Directory: ['made']", "Directory: [made]", "Directory: [made]",
-     "resources"),
-    (_CODE.IMPORT_FOREIGN_DECLARATION, NEXTFLOW_SCRIPT, 'path "${word}.txt"', 'path "${word.size()}.txt"',
-     "word.size()", "valued"),
-    (_CODE.IMPORT_FOREIGN_SCRIPT, NEXTFLOW_SCRIPT, "('wc')", "('\\u0000')", "('\\u0000')", "valued"),
-    (_CODE.IMPORT_FOREIGN_SCRIPT, NEXTFLOW_SCRIPT, "('renamed.txt')}\n", "('a/b')}\n", "('a/b')", "bindings"),
-    (_CODE.IMPORT_FOREIGN_SCRIPT, NEXTFLOW_SCRIPT, "('lit $x')", "('\\u0000')", "export A=", "bindings"),
-    # The command of a parenthesized script is on the line after `(`, and its redirects on the `)` line.
-    (_CODE.IMPORT_FOREIGN_SCRIPT, NEXTFLOW_SCRIPT, "('prog')", "('\\u0000')", "('\\u0000')", "bindings"),
-    (_CODE.IMPORT_FOREIGN_SCRIPT, NEXTFLOW_SCRIPT, ") > ${", ") >> ${", ") >>", "bindings"),
-    # A number that is not a finite decimal, a string outside the subset, and a condition that is not a boolean.
-    *((_CODE.IMPORT_FOREIGN_STATEMENT, NEXTFLOW_SCRIPT, "Double.valueOf('1')", f"Double.valueOf({number})",
-       f"Double.valueOf({number})", "valued") for number in ("'0x1'", "'abc'", "'1e999'")),
-    (_CODE.IMPORT_FOREIGN_STATEMENT, NEXTFLOW_SCRIPT, "(__w1 == 'it\"s')", "(__w1 == 'é')", "'é'", "unary_whens"),
-    (_CODE.IMPORT_FOREIGN_STATEMENT, NEXTFLOW_SCRIPT, "run: (((__w1) as double) > Double.valueOf('1'))",
-     "run: Double.valueOf('1')", "run: Double.valueOf('1')", "valued"),
-    # A channel no statement makes, where a merge, a scatter or a branch reads it.
-    (_CODE.IMPORT_FOREIGN_STATEMENT, NEXTFLOW_SCRIPT, "word.merge(k)", "word.merge(nope)", "merge(nope)", "valued"),
-    (_CODE.IMPORT_FOREIGN_STATEMENT, NEXTFLOW_SCRIPT, ".merge(o) {", ".merge(nope) {", ".merge(nope)", "unary_whens"),
-    (_CODE.IMPORT_FOREIGN_STATEMENT, NEXTFLOW_SCRIPT, "= pair_a.map", "= nope.map", "nope.map", "dotproduct"),
-    (_CODE.IMPORT_FOREIGN_STATEMENT, NEXTFLOW_SCRIPT, "= one_1_n.branch", "= nope.branch", "nope.branch", "conditions"),
-    (_CODE.IMPORT_FOREIGN_STATEMENT, NEXTFLOW_SCRIPT, ".combine(each_2_n.map", ".combine(nope.map", ".combine(nope",
-     "conditions"),
-    (_CODE.IMPORT_FOREIGN_STATEMENT, NEXTFLOW_SCRIPT, "'merge_nested', 'first_non_null')", "'bogus', 'first_non_null')",
-     "'bogus'", "crossproduct"),
-    (_CODE.IMPORT_FOREIGN_STATEMENT, NEXTFLOW_SCRIPT, "params.word, 'string')", "params.word, 'strin')", "'strin'",
-     "valued"),
-    # A carrier names exactly the process's last val inputs, in order.
-    (_CODE.IMPORT_MISMATCH, NEXTFLOW_SCRIPT, "WorkflowStepInput: ['enabled']", "WorkflowStepInput: ['message']",
-     "WorkflowStepInput", "when"),
-    # A key another value names, and an absent optional File, which has no lowering.
-    (_CODE.IMPORT_PARAMS, NEXTFLOW_PARAMS, '"a": [],\n  "b": []', '"a": "b",\n  "b": 3', '"b": 3', "crossproduct"),
-    (_CODE.IMPORT_PARAMS, NEXTFLOW_PARAMS, '"f": {\n    "class": "File",\n    "path": "/data/f.txt"\n  }', '"f": []',
-     '"f": []', "conditions"),
-    # Nesting deeper than Python recurses in a string's interpolation, and in a condition.
-    (_CODE.IMPORT_FOREIGN_DECLARATION, NEXTFLOW_SCRIPT, 'path "${word}.txt"',
-     'path "${' + "(" * _DEEP + "word" + ")" * _DEEP + '}.txt"', 'path "${(((', "valued"),
-    (_CODE.IMPORT_FOREIGN_STATEMENT, NEXTFLOW_SCRIPT, "run: (((__w1) as double) > Double.valueOf('1'))",
-     "run: " + "(!" * _DEEP + "(((__w1) as double) > Double.valueOf('1'))" + ")" * _DEEP, "run: (!(!", "valued"),
-]
-_ALL_EDITS = [*((*edit, None) for edit in _EDITS), *_VALUE_EDITS]
-
-
-def test_the_unedited_pipeline_imports(tmp_path: Path) -> None:
-    """The pipeline every edit below starts from is one the import reads."""
-    assert isinstance(import_edited(str(tmp_path), NEXTFLOW_SCRIPT, "", ""), Workflow)
+_NF, _PARAMS = NEXTFLOW_SCRIPT, NEXTFLOW_PARAMS
+#: An edit: the code the import stops with, the file edited, the text replaced wherever it occurs (or the texts, each
+#: by its own), its replacement, and text on the line the import stops at.
+Edit = tuple[SophiosErrorCode, str, str | tuple[str, ...], str | tuple[str, ...], str]
+#: Edits of a pipeline, by the pipeline: an example's, or the one-step pipeline `import_edited` writes (None). One
+#: edit per code; then text Sophios never writes, each where a check that no other edit reaches reads it.
+EDITS: dict[str, tuple[str | None, list[Edit]]] = {
+    "one per code": (None, [(code, *edit) for code, edit in IMPORT_EDITS.items()]),
+    "one step": (None, [
+        (_CODE.IMPORT_FOREIGN_STATEMENT, _NF, "    greet(message)\n", "    greet(message.view())\n", ".view()"),
+        (_CODE.IMPORT_FOREIGN_STATEMENT, _NF, "    greet(message)\n", "    greet(message)\n    other(message)\n",
+         "other("),
+        # A second block of a process, which nothing else would read, and a process after a workflow.
+        (_CODE.IMPORT_FOREIGN_STATEMENT, _NF, "\nworkflow provoke {\n",
+         '\nprocess greet {\n    script:\n    """\n    rm o\n    """\n}\n\nworkflow provoke {\n', "process greet"),
+        (_CODE.IMPORT_MISMATCH, _NF, "\nworkflow provoke {\n",
+         "\nworkflow first {\n}\n\nprocess other {\n}\n\nworkflow provoke {\n", "process other"),
+        # A lone carriage return ends no line; after a script's closing quotes, a comment is layout but code is not.
+        (_CODE.IMPORT_FOREIGN_STATEMENT, _NF, "    input:\n", "    input:\r", "input:"),
+        (_CODE.IMPORT_FOREIGN_DECLARATION, _NF, '    """\n\n    stub:', '    """ x\n\n    stub:', " x"),
+        # The stub is Sophios's, word for word; a command on one line holds no shell literal, whose `;` would end it.
+        (_CODE.IMPORT_FOREIGN_SCRIPT, _NF, "    exit 1\n", "    exit 0\n", "stub:"),
+        (_CODE.IMPORT_MISMATCH, _NF, "('echo')} ", "('echo')} ; ", "('echo')} ;"),
+        (_CODE.IMPORT_FOREIGN_SCRIPT, _NF, "${__sophios_shell_quote_9f72e('echo')}",
+         "${" + "(" * _DEEP + "__sophios_shell_quote_9f72e('echo')" + ")" * _DEEP + "}", "${((("),
+        # The compile renames a capitalized workflow and refuses an empty command word; the tool builder keeps the
+        # port name `keys` for a method; a parameter's value is never null.
+        (_CODE.IMPORT_UNWRITABLE, _NF, "provoke", "Provoke", "workflow Provoke"),
+        (_CODE.IMPORT_UNWRITABLE, _NF, "('echo')", "('')", "workflow provoke"),
+        (_CODE.IMPORT_UNWRITABLE, _NF, ("    val message\n", "(message.toString())"),
+         ("    val keys\n", "(keys.toString())"), "process greet"),
+        (_CODE.IMPORT_PARAMS, _PARAMS, '"hi"', "null", '"message": null'),
+        # Lines of tens of KB that nearly match a form with several holes: one after a merge, which the reader tries
+        # as the merge's next step, and one in `main:`, where it tries every statement as a scatter's shape.
+        (_CODE.IMPORT_FOREIGN_STATEMENT, _NF, "    greet(message)\n",
+         "    ch_greet_in = a.merge(b) { __w0, __w1 -> tuple(__w0, __w1) }\n        .merge("
+         + "a) { __merged, b -> tuple(" * 1000 + "}" * 1000 + "\n    greet(message)\n", ".merge(a) { __merged"),
+        (_CODE.IMPORT_FOREIGN_STATEMENT, _NF, "    greet(message)\n",
+         "    ch_greet_shape = " + "a.map { b -> [[" * 1000 + "}" * 1000 + "\n    greet(message)\n",
+         "ch_greet_shape = a.map"),
+    ]),
+    "commands": ("commands", [
+        (_CODE.IMPORT_FOREIGN_DECLARATION, _NF, 'path "${filename}"',
+         'path "${' + "(" * _DEEP + "filename" + ")" * _DEEP + '}"', 'path "${((('),
+        (_CODE.IMPORT_FOREIGN_SCRIPT, _NF, "('hello  there')", "('\\u0000')", "export GREETING="),
+        # The command of a parenthesized script is on the line after `(`, and its redirects on the `)` line.
+        (_CODE.IMPORT_FOREIGN_SCRIPT, _NF, ") > ${", ") >> ${", ") >>"),
+        (_CODE.IMPORT_FOREIGN_STATEMENT, _NF, "params.emit_message, 'string')", "params.emit_message, 'strin')",
+         "'strin'"),
+        # A float parameter's value is its text, "2.5": never a number, nor text that is no finite float.
+        *((_CODE.IMPORT_PARAMS, _PARAMS, '"print_bindings_scale": "2.5"', f'"print_bindings_scale": {value}',
+           f'"print_bindings_scale": {value}') for value in ("2", '"x"', '"1e999"')),
+    ]),
+    "resources": ("resources", [
+        (_CODE.IMPORT_FOREIGN_STATEMENT, _NF, "    cpus 2\n", "    container ''\n    cpus 2\n", "container ''"),
+        (_CODE.IMPORT_FOREIGN_STATEMENT, _NF, 'memory "64 MB"', 'memory "0 MB"', 'memory "0 MB"'),
+        (_CODE.IMPORT_FOREIGN_STATEMENT, _NF, "cudaVersionMin: '11.4'", "cudaVersionMin: ['11.4']",
+         "cudaVersionMin: ['11.4']"),
+        (_CODE.IMPORT_FOREIGN_STATEMENT, _NF, "Directory: ['result']", "Directory: [result]", "Directory: [result]"),
+    ]),
+    "conditions_and_scatter": ("conditions_and_scatter", [
+        # A string outside the subset; a channel no statement makes; a carrier names exactly the last val inputs.
+        (_CODE.IMPORT_FOREIGN_STATEMENT, _NF, "(__w0 != 'b')", "(__w0 != 'é')", "'é'"),
+        (_CODE.IMPORT_FOREIGN_STATEMENT, _NF, "= pair_unless_b_first.map", "= nope.map", "nope.map"),
+        (_CODE.IMPORT_MISMATCH, _NF, "WorkflowStepInput: ['enabled']", "WorkflowStepInput: ['go']",
+         "WorkflowStepInput"),
+    ]),
+    "calculator": ("calculator", [
+        # A condition nested deeper than Python recurses; a number literal that is not finite; an operand, a check's
+        # parts and a check's value each as no compile writes them.
+        (_CODE.IMPORT_FOREIGN_STATEMENT, _NF, "run: (Double.valueOf('3') == Double.valueOf('3'))",
+         "run: " + "(!" * _DEEP + "(Double.valueOf('3') == Double.valueOf('3'))" + ")" * _DEEP, "run: (!(!"),
+        (_CODE.IMPORT_FOREIGN_STATEMENT, _NF, "run: (Double.valueOf('3') == Double.valueOf('3'))",
+         "run: (Double.valueOf('3') == Double.valueOf('1e999'))", "Double.valueOf('1e999')"),
+        (_CODE.IMPORT_FOREIGN_STATEMENT, _NF, "run: (Double.valueOf('3') == Double.valueOf('3'))",
+         "run: (Double.valueOf('3') == three)", "three)"),
+        (_CODE.IMPORT_FOREIGN_STATEMENT, _NF, "7.5)', '(inputs.i + 0.5)'", "7.5)'; '(inputs.i + 0.5)'",
+         "; '(inputs.i + 0.5)'"),
+        (_CODE.IMPORT_FOREIGN_STATEMENT, _NF, "__sophios_round_9f72e(Double.valueOf('1e19'))",
+         "Double.valueOf('1e19')", "Double.valueOf('1e19'), 'c12"),
+    ]),
+    "staging": ("staging", [
+        (_CODE.IMPORT_FOREIGN_SCRIPT, _NF, "('renamed.txt')}\n", "('a/b')}\n", "('a/b')"),
+    ]),
+}
 
 
 def _stops(code: SophiosErrorCode, path: Path, at: str, importing: Callable[[], object]) -> None:
@@ -728,65 +444,101 @@ def _stops(code: SophiosErrorCode, path: Path, at: str, importing: Callable[[], 
     with pytest.raises(SophiosError) as caught:
         importing()
     (diagnostic,) = caught.value.diagnostics
-    assert diagnostic.code is code, diagnostic
-    assert diagnostic.span is not None and Path(diagnostic.span.file) == path
+    assert diagnostic.code is code, (at, diagnostic)
+    assert diagnostic.span is not None and Path(diagnostic.span.file) == path, (at, diagnostic)
     assert at in path.read_bytes().decode("utf-8", "surrogateescape").split("\n")[diagnostic.span.start_line - 1]
-    assert at in diagnostic.message
+    assert at in diagnostic.message, diagnostic
 
 
-@pytest.mark.parametrize("code, file, old, new, at, case", _ALL_EDITS, ids=[
-    f"{edit[0].name}-{edit[4]!r}" + (f"-{edit[5]}" if edit[5] else "") for edit in _ALL_EDITS])
+def _edited(directory: Path, pipeline: str | None, file: str, old: str | tuple[str, ...],
+            new: str | tuple[str, ...]) -> Workflow:
+    """The files `_texts(pipeline)`, each `old` replaced by its `new` in `file`, written into `directory`, imported."""
+    olds, news = (old,) if isinstance(old, str) else old, (new,) if isinstance(new, str) else new
+    for name, text in _texts(pipeline).items():
+        if name == file:
+            for replaced, replacement in zip(olds, news, strict=True):
+                assert replaced in text, replaced
+                text = text.replace(replaced, replacement)
+        (directory / name).write_text(text, encoding="utf-8")
+    return import_nextflow(directory)
+
+
+@pytest.mark.parametrize("pipeline, edits", EDITS.values(), ids=EDITS)
 def test_an_edit_outside_the_subset_stops_the_import_at_its_line(
-        code: SophiosErrorCode, file: str, old: str, new: str, at: str, case: str | None, tmp_path: Path) -> None:
-    workflow = CASES[case]() if case else None
-    _stops(code, tmp_path / file, at, lambda: import_edited(str(tmp_path), file, old, new, workflow))
+        pipeline: str | None, edits: list[Edit], tmp_path: Path) -> None:
+    """Each edit stops the import with its code, at a line that holds the text the edit names (`_stops`), and within
+    seconds: each hole of a form is read once, so a line of tens of KB that nearly matches one is read in linear
+    time."""
+    for index, (code, file, old, new, at) in enumerate(edits):
+        directory = tmp_path / str(index)
+        directory.mkdir()
+        started = time.perf_counter()
+        _stops(code, directory / file, at, partial(_edited, directory, pipeline, file, old, new))
+        assert time.perf_counter() - started < 5.0, at
 
 
-# Lines of tens of KB that nearly match a form with several holes: one after a merge, which the reader tries as the
-# merge's next step, and one in `main:`, where it tries every statement as a scatter's shape.
-_NEAR_MISSES = {
-    "merge": ("    ch_greet_in = a.merge(b) { __w0, __w1 -> tuple(__w0, __w1) }\n        .merge("
-              + "a) { __merged, b -> tuple(" * 1000 + "}" * 1000 + "\n", ".merge(a) { __merged"),
-    "shape": ("    ch_greet_shape = " + "a.map { b -> [[" * 1000 + "}" * 1000 + "\n", "ch_greet_shape = a.map"),
-}
+def _unread(tmp_path: Path, name: str) -> Path:
+    """A one-step pipeline holding a parameter no step reads, named `name` in all three files."""
+    step = _echo("greet", message=Input(cwl.string, position=1)).to_step()
+    workflow = Workflow([step], "unread")
+    step.inputs.message = "hi"
+    workflow.inputs.placeholder.as_type("string")  # pylint: disable=no-member
+    workflow.inputs.placeholder = "kept"
+    workflow.outputs.out = step.outputs.out
+    workflow.compile(target="nextflow").write(tmp_path)
+    for file in _FILES:
+        path = tmp_path / file
+        path.write_text(path.read_text(encoding="utf-8").replace("placeholder", name), encoding="utf-8")
+    return tmp_path
 
 
-@pytest.mark.parametrize("lines, at", _NEAR_MISSES.values(), ids=list(_NEAR_MISSES))
-def test_a_long_near_miss_stops_the_import_at_its_line(lines: str, at: str, tmp_path: Path) -> None:
-    """A line of tens of KB that nearly matches a form stops the import at its line, as other text Sophios does not
-    write does, and within seconds: each hole is read once, so the time is linear in the line's length."""
-    call = "    greet(message)\n"
-    started = time.perf_counter()
-    _stops(_CODE.IMPORT_FOREIGN_STATEMENT, tmp_path / NEXTFLOW_SCRIPT, at,
-           lambda: import_edited(str(tmp_path), NEXTFLOW_SCRIPT, call, lines + call))
-    assert time.perf_counter() - started < 5.0
+#: Words the pipeline `_unread` writes, which a parameter's name would be read as.
+_WRITTEN = re.compile(r"\w+")
 
 
-@cache
-def _bytes(name: str) -> dict[str, bytes]:
-    """The three files written for a case."""
-    with tempfile.TemporaryDirectory() as directory:
-        write_nextflow_artifacts(_compiled(name), directory)
-        return {file: (Path(directory) / file).read_bytes() for file in _FILES}
+@budget(30)
+@given(st.sampled_from(sorted(dir(ParameterNamespace))) | st.from_regex(r"_{0,2}[a-z][a-z0-9_]{0,5}", fullmatch=True))
+@example("keys")
+@example("_items")
+@example("_store")
+@example("__x__")
+def test_a_parameter_imports_exactly_when_a_python_workflow_can_take_its_input(name: str) -> None:
+    """A parameter is a workflow input: a pipeline whose parameter is renamed `name` imports exactly when
+    `flow.inputs.<name> = value` works. An attribute of the port namespace, such as `_store`, is read as itself, so it
+    stops the import at its workflow, not with an AttributeError; `keys` and `_items` import."""
+    with tempfile.TemporaryDirectory() as scratch:
+        directory = _unread(Path(scratch) / "written", "placeholder")
+        written = set(_WRITTEN.findall("".join((directory / file).read_text(encoding="utf-8") for file in _FILES)))
+        if name in written or name == "placeholder":
+            return
+        directory = _unread(Path(scratch) / "renamed", name)
+        try:
+            setattr(Workflow([], "python").inputs, name, "kept")
+        except ValueError:
+            _stops(_CODE.IMPORT_UNWRITABLE, directory / NEXTFLOW_SCRIPT, "workflow unread",
+                   lambda: import_nextflow(directory))
+        else:
+            assert name in [port.name for port in import_nextflow(directory).inputs]
 
 
 @st.composite
 def _corrupted(draw: st.DrawFn) -> tuple[str, str, bytes]:
-    """A case of values of each kind or thirty conditions, with one of its three files cut short or holding a non-UTF-8
-    byte, an integer longer than Python converts, or nesting deeper than it recurses."""
-    case, file = draw(st.sampled_from(["valued", "calculator"])), draw(st.sampled_from(_FILES))
-    data = _bytes(case)[file]
+    """The example of step inputs or of commands, or thirty conditions, with one of its three files cut short or
+    holding a non-UTF-8 byte, an integer longer than Python converts, or nesting deeper than it recurses."""
+    name = draw(st.sampled_from(["step_inputs", "commands", "calculator"]))
+    file = draw(st.sampled_from(_FILES))
+    data = _texts(name)[file].encode("utf-8")
     kind = draw(st.sampled_from(["cut", "byte", "digits", "nesting"]))
     if kind == "cut":
-        return case, file, data[:draw(st.integers(0, len(data) - 1))]
+        return name, file, data[:draw(st.integers(0, len(data) - 1))]
     if kind == "nesting":
         at = draw(st.sampled_from([0, *(index + 1 for index, byte in enumerate(data) if byte in b"([{'\"")]))
         opener, closer = draw(st.sampled_from([(b"(", b""), (b"(", b")"), (b"[", b"]"), (b"{", b"}"), (b"${", b"}"),
                                                (b"(!", b")")]))
-        return case, file, data[:at] + opener * _DEEP + closer * _DEEP + data[at:]
+        return name, file, data[:at] + opener * _DEEP + closer * _DEEP + data[at:]
     at = draw(st.integers(0, len(data)))
     inserted = b"9" * 5000 if kind == "digits" else draw(st.sampled_from([b"\xff", b"\xc3", b"\xed\xa0\x80"]))
-    return case, file, data[:at] + inserted + data[at:]
+    return name, file, data[:at] + inserted + data[at:]
 
 
 @budget(300)
@@ -794,10 +546,10 @@ def _corrupted(draw: st.DrawFn) -> tuple[str, str, bytes]:
 def test_whatever_bytes_the_files_hold_the_read_returns_a_model_or_stops_with_a_code(
         corrupted: tuple[str, str, bytes]) -> None:
     """The read returns a model or raises SophiosError or OSError, as its docstring says, and nothing else."""
-    case, file, data = corrupted
+    name, file, data = corrupted
     with tempfile.TemporaryDirectory() as directory:
-        for name, written in _bytes(case).items():
-            (Path(directory) / name).write_bytes(data if name == file else written)
+        for each, text in _texts(name).items():
+            (Path(directory) / each).write_bytes(data if each == file else text.encode("utf-8"))
         with suppress(SophiosError, OSError):
             read_nextflow(directory)
 
@@ -821,78 +573,4 @@ def test_a_condition_too_deep_to_render_stops_the_import_at_its_workflow(
 
     monkeypatch.setattr("sophios.nf_reader.render_nextflow", too_deep)
     _stops(_CODE.IMPORT_FOREIGN_STATEMENT, tmp_path / NEXTFLOW_SCRIPT, "workflow provoke",
-           lambda: import_edited(str(tmp_path), NEXTFLOW_SCRIPT, "", ""))
-
-
-def test_an_int_for_a_float_parameter_stops_the_import(tmp_path: Path) -> None:
-    """Sophios writes a float parameter's value as its text, `"1.0"` and never the int `1`, which an import would
-    write back as `"1.0"`."""
-    write_nextflow_artifacts(_compiled("resources"), tmp_path)
-    path = tmp_path / NEXTFLOW_PARAMS
-    path.write_text(path.read_text(encoding="utf-8").replace('"0.1"', "1"), encoding="utf-8")
-    _stops(_CODE.IMPORT_PARAMS, path, '"res_ratio": 1', lambda: import_nextflow(tmp_path))
-
-
-def test_a_process_block_after_the_workflows_stops_the_import(tmp_path: Path) -> None:
-    """The process blocks are free in their order among themselves, not past the workflows (design §4.2)."""
-    import_edited(str(tmp_path), NEXTFLOW_SCRIPT, "", "")
-    path = tmp_path / NEXTFLOW_SCRIPT
-    text = path.read_text(encoding="utf-8")
-    (block,) = _PROCESS_BLOCKS.findall(text)
-    path.write_text(text.replace(block, "") + "\n" + block, encoding="utf-8")
-    _stops(_CODE.IMPORT_MISMATCH, path, "process greet", lambda: import_nextflow(tmp_path))
-
-
-def test_a_port_the_tool_builder_cannot_name_stops_the_import_at_its_process(tmp_path: Path) -> None:
-    """A CWL tool may call a port `keys`, which `Inputs` keeps for its method, so no workflow built through the
-    tool builder compiles to the pipeline."""
-    step = Step.from_cwl_document({
-        "cwlVersion": "v1.2", "class": "CommandLineTool", "baseCommand": "echo", "stdout": "o.txt",
-        "inputs": {"keys": {"type": "string", "inputBinding": {"position": 1}}},
-        "outputs": {"out": {"type": "File", "outputBinding": {"glob": "o.txt"}}}}, process_name="tool")
-    workflow = Workflow([step], "reserved")
-    step.inputs.keys, workflow.outputs.out = "x", step.outputs.out
-    workflow.compile(target="nextflow").write(tmp_path)
-    _stops(_CODE.IMPORT_UNWRITABLE, tmp_path / NEXTFLOW_SCRIPT, "process tool", lambda: import_nextflow(tmp_path))
-
-
-@pytest.mark.parametrize("name", sorted({*dir(ParameterNamespace), "keys", "_items", "_x", "__x__"}))
-def test_a_parameter_imports_exactly_when_a_python_workflow_can_take_its_input(name: str, tmp_path: Path) -> None:
-    """A parameter is a workflow input: a pipeline whose parameter `unread` is renamed in all three files imports
-    exactly when `flow.inputs.<name> = value` works. An attribute of the port namespace, such as `_store`, is read
-    as itself, so it stops the import at its workflow, not with an AttributeError; `keys` and `_items` import."""
-    write_nextflow_artifacts(_compiled("valued"), tmp_path)
-    for file in _FILES:
-        path = tmp_path / file
-        path.write_text(path.read_text(encoding="utf-8").replace("unread", name), encoding="utf-8")
-    try:
-        setattr(Workflow([], "python").inputs, name, "kept")
-    except ValueError:
-        _stops(_CODE.IMPORT_UNWRITABLE, tmp_path / NEXTFLOW_SCRIPT, "workflow valued",
-               lambda: import_nextflow(tmp_path))
-    else:
-        assert name in [port.name for port in import_nextflow(tmp_path).inputs]
-
-
-def test_the_import_reads_the_three_files_alone(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """Copied alone into an empty directory, with the network refused, the files import, and no path a parameter
-    names is looked at: not `nextflow_workflow.json`, no tool registry, no network, no input file."""
-    model = _compiled("valued")
-    write_nextflow_artifacts(model, tmp_path / "written")
-    (tmp_path / "alone").mkdir()
-    for file in _FILES:
-        shutil.copy(tmp_path / "written" / file, tmp_path / "alone" / file)
-    named = {item["path"] for value in model.to_dict()["params"].values()
-             for item in (value if isinstance(value, list) else [value]) if isinstance(item, dict)}
-    looked: list[str] = []
-    stat = os.stat
-
-    def recording(path: Any, *args: Any, **kwargs: Any) -> os.stat_result:
-        looked.append(os.fspath(path) if isinstance(path, (str, os.PathLike)) else str(path))
-        return stat(path, *args, **kwargs)
-
-    monkeypatch.setattr(os, "stat", recording)
-    with network_refused() as attempts:
-        imported = _imported(tmp_path / "alone")
-    assert (imported, attempts, named & set(looked)) == (model, [], set())
-    assert named, "the case names no file"
+           partial(_edited, tmp_path, None, NEXTFLOW_SCRIPT, "", ""))

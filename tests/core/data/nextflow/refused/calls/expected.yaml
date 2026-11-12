@@ -1,0 +1,39 @@
+why: A call's input takes one source as it is, computes nothing and replaces the called workflow's default; a call is
+  neither scattered nor conditional; the called workflow's ports, requirements and hints are judged as the root's are;
+  a workflow output relaying a nested input nothing binds refuses that input once, at the call that leaves it unbound.
+# Each refusal: its code, its step, and its subject (a tool's file and field, a port, or a requirement).
+roots:
+  workflow.wic:
+  - [nf-s016, joined, 'source']
+  - [nf-s016, joined, 'source']
+  - [nf-s016, joined, 'source']
+  - [nf-s016, joined, 'source']
+  - [nf-s019, computed, 'source']
+  - [nf-s016, defaulted, 'source']
+  - [nf-s003, scattered, null]
+  - [nf-s009, conditional, null]
+  - [nf-s048, ports, 'source']
+  - [nf-s024, ports, 'source']
+  - [nf-s048, ports, 'result']
+  - [nf-s048, long_input, 'source']
+  - [nf-s048, long_output, 'result']
+  - [nf-s048, long_output, 'make_long~n']
+  - [nf-s031, write_all, 'write_all.cwl: outputs.result.type']
+  - [nf-s036, hinted_first~copy, 'SoftwareRequirement']
+  - [nf-s036, hinted_second~copy, 'SoftwareRequirement']
+  - [nf-s036, required~copy, 'SoftwareRequirement']
+  - [nf-s031, ports~copy_all, 'copy_all.cwl: outputs.result.type']
+  - [nf-s048, make_long, 'make_long.cwl: outputs.n.type']
+  - [nf-s034, make_long, 'make_long.cwl: outputs.n.outputBinding']
+  - [nf-s048, long_input~take_long, 'take_long.cwl: inputs.n.type']
+  - [nf-s048, long_output~make_long, 'make_long.cwl: outputs.n.type']
+  - [nf-s034, long_output~make_long, 'make_long.cwl: outputs.n.outputBinding']
+  - [nf-s048, null, 'ports~result']
+  - [nf-s048, null, 'make_long~n']
+  - [nf-s048, null, 'long_output~result']
+  - [nf-s048, null, 'long_output~make_long~n']
+  relays.wic:
+  - [nf-s025, relay, 'extra']
+  - [nf-s025, two_calls~relay, 'extra']
+  - [nf-s025, two_calls, 'x']
+  - [nf-s025, relayed, 'extra']

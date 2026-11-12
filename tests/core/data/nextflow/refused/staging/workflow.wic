@@ -1,0 +1,60 @@
+# Staged inputs, InitialWorkDirRequirement entries and references to them the Nextflow target refuses, all in one
+# workflow: lowering it reports every refusal expected.yaml lists for this file, at once.
+steps:
+- id: entries
+  in: {a: !ii in.txt, b: !ii in.txt, c: !ii in.txt, d: !ii in.txt, e: !ii in.txt, f: !ii in.txt, g: !ii in.txt,
+       h: !ii in.txt, flag: !ii true, name: !ii n, files: !ii [in.txt]}
+- id: listing_not_a_list
+- id: renamed_entries
+  in: {twice: !ii in.txt, bare: !ii in.txt, first: !ii in.txt, second: !ii in.txt}
+- id: directory_fields
+  in: {d: !ii in, f: !ii in.txt}
+- id: references
+  in: {f: !ii in.txt, d: !ii in}
+- id: references_to_entries
+  in: {f: !ii in.txt, d: !ii in}
+- id: object_streams
+  in: {f: !ii in.txt, linked: !ii in.txt}
+
+# Refused for the whole step: a renamed entry referenced anywhere; a list of globs; a glob at, or a stream written
+# through, the link a staged input is under, a name CWL does not match or that writes into the input.
+- id: renamed_and_referenced
+  in: {source: !ii in.txt}
+- id: renamed_and_written
+  in: {f: !ii in.txt}
+- id: linked_by_basename
+  in: {f: !ii in.txt}
+- id: list_of_globs
+  in: {f: !ii in.txt}
+- id: glob_at_a_staged_file
+  in: {source: !ii in.txt}
+- id: glob_inside_a_staged_directory
+  in: {source: !ii in}
+- id: stdout_at_a_staged_file
+  in: {source: !ii in.txt}
+- id: stderr_inside_a_staged_directory
+  in: {source: !ii in}
+- id: stdout_at_an_entry
+  in: {source: !ii in.txt}
+# A step's output named like the link its consumer stages it under: writing it writes through into the input.
+- id: emit
+  out: [out: !& emitted]
+- id: sort
+  in: {src: !* emitted}
+- id: emit_into_a_directory
+  out: [out: !& emitted_inside]
+- id: sort_from_a_directory
+  run: sort
+  in: {src: !* emitted_inside}
+- id: sort_dot_slash
+  in: {src: !* emitted}
+- id: sort_by_its_glob
+  in: {src: !* emitted}
+- id: emit_a_directory
+  out: [out: !& emitted_directory]
+- id: list_into_it
+  in: {src: !* emitted_directory}
+- id: sort_an_entry
+  in: {src: !* emitted}
+- id: entry_of_a_number       # the listing alone is refused
+  in: {f: !* emitted}

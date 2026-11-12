@@ -1,0 +1,6 @@
+# read_text has the output `result`, and no output `nope`.
+outputs:
+  r: {type: File, outputSource: read_text/nope}
+steps:
+- id: read_text
+  in: {text: !ii hi}

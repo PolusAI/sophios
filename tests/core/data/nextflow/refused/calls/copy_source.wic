@@ -1,0 +1,8 @@
+# Copy the source it is given.
+inputs:
+  source: File
+outputs:
+  result: {type: File, outputSource: copy/result}
+steps:
+- id: copy
+  in: {source: source}

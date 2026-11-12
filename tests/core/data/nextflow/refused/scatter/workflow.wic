@@ -1,0 +1,64 @@
+# Scattered steps the Nextflow target refuses, all in one workflow: lowering it reports every refusal expected.yaml
+# lists for this file, at once. As CWL the workflow is valid; each refusal is the target's, with its own code. The
+# other .wic files here are each refused for one reason, which is reported only when nothing else is.
+inputs:
+  words: {type: 'string[]', default: [a, b]}
+  anything: {type: Any, default: a}
+  lists: {type: {type: array, items: {type: array, items: string}}, default: [[a], [b]]}
+  flags: {type: 'boolean[]', default: [true]}
+
+steps:
+# A scatter names its inputs, over two of them with one of CWL's methods, and a method needs a scatter.
+- id: no_method
+  run: pair
+  scatter: [first, second]
+  in: {first: words, second: words}
+- id: not_a_method
+  run: say
+  scatter: [word]
+  scatterMethod: product
+  in: {word: words}
+- id: names_no_input
+  run: say
+  scatter: []
+  in: {word: !ii a}
+- id: method_alone
+  run: say
+  scatterMethod: dotproduct
+  in: {word: !ii a}
+
+# A scattered input's source is one array of values, which an unscattered step's output and a join are not, and its
+# tool declares it.
+- id: over_anything
+  run: say
+  scatter: [word]
+  in: {word: anything}
+- id: make_files
+  out: [files: !& made]
+- id: over_one_value
+  run: show
+  scatter: [file]
+  in: {file: !* made}
+- id: over_arrays
+  run: say_all
+  scatter: [words]
+  in: {words: lists}
+- id: over_a_step_only_input
+  run: say
+  scatter: [enabled]
+  in: {word: !ii a, enabled: !cwl {source: flags}}
+- id: over_two_sources
+  run: say
+  scatter: [word]
+  in: {word: !cwl {source: [words, words], linkMerge: merge_flattened}}
+
+# A nested crossproduct's array of arrays reaches workflow outputs only.
+- id: pairs
+  run: pair
+  scatter: [first, second]
+  scatterMethod: nested_crossproduct
+  in: {first: words, second: words}
+  out: [out: !& pairs]
+- id: reads_pairs
+  run: show_nested
+  in: {files: !* pairs}

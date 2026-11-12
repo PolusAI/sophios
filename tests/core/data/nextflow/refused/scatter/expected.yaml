@@ -1,0 +1,27 @@
+why: A scatter names one input or more, over two with a method of CWL's three, and a method needs a scatter; a scattered
+  input's source is one array of values its tool declares; a nested crossproduct reaches workflow outputs only; a
+  workflow's requirements are a mapping or list, each consumed or refused naming itself at the steps that inherit it.
+# Each refusal: its code, its step, and its subject (a tool's file and field, a port, or a requirement).
+roots:
+  requirements_of_the_wrong_shape.wic:
+  - [nf-s055, null, null]
+  workflow.wic:
+  - [nf-s031, make_files, 'make_files.cwl: outputs.files.type']
+  - [nf-s048, reads_pairs, null]
+  - [nf-s017, null, 'words']
+  - [nf-s048, null, 'anything']
+  - [nf-s048, null, 'lists']
+  - [nf-s017, null, 'flags']
+  - [nf-s008, method_alone, null]
+  - [nf-s055, no_method, null]
+  - [nf-s055, not_a_method, null]
+  - [nf-s055, names_no_input, null]
+  - [nf-s006, over_anything, 'word']
+  - [nf-s004, over_arrays, null]
+  - [nf-s005, over_a_step_only_input, 'enabled']
+  - [nf-s006, over_one_value, 'file']
+  - [nf-s007, reads_pairs, 'files']
+  - [nf-s006, over_two_sources, 'word']
+  workflow_requirements.wic:
+  - [nf-s036, each_word, 'SoftwareRequirement']
+  - [nf-s054, null, 'ScatterFeatureRequirement']

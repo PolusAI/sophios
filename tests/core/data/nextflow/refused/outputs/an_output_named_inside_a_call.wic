@@ -1,0 +1,6 @@
+# CWL reads inner/made as the call's output. Sophios keeps the text as written and runs the call's steps in place,
+# so the target finds no step called inner.
+outputs:
+  made: {type: File, outputSource: inner/made}
+steps:
+- id: inner.wic

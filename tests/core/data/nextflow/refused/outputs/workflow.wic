@@ -1,0 +1,18 @@
+# Outputs the Nextflow target refuses, all in one workflow: lowering it reports every refusal expected.yaml lists
+# for this file, at once. As CWL the workflow is valid; each refusal is the target's, with its own code.
+# The other .wic files here are each refused for one reason, which is reported only when nothing else is refused.
+steps:
+- id: evals               # each of its outputs states an outputEval the target does not read
+  in: {message: !ii hi}
+- id: captures            # each of its outputs states a declaration where it cannot be kept
+  in: {message: !ii hi}
+
+- id: say_text            # the text of a file, as a string ...
+  in: {message: !ii hi}
+  out: [text: !& said]
+- id: read_text           # ... can be a workflow output, and cannot feed a step
+  in: {text: !* said}
+
+- id: many_files          # a File[] output: an output is one File or Directory
+- id: named_by_an_array   # a glob reading an array input
+  in: {xs: !ii [a]}

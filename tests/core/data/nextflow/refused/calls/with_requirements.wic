@@ -1,0 +1,8 @@
+# Copy the source it is given, with a SoftwareRequirement among its requirements.
+requirements:
+  SoftwareRequirement: {packages: []}
+inputs:
+  source: File
+steps:
+- id: copy
+  in: {source: source}

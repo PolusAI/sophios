@@ -33,11 +33,13 @@ steps:
 # shellQuote: false is the one way to write shell syntax, and stdout and stderr take the whole command's output.
 - id: shell_redirect      # redirected.txt holds the one quoted word
 - id: three_commands      # out.txt holds the first two lines, err.txt the third
+  in: {flag: !ii true}
 
 # Bindings: a true flag is its prefix and a false one nothing; an array takes its prefix once; an optional input is
 # its prefix and value, apart or joined, or nothing when it has none; a float is printed as written.
 - id: print_bindings
-  in: {verbose: !ii true, quiet: !ii false, ratios: !ii [0.5, 1.25], tag: !ii a b, label: !ii x, scale: !ii 2.5}
+  in: {verbose: !ii true, quiet: !ii false, ratios: !ii [0.5, 1.25], tag: !ii a b, label: !ii x, scale: !ii 2.5,
+       silent: !ii unread}
 
 # One output read by two steps, from a tool that asks for 2 cores and 64 MiB.
 - id: produce

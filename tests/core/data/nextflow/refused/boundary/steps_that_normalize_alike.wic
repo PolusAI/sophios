@@ -1,0 +1,11 @@
+# A repeated step id carries `@<position>`, and it and a written id may normalize alike.
+steps:
+- id: touch
+  run: say
+  in: {word: !ii a}
+- id: touch
+  run: say
+  in: {word: !ii b}
+- id: touch_2
+  run: say
+  in: {word: !ii c}

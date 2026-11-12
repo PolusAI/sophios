@@ -1,0 +1,6 @@
+# The workflow an_output_named_inside_a_call.wic calls.
+outputs:
+  made: {type: File, outputSource: read_text/result}
+steps:
+- id: read_text
+  in: {text: !ii hi}

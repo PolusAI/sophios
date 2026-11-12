@@ -1,0 +1,8 @@
+# Copy the sources it is given; its ports declare what no step reads: secondary files, and names of array schemas.
+inputs:
+  source: {type: {type: array, items: File, name: inputs}, secondaryFiles: [.fai]}
+outputs:
+  result: {type: {type: array, items: File, name: outputs}, outputSource: copy_all/result}
+steps:
+- id: copy_all
+  in: {source: source}

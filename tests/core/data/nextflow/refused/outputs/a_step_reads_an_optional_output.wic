@@ -1,0 +1,6 @@
+# A File? output may be null, which a workflow output takes and a step does not.
+steps:
+- id: maybe_file
+  out: [o: !& maybe]
+- id: read_maybe
+  in: {source: !* maybe}
