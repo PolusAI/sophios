@@ -217,6 +217,10 @@ def _step(draw: st.DrawFn, stem: str, defined_edges: list[tuple[str, Any]],
         declared = inputs_of(stem)[name].get('type')
         return {'type': 'array', 'items': declared} if name in ports else declared
 
+    def literal(name: str) -> InlineLiteral:
+        value = draw(_literal_for(inputs_of(stem)[name].get('type')))
+        return InlineLiteral([value] if name in ports else value, _SPAN)
+
     chosen = draw(st.lists(st.sampled_from(names), unique=True, max_size=len(names))) if names else []
     # Infer lifts only a required input, so a scattered one that is not must be bound.
     chosen += [name for name in ports if name not in chosen and name not in required_inputs_of(stem)]
@@ -243,10 +247,7 @@ def _step(draw: st.DrawFn, stem: str, defined_edges: list[tuple[str, Any]],
             + (['record'] if references or fits else [])
         match draw(st.sampled_from(forms)):
             case 'literal':
-                literal = draw(_literal_for(inputs_of(stem)[name].get('type')))
-                if name in ports:
-                    literal = [literal]
-                bindings.append((name, InlineLiteral(literal, _SPAN)))
+                bindings.append((name, literal(name)))
             case 'unresolved' | 'raw' as form:
                 declared = draw(st.sampled_from(references))
                 referenced_inputs.add(declared)
@@ -256,6 +257,12 @@ def _step(draw: st.DrawFn, stem: str, defined_edges: list[tuple[str, Any]],
                 bindings.append((name, draw(_record(sink(name), fits, references, referenced_inputs))))
             case _:
                 bindings.append((name, EdgeRef(draw(st.sampled_from(fits)), _SPAN)))
+
+    # Inference refuses an input inferred from an output another input of the step reads (wic055), so a step that
+    # reads an edge binds every required input.
+    if any(isinstance(source, EdgeRef) for _, value in bindings
+           for source in (value.sources if isinstance(value, CwlRecord) else (value,))):
+        bindings += [(name, literal(name)) for name in required_inputs_of(stem) if name not in chosen]
 
     # `bool(...)` around the left operand of `and draw(...)`: mypy otherwise types draw's result from that operand.
     outs: list[OutputBinding] = []
