@@ -36,6 +36,8 @@ from .budgets import budget
 from .cases import cases, match
 from .helpers import REPO_ROOT, live_workflow, python_process
 
+pytestmark = pytest.mark.package
+
 DOCS = REPO_ROOT / 'docs'
 
 

@@ -14,6 +14,8 @@ from sophios.api.python.workflow import Step, Workflow
 
 from .helpers import EACH_RUNNER, no_preflight, run_cli, search_config, write_tree
 
+pytestmark = pytest.mark.package
+
 TOOL: Final = 'cwlVersion: v1.2\nclass: CommandLineTool\nbaseCommand: echo\ninputs: {}\noutputs: {}\n'
 WORKFLOW: Final = 'steps:\n- id: noop\n'
 

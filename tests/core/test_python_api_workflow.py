@@ -707,6 +707,7 @@ def test_workflow_run_reports_an_unwritable_basepath_as_wic021(monkeypatch: pyte
                                f"but {locked} is not writable by you: pass run() a basepath you can write to.")
 
 
+@pytest.mark.cwl_corpus
 @pytest.mark.fast
 def test_compile_python_workflows() -> None:
     """Import and compile all auto-discovered Python workflow scripts."""

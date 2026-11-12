@@ -11,6 +11,8 @@ from sophios.ir.frontdoor import bundle_from_disk
 
 from .synthetic_tools import SYNTHETIC_TOOLS
 
+pytestmark = pytest.mark.package
+
 
 def _compile_wic(wic: Path) -> CompilationArtifact:
     return compile_source(bundle_from_disk(wic, {}, SYNTHETIC_TOOLS), default_compilation_settings(),

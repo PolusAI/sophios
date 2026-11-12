@@ -8,6 +8,8 @@ from sophios.wic_types import StepId, Yaml
 from .hermetic import compile_hermetic_cwl, subworkflow_step
 from .synthetic_tools import SYNTHETIC_NS, SYNTHETIC_TOOLS
 
+pytestmark = pytest.mark.package
+
 
 @pytest.mark.fast
 @pytest.mark.parametrize(('claim', 'user', 'argument', 'expected'), [

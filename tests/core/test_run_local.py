@@ -32,7 +32,7 @@ from .helpers import (ADAPTERS, EACH_RUNNER, HELLOWORLD, REPO_ROOT, adapter_step
 from .nextflow.test_public_api import CUDA_NOTES, gpu_workflow
 from .test_backends import _Frozen
 
-pytestmark = POSIX_ONLY
+pytestmark = [POSIX_ONLY, pytest.mark.package]
 
 
 @pytest.fixture(name='offline')

@@ -42,7 +42,7 @@ surfaces'. The markers, declared in `pyproject.toml`:
 - `slow`: workflow and integration tests;
 - `serial`: tests that cannot run under `pytest --workers`;
 - `needs_cwltool`: runs cwltool; skipped off POSIX;
-- `skip_pypi_ci`: left out of the packaging lane;
+- `skip_pypi_ci`: left out of the release lane and the package job;
 - `contrib`: a contrib surface rather than the core compiler.
 
 Three kinds of test carry the promises the documentation makes:

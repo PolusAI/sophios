@@ -241,7 +241,9 @@ markers = [
     "nextflow: invokes the installed Nextflow executable",
     "docker: requires a working Docker daemon",
     "nextflow_corpus: runs corpus workflows under Nextflow; only .github/workflows/run_workflows.yml collects it, on a push",
+    "cwl_corpus: runs or reads the CWL corpus, the workflows search_paths_wic reaches in mm-workflows and image-workflows; Python Matrix Weekly leaves it out",
     "skip_pypi_ci: tests intentionally excluded from PyPI package-build CI",
+    "package: only the package job of build_wheel.yml collects it; no other pull-request lane runs it",
     "contrib: exercises a peripheral surface (ICT, Workflow Builder, REST) rather than the core compiler; run core only with 'pytest -m \"not contrib\"'",
     "needs_cwltool: runs cwltool; skipped off POSIX, see conftest.py",
 ]

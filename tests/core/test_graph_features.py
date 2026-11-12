@@ -18,6 +18,8 @@ from .helpers import no_preflight, run_cli, write_tree
 from .hermetic import bundle, subworkflow_step
 from .synthetic_tools import SYNTHETIC_TOOLS
 
+pytestmark = pytest.mark.package
+
 #: `mk_file` feeds `xform` of a subworkflow, which feeds `count`, which feeds a
 #: subworkflow of its own: two levels of nesting under the root.
 _DOCUMENT: Yaml = {'steps': [

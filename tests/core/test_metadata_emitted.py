@@ -8,6 +8,8 @@ from sophios.ir.emit import EDAM_NAMESPACE
 
 from .hermetic import compile_hermetic
 
+pytestmark = pytest.mark.package
+
 
 #: The fields a CWL document declares its prefixes and ontologies in.
 DECLARATIONS = ('$namespaces', '$schemas')

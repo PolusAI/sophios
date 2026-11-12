@@ -34,6 +34,8 @@ from .cases import DATA, case_dirs, cases
 from .helpers import write_tree
 from .synthetic_tools import SYNTHETIC_TOOLS
 
+pytestmark = pytest.mark.package
+
 #: A root whose failing construct sits well below the top of the file, so a
 #: reported line that came from a re-dump cannot coincide with the real one.
 FORWARD_EDGE = '''# A workflow that references an edge before defining it.

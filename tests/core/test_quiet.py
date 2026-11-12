@@ -15,6 +15,8 @@ from sophios.api.python.workflow import Step, Workflow
 
 from .helpers import EACH_RUNNER, no_preflight, run_cli, run_local_process, search_config, write_tree
 
+pytestmark = pytest.mark.package
+
 #: Prints a line on each stream, and fails when told to.
 SAY: Final = '''cwlVersion: v1.2
 class: CommandLineTool

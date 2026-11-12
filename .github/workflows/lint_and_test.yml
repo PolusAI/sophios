@@ -255,14 +255,13 @@ jobs:
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         run: cd sophios/ && pytest tests/core/test_entry_points.py tests/core/test_ci_coverage.py
 
-      # The packaging lane runs `pytest -m "not skip_pypi_ci"`, so a test with
-      # that marker runs only where a step names its file. This is that place,
-      # filtered to exactly the complement so nothing here is run twice: these
-      # files' unmarked tests are already covered by the packaging lane's
-      # default collection. tests/core/test_ci_coverage.py fails if a
-      # skip_pypi_ci test exists that no lane collects, which is how these came
-      # to light — 26 of them had never executed anywhere; only the files its
-      # LOCAL_ONLY names, which no lane can run, are run by hand instead.
+      # The release lane runs `pytest -m "not skip_pypi_ci"` and the package job
+      # leaves that marker out too, so a test with it runs only where a step
+      # names its file. This is that place, filtered to exactly the complement
+      # so nothing here is run twice. tests/core/test_ci_coverage.py fails if a
+      # test exists that no pull-request or weekly lane collects, which is how
+      # these came to light; only the files its LOCAL_ONLY names, which no lane
+      # can run, are run by hand instead.
       - name: PyTest Environment-Dependent
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         timeout-minutes: 20

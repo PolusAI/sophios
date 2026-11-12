@@ -342,6 +342,7 @@ def _loaded(path: Path, workflow_paths: WorkflowPaths, tools: Tools) -> Workflow
         return None
 
 
+@pytest.mark.cwl_corpus
 @pytest.mark.fast
 @pytest.mark.parametrize('yml_path_str, yml_path', yml_paths_tuples_not_large)
 def test_a_wic_file_and_its_python_objects_compile_alike(yml_path_str: str, yml_path: Path,
@@ -363,6 +364,7 @@ def test_a_wic_file_and_its_python_objects_compile_alike(yml_path_str: str, yml_
     assert python_codes == codes
 
 
+@pytest.mark.cwl_corpus
 @pytest.mark.fast
 @pytest.mark.parametrize('yml_path_str, yml_path', yml_paths_tuples_not_large)
 def test_write_wic_of_a_loaded_workflow_compiles_identically(yml_path_str: str, yml_path: Path,
