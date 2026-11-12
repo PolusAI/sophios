@@ -1,0 +1,29 @@
+# A tag the language does not own is reported wherever it is written, and so is any tag on a key: a key is a name.
+top: !foo bar
+mapping: !foo {a: 1}
+sequence: !foo [1, 2]
+alias: !foo {wic_alias: x}
+number: !!foo 1                  # a core tag YAML does not define
+!ii key: b
+requirements:
+  !cwl a: b
+steps:
+- !foo {id: s}
+- id: t
+  in: !foo {f: !ii 1}
+- id: u
+  in:
+    a: !foo bar
+    b: !foo {wic_alias: x}
+    !ii c: b
+    !* d: x
+    e: {wic_inline_inpt: 1}      # a construct misspelled
+    f: {wic_alis: e}
+    g: {wic_raw_cwll: e}
+    h: {wic_: 1}
+  out: !foo [a]
+- id: v
+  out: [!foo a]
+- id: w
+  out:
+  - !foo {a: !& e}

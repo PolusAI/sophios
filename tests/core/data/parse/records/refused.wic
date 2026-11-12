@@ -1,0 +1,17 @@
+# A mapping of WorkflowStepInput fields is a record, which is written !cwl, carries only those fields, takes its
+# sources as references and its other fields as CWL, and gives the input a value. Each record here breaks one of these.
+steps:
+  s:
+    in:
+      a: {source: x}                          # untagged
+      b: {default: 20}
+      c: {source: x, linkMerge: merge_flattened}
+      d: {valueFrom: $(1)}
+      e: !cwl {source: a, nope: 1}            # a field CWL has no name for
+      f: !cwl {source: !ii 3}                 # a source that is no reference
+      g: !cwl {source: [a, !cwl x]}
+      h: !cwl {default: !ii 3}                # a construct in a field CWL reads as written
+      i: !cwl {valueFrom: !* e}
+      j: !cwl {}                              # no value at all
+      k: !cwl {source: []}
+      l: !cwl {loadContents: true}

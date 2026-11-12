@@ -1,0 +1,7 @@
+# A document pinned to the language version it is written in.
+wic:
+  lang_version: 0.0.1
+steps:
+- id: touch
+  in:
+    filename: !ii empty.txt

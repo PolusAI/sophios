@@ -1,0 +1,16 @@
+# A node that contains itself, through an alias, is reported once, wherever it is reached from: a !cwl record
+# reached through its own alias is the cycle every other alias cycle is.
+top: &a [*a]
+direct: &x1 !cwl {default: *x1}
+through_a_merge: &x2 !cwl {<<: {default: *x2}}
+beside_a_merge: &x3 !cwl {default: *x3, <<: {label: x}}
+nested: &x4 !cwl {default: !cwl {default: *x4}}      # a record in a field, besides
+desugared: &x5 {wic_raw_cwl: {default: *x5}}
+steps:
+  s:
+    in:
+      a: &y1 !cwl {default: *y1}
+      b: &y2 !cwl {<<: {default: *y2}}
+      c: &y3 !cwl {default: *y3, <<: {label: x}}
+      d: &y4 !cwl {default: !cwl {default: *y4}}
+      e: &y5 {wic_raw_cwl: {default: *y5}}

@@ -1,0 +1,5 @@
+# An input with an empty name, which parses and which lowering cannot represent.
+steps:
+- id: s
+  in:
+    "": !* e

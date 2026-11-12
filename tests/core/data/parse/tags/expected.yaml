@@ -1,0 +1,46 @@
+why: Every tag the language does not own is reported, wherever it is written, and so is any tag on a key, which is a
+  name. A single-key mapping beginning wic_ is a construct, so a misspelled one is reported, but a name may carry the
+  prefix freely.
+# Each document's diagnostics, by code, line and column in reading order; an accepted document reports none.
+documents:
+  blocks.wic:
+  - [UNKNOWN_TAG, 2, 6]
+  - [UNKNOWN_TAG, 3, 8]
+  sidecar.wic:
+  - [UNKNOWN_TAG, 4, 13]
+  - [UNKNOWN_TAG, 6, 12]
+  - [UNKNOWN_TAG, 8, 10]
+  - [EXPECTED_SCALAR, 11, 7]
+  unclaimed.wic: []
+  unknown.wic:
+  - [UNKNOWN_TAG, 2, 6]
+  - [UNKNOWN_TAG, 3, 10]
+  - [UNKNOWN_TAG, 4, 11]
+  - [UNKNOWN_TAG, 5, 8]
+  - [UNKNOWN_TAG, 6, 9]
+  - [EXPECTED_SCALAR, 7, 1]
+  - [EXPECTED_SCALAR, 9, 3]
+  - [UNKNOWN_TAG, 11, 3]
+  - [UNKNOWN_TAG, 13, 7]
+  - [UNKNOWN_TAG, 16, 8]
+  - [UNKNOWN_TAG, 17, 8]
+  - [EXPECTED_SCALAR, 18, 5]
+  - [EXPECTED_SCALAR, 19, 5]
+  - [RESERVED_KEY, 20, 9]
+  - [RESERVED_KEY, 21, 9]
+  - [RESERVED_KEY, 22, 9]
+  - [RESERVED_KEY, 23, 9]
+  - [UNKNOWN_TAG, 24, 8]
+  - [UNKNOWN_TAG, 26, 9]
+  - [UNKNOWN_TAG, 29, 5]
+  wic_steps.wic:
+  - [UNKNOWN_TAG, 3, 10]
+# What a document reads as: each node by its fields, a construct as its tag around what it carries.
+reads:
+  unclaimed.wic:
+    steps:
+    - id: s
+      inputs: {wic_: {'!*': e}, wic_port: {'!ii': 1}, a: {'!ii': e}, b: {'!*': e}, c: {'!cwl': e}}
+      passthrough: {hints: {wic_hint: 1, wicked: 1}}
+    wic:
+      entries: {graphviz: {}}

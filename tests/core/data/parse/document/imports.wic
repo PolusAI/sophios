@@ -1,0 +1,26 @@
+# A list that holds an $import or an $include is kept as written, since cwltool reads the file it names. Every other
+# top-level key is CWL the parser keeps as written, a literal in it included.
+inputs:
+- $import: foo.yml
+- id: a
+outputs:
+- $include: foo.yml
+- id: a
+requirements:
+- $include: foo.yml
+- class: a
+hints:
+- $import: foo.yml
+- class: a
+$namespaces:
+  edam: http://example
+top: !ii {k: v}
+steps:
+  s:
+    label: a human label
+    requirements:
+    - $import: foo.yml
+    - class: X
+    hints:
+    - $include: foo.yml
+    - class: X

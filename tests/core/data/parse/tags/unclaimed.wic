@@ -1,0 +1,12 @@
+# The wic_ prefix is claimed only where a construct may be written: a name may carry it.
+wic:
+  graphviz: {}
+steps:
+- id: s
+  in:
+    wic_: !* e
+    wic_port: {wic_inline_input: 1}
+    a: {wic_inline_input: e}
+    b: {wic_alias: e}
+    c: {wic_raw_cwl: e}
+  hints: {wic_hint: 1, wicked: 1}

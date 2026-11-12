@@ -55,16 +55,16 @@ WORKFLOW: Final[Mapping[str, Row]] = MappingProxyType({
     'label': Row(_P, _TOP_LEVEL),
     'outputs': Row(_N, _WRITTEN, 'read: outputSource is resolved; merged into'),
     'requirements': Row(_N, 'test_user_requirements_are_merged_into_not_copied', 'merged into'),
-    'steps': Row(_N, 'test_well_formed_documents_parse'),
+    'steps': Row(_N, 'test_a_well_formed_document_is_read_whole'),
 })
 
 WORKFLOW_STEP: Final[Mapping[str, Row]] = MappingProxyType({
     'doc': Row(_P, _STEP),
     'hints': Row(_P, _STEP),
-    'id': Row(_N, 'test_sequence_and_mapping_steps_agree'),
-    'in': Row(_N, 'test_input_values_are_closed'),
+    'id': Row(_N, 'test_a_well_formed_document_is_read_whole'),
+    'in': Row(_N, 'test_a_well_formed_document_is_read_whole'),
     'label': Row(_P, _STEP),
-    'out': Row(_N, 'test_the_two_spellings_of_an_edge_definition_agree_on_an_output'),
+    'out': Row(_N, 'test_a_construct_reads_alike_in_either_spelling_and_position'),
     'requirements': Row(_P, _STEP),
     'run': Row(_N, 'test_each_step_runs_the_tool_its_run_names',
                'a registry stem, a path relative to the document, or an inline body'),
@@ -74,8 +74,8 @@ WORKFLOW_STEP: Final[Mapping[str, Row]] = MappingProxyType({
 })
 
 WORKFLOW_STEP_INPUT: Final[Mapping[str, Row]] = MappingProxyType({
-    'id': Row(_N, 'test_input_values_are_closed', 'the in: key'),
-    'source': Row(_N, 'test_input_values_are_closed',
+    'id': Row(_N, 'test_a_document_reads_as_its_family_states', 'the in: key'),
+    'source': Row(_N, 'test_a_document_reads_as_its_family_states',
                   '!*, a bare workflow-input name, or a list of them inside !cwl {source: [...]}'),
     'default': Row(_N, _RECORD, 'through !cwl {...}'),
     'label': Row(_N, _RECORD, 'through !cwl {...}'),

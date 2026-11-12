@@ -1,0 +1,3 @@
+# A document is a mapping. This one is a list, and holds an unknown tag besides.
+- !foo a
+- a list

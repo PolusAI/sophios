@@ -1,0 +1,9 @@
+# The wic: block and the steps reached through their own aliases.
+wic: &w
+  steps:
+    (1, a):
+      wic: *w
+steps: &s
+- id: s
+  in:
+    x: *s

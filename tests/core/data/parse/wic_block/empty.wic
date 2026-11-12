@@ -1,0 +1,6 @@
+# A wic: block with nothing in it.
+wic:
+steps:
+  s:
+    in:
+      a: x

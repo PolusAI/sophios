@@ -1,0 +1,7 @@
+# Faults in steps keyed by name.
+steps:
+  ? [a, b]                # a key that is a collection is no name
+  : {}
+  named:
+    id: other             # the key is the step's id already
+  body: 3                 # a step's body is a mapping, or nothing

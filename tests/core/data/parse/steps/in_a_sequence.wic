@@ -1,0 +1,39 @@
+# Faults in a sequence of steps. The parser reports each one where it is written and reads on to the next.
+steps:
+- touch:                  # a step in a sequence carries its name in an id: key
+    in: {f: !ii x}
+- sub.wic:                # the same, with no body
+- id: bound_twice
+  in:
+    f: !ii a
+    f: !ii b              # an input bound twice
+- 42                      # a step that is not a mapping
+- id: two_ins
+  in: {a: !ii 1}
+  in: {b: !ii 2}          # a step key written twice
+- touch:                  # no id, and what is under it is still read
+    in:
+      f: !bogus x
+      g: !& e
+- name: touch             # several keys and no id, likewise
+  in:
+    f: !bogus x
+    g: !& e
+- id: touch               # with an id, the same two faults and no more
+  in:
+    f: !bogus x
+    g: !& e
+- ? [a]                   # a key that is a collection is no name
+  : 1
+- id: first
+  id: second              # a second id
+- in: {f: !ii x}          # no id among several keys
+  out: [g]
+- id: ''                  # an empty id
+- id: shapes
+  in: 3                   # in: is a mapping
+  out: 3                  # out: is a sequence
+- id: outs
+  out:
+  - [a, b]                # an out: entry is a name, or a mapping of one name
+  - file: something       # to an edge definition

@@ -73,7 +73,7 @@ step's tool is passthrough wholesale: Sophios does not classify
 | `label` | passthrough | | `test_top_level_passthrough_is_byte_identical` |
 | `outputs` | native | read: `outputSource` is resolved; merged into | `test_class_is_written_while_inputs_outputs_and_version_are_not` |
 | `requirements` | native | merged into | `test_user_requirements_are_merged_into_not_copied` |
-| `steps` | native | | `test_well_formed_documents_parse` (`test_lang_parser.py`) |
+| `steps` | native | | `test_a_well_formed_document_is_read_whole` (`test_lang_parser.py`) |
 
 **`WorkflowStep`**
 
@@ -81,10 +81,10 @@ step's tool is passthrough wholesale: Sophios does not classify
 |---|---|---|---|
 | `doc` | passthrough | | `test_step_passthrough_is_byte_identical` |
 | `hints` | passthrough | | `test_step_passthrough_is_byte_identical` |
-| `id` | native | `[A-Za-z0-9_-][A-Za-z0-9_.-]*`, else `wic045`, as for workflow input and output names and the root's name | `test_sequence_and_mapping_steps_agree` (`test_lang_parser.py`), `test_a_step_id_outside_the_allowed_characters_is_refused_at_its_line` (`test_diagnostics.py`) |
-| `in` | native | | `test_input_values_are_closed` (`test_lang_parser.py`) |
+| `id` | native | `[A-Za-z0-9_-][A-Za-z0-9_.-]*`, else `wic045`, as for workflow input and output names and the root's name | `test_a_well_formed_document_is_read_whole` (`test_lang_parser.py`), `test_a_step_id_outside_the_allowed_characters_is_refused_at_its_line` (`test_diagnostics.py`) |
+| `in` | native | | `test_a_well_formed_document_is_read_whole` (`test_lang_parser.py`) |
 | `label` | passthrough | | `test_step_passthrough_is_byte_identical` |
-| `out` | native | | `test_the_two_spellings_of_an_edge_definition_agree_on_an_output` (`test_lang_parser.py`) |
+| `out` | native | | `test_a_construct_reads_alike_in_either_spelling_and_position` (`test_lang_parser.py`) |
 | `requirements` | passthrough | | `test_step_passthrough_is_byte_identical` |
 | `run` | native | a registry stem, a path relative to the document, or an inline body | `test_each_step_runs_the_tool_its_run_names` (`test_frontdoor.py`) |
 | `scatter` | native | | `test_every_declared_key_is_interpreted` |
@@ -95,8 +95,8 @@ step's tool is passthrough wholesale: Sophios does not classify
 
 | Field | Support | Note | Pinned by |
 |---|---|---|---|
-| `id` | native | the `in:` key | `test_input_values_are_closed` (`test_lang_parser.py`) |
-| `source` | native | `!*`, a bare workflow-input name, or a list of them inside `!cwl {source: [...]}` | `test_input_values_are_closed` (`test_lang_parser.py`) |
+| `id` | native | the `in:` key | `test_a_document_reads_as_its_family_states` (`test_lang_parser.py`) |
+| `source` | native | `!*`, a bare workflow-input name, or a list of them inside `!cwl {source: [...]}` | `test_a_document_reads_as_its_family_states` (`test_lang_parser.py`) |
 | `default` | native | through `!cwl {...}`; a relative File or Directory `location`/`path` is written absolute against the `.wic`'s directory | `test_a_cwl_record_emits_the_fields_it_carries` (`test_emit.py`), `test_a_wic_file_default_is_written_absolute_against_the_wic` (`test_wic_defaults.py`) |
 | `label` | native | through `!cwl {...}` | `test_a_cwl_record_emits_the_fields_it_carries` (`test_emit.py`) |
 | `linkMerge` | native | through `!cwl {...}` | `test_a_cwl_record_emits_the_fields_it_carries` (`test_emit.py`) |
@@ -258,7 +258,7 @@ passthrough keys.
 `sophios.lang.render`, which emits the tagged one; the two are inverses, the
 round-trip property in `tests/core/test_lang_render.py`. A nested step entry
 keeps its `wic:` wrapper through a render, and an empty `wic:` block renders
-as `{}`, never as a null (`test_empty_sidecar_renders_as_mapping_not_null`).
+as `{}`, never as a null (`tests/core/data/render`).
 
 **The Python API** (`Workflow`, `Step`) is the second surface of the same
 language. It builds a `sophios.lang.Document` directly, compiles it through
@@ -278,8 +278,7 @@ Two obligations follow, both enforced by tests:
 
 1. Whatever the Python API writes as a `.wic` file must parse, for every
    workflow, nested or not
-   (`test_python_api_emits_documents_this_parser_accepts` in
-   `tests/core/test_lang_parser.py`).
+   (`tests/core/test_python_api_workflow.py`).
 2. Both spellings must produce the same result: `!ii x` and
    `{wic_inline_input: x}` are the same input, checked as a property over
    generated inputs in `tests/core/test_lang_parser.py`. And both surfaces
@@ -363,11 +362,11 @@ is never renumbered, and a code that shipped in a release is never reused;
 `wic040`, `wic041` and `wic042` are unassigned. `wic043` is a note, an
 error under `--inference_strict`.
 
-Every member is provoked in `tests/core/provocations.py`, in one of two
-tiers: `PARSE` (source text through `parse()` alone) or `COMPILED` (a
-callable that drives the compiler or its helpers).
-`test_every_code_has_a_registered_provocation` fails for a member with no
-provocation, so a new code lands with its provocation in the same commit.
+Every member is provoked, in one of two ways: a document under
+`tests/core/data/parse` reports it (`data/parse`), or a callable in
+`tests/core/provocations.py` that drives the compiler or its helpers raises it
+(`COMPILED`). `tests/core/test_lang_parser.py` fails for a member neither
+provokes, so a new code lands with its provocation in the same commit.
 Every member has an `Explanation` in `EXPLANATIONS` (kind, meaning, fix);
 `test_every_code_is_explained` fails for one without, and
 `test_the_error_codes_page_says_what_the_code_says` keeps the
@@ -375,16 +374,16 @@ Every member has an `Explanation` in `EXPLANATIONS` (kind, meaning, fix);
 
 | Code | Member | Provoked in |
 |---|---|---|
-| `wic001` | `INVALID_YAML` | `PARSE` |
-| `wic002` | `NOT_A_MAPPING` | `PARSE` |
-| `wic003` | `EXPECTED_MAPPING` | `PARSE` |
-| `wic004` | `EXPECTED_SEQUENCE` | `PARSE` |
-| `wic005` | `EXPECTED_SCALAR` | `PARSE` |
-| `wic006` | `MISSING_STEP_ID` | `PARSE` |
-| `wic007` | `EMPTY_STEP_ID` | `PARSE` |
-| `wic008` | `MALFORMED_WIC_STEP_KEY` | `PARSE` |
-| `wic009` | `UNKNOWN_TAG` | `PARSE` |
-| `wic010` | `DUPLICATE_KEY` | `PARSE` |
+| `wic001` | `INVALID_YAML` | `data/parse` |
+| `wic002` | `NOT_A_MAPPING` | `data/parse` |
+| `wic003` | `EXPECTED_MAPPING` | `data/parse` |
+| `wic004` | `EXPECTED_SEQUENCE` | `data/parse` |
+| `wic005` | `EXPECTED_SCALAR` | `data/parse` |
+| `wic006` | `MISSING_STEP_ID` | `data/parse` |
+| `wic007` | `EMPTY_STEP_ID` | `data/parse` |
+| `wic008` | `MALFORMED_WIC_STEP_KEY` | `data/parse` |
+| `wic009` | `UNKNOWN_TAG` | `data/parse` |
+| `wic010` | `DUPLICATE_KEY` | `data/parse` |
 | `wic011` | `UNRESOLVED_INPUT` | `COMPILED` |
 | `wic012` | `MISSING_REQUIRED_INPUT` | `COMPILED` |
 | `wic013` | `SUBWORKFLOW_INVALID` | `COMPILED` |
@@ -393,26 +392,26 @@ Every member has an `Explanation` in `EXPLANATIONS` (kind, meaning, fix);
 | `wic016` | `MISSING_INPUT_FILE` | `COMPILED` |
 | `wic017` | `UNKNOWN_LANG_VERSION` | `COMPILED` |
 | `wic018` | `LANG_VERSION_CONFLICT` | `COMPILED` |
-| `wic019` | `MISPLACED_EDGE_DEF` | `PARSE` |
+| `wic019` | `MISPLACED_EDGE_DEF` | `data/parse` |
 | `wic020` | `LITERAL_TYPE_MISMATCH` | `COMPILED` |
 | `wic021` | `DIRECTORY_NOT_WRITABLE` | `COMPILED` |
 | `wic022` | `FIXED_POINT_NOT_REACHED` | `COMPILED` |
 | `wic023` | `INCOMPATIBLE_INPUT_REFERENCE` | `COMPILED` |
-| `wic024` | `RESERVED_KEY` | `PARSE` |
+| `wic024` | `RESERVED_KEY` | `data/parse` |
 | `wic025` | `UNDEFINED_EDGE` | `COMPILED` |
 | `wic026` | `DUPLICATE_EDGE_DEF` | `COMPILED` |
 | `wic027` | `EMPTY_NAME` | `COMPILED` |
 | `wic028` | `UNDECLARED_PORT` | `COMPILED` |
 | `wic029` | `PROGRAM_MISSING` | `COMPILED` |
-| `wic030` | `RECURSIVE_ALIAS` | `PARSE` |
+| `wic030` | `RECURSIVE_ALIAS` | `data/parse` |
 | `wic031` | `DUPLICATE_DOCUMENT_NAME` | `COMPILED` |
 | `wic032` | `UNKNOWN_SCATTER_PORT` | `COMPILED` |
-| `wic033` | `UNKNOWN_WIC_KEY` | `PARSE` |
-| `wic034` | `MALFORMED_WIC_VALUE` | `PARSE` |
-| `wic035` | `UNSUPPORTED_CWL_VERSION` | `PARSE` |
+| `wic033` | `UNKNOWN_WIC_KEY` | `data/parse` |
+| `wic034` | `MALFORMED_WIC_VALUE` | `data/parse` |
+| `wic035` | `UNSUPPORTED_CWL_VERSION` | `data/parse` |
 | `wic036` | `UNTYPED_OUTPUT` | `COMPILED` |
 | `wic037` | `IMAGE_UNAVAILABLE` | `COMPILED` |
-| `wic038` | `STEP_INPUT_RECORD` | `PARSE` |
+| `wic038` | `STEP_INPUT_RECORD` | `data/parse` |
 | `wic039` | `POSITIONAL_OUTPUT_SOURCE` | `COMPILED` |
 | `wic043` | `INFERENCE_GUESS` | `COMPILED` |
 | `wic044` | `REALTIME_DECLARATION` | `COMPILED` |

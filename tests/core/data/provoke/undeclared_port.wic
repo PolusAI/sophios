@@ -1,0 +1,6 @@
+# Binds an input mk_file does not declare.
+steps:
+- id: mk_file
+  in:
+    name: !ii a
+    ghost: !ii x

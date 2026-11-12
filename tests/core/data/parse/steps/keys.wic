@@ -1,0 +1,14 @@
+# A step's own keys are read, each by name or as CWL Sophios acts on; any other key is CWL, kept as written. A step
+# keyed by name may have no body at all.
+steps:
+  s:
+    in: {}
+    out: [f]
+    run: tool.cwl
+    scatter: [x]
+    scatterMethod: dotproduct
+    when: $(true)
+    doc: a step
+    label: a human label
+    touch: {}
+  some_step.wic:

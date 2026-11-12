@@ -1,7 +1,6 @@
-"""Properties of the Sophios renderer: it inverts parsing, so a round trip, parse(render(ast)) == ast, proves one of the
-two wrong."""
+"""The Sophios renderer inverts parsing: a document reads the same once rendered, rendering settles at once, a value
+built in Python gets a spelling that reads back as itself, and a document renders as tests/core/data/render states."""
 import math
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -9,113 +8,33 @@ import yaml
 from hypothesis import example, given
 from hypothesis import strategies as st
 
-from sophios.lang import (
-    CwlRecord,
-    Document,
-    EdgeDef,
-    EdgeRef,
-    InlineLiteral,
-    OutputBinding,
-    RawCwlRef,
-    Step,
-    UnresolvedName,
-    WicSidecar,
-    parse,
-)
+from sophios.lang import Document, InlineLiteral, Step, parse
 from sophios.lang.render import render
 from sophios.lang.spans import SourceSpan
 
 from .budgets import budget
-from .strategies import documents, pinned, scalar_payload_texts
-
-from .wic_corpus import CORPUS, corpus_id
+from .cases import DATA
+from .strategies import documents, identifiers, pinned
+from .test_lang_parser import reading
 from .wic_reading import YamlWithSophiosTagsOpaque
 
 FAST = budget(200)
 
-#: The spellings whose source text IS the scalar's content — every payload
-#: above except the quoted ones, where the quotes belong to the YAML syntax
-#: rather than to the scalar: `!ii '0'` is the text 0, which the writer
-#: spells from the value, quotes and all.
-unquoted_spellings = scalar_payload_texts.filter(lambda text: not text.startswith("'"))
-
-
-# A round-tripped document cannot carry the original spans: rendering produces
-# new text, so positions legitimately move. The property is therefore about
-# structure, and comparison strips spans rather than pretending they survive.
-
-
-def _shape(node: Any) -> Any:  # pylint: disable=too-many-return-statements,too-many-branches
-    """Reduce an AST to its structure, discarding source positions; one return per node kind, so each kind's fields stay
-    visible."""
-    match node:
-        case Document():
-            return ('doc',
-                    tuple(_shape(s) for s in node.steps),
-                    _shape(node.sidecar) if node.sidecar is not None else None,
-                    tuple((k, _shape(v)) for k, v in node.passthrough))
-        case Step():
-            return ('step', node.id,
-                    tuple((k, _shape(v)) for k, v in node.inputs),
-                    tuple(_shape(o) for o in node.outputs),
-                    tuple((k, _shape(v)) for k, v in node.interpreted),
-                    tuple((k, _shape(v)) for k, v in node.passthrough))
-        case OutputBinding():
-            return ('out', node.name, _shape(node.edge_def) if node.edge_def else None)
-        case WicSidecar():
-            return ('wic',
-                    tuple(((k.index, k.name), _shape(v)) for k, v in node.steps),
-                    tuple((k, _shape(v)) for k, v in node.entries))
-        case InlineLiteral():
-            return ('lit', _shape(node.value))
-        case EdgeDef():
-            return ('def', node.name)
-        case EdgeRef():
-            return ('ref', node.name)
-        case RawCwlRef():
-            return ('raw', node.expression)
-        case UnresolvedName():
-            return ('name', node.name)
-        case CwlRecord():
-            return ('record', tuple(_shape(source) for source in node.sources),
-                    tuple((k, _shape(v)) for k, v in node.fields))
-        case dict():
-            return tuple((k, _shape(v)) for k, v in node.items())
-        case list():
-            return tuple(_shape(v) for v in node)
-        case float() if math.isnan(node):
-            # NaN != NaN would fail the comparison exactly when the round
-            # trip is correct; normalise to a sentinel before comparing.
-            return 'NaN'
-        case _:
-            return node
-
-
-identifiers = st.text('abcdefghijklmnopqrstuvwxyz_', min_size=1, max_size=8)
-
-# Literals are drawn as YAML source text rather than converted from Python
-# values: writing the spelling out keeps the awkward cases visible, and leaves
-# the test with no quoting logic of its own to agree with the renderer's.
-# Included on purpose: the falsy values a naive `x or ''` would destroy, and
-# the characters that force the renderer off plain style.
+# Literals are drawn as YAML source text rather than converted from Python values: writing the spelling out keeps
+# the awkward cases visible, and leaves the test no quoting logic of its own to agree with the renderer's. Included on
+# purpose: the falsy values a naive `x or ''` would destroy, and the characters that force the renderer off plain style.
 literal_texts = st.sampled_from([
-    '0', '1', '-42', '3.5',
-    'true', 'false', 'null',
-    'plain_word', 'a/path/to.txt',
-    "''", "'0'", "'false'",
-    "'hello world'", "'has: colon'", "'#hash'", "'-dash'", "'{brace}'",
-    "'has ''quote'''", "'trailing '''",
+    '0', '1', '-42', '3.5', 'true', 'false', 'null', 'plain_word', 'a/path/to.txt', "''", "'0'", "'false'",
+    "'hello world'", "'has: colon'", "'#hash'", "'-dash'", "'{brace}'", "'has ''quote'''", "'trailing '''",
 ])
 
 
 @st.composite
 def awkward_literal_documents(draw: st.DrawFn) -> str:
-    """Documents whose `!ii` payloads are the renderer's hard cases, to hammer quoting; the structural round trip uses
-    the parser suite's `documents()`, as a second narrower one once made outputs and nested sidecars invisible to it."""
+    """Documents whose `!ii` payloads are the renderer's hard cases, to hammer quoting."""
     lines = ['steps:']
     for _ in range(draw(st.integers(min_value=1, max_value=3))):
-        lines.append(f'- id: {draw(identifiers)}')
-        lines.append('  in:')
+        lines += [f'- id: {draw(identifiers)}', '  in:']
         for name in draw(st.lists(identifiers, min_size=1, max_size=3, unique=True)):
             lines.append(f'    {name}: !ii {draw(literal_texts)}')
     return '\n'.join(lines) + '\n'
@@ -123,89 +42,29 @@ def awkward_literal_documents(draw: st.DrawFn) -> str:
 
 @pytest.mark.fast
 @given(st.one_of(documents(), awkward_literal_documents()))
-# Counterexamples, pinned deterministically (Hypothesis's
-# failure database does not travel to CI). Duplicate-key cases are absent
-# because they are parse errors now, pinned on the parser's provocations.
-@example('steps:\n- id: t\n  in:\n    f: !ii {a: !* e}\n')      # construct inside collection literal
-@example('steps:\n- id: t\nmeta: !ii {a: 1}\n')                   # collection literal in passthrough
-@example("steps:\n- id: t\n  in:\n    f: {wic_inline_input: '0'}\n")     # string that spells an int
-@example("steps:\n- id: t\n  in:\n    f: {wic_inline_input: 'true'}\n")  # string that spells a bool
-@example('steps:\n- id: t\n  in:\n    f: !ii 1.0e+300\n')       # exponent float
-@example('steps:\n- id: t\n  in:\n    f: !ii .inf\n')           # YAML float special
-@example('steps:\n- id: t\n  in:\n    f: !ii .nan\n')           # NaN, comparator-normalised
-@example('steps:\n- id: t\n  in:\n    f: !cwl {source: [!* a, b], linkMerge: merge_flattened, default: [1]}\n')
+# Hypothesis's failure database does not travel to CI, so what it once found is pinned.
+@example('')                                                      # nothing at all
+@example('steps:\n- id: t\n  in:\n    f: !ii {a: !* e}\n')      # a construct inside a collection literal
+@example("steps:\n- id: t\n  in:\n    f: {wic_inline_input: '0'}\n")     # text that spells a number
+@example('steps:\n- id: t\n  in:\n    f: !ii .nan\n')           # NaN, which equals nothing
 @example('steps:\n- id: t\n  in:\n    f: !cwl {source: [a], linkMerge: merge_nested}\n')  # one source, still a list
-@example('steps:\n- id: t\n  in:\n    f: {wic_raw_cwl: {source: {wic_alias: a}, valueFrom: $(self)}}\n')
-@example('wic:\n  steps:\n    (1, o):\n      wic:\n        namespace: dna\n')  # nested wrapper
-@example('wic:\n  steps:\n    (1, o):\n      wic: {}\n')          # empty child sidecar: {} not null
 @FAST
-def test_round_trip_preserves_structure(source: str) -> None:
-    """Parsing a rendered document reproduces the document.
-
-    Quantified over the shared full-language generator (both step forms,
-    both spellings, outputs, nested sidecars) plus the quoting-hostile
-    literals — and the rendered text must also be YAML that `yaml.SafeLoader`
-    loads with the Sophios tags opaque, since a renderer that emits what YAML
-    rejects would be writing a dialect — a differential oracle, not
-    self-consistency.
-    """
+def test_a_rendered_document_reads_the_same_and_renders_the_same(source: str) -> None:
+    """Parsing a rendered document reproduces the document, and rendering it again reproduces the text: a formatter
+    that never settled would churn every file it touched. The rendered text is also YAML that `yaml.SafeLoader` loads
+    with the Sophios tags opaque, since a renderer writing what YAML rejects would be writing a dialect."""
     first = parse(source, 'a.wic')
     assert first.ok and first.document is not None
-
     rendered = render(first.document)
     second = parse(rendered, 'b.wic')
-    assert second.ok, [str(d) for d in second.diagnostics]
-    assert second.document is not None
-
-    assert _shape(second.document) == _shape(first.document)
-    if rendered:
-        yaml.load(rendered, Loader=YamlWithSophiosTagsOpaque)  # YAML agrees too
-
-
-@pytest.mark.fast
-@given(st.one_of(documents(), awkward_literal_documents()))
-@FAST
-def test_rendering_is_idempotent(source: str) -> None:
-    """Rendering a round-tripped document produces identical text.
-
-    Round-trip stability matters more than matching the original byte for byte:
-    a formatter that never settles would churn every file it touched.
-    """
-    document = parse(source, 'a.wic').document
-    assert document is not None
-
-    once = render(document)
-    reparsed = parse(once, 'b.wic').document
-    assert reparsed is not None
-    assert once == render(reparsed)
-
-
-@pytest.mark.cwl_corpus
-@pytest.mark.fast
-@pytest.mark.parametrize('path', CORPUS, ids=corpus_id)
-def test_corpus_round_trips(path: Path) -> None:
-    """Every corpus file survives a render/parse cycle unchanged in structure."""
-    source = path.read_text(encoding='utf-8')
-    first = parse(source, str(path))
-    assert first.ok and first.document is not None
-
-    second = parse(render(first.document), str(path))
-    assert second.ok, [str(d) for d in second.diagnostics]
-    assert _shape(second.document) == _shape(first.document)
-
-
-@pytest.mark.fast
-def test_render_emits_the_tagged_spelling() -> None:
-    """Output uses the spelling the .wic reference tells people to write."""
-    document = parse('steps:\n- id: s\n  in:\n    f:\n      wic_inline_input: x\n', 'a.wic').document
-    assert document is not None
-    text = render(document)
-    assert '!ii' in text
-    assert 'wic_inline_input' not in text
+    assert second.ok and second.document is not None, [str(d) for d in second.diagnostics]
+    assert reading(second.document) == reading(first.document)
+    assert render(second.document) == rendered
+    yaml.load(rendered, Loader=YamlWithSophiosTagsOpaque)
 
 
 #: A value the renderer must spell as an `!ii` payload, as the Python API hands it over: no source text behind it.
-#: A parsed literal remembers how it was written and is transcribed verbatim, so the round-trip properties never reach
+#: A parsed literal remembers how it was written and is transcribed verbatim, so the round trip above never reaches
 #: the code that has to *choose* a spelling.
 synthesized = st.recursive(st.none() | st.booleans() | st.integers() | st.floats() | st.text(),
                            lambda inner: st.lists(inner, max_size=3) | st.dictionaries(st.text(), inner, max_size=3),
@@ -233,66 +92,17 @@ def test_a_synthesized_literal_gets_a_spelling_that_survives(value: Any) -> None
 
 
 @pytest.mark.fast
-def test_empty_document_renders_empty() -> None:
-    """A document carrying nothing renders to nothing, and reparses."""
-    document = parse('', 'e.wic').document
-    assert document is not None
-    assert render(document) == ''
-    assert parse(render(document), 'e.wic').ok
-
-
-@pytest.mark.fast
-def test_nested_sidecar_wrapper_survives_rendering() -> None:
-    """The renderer re-wraps what the parser unwraps — asymmetry test.
-
-    The round-trip property is structurally blind here: the parser tolerates
-    the missing wrapper
-    in the renderer's own output, so the round-trip holds even when rendering
-    is a semantic edit. Every downstream consumer reads through the wrapper
-    explicitly, which is why its loss changes what a workflow means.
-    """
-    source = 'wic:\n  steps:\n    (1, o):\n      wic:\n        namespace: dna\n'
-    document = parse(source, 'x.wic').document
-    assert document is not None
-    rendered = render(document)
-    assert rendered == source  # byte-exact, wrapper included
-
-
-@pytest.mark.fast
-def test_empty_sidecar_renders_as_mapping_not_null() -> None:
-    """`{}` — a present-None sails past every `.get(key, {})` downstream."""
-    document = parse('wic:\n  steps:\n    (1, o):\n      wic: {}\n', 'x.wic').document
-    assert document is not None
-    rendered = render(document)
-    assert 'null' not in rendered and '~' not in rendered
-
-
-@pytest.mark.fast
-@given(unquoted_spellings)
-@FAST
-@example('0777')   # octal: value 511 knows nothing of how it was spelled
-@example('1.50')   # trailing zero
-@example('yes')    # YAML 1.1 boolean
-@example('0x1f')   # hexadecimal
-@example('1:30')   # sexagesimal
-def test_a_tagged_literal_keeps_its_source_spelling(spelling: str) -> None:
-    """`!ii <spelling>` renders back as `!ii <spelling>`, character for
-    character.
-
-    This is the renderer's founding claim — transcription, not
-    reconstruction — and the only claim that distinguishes the two. The
-    round-trip property cannot: it compares parsed values, and every spelling
-    here parses to a value that re-serialises to *some* valid spelling, just
-    not the one the author wrote. So when the parser silently stopped
-    recording the source text, every property stayed green while `!ii 0777`
-    began compiling as `!ii 511`.
-    """
-    source = f'steps:\n- id: s\n  in:\n    f: !ii {spelling}\n'
-    result = parse(source, 'transcribe.wic')
-    assert result.ok, [str(d) for d in result.diagnostics]
-    assert result.document is not None
-
-    payload = render(result.document).split('!ii ', 1)[1].rstrip('\n')
-    # Exactly, quotes included: a plain spelling must come back plain, since
-    # `!ii '1:30'` is the text 1:30 where `!ii 1:30` is the number 90.
-    assert payload == spelling, f'{spelling!r} came back as {payload!r}'
+def test_a_document_renders_as_stated() -> None:
+    """tests/core/data/render/written.wic, in every spelling, renders as rendered.wic, byte for byte: each construct
+    in the tagged spelling the .wic reference tells people to write; each literal transcribed as it was spelled, since
+    `!ii 0777` is 511 and `!ii '1:30'` text where `!ii 1:30` is the number 90; each step's `wic:` block in the wrapper
+    it was read through, which the parser tolerates the loss of, so no round trip sees it go; and an empty one as `{}`,
+    since a null sails past every `.get(key, {})` downstream. rendered.wic reads as written.wic and renders as itself;
+    and nothing renders as nothing."""
+    rendered = (DATA / 'render' / 'rendered.wic').read_text(encoding='utf-8')
+    written, again = (parse((DATA / 'render' / name).read_text(encoding='utf-8'), name).document
+                      for name in ('written.wic', 'rendered.wic'))
+    assert written is not None and again is not None
+    assert render(written) == rendered and render(again) == rendered and reading(again) == reading(written)
+    nothing = parse('', 'empty.wic').document
+    assert nothing is not None and render(nothing) == ''

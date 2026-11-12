@@ -1,0 +1,68 @@
+why: "The wic: block is closed at every depth, each key taking a value of its declared shape, and refuses any other
+  key or shape at the node that is wrong. Its steps are keyed (index, name) or by id, and read at every depth through
+  the wic: each one wraps, a sibling of which is read beside it."
+# Each document's diagnostics, by code, line and column in reading order; an accepted document reports none.
+documents:
+  empty.wic: []
+  every_key.wic: []
+  root.wic:
+  - [UNKNOWN_WIC_KEY, 3, 3]
+  - [UNKNOWN_WIC_KEY, 4, 3]
+  - [MALFORMED_WIC_VALUE, 5, 15]
+  - [MALFORMED_WIC_VALUE, 6, 11]
+  - [MALFORMED_WIC_VALUE, 7, 14]
+  - [MALFORMED_WIC_VALUE, 8, 17]
+  - [MALFORMED_WIC_VALUE, 9, 20]
+  - [MALFORMED_WIC_VALUE, 11, 12]
+  - [MALFORMED_WIC_VALUE, 12, 12]
+  - [MALFORMED_WIC_VALUE, 13, 5]
+  - [MALFORMED_WIC_VALUE, 14, 26]
+  steps.wic:
+  - [MALFORMED_WIC_STEP_KEY, 5, 5]
+  - [DUPLICATE_KEY, 7, 5]
+  - [MALFORMED_WIC_VALUE, 9, 22]
+  - [UNKNOWN_WIC_KEY, 10, 7]
+  - [MALFORMED_WIC_VALUE, 13, 21]
+  - [UNKNOWN_WIC_KEY, 14, 9]
+  - [MALFORMED_WIC_VALUE, 15, 19]
+  - [EXPECTED_MAPPING, 16, 13]
+# What a document reads as: each node by its fields, a wic: step key as [index, name].
+reads:
+  every_key.wic:
+    steps: [id: outer, id: s, id: gpu, id: empty, id: echo]
+    wic:
+      steps:
+      - [1, outer, {steps: [[1, inner, {steps: [[1, innermost, {entries: {namespace: global}}]]}]]}]
+      - - 2
+        - s
+        - entries:
+            graphviz: {label: x}
+            implementations: {}
+            driver: slurm
+            inlineable: true
+            implementation: x
+            default_implementation: x
+            version: x
+            lang_version: x
+            namespace: x
+            scatterMethod: dotproduct
+            in: {}
+            scatter: [x]
+            inference: {}
+            out: [value: {wic_anchor: e}]
+      - [3, gpu, {entries: {namespace: gpu, out: [value: {wic_anchor: f}]}}]
+      - [4, empty, {entries: {in: {x: 1}}}]
+      - [null, echo, {}]
+      entries:
+        graphviz: {label: x, style: dashed, ranksame: ['(1, s)']}
+        implementations: {}
+        driver: slurm
+        inlineable: true
+        implementation: x
+        default_implementation: x
+        version: x
+        lang_version: x
+        namespace: x
+  empty.wic:
+    steps: [{id: s, inputs: {a: x}}]
+    wic: {}

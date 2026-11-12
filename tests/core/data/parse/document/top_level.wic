@@ -1,0 +1,20 @@
+--- !foo                         # an unknown tag on the document itself
+# Top-level keys whose values have the wrong shape.
+cwlVersion: draft-3              # a CWL version cwltool does not run
+steps: nope                      # steps is a mapping or a sequence
+wic: 3                           # wic is a mapping
+inputs:                          # list-form entries with no name to key them by
+- type: string                   # no id
+- id: [a]                        # an id that is no string
+- {id: '#', type: string}        # an id naming no port: the name is what follows the last #
+- {id: '', type: string}
+- {id: a, type: string}
+- {id: '#a', type: int}          # a, again
+outputs:
+- just-a-name                    # no mapping
+- {id: 'wf.cwl#', type: string}
+requirements:
+- coresMin: 1                    # no class
+hints:
+- {class: A}
+- {class: A}                     # the same class twice

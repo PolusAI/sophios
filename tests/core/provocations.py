@@ -1,5 +1,5 @@
-"""One attack per diagnostic code, as a code nothing provokes is dead on arrival: each SophiosErrorCode is in exactly
-one tier (PARSE: source text; COMPILED: callables raising it), or test_lang_parser's meta-test fails."""
+"""One attack per diagnostic code no document under tests/core/data/parse reports, as a code nothing provokes is dead
+on arrival: each callable of COMPILED raises a SophiosError carrying its code, or test_lang_parser's census fails."""
 # pylint: disable=import-outside-toplevel  # the compiler and API load lazily, so enumerating codes stays cheap
 import asyncio
 import subprocess
@@ -14,26 +14,8 @@ from unittest import mock
 from sophios.lang import SophiosError, SophiosErrorCode, parse, resolve_lang_version
 from sophios.wic_types import Yaml
 
-#: Codes provoked through `parse()` alone: source text in, diagnostic out.
-PARSE: Final[dict[SophiosErrorCode, str]] = {
-    SophiosErrorCode.INVALID_YAML: 'steps:\n  - [unclosed\n',
-    SophiosErrorCode.NOT_A_MAPPING: '- just\n- a list\n',
-    SophiosErrorCode.EXPECTED_MAPPING: 'steps: 3\n',
-    SophiosErrorCode.EXPECTED_SEQUENCE: 'steps:\n- id: s\n  out: 3\n',
-    SophiosErrorCode.EXPECTED_SCALAR: 'steps:\n  ? [a, b]\n  : {}\n',
-    SophiosErrorCode.MISSING_STEP_ID: 'steps:\n- {a: 1, b: 2}\n',
-    SophiosErrorCode.EMPTY_STEP_ID: "steps:\n- id: ''\n",
-    SophiosErrorCode.MALFORMED_WIC_STEP_KEY: 'wic:\n  steps:\n    "not a key":\n      x: 1\n',
-    SophiosErrorCode.UNKNOWN_TAG: 'top: !foo bar\n',
-    SophiosErrorCode.DUPLICATE_KEY: 'steps:\n- id: s\n  in:\n    f: !ii a\n    f: !ii b\n',
-    SophiosErrorCode.RECURSIVE_ALIAS: 'top: &a [*a]\n',
-    SophiosErrorCode.MISPLACED_EDGE_DEF: 'top: !& e\n',
-    SophiosErrorCode.RESERVED_KEY: 'steps:\n- id: s\n  in:\n    f:\n      wic_inline_inpt: 1\n',
-    SophiosErrorCode.UNKNOWN_WIC_KEY: 'wic:\n  nonsense_key: 1\n',
-    SophiosErrorCode.MALFORMED_WIC_VALUE: 'wic:\n  inlineable: sometimes\n',
-    SophiosErrorCode.UNSUPPORTED_CWL_VERSION: 'cwlVersion: draft-3\n',
-    SophiosErrorCode.STEP_INPUT_RECORD: 'steps:\n- id: s\n  in:\n    f: {source: x}\n',
-}
+#: Documents a provocation reads.
+DOCUMENTS: Final = Path(__file__).resolve().parent / 'data' / 'provoke'
 
 
 def _provoke_undefined_edge() -> None:
@@ -58,6 +40,16 @@ def _hermetic(yml: Yaml, **options: Any) -> None:
     compile_hermetic(yml, 'provoke', **options)
 
 
+def _provoke_subworkflow_invalid() -> None:
+    """Compile a workflow with no step at all, then, once that is wic013, one whose step runs a file that is neither
+    beside the document nor in the registry, which raises."""
+    try:
+        _compile_minimal({'steps': []})
+    except SophiosError as empty:
+        if any(found.code is SophiosErrorCode.SUBWORKFLOW_INVALID for found in empty.diagnostics):
+            _hermetic({'steps': [{'id': 's', 'run': 'nowhere.cwl'}]})
+
+
 def _provoke_script_argument_mismatch() -> None:
     from sophios.python_cwl_adapter import check_args_match_inputs
 
@@ -69,13 +61,10 @@ def _provoke_script_argument_mismatch() -> None:
 def _provoke_container_engine_unavailable() -> None:
     from sophios import preflight
 
-    with tempfile.TemporaryDirectory() as root:
-        tool = Path(root) / 'tool.cwl'
-        tool.write_text('cwlVersion: v1.2\nclass: CommandLineTool\nrequirements:\n  DockerRequirement:\n'
-                        '    dockerPull: docker.io/bash:4.4\nbaseCommand: [echo]\ninputs: {}\noutputs: {}\n',
-                        encoding='utf-8')
-        with mock.patch.object(preflight.sub, 'run', side_effect=FileNotFoundError('docker')):
-            preflight.check(preflight.needs([tool]), preflight.RunSettings('docker', root))
+    tool = Path(__file__).resolve().parents[2] / 'cwl_adapters' / 'touch.cwl'
+    with tempfile.TemporaryDirectory() as root, \
+            mock.patch.object(preflight.sub, 'run', side_effect=FileNotFoundError('docker')):
+        preflight.check(preflight.needs([tool]), preflight.RunSettings('docker', root))
 
 
 def _provoke_missing_input_file() -> None:
@@ -119,7 +108,7 @@ def _provoke_empty_name() -> None:
     from sophios.ir.lower import lower
     from sophios.ir.resolve import RegistryKey, ResolvedDocument, ResolvedPort, ResolvedProcess, ResolvedStep
 
-    document = parse('steps:\n- id: s\n  in:\n    "": !* e\n', 'provoke.wic').document
+    document = parse((DOCUMENTS / 'empty_name.wic').read_text(encoding='utf-8'), 'provoke.wic').document
     assert document is not None
     step = document.steps[0]
     process = ResolvedProcess(
@@ -140,8 +129,7 @@ def _provoke_undeclared_port() -> None:
 
     from .synthetic_tools import SYNTHETIC_TOOLS
 
-    document = parse('steps:\n- id: mk_file\n  in: {name: !ii a, ghost: !ii x}\n',
-                     'provoke.wic').document
+    document = parse((DOCUMENTS / 'undeclared_port.wic').read_text(encoding='utf-8'), 'provoke.wic').document
     assert document is not None
     resolved = resolve(document, RegistrySnapshot.from_tools(SYNTHETIC_TOOLS), name='provoke')
     assert resolved.document is not None
@@ -224,12 +212,7 @@ def _provoke_no_python_spelling() -> None:
     """Read into Python objects a `.wic` that declares top-level `hints:`, which no Python `Workflow` carries."""
     from sophios.api.python.workflow import Workflow
 
-    with tempfile.TemporaryDirectory() as directory:
-        root = Path(directory) / 'provoke.wic'
-        root.write_text('hints:\n  ResourceRequirement:\n    coresMin: 1\n'
-                        'steps:\n- id: say\n  run:\n    class: CommandLineTool\n    baseCommand: "true"\n'
-                        '    inputs: {}\n    outputs: {}\n', encoding='utf-8')
-        Workflow.from_wic(root)
+    Workflow.from_wic(DOCUMENTS / 'top_level_hints.wic')
 
 
 def _provoke_program_missing() -> None:
@@ -336,8 +319,7 @@ COMPILED: Final[dict[SophiosErrorCode, Callable[[], object]]] = {
     # A null !ii on a non-nullable input.
     SophiosErrorCode.MISSING_REQUIRED_INPUT: partial(
         _compile_minimal, {'steps': [{'id': 'touch', 'in': {'filename': {'wic_inline_input': None}}}]}),
-    # A workflow with no step at all: nothing to run.
-    SophiosErrorCode.SUBWORKFLOW_INVALID: partial(_compile_minimal, {'steps': []}),
+    SophiosErrorCode.SUBWORKFLOW_INVALID: _provoke_subworkflow_invalid,
     SophiosErrorCode.SCRIPT_ARGUMENT_MISMATCH: _provoke_script_argument_mismatch,
     SophiosErrorCode.CONTAINER_ENGINE_UNAVAILABLE: _provoke_container_engine_unavailable,
     SophiosErrorCode.MISSING_INPUT_FILE: _provoke_missing_input_file,

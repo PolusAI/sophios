@@ -1,0 +1,53 @@
+# Every key the wic: block has, at the top and for a step, and steps nested three deep: the step keys are read at
+# every depth, through the wic: each one wraps, a sibling of which is read beside it.
+wic:
+  graphviz: {label: x, style: dashed, ranksame: ["(1, s)"]}
+  implementations: {}
+  driver: slurm
+  inlineable: true
+  implementation: x
+  default_implementation: x
+  version: x
+  lang_version: x
+  namespace: x
+  steps:
+    (1, outer):
+      wic:
+        steps:
+          (1, inner):
+            wic:
+              steps:
+                (1, innermost):
+                  namespace: global
+    (2, s):
+      graphviz: {label: x}
+      implementations: {}
+      driver: slurm
+      inlineable: true
+      implementation: x
+      default_implementation: x
+      version: x
+      lang_version: x
+      namespace: x
+      scatterMethod: dotproduct
+      in: {}
+      scatter: [x]
+      inference: {}
+      out:
+      - value: {wic_anchor: e}
+    (3, gpu):
+      wic:
+        namespace: gpu
+      out:
+      - value: {wic_anchor: f}
+    (4, empty):
+      wic:
+      in: {x: 1}
+    echo:
+      wic: {}
+steps:
+- id: outer
+- id: s
+- id: gpu
+- id: empty
+- id: echo

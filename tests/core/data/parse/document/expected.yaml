@@ -1,0 +1,55 @@
+why: A document is a mapping YAML can read; anything less leaves nothing to read on. Top-level keys the language
+  does not read are CWL, kept as written, except that list-form inputs, outputs, requirements and hints are keyed.
+# Each document's diagnostics, by code, line and column in reading order; an accepted document reports none.
+documents:
+  invalid_yaml.wic:
+  - [INVALID_YAML, 3, 1]
+  not_a_mapping.wic:
+  - [NOT_A_MAPPING, 2, 1]
+  - [UNKNOWN_TAG, 2, 3]
+  top_level.wic:
+  - [UNKNOWN_TAG, 1, 5]
+  - [UNSUPPORTED_CWL_VERSION, 3, 13]
+  - [EXPECTED_MAPPING, 4, 8]
+  - [EXPECTED_MAPPING, 5, 6]
+  - [EXPECTED_MAPPING, 7, 3]
+  - [EXPECTED_MAPPING, 8, 3]
+  - [EXPECTED_MAPPING, 9, 3]
+  - [EXPECTED_MAPPING, 10, 3]
+  - [DUPLICATE_KEY, 12, 3]
+  - [EXPECTED_MAPPING, 14, 3]
+  - [EXPECTED_MAPPING, 15, 3]
+  - [EXPECTED_MAPPING, 17, 3]
+  - [DUPLICATE_KEY, 20, 3]
+  list_forms.wic: []
+  imports.wic: []
+# What a document reads as: each node by its fields, a construct as its tag around what it carries. A document
+# not listed here is read too.
+reads:
+  invalid_yaml.wic: null
+  not_a_mapping.wic: null
+  list_forms.wic:
+    steps:
+    - id: s
+      passthrough:
+        requirements: {InlineJavascriptRequirement: {}}
+        hints: {InlineJavascriptRequirement: {}}
+    passthrough:
+      inputs: {a: {type: string}, nm: {type: string}}
+      outputs: {o: {type: File, outputSource: s/f}, p: {type: File}}
+      requirements: {ScatterFeatureRequirement: {}, '': {}}
+      hints: {DockerRequirement: {dockerPull: x}}
+  imports.wic:
+    steps:
+    - id: s
+      passthrough:
+        label: a human label
+        requirements: [{$import: foo.yml}, {class: X}]
+        hints: [{$include: foo.yml}, {class: X}]
+    passthrough:
+      inputs: [{$import: foo.yml}, {id: a}]
+      outputs: [{$include: foo.yml}, {id: a}]
+      requirements: [{$include: foo.yml}, {class: a}]
+      hints: [{$import: foo.yml}, {class: a}]
+      $namespaces: {edam: 'http://example'}
+      top: {'!ii': {k: v}}

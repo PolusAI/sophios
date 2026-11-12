@@ -1,0 +1,19 @@
+# An output defines an edge in either spelling, on the step or in the wic: block for it.
+wic:
+  steps:
+    (1, s):
+      out:
+      - output_tpr_path: !& min.tpr
+    (2, t):
+      out:
+      - output_tpr_path: {wic_anchor: min.tpr}
+steps:
+- id: s
+  out:
+  - f: !& e
+  - g:
+      wic_anchor: e2
+  - h: {wic_anchor: e3}
+  - plain
+  - ''
+- id: t

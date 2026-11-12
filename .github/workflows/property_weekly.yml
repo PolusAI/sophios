@@ -88,7 +88,7 @@ jobs:
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         timeout-minutes: 180
         run: >-
-          pytest tests/core/test_generators.py tests/core/test_equivalence.py tests/core/test_equivalences.py tests/core/test_predicates.py tests/core/test_reference_compatibility.py tests/core/test_canonical_path.py tests/core/test_emit.py tests/core/test_resolve.py tests/core/test_link.py tests/core/test_infer_phase.py tests/core/test_cwl_version.py tests/core/test_names_emitted.py tests/core/test_edge_binding.py tests/core/test_lower.py tests/core/test_pipeline.py
+          pytest tests/core/test_generators.py tests/core/test_equivalence.py tests/core/test_equivalences.py tests/core/test_predicates.py tests/core/test_reference_compatibility.py tests/core/test_canonical_path.py tests/core/test_emit.py tests/core/test_resolve.py tests/core/test_link.py tests/core/test_infer_phase.py tests/core/test_names_emitted.py tests/core/test_edge_binding.py tests/core/test_lower.py tests/core/test_pipeline.py
           tests/core/test_leak_boundary.py::test_step_passthrough_is_byte_identical
           tests/core/test_leak_boundary.py::test_top_level_passthrough_is_byte_identical
           tests/core/test_leak_boundary.py::test_hints_survive_on_the_document_and_the_step_and_change_nothing_else

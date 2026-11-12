@@ -1,0 +1,24 @@
+# An edge is defined where its value comes into being: on a step's output. Anywhere else !& is reported, in either
+# spelling, and the name it gave is kept as a name.
+top: !& x                         # at the top level
+top_desugared: {wic_anchor: x}
+both: !foo {wic_anchor: x}        # under an unknown tag as well
+wic:
+  graphviz:
+    label: !& e                   # in the wic: block
+  steps:
+    (1, s):
+      wic:
+        graphviz:
+          label: {wic_anchor: e}
+steps:
+- id: s
+  in:
+    a: !& e                       # in input position
+    b: {wic_anchor: e}
+    c: !ii {k: !& e}              # inside a literal
+    d: !ii {k: {wic_anchor: e}}
+    f: !& [a]                     # on a collection, which has no name to keep
+    g: !foo {wic_anchor: x}       # under an unknown tag as well
+  label: !& e                     # in a step's own CWL
+  doc: {wic_anchor: e}
