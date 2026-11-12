@@ -99,10 +99,10 @@ stopped, and how each runner spreads the steps over it:
 - **No site runs cwltool** (decision 22). Toil runs the same CWL on a machine and on Slurm, so a site needs one CWL
   runner, and a site's default for a target is its first runner a site runs: `toil-cwl-runner` for `cwl`.
   `runner='cwltool'` is refused, `wic058`, naming Toil, before anything is compiled or sent.
-- **Nextflow's containers need Docker, wherever they run.** That is the Nextflow target's own restriction, not
-  Sites': its generated `nextflow.config` enables Docker, and each process with a container reads its image's
-  entrypoint with `docker image inspect` in its `beforeScript`. On a site whose `container_engine` is not `docker`,
-  `check` refuses each process with a container, by name; a workflow whose processes have none runs on Slurm.
+- **Nextflow's containers need Docker on a site.** That is the restriction of the pipeline `compile()` writes, which
+  a site runs, not Sites': its generated `nextflow.config` enables Docker, and each process with a container reads
+  its image's entrypoint with `docker image inspect` in its `beforeScript`. On a site whose `container_engine` is not
+  `docker`, `check` refuses each process with a container, by name; a workflow whose processes have none runs on Slurm.
 - **What a site sets for Nextflow is a block it appends to the run's copy of the generated `nextflow.config`,** the
   one configuration the backend has Nextflow read (`-C`), from one function in `sophios.sites` (decision 25). Nextflow
   is set by its configuration, and only a configuration sets a task's options by the task. The Nextflow backend never
@@ -321,7 +321,8 @@ the site. Problems only a site has (it cannot be reached, a scheduler command is
 - **No resume** (decision 21). A failed run is submitted again from the start.
 - **No sweep of what a hard kill leaves.** `<run>/toil` stays, and the reason names the `rm` line.
 - **No real-time analyses on a site:** they watch cwltool's job folders here.
-- **No Apptainer for Nextflow's containers** (decision 19): that is a change to the Nextflow target.
+- **No Apptainer for Nextflow's containers** (decision 19): that is a change to the pipeline `compile()` writes, which
+  a site runs.
 - **No cloud plumbing:** a VM is a `Machine`; Sophios never creates, sizes or stops one.
 - **No settings file, no site registry, no CLI in v1:** a site is one line of Python; `attach` is "come back
   tomorrow".
@@ -358,8 +359,8 @@ the site. Problems only a site has (it cannot be reached, a scheduler command is
     whole: a site sets the executor options of its own scheduler, through the run's ordinary passthrough
     arguments, from one function in `sophios.sites`. The backend never learns of sites, so lifting the non-goal
     later deletes a sentence and changes no code. *Its channel is replaced by 25.*
-19. **2026-11-09: Nextflow's containerized processes stay Docker-only on a site**, the Nextflow target's own
-    restriction; Apptainer would be a change to that target.
+19. **2026-11-09: Nextflow's containerized processes stay Docker-only on a site**, the restriction of the pipeline
+    `compile()` writes; Apptainer would be a change to that pipeline.
 20. **2026-11-09: the default runners:** a machine runs the target's default (cwltool for `cwl`, as locally); Slurm
     runs `toil-cwl-runner` for `cwl`. *Replaced by 22.*
 21. **2026-11-09: no resume until Sites has met real use.** (It was open question 1; the 2026-10-29 design's "Later:
