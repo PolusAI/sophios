@@ -187,3 +187,24 @@
   answers: {POST runs: {status: 201, json: {id: x, state: QUEUED, slurmJobId: '7'}},
       GET runs/x: {json: {id: x, state: QUEUED}}}
   calls: [[GET, openapi.json, 10, 60], [POST, runs, 10, 300], [GET, runs/x, 10, 60]]
+- id: the-outputs-of-a-nextflow-run
+  why: "Each File and Directory the pipeline published, its class and path, gains its location and basename, as a CWL
+      run's has them, from the answer alone, so an attached run reads the same; in a list too; any other value is as
+      it is."
+  do: [attach, outputs]
+  answers: {GET runs/r1: {json: {id: r1, state: COMPLETED, outputs: {
+      segmentation: [{class: Directory, path: /out/seg-a}, {class: Directory, path: /out/seg b}],
+      note: {class: File, path: /out/note.txt}, text: "noted\n", absent: null}}}}
+  returns: [r1, {exact: {
+      segmentation: [{class: Directory, location: 'file:///out/seg-a', path: /out/seg-a, basename: seg-a},
+                     {class: Directory, location: 'file:///out/seg%20b', path: /out/seg b, basename: seg b}],
+      note: {class: File, location: 'file:///out/note.txt', path: /out/note.txt, basename: note.txt},
+      text: "noted\n", absent: null}}]
+- id: the-outputs-of-a-cwl-run
+  why: Toil's output object, as it is, every field of each File and Directory kept.
+  do: [attach, outputs]
+  answers: {GET runs/r1: {json: {id: r1, state: COMPLETED, outputs: &toil {
+      masks: [{class: File, location: 'file:///out/a.tif', path: /out/a.tif, basename: a.tif, size: 3,
+               checksum: sha1$0}],
+      folder: {class: Directory, location: 'file:///out/f', path: /out/f, basename: f, listing: []}}}}}
+  returns: [r1, {exact: *toil}]

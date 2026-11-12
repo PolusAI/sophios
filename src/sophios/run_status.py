@@ -1,6 +1,6 @@
 """How a run is, and how it ended: what `Workflow.start()`'s handle reports.
 
-The states and the status are those the compute service reports for a run (its contract 3.0.0),
+The states and the status are those the compute service reports for a run (its contract 3),
 so a run reads the same wherever it runs. `WorkflowRunError` is what the handle's `collect()`
 raises for a run that did not complete.
 """
