@@ -15,7 +15,7 @@ import pytest
 
 from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
 from sophios.api.python.workflow import Step, Workflow
-from sophios.input_output_nf import NF_OUTPUT_MARKER
+from sophios.backends import recorded_outputs
 
 from .testkit import assert_succeeded, execute_nextflow
 
@@ -145,8 +145,7 @@ def _snapshot(values: dict[str, Any]) -> dict[str, Any]:
 def _run_nextflow(workflow: Workflow, directory: Path) -> dict[str, Any]:
     result = execute_nextflow(workflow.compile(target="nextflow").write(directory))
     assert_succeeded(result)
-    marker = f"{NF_OUTPUT_MARKER} "
-    return dict(json.loads(line.removeprefix(marker)) for line in result.stdout.splitlines() if line.startswith(marker))
+    return dict(recorded_outputs(result.stdout))
 
 
 def _run_cwltool(main: Callable[..., int], workflow: Workflow, directory: Path) -> dict[str, Any]:

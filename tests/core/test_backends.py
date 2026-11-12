@@ -460,3 +460,10 @@ def test_the_engine_remedies_name_only_the_options_the_runs_target_takes(
                                  else 'install docker.')
     assert str(busy).endswith('or pass --ignore_docker_processes.' if cwl else '(sudo pkill com.docker && sudo '
                               'pkill Docker).')
+
+
+def test_a_recorded_output_is_read_after_the_launchers_download_notice() -> None:
+    """The standalone launcher prints its notice with no newline, so the first record shares its line."""
+    stdout = ('Downloading nextflow dependencies. It may require a few seconds, please wait .. \r\x1b[K'
+              'sophios-output ["a", 1]\nsophios-output ["b", {"class": "File", "path": "/x"}]\nnot a record\n')
+    assert list(backends.recorded_outputs(stdout)) == [("a", 1), ("b", {"class": "File", "path": "/x"})]

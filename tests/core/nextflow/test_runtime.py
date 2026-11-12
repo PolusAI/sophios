@@ -20,7 +20,8 @@ import pytest
 from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
 from sophios.api.python._workflow_runtime import compile_workflow_result
 from sophios.api.python.workflow import Step, StepInput, Workflow
-from sophios.input_output_nf import NF_OUTPUT_MARKER, write_nextflow_artifacts
+from sophios.backends import recorded_outputs
+from sophios.input_output_nf import write_nextflow_artifacts
 from sophios.nf_symbols import NEXTFLOW_SCRIPT_NAMES
 from sophios.nf_types import (
     ExecutableNextflowWorkflow,
@@ -182,8 +183,7 @@ def test_host_and_container_tasks_run_in_one_workflow(tmp_path: Path) -> None:
 
 def _recorded(stdout: str) -> dict[str, Any]:
     """Each workflow output the pipeline recorded on ``stdout``, by its Nextflow name."""
-    marker = f"{NF_OUTPUT_MARKER} "
-    return dict(json.loads(line.removeprefix(marker)) for line in stdout.splitlines() if line.startswith(marker))
+    return dict(recorded_outputs(stdout))
 
 
 @pytest.mark.nextflow
