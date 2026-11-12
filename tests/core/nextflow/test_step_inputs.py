@@ -1,9 +1,8 @@
-"""Step-input default, linkMerge and pickValue under pinned Nextflow, each compared with what CWL gives (design §6,
-Topology)."""
+"""Step-input default, linkMerge and pickValue lowering (design §6, Topology); their runs are cases in
+tests/core/data/nextflow/runs.yaml."""
 
 # pylint: disable=missing-function-docstring
 
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -18,7 +17,7 @@ from sophios.nf_types import (
 from sophios.utils_nf import compiled_source_to_nextflow
 
 from .test_capabilities import _findings
-from .test_channels import _lower, _run
+from .test_channels import _lower
 from .testkit import command, output_port, step, synthetic_source, tool, workflow_doc
 
 _STRINGS = {"type": "array", "items": "string"}
@@ -31,100 +30,10 @@ def _echo(name: str, port: Any) -> CommandLineTool:
     ).base_command("echo").stdout("out.txt")
 
 
-def _word(name: str, text: str) -> Step:
-    """A step whose text output is ``text``."""
-    tool = CommandLineTool(
-        name, Inputs(text=Input(cwl.string, position=1)),
-        Outputs(said=Output(cwl.string, glob="said.txt", load_contents=True, output_eval="$(self[0].contents)")),
-    ).base_command("printf").stdout("said.txt")
-    step = Step(tool, step_name=name)
-    step.inputs.text = text
-    return step
-
-
-def _maybe(name: str, text: str, *, runs: bool) -> Step:
-    """A conditional step whose text output is ``text`` when it runs, and null when it does not."""
-    tool = CommandLineTool(
-        name, Inputs(text=Input(cwl.string, position=1), go=Input(cwl.boolean)),
-        Outputs(said=Output(cwl.string, glob="said.txt", load_contents=True, output_eval="$(self[0].contents)")),
-    ).base_command("printf").stdout("said.txt")
-    step = Step(tool, step_name=name)
-    step.inputs.text, step.inputs.go = text, runs
-    step.when = "$(inputs.go)"
-    return step
-
-
 def _say(name: str, port: Any, value: Any) -> Step:
     step = Step(_echo(name, port), step_name=name)
     step.inputs.words = value
     return step
-
-
-@pytest.mark.nextflow
-@pytest.mark.serial
-def test_pick_value_picks_from_the_joined_sources(tmp_path: Path) -> None:
-    skipped, ran = _maybe("skipped", "never", runs=False), _maybe("ran", "only", runs=True)
-    flow = Workflow([skipped, ran], "picked")
-    absent, present = flow.inputs.absent.as_type("string?"), flow.inputs.present.as_type("string?")
-    first = _say("first", cwl.string, StepInput(
-        source=[absent, skipped.outputs.said, present], pick_value="first_non_null"
-    ))
-    only = _say("only", cwl.string, StepInput(
-        source=[skipped.outputs.said, ran.outputs.said], pick_value="the_only_non_null"
-    ))
-    every = _say("every", cwl.array(cwl.string), StepInput(
-        source=[present, skipped.outputs.said, ran.outputs.said, absent], pick_value="all_non_null"
-    ))
-    flow.steps.extend([first, only, every])
-    flow.outputs.first, flow.outputs.only = first.outputs.line, only.outputs.line
-    flow.outputs.every = every.outputs.line
-    result, observed = _run(flow, tmp_path, params={"absent": None, "present": "x"})
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert {name: observed[name] for name in ("first", "only", "every")} == {
-        "first": ["x\n"], "only": ["only\n"], "every": ["x only\n"],
-    }
-
-
-@pytest.mark.nextflow
-@pytest.mark.serial
-@pytest.mark.parametrize(("pick", "values", "found"), [
-    ("first_non_null", [None, None], 0), ("the_only_non_null", [None, None], 0), ("the_only_non_null", ["x", "y"], 2),
-])
-def test_a_pick_value_that_finds_no_one_value_stops_the_run(
-    pick: str, values: list[str | None], found: int, tmp_path: Path
-) -> None:
-    flow = Workflow([], "picked")
-    step = _say("pick", cwl.string, StepInput(
-        source=[flow.inputs.a.as_type("string?"), flow.inputs.b.as_type("string?")], pick_value=pick
-    ))
-    flow.steps.append(step)
-    flow.outputs.line = step.outputs.line
-    result, _ = _run(flow, tmp_path, params=dict(zip("ab", values)))
-    assert result.returncode != 0
-    assert f"Sophios step input pick.words: {pick} finds {found} values that are not null" in (
-        result.stdout + result.stderr
-    )
-    assert not list((tmp_path / "work").rglob("out.txt"))
-
-
-@pytest.mark.nextflow
-@pytest.mark.serial
-def test_a_default_is_the_value_with_no_source_and_takes_the_place_of_a_null_one(tmp_path: Path) -> None:
-    skipped = _maybe("skipped", "never", runs=False)
-    flow = Workflow([skipped], "defaulted")
-    unsourced = _say("unsourced", cwl.string, StepInput(default="d1"))
-    absent = _say("absent", cwl.string, StepInput(source=flow.inputs.absent.as_type("string?"), default="d2"))
-    present = _say("present", cwl.string, StepInput(source=flow.inputs.given.as_type("string?"), default="d3"))
-    after_skip = _say("after_skip", cwl.string, StepInput(source=skipped.outputs.said, default="d4"))
-    flow.steps.extend([unsourced, absent, present, after_skip])
-    flow.outputs.unsourced, flow.outputs.absent, flow.outputs.present, flow.outputs.after_skip = (
-        unsourced.outputs.line, absent.outputs.line, present.outputs.line, after_skip.outputs.line
-    )
-    result, observed = _run(flow, tmp_path, params={"absent": None, "given": "g"})
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert {name: observed[name] for name in ("unsourced", "absent", "present", "after_skip")} == {
-        "unsourced": ["d1\n"], "absent": ["d2\n"], "present": ["g\n"], "after_skip": ["d4\n"],
-    }
 
 
 def _joined(step_input: Any, port_type: Any, inputs: dict[str, Any], *, scatter: bool = False) -> Any:
