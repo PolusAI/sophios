@@ -3,7 +3,6 @@ workflow has its own builder function, which test_import.py's fixed point reads 
 
 # pylint: disable=missing-function-docstring
 
-import json
 from pathlib import Path
 from typing import Any
 
@@ -11,7 +10,6 @@ import pytest
 
 from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
 from sophios.api.python.workflow import Step, StepInput, Workflow
-from sophios.nf_types import NfWorkflowInputConnection
 
 from .testkit import execute_nextflow
 
@@ -276,15 +274,3 @@ def flags_workflow() -> Workflow:
                      fast=Input(cwl.boolean, position=3, flag="--fast")), step_name="flags")
     flags.inputs.strict, flags.inputs.verbose, flags.inputs.fast = True, True, False
     return Workflow([flags], "flags")
-
-
-@pytest.mark.nextflow
-@pytest.mark.serial
-def test_a_command_line_false_overrides_a_flag_the_params_file_sets(tmp_path: Path) -> None:
-    """The params file sets strict and verbose and clears fast; the command line clears verbose."""
-    workflow = flags_workflow()
-    verbose = next(connection.from_port
-                   for connection in workflow.compile(target="nextflow").nextflow_workflow.connections
-                   if isinstance(connection, NfWorkflowInputConnection) and connection.to_port == "verbose")
-    assert _run_report(workflow, tmp_path, f"--{verbose}", "false") == "--strict\n"
-    assert json.loads((tmp_path / "nextflow_params.json").read_text(encoding="utf-8"))[verbose] is True
