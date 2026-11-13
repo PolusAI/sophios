@@ -19,6 +19,7 @@ from .ir.artifacts import CompilationArtifact, CompilationResult
 from .ir.resolved import ResolvedWorkflow
 from .nf_types import ExecutableNextflowWorkflow
 from .run_setup import Lowered
+from .runtime_inputs import output_target_inputs
 from .utils_nf import NEXTFLOW as _NEXTFLOW_LOWERING
 
 ModelT = TypeVar('ModelT')
@@ -90,7 +91,8 @@ class _Cwl:
     def write(self, lowered: Lowered[CompilationArtifact], analyses: tuple[realtime.Analysis, ...], basepath: Path,
               *, inputs_file: str, root_dir: Path) -> None:
         """Each document under its own name, the root's job, and each analysis beside them."""
-        input_output.write_artifacts_to_disk(lowered.model, basepath, inputs_file)
+        input_output.write_artifacts_to_disk(lowered.model, basepath, inputs_file,
+                                             output_targets=output_target_inputs(lowered.view))
         realtime.write(analyses, basepath, lowered.model.name, root_dir)
 
 

@@ -6,6 +6,7 @@ files:
   realtime/declared_2: [measure_only.cwl, measure_only_inputs.yml, measure_only~measure.cwl,
                         measure_only~measure~count_lines@1.cwl, measure_only~measure~count_lines@2.cwl]
   realtime/declared_3: [counted_only.cwl, counted_only_inputs.yml, counted_only~counted.cwl]
+  realtime/declared_4: [write_dir_only.cwl, write_dir_only_inputs.yml, write_dir_only~write_dir.cwl]
   realtime/watch: [count_lines_only.cwl, count_lines_only_inputs.yml, count_lines_only~count_lines.cwl]
 written:
   declared.cwl: {steps: [{id: slow_log}, {id: watch}]}
@@ -18,6 +19,7 @@ written:
      cwl: realtime/declared_2/measure_only.cwl, declared_at: 'declared.wic:17:3'}
   - {name: declared_3, analysis: counted, file_pattern: out.log, max_times: 2, interval: 5,
      declared_at: 'declared.wic:30:3'}
+  - {name: declared_4, analysis: write_dir, declared_at: 'declared.wic:40:3'}
   - {name: watch, analysis: count_lines, max_times: 2, interval: 5, declared_at: 'watch.wic:3:3'}
   realtime/declared/tag_only_inputs.yml: {exact: {tag~file: {class: File, location: a.txt}, tag~name: b.txt}}
   realtime/declared_2/measure_only_inputs.yml: {exact: {measure~count_lines@1~log: {class: File, location: a.txt},
@@ -25,5 +27,7 @@ written:
   realtime/declared_3/counted_only.cwl: {steps: [{run: counted_only~counted.cwl}]}
   realtime/declared_3/counted_only~counted.cwl:
     hints: [{exact: {class: DockerRequirement, dockerPull: counted, dockerFile: "FROM alpine:3.20\n"}}]
+  realtime/declared_4/write_dir_only_inputs.yml:
+    exact: {write_dir~outDir: {class: Directory, basename: plots, listing: []}}
 refused: [{code: REALTIME_DECLARATION, severity: error, file: refused.wic, line: 4,
            message: {contains: ["real-time analysis 'nope' does not compile"]}}]

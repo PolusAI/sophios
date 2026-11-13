@@ -36,4 +36,13 @@ steps:
     config: !ii
       in:
         log: out.log
+# A tool that writes into a directory it is given: the job names an empty Directory for the run to create.
+- id: cwl_subinterpreter
+  in:
+    file_pattern: !ii out.log
+    cwl_tool: !ii write_dir
+    max_times: !ii 1
+    config: !ii
+      in:
+        outDir: plots
 - id: watch.wic

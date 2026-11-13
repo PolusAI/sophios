@@ -179,7 +179,7 @@ def _under_cwltool(case: dict[str, Any], directory: Path) -> dict[str, Any]:
     import cwltool.main  # pylint: disable=import-outside-toplevel
 
     artifact = compiled_case(case).artifact
-    write_artifacts_to_disk(artifact, directory)
+    write_artifacts_to_disk(artifact, directory, output_targets=())
     jobs = directory / f"{artifact.name}_inputs.yml"
     jobs.write_text(json.dumps({**(yaml.safe_load(jobs.read_text("utf-8")) or {}), **case["job"]}), "utf-8")
     stdout, stderr = io.StringIO(), io.StringIO()

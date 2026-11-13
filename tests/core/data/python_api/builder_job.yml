@@ -1,4 +1,4 @@
 child~count~scale: 0.5
-write_dir~outDir: result.outDir
+write_dir~outDir: {class: Directory, basename: result.outDir, listing: []}
 cat~f: {class: File, location: /cluster/images.ome.zarr}
 message: hello

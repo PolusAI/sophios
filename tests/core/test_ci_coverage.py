@@ -389,6 +389,10 @@ WINDOWS_EXCLUDED: Final = frozenset({
     # the file it writes as its stdout, in a few seconds together. What a quiet run writes and gives the
     # runner is checked on every leg by the file's other tests.
     'tests/core/test_quiet.py::test_a_quiet_run_prints_each_steps_messages_and_keeps_the_files_it_names',
+    # One cwltool run of a `touch` step one call down that writes into its output directory, under a second. The
+    # job's Directory literal at that depth is checked on every leg by the file's other tests; only a runner shows
+    # that it creates the directory the tool writes into.
+    'tests/core/test_runtime_inputs.py::test_a_tool_below_a_call_writes_into_its_output_target_directory',
     # One six-step workflow run under Nextflow and under cwltool, and one one-step tool cwltool fails, in about six
     # seconds. Only Lint And Test's Linux Nextflow step collects it, so the Windows leg gives up nothing it ran; which
     # references the target refuses is checked on every leg by the staging family of test_capabilities.py.

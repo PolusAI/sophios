@@ -19,7 +19,7 @@ from sophios.ir.artifacts import CompilationResult
 from sophios.ir.frontdoor import bundle_from_disk
 from sophios.post_compile import inline_artifact_runs
 from sophios.python_cwl_adapter import import_python_file
-from sophios.runtime_inputs import normalize_artifact_cwl, normalize_artifact_job_inputs
+from sophios.runtime_inputs import output_target_inputs, runner_job_inputs
 from sophios.wic_types import CompilerOptions, Json
 
 from .cases import DATA, diagnostic, match
@@ -93,10 +93,11 @@ def _through_the_file(root: Path, settings: CompilerOptions) -> Any:
     except SophiosError as error:
         return _refusal(error)
     artifact = inline_artifact_runs(result.artifact)
-    cwl = normalize_artifact_cwl(artifact)
+    cwl = {**artifact.cwl}
     if named := read_wic(root.read_text(encoding='utf-8'), root.name).get('outputs'):
         cwl['outputs'] = {name: cwl['outputs'][name] for name in named}
-    return cwl, normalize_artifact_job_inputs(artifact, artifact.job_inputs), _bodies(result.diagnostics)
+    job = runner_job_inputs(artifact.job_inputs, output_target_inputs(sophios.compiler.resolved_view(result)))
+    return cwl, job, _bodies(result.diagnostics)
 
 
 def _reads(cwl: Json) -> dict[str, dict[str, Any]]:

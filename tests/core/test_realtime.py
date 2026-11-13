@@ -129,10 +129,11 @@ REALTIME: Final = DATA / 'realtime'
 
 
 def _project(tmp_path: Path) -> Path:
-    """A copy of tests/core/data/realtime, and a config that finds its tools, its workflows and the adapter."""
+    """A copy of tests/core/data/realtime, and a config that finds its tools, its workflows, the adapter and a tool
+    that writes into a directory it is given."""
     root = tmp_path / 'project'
     shutil.copytree(REALTIME, root, ignore=shutil.ignore_patterns('expected.yaml'))
-    search_config(root / 'config.json', [root / 'tools', ADAPTER_PATH.parent], [root])
+    search_config(root / 'config.json', [root / 'tools', ADAPTER_PATH.parent, DATA / 'output_directory'], [root])
     return root
 
 

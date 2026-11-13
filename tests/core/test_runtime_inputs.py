@@ -1,15 +1,26 @@
-"""A job's File format, resolved from two or more EDAM candidates by its extension, as EDAM's own table pairs them."""
+"""What a runner gets as the job: a File's format resolved from two or more EDAM candidates by its extension, as
+EDAM's own table pairs them, and an output-target Directory as a literal the runner creates."""
 import copy
+import io
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import pytest
+import yaml
 from hypothesis import example, given, strategies as st
 
-from sophios.ir.artifacts import CompilationArtifact
-from sophios.runtime_inputs import normalize_artifact_job_inputs
+from sophios.cli import default_compilation_settings
+from sophios import targets
+from sophios.compiler import compile_source, resolved_view
+from sophios.ir.frontdoor import bundle_from_disk
+from sophios.runtime_inputs import runner_job_inputs
+from sophios.wic_types import StepId, Tool
 
 from .budgets import budget
+from .helpers import write_tree
+
+DATA = Path(__file__).resolve().parent / 'data' / 'output_directory'
 
 #: A File, its candidates as `edam:format_<n>`, and the one EDAM pairs with its extension: SDF `.sdf`, PDB `.pdb`,
 #: PDBQT `.pdbqt`; `.mol`'s is dropped, not guessed at: a runner treats `format` as a claim.
@@ -55,6 +66,59 @@ def test_a_file_has_the_format_its_extension_names_or_none(drawn: tuple[dict[str
     """Each File's candidates become the one its extension names, as spelled, wherever it is; nothing else changes."""
     job, resolved = drawn
     given_job = copy.deepcopy(job)
-    artifact = CompilationArtifact(namespace=(), name='w', run_path='w.cwl', cwl={}, job_inputs={}, graph=None)
-    assert normalize_artifact_job_inputs(artifact, job) == resolved
+    assert runner_job_inputs(job, set()) == resolved
     assert job == given_job
+
+
+def _written(tmp_path: Path, source: str, inputs_file: str = '') -> Path:
+    """`data/output_directory/<source>` compiled and written under `tmp_path / 'out'` as the CWL target writes it,
+    its job read from `inputs_file` when given."""
+    tool = DATA / 'write_dir.cwl'
+    tools = {StepId('write_dir', 'global'): Tool(str(tool), yaml.safe_load(tool.read_text(encoding='utf-8')))}
+    siblings = {'global': {p.stem: p for p in DATA.glob('*.wic')}}
+    result = compile_source(bundle_from_disk(DATA / source, siblings, tools), default_compilation_settings(),
+                            quiet=True)
+    if inputs_file:
+        write_tree(tmp_path, {'job.yml': inputs_file})
+    cwl = targets.target('cwl')
+    cwl.write(cwl.lower(result, resolved_view(result)), (), tmp_path / 'out',
+              inputs_file=str(tmp_path / 'job.yml') if inputs_file else '', root_dir=tmp_path)
+    return tmp_path / 'out'
+
+
+def _job(out: Path, stem: str) -> Any:
+    return yaml.safe_load((out / f'{stem}_inputs.yml').read_text(encoding='utf-8'))
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('given_directory', [
+    'result.outDir', '{class: Directory, location: result.outDir}', '{class: Directory, path: result.outDir}',
+    '{class: Directory, basename: result.outDir}'], ids=['name', 'location', 'path', 'basename'])
+def test_an_output_target_directory_in_a_job_is_a_directory_literal(tmp_path: Path, given_directory: str) -> None:
+    """Whichever way an inputs file gave it, the runner is asked to create an empty directory of that name; nothing
+    is made on disk."""
+    out = _written(tmp_path, 'w.wic', f'write_dir~outDir: {given_directory}\n')
+    assert _job(out, 'w')['write_dir~outDir'] == {'class': 'Directory', 'basename': 'result.outDir', 'listing': []}
+    assert not (tmp_path / 'result.outDir').exists()
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize(('source', 'key'), [('nested.wic', 'w~write_dir~outDir'),
+                                             ('deeper.wic', 'nested~w~write_dir~outDir')], ids=['one', 'two'])
+def test_an_output_target_directory_below_calls_is_a_directory_literal_at_its_root_key(
+        tmp_path: Path, source: str, key: str) -> None:
+    """The job key is the step's qualified input, however many calls deep."""
+    out = _written(tmp_path, source, f'{key}: {{class: Directory, location: result.outDir}}\n')
+    assert _job(out, source.removesuffix('.wic')) == {
+        key: {'class': 'Directory', 'basename': 'result.outDir', 'listing': []}}
+
+
+@pytest.mark.needs_cwltool
+def test_a_tool_below_a_call_writes_into_its_output_target_directory(tmp_path: Path) -> None:
+    """cwltool creates the directory the job's literal names, and the tool fills it."""
+    import cwltool.main  # pylint: disable=import-outside-toplevel
+
+    out = _written(tmp_path, 'nested.wic')
+    assert cwltool.main.main(['--quiet', '--outdir', str(tmp_path / 'run'), str(out / 'nested.cwl'),
+                              str(out / 'nested_inputs.yml')], stdout=io.StringIO()) == 0
+    assert (tmp_path / 'run' / 'result.outDir' / 'done.txt').is_file()
