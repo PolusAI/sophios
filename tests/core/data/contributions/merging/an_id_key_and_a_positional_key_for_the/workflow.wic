@@ -1,0 +1,11 @@
+# Fields only the bare entry sets survive; the positional entry wins where both set one.
+wic:
+  steps:
+    mk_file:
+      in:
+        a: !ii x.txt
+    (1, mk_file):
+      in:
+        b: !ii y.txt
+steps:
+- id: mk_file

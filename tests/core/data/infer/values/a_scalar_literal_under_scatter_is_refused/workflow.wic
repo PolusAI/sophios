@@ -1,0 +1,7 @@
+# A scatter splits its value; a scalar is not wrapped into a one-element list.
+steps:
+- id: mk_file
+  in:
+    name: !ii a
+  scatter:
+  - name

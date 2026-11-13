@@ -1,0 +1,25 @@
+# Every output of workflow.wic, by step and port, in the order of its steps.
+outputs:
+  brace_named~result: {class: File, basename: "a{b,c}.txt", contents: "literal\n"}
+  dollar_named~result: {class: File, basename: "out$name.txt", contents: ""}
+  backtick_named~result: {class: File, basename: "`report.txt", contents: ""}
+  first_of_braces~result: {class: File, basename: "out{1,2}.txt", contents: "one match only\n"}
+  named_absent~o: null
+  named_present~o: {class: File, basename: maybe.txt, contents: ""}
+  pattern_none~o: null
+  pattern_one~o: {class: File, basename: a.log, contents: ""}
+  touch_names~result: {class: File, basename: a.txt, contents: ""}
+# The CWL workflow.wic compiles to: its requirements, and of each step, in order, what it reads from another
+# step or from a workflow input, and its scatter and when; a literal an input is given is left out.
+compiled:
+  requirements: {exact: {}}
+  steps:
+    brace_named: {}
+    dollar_named: {}
+    backtick_named: {}
+    first_of_braces: {}
+    named_absent: {}
+    named_present: {}
+    pattern_none: {}
+    pattern_one: {}
+    touch_names: {}

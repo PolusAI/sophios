@@ -1,5 +1,5 @@
 """The library reports failures; only the CLI adapter exits: compilation never terminates the process, every failure
-yields a diagnostic, exit codes are unchanged. The no-exit claim's dynamic half is test_pipeline.py's."""
+yields a diagnostic, exit codes are unchanged. The no-exit claim's dynamic half is test_emit.py's laws."""
 import datetime
 import json
 import math

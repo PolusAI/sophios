@@ -1,0 +1,9 @@
+# The list form is unchanged: each element is one scattered value.
+steps:
+- id: mk_file
+  in:
+    name: !ii
+    - a
+    - b
+  scatter:
+  - name

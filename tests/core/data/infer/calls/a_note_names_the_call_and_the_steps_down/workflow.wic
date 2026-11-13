@@ -1,0 +1,4 @@
+# The input is named at the call the author wrote, and the output by the steps down to the one that makes it.
+steps:
+- id: make.wic
+- id: use.wic

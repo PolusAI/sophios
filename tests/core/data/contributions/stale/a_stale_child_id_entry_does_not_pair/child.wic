@@ -1,0 +1,8 @@
+wic:
+  steps:
+    mk_file:
+      in:
+        extra: !ii stale_child.txt
+steps:
+- id: mk_file
+- id: mk_file

@@ -1,0 +1,8 @@
+# The closest sidecar namespace selects the process over the default global one.
+wic:
+  steps:
+    (1, mk_file):
+      wic:
+        namespace: alt
+steps:
+- id: mk_file

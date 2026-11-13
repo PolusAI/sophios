@@ -1,8 +1,12 @@
-"""Independent test model for reference-type judgments: it lowers declarations to a small set of structural variants and
-compares the Cartesian product, so generated inputs never ask the system under test which cases it should generate."""
+"""Independent test models: reference-type judgments, lowering declarations to a small set of structural variants and
+comparing the Cartesian product, so generated inputs never ask the system under test which cases it should generate;
+and inference's default choice of source for an unbound input."""
 
 from enum import Enum
 from typing import Any, Final
+
+from sophios.ir.declarations import input_rank, layered, output_rank
+from sophios.ir.types import DerivedName, Port, PortDeclaration, PortId, PortName, StepNode
 
 
 class ReferenceExpectation(Enum):
@@ -75,3 +79,65 @@ def reference_expectation(source: Any, sink: Any) -> ReferenceExpectation:
 def may_reference(source: Any, sink: Any) -> bool:
     """Whether a generator may safely put this reference in a compilable document."""
     return reference_expectation(source, sink) is not ReferenceExpectation.DISJOINT
+
+
+def inference_choice(steps: tuple[StepNode, ...], position: int, sink: Port) -> PortId | None:
+    """Independent, deliberately small model of default candidate selection: the most recent earlier step with an
+    output whose type and format fit, the first such output declared, among those exposed through the same steps."""
+    sink_type = layered(sink.type, input_rank(steps[position], sink.id.port)).canonical
+    sink_formats = _formats(sink.declaration)
+    for producer in reversed(steps[:position]):
+        matches = [output for output in producer.outputs
+                   if _types_match(sink_type, _source_type(producer, output))
+                   and _formats_match(sink_formats, _formats(output.declaration), _source_type(producer, output))]
+        if matches:
+            through = _exposed_through(matches[-1].id.port)
+            return next(output.id for output in matches if _exposed_through(output.id.port) == through)
+    return None
+
+
+def _exposed_through(name: PortName) -> list[object]:
+    """The steps a port name was exposed through, outermost first."""
+    steps: list[object] = []
+    while isinstance(name, DerivedName):
+        steps.append(name.step)
+        name = name.port
+    return steps
+
+
+def _types_match(sink: Any, source: Any) -> bool:
+    if sink == source:
+        return True
+    sink_members = sink if isinstance(sink, list) else [sink]
+    source_members = source if isinstance(source, list) else [source]
+    return any(member in sink_members for member in source_members)
+
+
+def _formats(declaration: PortDeclaration | None) -> tuple[Any, ...]:
+    if declaration is None or not declaration.has_format:
+        return ()
+    return tuple(declaration.format) if isinstance(declaration.format, list) else (declaration.format,)
+
+
+def _formats_match(sink: tuple[Any, ...], source: tuple[Any, ...], source_type: Any) -> bool:
+    if not sink:
+        return True
+    if source:
+        return any(item in sink for item in source)
+    return not _permits_format(source_type)
+
+
+def _permits_format(value: Any) -> bool:
+    if value == 'File':
+        return True
+    if isinstance(value, list):
+        return any(_permits_format(item) for item in value)
+    if isinstance(value, dict) and value.get('type') == 'array':
+        return _permits_format(value.get('items'))
+    return False
+
+
+def _source_type(step: StepNode, port: Port) -> Any:
+    """CWL v1.2: `nested_crossproduct` nests one array per scattered input; every other method yields one flat array.
+    Rank is `output_rank`."""
+    return layered(port.type, output_rank(step)).canonical

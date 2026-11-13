@@ -1,0 +1,3 @@
+steps:
+- id: sink
+  in: {file: !cwl {source: !* made}, n: !ii 1}

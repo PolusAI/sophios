@@ -13,8 +13,8 @@ page and it are meant to agree, and where they disagree, that is a bug in one
 of them. Every rule here is implemented and pinned by the tests it names. One
 gap is known: a step input typed by a `SchemaDefRequirement` name is promoted
 to a workflow input without the requirement that defines the name, so cwltool
-rejects the compiled workflow (`test_a_schema_def_typed_input_validates` in
-`tests/core/test_emit.py`, a strict xfail).
+rejects the compiled workflow (an xfail example of the validation property in
+`tests/core/test_emit.py`).
 
 ## The language and its two surfaces
 
@@ -63,15 +63,15 @@ step's tool is passthrough wholesale: Sophios does not classify
 
 | Field | Support | Note | Pinned by |
 |---|---|---|---|
-| `class` | native | written by the compiler | `test_class_is_written_while_inputs_outputs_and_version_are_not` |
-| `cwlVersion` | native | written; `wic035` for an unrunnable value | `test_class_is_written_while_inputs_outputs_and_version_are_not` |
-| `doc` | passthrough | | `test_top_level_passthrough_is_byte_identical` |
-| `hints` | passthrough | | `test_top_level_passthrough_is_byte_identical` |
-| `id` | passthrough | | `test_top_level_passthrough_is_byte_identical` |
-| `inputs` | native | merged into; the compiler wins on a collision | `test_class_is_written_while_inputs_outputs_and_version_are_not` |
-| `intent` | passthrough | | `test_top_level_passthrough_is_byte_identical` |
-| `label` | passthrough | | `test_top_level_passthrough_is_byte_identical` |
-| `outputs` | native | read: `outputSource` is resolved; merged into | `test_class_is_written_while_inputs_outputs_and_version_are_not` |
+| `class` | native | written by the compiler | `tests/core/data/compiler/boundary` |
+| `cwlVersion` | native | written; `wic035` for an unrunnable value | `tests/core/data/compiler/boundary` |
+| `doc` | passthrough | | `test_leak_boundary.py` |
+| `hints` | passthrough | | `test_leak_boundary.py` |
+| `id` | passthrough | | `test_leak_boundary.py` |
+| `inputs` | native | merged into; the compiler wins on a collision | `tests/core/data/compiler/boundary` |
+| `intent` | passthrough | | `test_leak_boundary.py` |
+| `label` | passthrough | | `test_leak_boundary.py` |
+| `outputs` | native | read: `outputSource` is resolved; merged into | `tests/core/data/compiler/boundary` |
 | `requirements` | native | merged into | `test_user_requirements_are_merged_into_not_copied` |
 | `steps` | native | | `test_a_well_formed_document_is_read_whole` (`test_lang_parser.py`) |
 
@@ -79,17 +79,17 @@ step's tool is passthrough wholesale: Sophios does not classify
 
 | Field | Support | Note | Pinned by |
 |---|---|---|---|
-| `doc` | passthrough | | `test_step_passthrough_is_byte_identical` |
-| `hints` | passthrough | | `test_step_passthrough_is_byte_identical` |
+| `doc` | passthrough | | `test_leak_boundary.py` |
+| `hints` | passthrough | | `test_leak_boundary.py` |
 | `id` | native | `[A-Za-z0-9_-][A-Za-z0-9_.-]*`, else `wic045`, as for workflow input and output names and the root's name | `test_a_well_formed_document_is_read_whole` (`test_lang_parser.py`), `test_a_step_id_outside_the_allowed_characters_is_refused_at_its_line` (`test_diagnostics.py`) |
 | `in` | native | | `test_a_well_formed_document_is_read_whole` (`test_lang_parser.py`) |
-| `label` | passthrough | | `test_step_passthrough_is_byte_identical` |
+| `label` | passthrough | | `test_leak_boundary.py` |
 | `out` | native | | `test_a_construct_reads_alike_in_either_spelling_and_position` (`test_lang_parser.py`) |
-| `requirements` | passthrough | | `test_step_passthrough_is_byte_identical` |
+| `requirements` | passthrough | | `test_leak_boundary.py` |
 | `run` | native | a registry stem, a path relative to the document, or an inline body | `test_each_step_runs_the_tool_its_run_names` (`test_frontdoor.py`) |
-| `scatter` | native | | `test_every_declared_key_is_interpreted` |
-| `scatterMethod` | native | | `test_every_declared_key_is_interpreted` |
-| `when` | native | | `test_every_declared_key_is_interpreted` |
+| `scatter` | native | | `test_leak_boundary.py` |
+| `scatterMethod` | native | | `test_leak_boundary.py` |
+| `when` | native | | `test_leak_boundary.py` |
 
 **`WorkflowStepInput`** (an entry of a step's `in:`)
 
@@ -109,32 +109,32 @@ step's tool is passthrough wholesale: Sophios does not classify
 
 | Field | Support | Note | Pinned by |
 |---|---|---|---|
-| `id` | native | | `test_class_is_written_while_inputs_outputs_and_version_are_not` |
-| `type` | native | | `test_an_untyped_authored_output_takes_its_producers_type` (`test_emit.py`) |
-| `outputSource` | native | one step/port reference; a list is `wic038` | `test_an_authored_output_source_validates` |
-| `format` | passthrough | | `test_class_is_written_while_inputs_outputs_and_version_are_not` |
-| `doc` | passthrough | | `test_class_is_written_while_inputs_outputs_and_version_are_not` |
-| `label` | passthrough | | `test_class_is_written_while_inputs_outputs_and_version_are_not` |
-| `secondaryFiles` | passthrough | | `test_a_promoted_output_keeps_the_fields_a_workflow_output_may_state` (`test_emit.py`) |
-| `streamable` | passthrough | | `test_a_promoted_output_keeps_the_fields_a_workflow_output_may_state` (`test_emit.py`) |
-| `linkMerge` | rejected | `wic038` | `test_link_merge_and_pick_value_on_an_output_are_wic038` (`test_lower.py`) |
-| `pickValue` | rejected | `wic038` | `test_link_merge_and_pick_value_on_an_output_are_wic038` (`test_lower.py`) |
+| `id` | native | | `tests/core/data/compiler/boundary` |
+| `type` | native | | `tests/core/data/compiler/sources` |
+| `outputSource` | native | one step/port reference; a list is `wic038` | `test_leak_boundary.py` |
+| `format` | passthrough | | `tests/core/data/compiler/boundary` |
+| `doc` | passthrough | | `tests/core/data/compiler/boundary` |
+| `label` | passthrough | | `tests/core/data/compiler/boundary` |
+| `secondaryFiles` | passthrough | | `test_emit.py` |
+| `streamable` | passthrough | | `test_emit.py` |
+| `linkMerge` | rejected | `wic038` | `tests/core/data/lower` |
+| `pickValue` | rejected | `wic038` | `tests/core/data/lower` |
 
 **`WorkflowInputParameter`** (an entry of the workflow's `inputs:`)
 
 | Field | Support | Note | Pinned by |
 |---|---|---|---|
-| `id` | native | | `test_class_is_written_while_inputs_outputs_and_version_are_not` |
-| `type` | native | read for the reference judgment | `test_only_proven_disjoint_cross_scope_types_are_rejected` (`test_link.py`) |
-| `format` | native | read by inference | `test_promoted_input_preserves_a_cwl_format_expression` (`test_infer_phase.py`) |
-| `default` | passthrough | a relative File or Directory `location`/`path` is written absolute against the `.wic`'s directory | `test_class_is_written_while_inputs_outputs_and_version_are_not`, `test_a_wic_file_default_is_written_absolute_against_the_wic` (`test_wic_defaults.py`) |
+| `id` | native | | `tests/core/data/compiler/boundary` |
+| `type` | native | read for the reference judgment | `tests/core/data/compiler/refused` |
+| `format` | native | read by inference | `tests/core/data/compiler/boundary` |
+| `default` | passthrough | a relative File or Directory `location`/`path` is written absolute against the `.wic`'s directory | `tests/core/data/compiler/boundary`, `test_a_wic_file_default_is_written_absolute_against_the_wic` (`test_wic_defaults.py`) |
 | `doc` | passthrough | | `test_a_referenced_input_merges_the_documentation_of_the_argument_it_binds` (`test_compiler.py`) |
 | `label` | passthrough | | `test_a_referenced_input_merges_the_documentation_of_the_argument_it_binds` (`test_compiler.py`) |
-| `inputBinding` | passthrough | | `test_class_is_written_while_inputs_outputs_and_version_are_not` |
-| `loadContents` | passthrough | | `test_a_promoted_input_keeps_the_fields_a_workflow_input_may_state` (`test_emit.py`) |
-| `loadListing` | passthrough | | `test_a_promoted_input_keeps_the_fields_a_workflow_input_may_state` (`test_emit.py`) |
-| `secondaryFiles` | passthrough | | `test_a_promoted_input_keeps_the_fields_a_workflow_input_may_state` (`test_emit.py`) |
-| `streamable` | passthrough | | `test_a_promoted_input_keeps_the_fields_a_workflow_input_may_state` (`test_emit.py`) |
+| `inputBinding` | passthrough | | `tests/core/data/compiler/boundary` |
+| `loadContents` | passthrough | | `test_emit.py` |
+| `loadListing` | passthrough | | `test_emit.py` |
+| `secondaryFiles` | passthrough | | `test_emit.py` |
+| `streamable` | passthrough | | `test_emit.py` |
 
 ### 1.1 The native rows of `Workflow`
 
@@ -172,12 +172,7 @@ step's tool is passthrough wholesale: Sophios does not classify
   ports use a prefix do not all bind it to one URI, that is `wic031`; a tool
   that binds the prefix differently but promotes no port using it conflicts
   with nothing, so the result does not depend on how the workflow is split
-  into subworkflows. Pinned by
-  `test_user_namespaces_survive_and_edam_is_edams_where_a_format_says_it`, the
-  tests of `test_metadata_emitted.py`, and in `test_emit.py` by
-  `test_a_prefix_two_promoting_sources_bind_differently_is_reported`,
-  `test_a_clash_on_a_prefix_no_promoted_format_uses_is_no_error` and
-  `test_a_step_promoting_no_format_with_a_prefix_is_no_source_for_it_wherever_it_sits`.
+  into subworkflows. Pinned by the example `tests/core/data/compiler/boundary`.
 
 ### 1.3 Passthrough
 

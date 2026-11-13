@@ -1,0 +1,4 @@
+# A child output stays visible to a later tool in its parent.
+steps:
+- id: sub.wic
+- id: count

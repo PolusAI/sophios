@@ -1,0 +1,8 @@
+# `mk_file` makes text; both inputs of `pair` declare text, which counts as saying so.
+steps:
+- id: mk_file
+  in:
+    name: !ii a.txt
+  out:
+  - file: !& f
+- id: pair

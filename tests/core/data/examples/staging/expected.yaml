@@ -1,0 +1,24 @@
+# Every output of workflow.wic, by step and port, in the order of its steps.
+outputs:
+  write_source~result: {class: File, basename: lines.txt, contents: "staged content\n"}
+  copy_named_after_source~result: {class: File, basename: lines.txt.copy, contents: "staged content\n"}
+  stage_own_basename~result: {class: File, basename: out.txt, contents: "staged content\n"}
+  stage_and_read~result: {class: File, basename: out.txt, contents: "staged content\n"}
+  capture_own_entry~same: {class: File, basename: lines.txt, contents: "staged content\n"}
+  capture_own_entry~wild: {class: File, basename: lines.txt, contents: "staged content\n"}
+  copy_captured~result: {class: File, basename: lines.txt.copy, contents: "staged content\n"}
+  capture_renamed_entry~wild: {class: File, basename: renamed.txt, contents: "staged content\n"}
+  plugin~outDir: {class: Directory, basename: plugin_out, contents: {result.txt: written}}
+# The CWL workflow.wic compiles to: its requirements, and of each step, in order, what it reads from another
+# step or from a workflow input, and its scatter and when; a literal an input is given is left out.
+compiled:
+  requirements: {exact: {}}
+  steps:
+    write_source: {}
+    copy_named_after_source: {in: {source: {source: write_source/result}}}
+    stage_own_basename: {in: {source: {source: write_source/result}}}
+    stage_and_read: {in: {source: {source: write_source/result}}}
+    capture_own_entry: {in: {source: {source: write_source/result}}}
+    copy_captured: {in: {source: {source: capture_own_entry/same}}}
+    capture_renamed_entry: {in: {source: {source: write_source/result}}}
+    plugin: {}

@@ -1,0 +1,11 @@
+# Overriding is the point of parameter passing: the contributor wins.
+wic:
+  steps:
+    (1, child.wic):
+      wic:
+        steps:
+          (1, mk_file):
+            in:
+              name: !ii from_the_parent.txt
+steps:
+- id: child.wic

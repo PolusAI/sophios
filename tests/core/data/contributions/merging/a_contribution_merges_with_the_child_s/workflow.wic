@@ -1,0 +1,14 @@
+# Both bodies address `(1, xform)`; neither replaces the other wholesale. A subworkflow that already parameterises
+# one of its own steps is the ordinary case -- `cg.wic` does -- so a contribution that overwrote the whole `(N,
+# name)` body would delete whatever the child had written there, and one that overwrote the whole `in:` would delete
+# the bindings it does not itself mention.
+wic:
+  steps:
+    (1, child.wic):
+      wic:
+        steps:
+          (1, xform):
+            in:
+              name: !ii contributed.txt
+steps:
+- id: child.wic

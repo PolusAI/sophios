@@ -1,0 +1,36 @@
+a_contribution_whose_key_does_not_match:
+  expect:
+  - {depth: 1, inputs: {name: [InlineLiteral, its_own.txt]}}
+  said:
+  - {contains: ['key (2, mk_file) addresses no step of ''child''', there is no step 2; the document has 1 step]}
+  - {contains: ['key (1, mk_text) addresses no step of ''child''', 'step 1 is ''mk_file''; write (1, mk_file)']}
+an_id_keyed_entry_for_a_repeated_id_is:
+  expect:
+  - {inputs: {exact: {}}}
+  - {step: 1, inputs: {exact: {}}}
+  said:
+  - {contains: [key mk_file addresses no step of 'workflow', '''mk_file'' names 2 steps; write (index, mk_file)']}
+a_stale_key_is_named_once_however_many:
+  expect: []
+  said:
+  - {startswith: 'Warning! '}
+a_stale_positional_key_from_the_parent:
+  expect:
+  - {depth: 1, inputs: {name: [InlineLiteral, child_own.txt]}}
+  said:
+  - {contains: ["key (2, mk_file) addresses no step of 'child'", there is no step 2]}
+a_stale_positional_key_in_the_child_does:
+  expect:
+  - {depth: 1, inputs: {name: [InlineLiteral, from_root.txt]}}
+  said:
+  - {contains: [child.wic, "key (2, mk_file) addresses no step of 'child'"]}
+a_stale_child_id_entry_does_not_pair:
+  expect:
+  - {depth: 1, inputs: {exact: {name: [InlineLiteral, from_root.txt]}}}
+  said:
+  - {contains: [child.wic, "key mk_file addresses no step of 'child'", "'mk_file' names 2 steps"]}
+a_bare_id_naming_no_step:
+  expect:
+  - {inputs: {exact: {}}}
+  said:
+  - {contains: ["key nothing addresses no step of 'workflow'", "no step is called 'nothing'"]}

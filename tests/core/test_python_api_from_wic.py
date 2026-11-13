@@ -24,7 +24,7 @@ from sophios.utils_cwl import canonicalize_type
 from sophios.lang import Document, render
 from sophios.wic_types import Json, StepId, Tool, Tools
 
-from .ast_strategies import SUBWORKFLOW_BODIES, compilable_documents
+from .ast_strategies import SUBWORKFLOW_BODIES, documents
 from .budgets import budget
 from .cases import case_dirs, diagnostic, match
 from .equivalence import Strength, equivalent
@@ -172,7 +172,7 @@ def _outcome(compile_it: Callable[[], tuple[Json, Json, list[str]]]) -> Any:
 
 
 @pytest.mark.fast
-@given(compilable_documents().filter(_held_today).map(_files), st.just(False))
+@given(documents().filter(_held_today).map(_files), st.just(False))  # pylint: disable=no-member
 # A bare name is the workflow input, `!*` the producing step's output object and `!ii` a literal; the workflow output
 # is the step output it names.
 @example((CHAIN, {}), True)

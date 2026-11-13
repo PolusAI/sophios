@@ -1,0 +1,28 @@
+# Outputs named by position: inference moves no step, so `(4, count)` names the fourth step.
+steps:
+- id: mk_file
+  in: {name: !ii x}
+- id: count
+- id: mk_file
+  in: {name: !ii y}
+- id: count
+- id: xform                # scattered in the order written: under nested_crossproduct, the nesting of its outputs
+  in: {name: !ii [a], file: !ii [x.txt]}
+  scatter: [name, file]
+  scatterMethod: nested_crossproduct
+outputs:
+  n:
+    type: int
+    outputSource: (4, count)/n
+  first:                   # a bare id two steps share means the first, and the compile says so
+    type: File
+    outputSource: mk_file/file
+  third:                   # the spelling that says which is never reported
+    type: File
+    outputSource: (3, mk_file)/file
+  only:                    # a position at an id no other step has is that plain id
+    type: File[][]
+    outputSource: (5, xform)/file
+  old:                     # a spelling no step has: written as it is
+    type: File
+    outputSource: positions__step__1__mk_file/file

@@ -1,0 +1,30 @@
+# Every diagnostic lowering gives each document, in order, by code, severity, line, step and port.
+names.wic:
+- {code: EMPTY_NAME, severity: error, line: 4, step: s}
+- {code: EMPTY_NAME, severity: error, line: 9, step: t}
+- {code: EMPTY_NAME, severity: error, line: 12, step: u, port: f}
+- {code: EMPTY_NAME, severity: error, line: 15, step: v, port: f}
+empty_step_id.wic:
+- {code: EMPTY_STEP_ID, severity: error, line: 3}
+edges.wic:
+- {code: DUPLICATE_EDGE_DEF, severity: error, line: 18, step: b, port: f}
+- {code: UNDEFINED_EDGE, severity: error, line: 12, step: use, port: f}
+- {code: UNDEFINED_EDGE, severity: error, line: 21, step: record_use, port: f}
+record_sources.wic:
+- {code: UNDEFINED_EDGE, severity: error, line: 8, step: use, port: f, message: {contains: [several sources]}}
+scatter.wic:
+- {code: UNKNOWN_SCATTER_PORT, severity: error, line: 4, step: mk_file}
+- {code: UNKNOWN_SCATTER_PORT, severity: error, line: 7, step: mk_file}
+- {code: UNKNOWN_SCATTER_PORT, severity: error, line: 10, step: mk_file}
+- {code: UNKNOWN_SCATTER_PORT, severity: error, line: 13, step: mk_file}
+- {code: UNKNOWN_SCATTER_PORT, severity: error, line: 16, step: mk_file}
+outputs.wic:
+- {code: POSITIONAL_OUTPUT_SOURCE, severity: error, step: t, port: f, message: {contains: ["'wrong_step'"]}}
+- {code: POSITIONAL_OUTPUT_SOURCE, severity: error, step: s, port: f, message: {contains: ["'past_the_last'"]}}
+- {code: UNDECLARED_PORT, severity: error, step: s, port: nope, message: {contains: ["'nope'", 'its outputs are: f']}}
+merged_outputs.wic:
+- {code: STEP_INPUT_RECORD, severity: error, message: {contains: ["'merged'", linkMerge]}}
+- {code: STEP_INPUT_RECORD, severity: error, message: {contains: ["'picked'", pickValue]}}
+- {code: STEP_INPUT_RECORD, severity: error, message: {contains: ["'two_sources'", a list outputSource]}}
+- {code: STEP_INPUT_RECORD, severity: error, message: {contains: ["'one_listed'", a list outputSource]}}
+- {code: STEP_INPUT_RECORD, severity: error, message: {contains: ["'none_listed'", a list outputSource]}}

@@ -1,0 +1,6 @@
+steps:
+- id: mk_file
+  in:
+    name: !ii a.txt
+  out:
+  - file: !& f

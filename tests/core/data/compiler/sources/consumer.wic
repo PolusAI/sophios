@@ -1,0 +1,5 @@
+inputs:
+  outer_name: File   # declared as outer_name, read as inner_name
+steps:
+- id: take
+  in: {inner_name: outer_name}

@@ -1,0 +1,6 @@
+# `x` and `y` reach `count` and `xform` two calls down: two tool steps, each reading the file once.
+steps:
+- id: mk_file
+  in:
+    name: !ii a.txt
+- id: mid.wic

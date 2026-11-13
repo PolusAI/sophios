@@ -1,0 +1,7 @@
+# A workflow with implementations runs the one it selects: `implementation` over `default_implementation`.
+wic:
+  implementations:
+    fast: {steps: [{id: mk_file, in: {name: {wic_inline_input: fast}}}]}
+    safe: {steps: [{id: mk_text, in: {name: {wic_inline_input: safe}}}]}
+  default_implementation: safe
+  implementation: fast

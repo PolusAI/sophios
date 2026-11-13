@@ -338,18 +338,10 @@ WINDOWS_EXCLUDED: Final = frozenset({
     # runner (preflight.PLATFORM_LACKS_RUNNERS), so it never uses the command line built for them.
     'tests/core/test_backends.py::test_each_cwl_runner_reads_its_command_line_as_the_request_says',
     'tests/core/test_emit.py::test_emit_validates_as_cwl_v1_2',
-    'tests/core/test_emit.py::test_validator_rejects_the_independent_invalid_control',
-    # A strict xfail on one cwltool validation of a `schemed` workflow, under a
-    # second. It states the SchemaDefRequirement gap the generators exclude,
-    # which only cwltool's validator can show, so it runs where the pair does.
-    'tests/core/test_emit.py::test_a_schema_def_typed_input_validates',
     'tests/core/test_leak_boundary.py::test_residue_validates_as_cwl_v1_2',
-    # One compile and one `--validate` of a four-line workflow, under a second.
-    # It buys the authored `outputSource` path, which the residue property
-    # above cannot reach: the workflow strategy never writes one, so only the
-    # synthesized path was ever validated, and the authored one emitted a
-    # reference to a step the document does not contain.
-    'tests/core/test_leak_boundary.py::test_an_authored_output_source_validates',
+    # Six example workflows run by cwltool, in about three seconds together. What each compiles to is stated and
+    # checked on every leg by the compile leg beside it; only a runner shows the outputs.
+    'tests/core/test_compiler.py::test_an_example_runs_under_cwltool_as_stated',
     # One `cwltool --validate` of a one-step workflow whose tool was unpacked from
     # a `$graph`, under a second. The ports and the file written are checked on
     # every leg by the test before it.
@@ -387,7 +379,7 @@ WINDOWS_EXCLUDED: Final = frozenset({
     'tests/core/test_python_api_workflow.py::test_a_real_failed_step_is_named_with_its_status',
     # Two roots of a few echo steps, nested two deep, each run through the command line by cwltool
     # and by Toil with provenance, in about twenty seconds. Which files are written is checked on
-    # every leg by `test_names_emitted.py`; only a runner shows what its snapshot holds.
+    # every leg by tests/core/data/compiler/names; only a runner shows what its snapshot holds.
     'tests/core/test_provenance.py::test_every_step_file_is_in_the_provenance_snapshot',
     # One echo step run through the command line by cwltool and by Toil with provenance, its
     # `.wic` or its tool declaring EDAM from another URL, in about five seconds each. That no
@@ -414,10 +406,8 @@ WINDOWS_EXCLUDED: Final = frozenset({
     # references the target refuses is checked on every leg by the staging family of test_capabilities.py.
     'tests/core/nextflow/test_reference_differential.py::'
     'test_a_path_inputs_references_mean_under_nextflow_what_they_mean_under_cwltool',
-    # Seven example workflows run under Nextflow, six of them under cwltool too, and nine that stop, in about
-    # forty-five seconds together. Lint And Test's Linux Nextflow step collects them, so the Windows leg gives up
-    # nothing it ran.
-    'tests/core/nextflow/test_runtime.py::test_an_example_workflow_runs_under_nextflow_as_under_cwltool',
+    # Nine examples that stop, each run under Nextflow and under cwltool, in about twenty seconds together. Lint And
+    # Test's Linux Nextflow step collects them, so the Windows leg gives up nothing it ran.
     'tests/core/nextflow/test_runtime.py::test_a_run_stops_before_a_step_whose_inputs_it_cannot_decide',
     'tests/core/nextflow/test_runtime.py::test_a_run_stops_at_a_task_that_leaves_no_one_answer',
     # Four batches of up to twelve small workflows, each run under Nextflow and under cwltool, in about ten

@@ -1,0 +1,8 @@
+# A bare id no step has addresses nothing: named on stderr and ignored.
+wic:
+  steps:
+    nothing:
+      in:
+        name: !ii x.txt
+steps:
+- id: mk_file

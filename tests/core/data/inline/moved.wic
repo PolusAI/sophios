@@ -1,0 +1,9 @@
+requirements:
+  InlineJavascriptRequirement: {expressionLib: ['var a = 1;']}   # the caller's, so no reason to stay
+  EnvVarRequirement: {envDef: {FOO: bar}}
+  ResourceRequirement: {ramMin: 100}
+steps:
+- id: xform
+  in: {name: !ii b}
+  requirements: {ResourceRequirement: {ramMin: 5}}   # the step's own entry wins, as in CWL
+  when: $(inputs.name != null)                       # the engine reads `when` against the root

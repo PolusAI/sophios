@@ -1,0 +1,3 @@
+# Nothing says edam:, so nothing binds a prefix or names an ontology.
+steps:
+- id: count

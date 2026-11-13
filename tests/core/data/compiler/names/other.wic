@@ -1,0 +1,5 @@
+# A second root written beside the first: every file starts with its root's name.
+steps:
+- id: hello
+  run: b/echo.cwl
+  in: {a: !ii x}

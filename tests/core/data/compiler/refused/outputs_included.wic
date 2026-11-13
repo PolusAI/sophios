@@ -1,0 +1,5 @@
+outputs:
+- $include: shared.yml
+steps:
+- id: mk_file
+  in: {name: !ii x}

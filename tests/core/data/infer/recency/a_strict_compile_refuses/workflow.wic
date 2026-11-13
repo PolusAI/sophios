@@ -1,0 +1,9 @@
+# The compiler forwards the strict flag.
+steps:
+- id: mk_file
+  in:
+    name: !ii a
+- id: mk_file
+  in:
+    name: !ii b
+- id: count

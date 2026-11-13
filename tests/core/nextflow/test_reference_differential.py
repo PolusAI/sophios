@@ -5,12 +5,8 @@ read text, but `.name` of an input staged under a directory is the whole staged 
 
 from collections.abc import Callable
 from functools import partial
-import hashlib
-import io
-import json
 from pathlib import Path
-from typing import Any, cast
-from urllib.parse import unquote, urlsplit
+from typing import Any
 
 import pytest
 
@@ -19,6 +15,7 @@ from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Outp
 from sophios.api.python.workflow import Step, Workflow
 from sophios.backends import recorded_outputs
 
+from ..helpers import cwltool_outputs, cwltool_run, observed, tree
 from .testkit import assert_succeeded, execute_nextflow
 
 #: One script for every cell. $1, $2, $3 are `$(inputs.x)`, `$(inputs.x.path)`, `$(inputs.x.basename)` as
@@ -120,60 +117,15 @@ def _workflow(values: dict[str, Any]) -> Workflow:
     return workflow
 
 
-def _tree(path: Path) -> Any:
-    """What a runner-independent observer sees at ``path``: a file's text, or a directory's files and texts."""
-    if path.is_dir():
-        return {str(item.relative_to(path)): _tree(item) for item in sorted(path.rglob("*")) if item.is_file()}
-    data = path.read_bytes()
-    try:
-        return data.decode("utf-8")
-    except UnicodeDecodeError:
-        return hashlib.sha256(data).hexdigest()
-
-
-def _observed(value: Any) -> Any:
-    """An output as a runner-independent observer sees it: a File's or Directory's class, basename and contents,
-    never its path; null and a string, number or boolean as they are."""
-    if isinstance(value, list):
-        return [_observed(item) for item in value]
-    if not isinstance(value, dict):
-        return value
-    # cwltool gives a Directory it left where its step made it a location and no path, and an entry it captured the
-    # path of the file the entry links to: the name is the object's.
-    path = Path(value["path"] if "path" in value else unquote(urlsplit(value["location"]).path))
-    return {"class": value["class"], "basename": value.get("basename", path.name), "contents": _tree(path)}
-
-
 def _snapshot(values: dict[str, Any]) -> dict[str, Any]:
     flat = [item for value in values.values() for item in (value if isinstance(value, list) else [value])]
-    return {path.name: _tree(path) for path in flat}
+    return {path.name: tree(path) for path in flat}
 
 
 def _run_nextflow(workflow: Workflow, directory: Path) -> dict[str, Any]:
     result = execute_nextflow(workflow.compile(target="nextflow").write(directory))
     assert_succeeded(result)
     return dict(recorded_outputs(result.stdout))
-
-
-def _cwltool(main: Callable[..., int], workflow: Workflow, directory: Path) -> tuple[int, str, str]:
-    """cwltool's exit code, output object and messages for the CWL `workflow` compiles to, written in `directory`.
-    Each output stays where its step left it: moved into one directory, two steps' out.txt could not both keep
-    the name."""
-    compiled = workflow.compile()
-    document, job = compiled.write_cwl(directory), compiled.write_job_inputs(directory)
-    stdout, stderr = io.StringIO(), io.StringIO()
-    code = main(
-        ["--quiet", "--leave-outputs", "--leave-tmpdir", "--tmpdir-prefix", f"{directory}/tmp/",
-         "--tmp-outdir-prefix", f"{directory}/tmp_out/", str(document), str(job)],
-        stdout=stdout, stderr=stderr,
-    )
-    return code, stdout.getvalue(), stderr.getvalue()
-
-
-def _run_cwltool(main: Callable[..., int], workflow: Workflow, directory: Path) -> dict[str, Any]:
-    code, outputs, messages = _cwltool(main, workflow, directory)
-    assert code == 0, messages
-    return cast(dict[str, Any], json.loads(outputs))
 
 
 @pytest.mark.nextflow
@@ -187,16 +139,16 @@ def test_a_path_inputs_references_mean_under_nextflow_what_they_mean_under_cwlto
     target refuses it when compiling instead of running what CWL does not (design §6)."""
     import cwltool.main  # pylint: disable=import-outside-toplevel
 
-    observed, problems = {}, []
-    for runner, run in (("nextflow", _run_nextflow), ("cwltool", partial(_run_cwltool, cwltool.main.main))):
+    seen, problems = {}, []
+    for runner, run in (("nextflow", _run_nextflow), ("cwltool", partial(cwltool_outputs, cwltool.main.main))):
         values = _inputs(tmp_path / runner / "inputs")
         before = _snapshot(values)
         outputs = run(_workflow(values), tmp_path / runner / "run")
-        observed[runner] = {name: _observed(value) for name, value in sorted(outputs.items())}
+        seen[runner] = {name: observed(value) for name, value in sorted(outputs.items())}
         after = _snapshot(values)
         problems += [f"{runner} changed its input {name}: {after[name]}"
                      for name in before if after[name] != before[name]]
-    nf, cw = observed["nextflow"], observed["cwltool"]
+    nf, cw = seen["nextflow"], seen["cwltool"]
     problems += [
         f"output {name}:\n  nextflow: {nf.get(name)}\n  cwltool:  {cw.get(name)}"
         for name in sorted(nf.keys() | cw.keys()) if nf.get(name) != cw.get(name)
@@ -219,5 +171,5 @@ def _neither_globs_an_entrys_object(main: Callable[..., int], directory: Path) -
         workflow.compile(target="nextflow")
     assert [(refusal.code.value, refusal.subject) for refusal in refused.value.refusals] == [
         ("nf-s046", "fill.cwl: outputs.o.outputBinding.glob")]
-    code, _, messages = _cwltool(main, workflow, directory)
+    code, _, messages = cwltool_run(main, workflow, directory)
     assert code != 0 and "Resolved glob patterns must be strings" in messages, messages

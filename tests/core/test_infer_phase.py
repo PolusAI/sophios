@@ -1,334 +1,73 @@
-"""Inference and speculative insertion against a local candidate model, judged at UP_TO_EMBEDDING.
-Blind spot: generated workflows put no tool after a workflow call and no converters exist, so those are planted."""
-import copy
+"""Inference, judged on cases in files: tests/core/data/infer/<theme>/<case> is a workflow.wic with the tools and child
+workflows it names (beside it, or shared by the theme), and the theme's expected.yaml states what each case infers.
+That every inferred edge is the independent model's choice is a law of test_emit.py's drawn workflows."""
+from pathlib import Path
 from typing import Any
 
 import pytest
-from hypothesis import given
+import yaml
 
-from sophios.ir import (
-    InferencePolicy,
-    InsertionCatalog,
-    front_end,
-    infer,
-    link,
-)
+from sophios.cli import default_compilation_settings
+from sophios.compiler import compile_source
+from sophios.ir import InferencePolicy, InsertionCatalog, front_end, infer, link
+from sophios.ir.frontdoor import bundle_from_disk
 from sophios.ir.names import Names
-from sophios.ir.declarations import input_rank, layered, output_rank
-from sophios.ir.types import (DerivedName, EdgeOrigin, Port, PortDeclaration, PortId, PortName,
-                              StepNode, WorkflowGraph)
+from sophios.ir.types import EdgeOrigin, WorkflowGraph
 from sophios.lang.diagnostics import Diagnostics, SophiosError
-from sophios.wic_types import StepId as LegacyStepId, Tool, Tools, Yaml
+from sophios.utils_cwl import desugar_into_canonical_normal_form
 
-from . import ast_strategies as strat
-from .cases import cases, diagnostic, match
-from .hermetic import ORACLE, bundle, compile_hermetic, subworkflow_step
-from .synthetic_tools import SYNTHETIC_NS, SYNTHETIC_TOOLS, clt, insertion_registry, registered
+from .cases import DATA, diagnostic, match
+from .helpers import stated
+from .synthetic_tools import registered
 
 
-def _typed(workflow: Yaml, tools: Tools = SYNTHETIC_TOOLS):  # type: ignore[no-untyped-def]
-    model = bundle(workflow, 'oracle', tools)
-    result = front_end(model.parsed, model.registry, name='oracle')
-    assert result.graph is not None and result.resolved is not None
-    linked = link(result.graph)
+def _tools(*directories: Path) -> Any:
+    """The synthetic tools, and each tool in `directories`, the later winning, desugared as discovery desugars them."""
+    return registered({path.stem: desugar_into_canonical_normal_form(yaml.safe_load(path.read_text(encoding='utf-8')))
+                       for directory in directories for path in sorted(directory.glob('*.cwl'))})
+
+
+def _inferred(case: Path, expected: dict[str, Any]) -> tuple[WorkflowGraph | None, Diagnostics, int]:
+    """The graph inference gives the case, every diagnostic its door gives, and how many passes it took: the phases
+    run directly under `policy`, or the whole compile where `compiled` is set."""
+    others = {'global': {path.stem: path for path in case.glob('*.wic') if path.name != 'workflow.wic'}}
+    bundled = bundle_from_disk(case / 'workflow.wic', others, _tools(case.parent, case))
+    policy = expected.get('policy', {})
+    if expected.get('compiled'):
+        options = default_compilation_settings()
+        options['inference_strict'] = policy.get('strict', False)
+        try:
+            compiled = compile_source(bundled, options, quiet=True)
+        except SophiosError as error:
+            return None, error.diagnostics, 0
+        return compiled.graph, compiled.diagnostics, 0
+    front = front_end(bundled.parsed, bundled.registry, name='workflow')
+    assert front.graph is not None, list(front.diagnostics)
+    linked = link(front.graph)
     assert linked.graph is not None, list(linked.diagnostics)
-    return result, linked.graph, model.registry
-
-
-@pytest.mark.skip_pypi_ci
-@given(strat.workflows())
-@ORACLE
-def test_every_inferred_edge_is_the_independent_models_choice(workflow: Yaml) -> None:
-    """Removing candidate selection or changing its order breaks this predicate."""
-    _, linked, _ = _typed(workflow)
-    inferred = infer(linked)
-    assert inferred.graph is not None, list(inferred.diagnostics)
-    for graph in _graphs(inferred.graph):
-        original = next(item for item in _graphs(linked) if item.namespace == graph.namespace)
-        for edge in graph.linked_edges:
-            if edge.origin is not EdgeOrigin.INFERRED:
-                continue
-            position = next(index for index, step in enumerate(original.steps)
-                            if step.id == edge.sink.step)
-            sink = _port(original.steps[position].inputs, edge.sink.port)
-            assert _model_candidate(original.steps, position, sink) == edge.source
-
-
-def _built(value: Any) -> Any:
-    """`value`, each step with a `subtree` built as subworkflow_step builds a call."""
-    if isinstance(value, list):
-        return [_built(each) for each in value]
-    if isinstance(value, dict):
-        built = {key: _built(each) for key, each in value.items()}
-        return {**subworkflow_step(built['id'], built['subtree']), **built} if 'subtree' in built else built
-    return value
-
-
-def _ran(case: dict[str, Any]) -> tuple[Any, Diagnostics]:
-    """What the case's door returns and every diagnostic it gives, the compile's error included."""
-    for stem, tool in case.get('tools', {}).items():
-        if unread := set(tool) - {'inputs', 'outputs', 'canonical'}:
-            raise ValueError(f"{case['id']}: tool {stem} has keys nothing reads: {sorted(unread)}")
-    if case.get('compiled') and (unread := set(case.get('policy', {})) - {'strict'}):
-        raise ValueError(f"{case['id']}: a compiled case reads only policy.strict, not {sorted(unread)}")
-    tools = registered({stem: clt(tool.get('inputs', {}), tool.get('outputs', {}),
-                                  canonical=tool.get('canonical', False))
-                        for stem, tool in case.get('tools', {}).items()})
-    policy = case.get('policy', {})
-    workflow = {'steps': _built(case['steps'])}
-    if not case.get('compiled'):
-        _, linked, _ = _typed(workflow, tools)
-        result = infer(linked, InferencePolicy(**policy))
-        return result.graph, result.diagnostics
-    try:
-        compiled = compile_hermetic(workflow, tools=tools, inference_strict=policy.get('strict', False))
-    except SophiosError as error:
-        return None, error.diagnostics
-    return compiled, compiled.diagnostics
+    result = infer(linked.graph, InferencePolicy(**policy), InsertionCatalog.from_registry(bundled.registry))
+    return result.graph, result.diagnostics, result.iterations
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize('case', cases('infer', 'tools', 'steps', 'policy', 'compiled', 'refused', 'diagnostics',
-                                       'edges', 'job_inputs'))
-def test_inference_case(case: dict[str, Any]) -> None:
-    """`steps` are inferred over the synthetic registry plus `tools` (stem: inputs, outputs, canonical), under
-    `policy`, or compiled whole where `compiled` is set (which reads only `policy.strict`); a call is a step with a
-    `subtree`. A tool key other than those three, or a compiled policy key other than `strict`, is an error, so a
-    misspelling cannot pass without being read.
-
-    `diagnostics` is every diagnostic the door returns, in order; `refused` (default false) is no graph, or a compile
-    that raised; `edges` the inferred edges of the graph as sink: source, and `job_inputs` those of the compile.
-    """
-    ran, diagnostics = _ran(case)
-    assert (ran is None) is case.get('refused', False), list(diagnostics)
-    assert match(case.get('diagnostics', []), [diagnostic(d) for d in diagnostics]), list(diagnostics)
-    if 'edges' in case:
-        assert match(case['edges'], {
-            f'{e.sink.step.name}@{e.sink.step.index}.{e.sink.port}':
-                f'{e.source.step.name}@{e.source.step.index}.{e.source.port}'
-            for e in ran.linked_edges if e.origin is EdgeOrigin.INFERRED})
-    if 'job_inputs' in case:
-        assert match(case['job_inputs'], ran.artifact.job_inputs)
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize('default', [0, False, '', []])
-def test_falsy_defaults_satisfy_inputs(default: object) -> None:
-    """Presence, not truthiness, suppresses inference for a defaulted port."""
-    tool = clt({'value': {'type': 'string', 'default': default}}, {})
-    tools = {LegacyStepId('defaulted', SYNTHETIC_NS):
-             Tool('/synthetic/defaulted.cwl', tool)}
-    _, linked, _ = _typed({'steps': [{'id': 'defaulted'}]}, tools)
-    result = infer(linked)
-    assert result.graph is not None
-    assert not any(edge.origin is EdgeOrigin.INFERRED for edge in result.graph.linked_edges)
-    assert result.graph.workflow_inputs == ()
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize('expression', [
-    '$(inputs.source.format)',
-    '${ return inputs.source.format; }',
-])
-def test_promoted_input_preserves_a_cwl_format_expression(expression: str) -> None:
-    """A lifted input carries the tool's `format` verbatim, in the graph and
-    in the emitted document -- the one test that a promoted boundary keeps
-    `format` at all. An expression is the spelling a rewrite would most
-    likely break.
-    """
-    tool = clt({'file': {'type': 'File', 'format': expression}}, {}, canonical=True)
-    tools = {LegacyStepId('formatted_sink', SYNTHETIC_NS):
-             Tool('/synthetic/formatted_sink.cwl', tool)}
-    workflow = {'steps': [{'id': 'formatted_sink'}]}
-    _, linked, _ = _typed(workflow, tools)
-    result = infer(linked)
-    assert result.graph is not None, list(result.diagnostics)
-    assert result.graph.workflow_inputs[0].declaration.format == expression
-    compiled = compile_hermetic(copy.deepcopy(workflow), tools=copy.deepcopy(tools))
-    boundary = next(iter(compiled.artifact.cwl['inputs'].values()))
-    assert boundary['format'] == expression
-
-
-@pytest.mark.fast
-def test_scatter_lifts_both_sides_of_candidate_selection() -> None:
-    """A producing scatter matches an array sink, while a scalar sink does not."""
-    tools = copy.deepcopy(SYNTHETIC_TOOLS)
-    tools[LegacyStepId('file_array_sink', SYNTHETIC_NS)] = Tool(
-        '/synthetic/file_array_sink.cwl', clt({'files': {'type': 'File[]'}}, {}, canonical=True))
-    workflow = {'steps': [
-        {'id': 'mk_file', 'in': {'name': {'wic_inline_input': ['a', 'b']}},
-         'scatter': 'name'},
-        {'id': 'file_array_sink'},
-        {'id': 'count'},
-    ]}
-    _, linked, _ = _typed(workflow, tools)
-    result = infer(linked)
-    assert result.graph is not None
-    sinks = {(edge.sink.step.name, edge.sink.port) for edge in result.graph.linked_edges
-             if edge.origin is EdgeOrigin.INFERRED}
-    assert ('file_array_sink', 'files') in sinks
-    assert ('count', 'file') not in sinks
-
-
-@pytest.mark.fast
-def test_converter_insertion_reaches_the_same_fixed_point() -> None:
-    """Two speculative insertions agree with the live typed compiler."""
-    workflow, tools = insertion_registry()
-    _, linked, registry = _typed(workflow, tools)
-    result = infer(linked, InferencePolicy(insert_steps_automatically=True),
-                   InsertionCatalog.from_registry(registry))
-    assert result.graph is not None, list(result.diagnostics)
-    assert result.iterations == 3
-    assert sum(step.synthesized for step in result.graph.steps) == 2
-    live = compile_hermetic(copy.deepcopy(workflow), tools=copy.deepcopy(tools),
-                            insert_steps_automatically=True).graph
-    assert sum(step.synthesized for step in live.steps) == 2
-
-
-@pytest.mark.fast
-def test_workflow_call_outputs_are_inference_candidates() -> None:
-    """A child output remains visible to a later tool in its parent."""
-    child = {'steps': [
-        {'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'child.txt'}}},
-    ]}
-    workflow = {'steps': [subworkflow_step('sub.wic', child), {'id': 'count'}]}
-    _, linked, _ = _typed(workflow)
-    result = infer(linked)
-    assert result.graph is not None, list(result.diagnostics)
-    assert any(edge.sink.step.name == 'count' for edge in result.graph.linked_edges
-               if edge.origin is EdgeOrigin.INFERRED)
-    # The live compiler infers the same edge from the same document.
-    live = compile_hermetic(copy.deepcopy(workflow)).graph
-    assert any(edge.sink.step.name == 'count' for edge in live.linked_edges
-               if edge.origin is EdgeOrigin.INFERRED)
-
-
-@pytest.mark.fast
-def test_workflow_call_outputs_can_feed_inserted_converters() -> None:
-    """Converter search sees formats exported through a workflow call."""
-    _, tools = insertion_registry()
-    child = {'steps': [{'id': 'mk_2'}]}
-    workflow = {'steps': [subworkflow_step('sub.wic', child), {'id': 'use_2'}]}
-    typed, linked, registry = _typed(workflow, tools)
-    result = infer(linked, InferencePolicy(insert_steps_automatically=True),
-                   InsertionCatalog.from_registry(registry))
-    assert result.graph is not None, list(result.diagnostics)
-    assert sum(step.synthesized for step in result.graph.steps) == 1
-    # The live compiler reaches the same conclusion from the same document.
-    live = compile_hermetic(copy.deepcopy(workflow), tools=copy.deepcopy(tools),
-                            insert_steps_automatically=True)
-    assert sum(step.synthesized for step in live.graph.steps) == 1
-
-
-@pytest.mark.fast
-def test_converter_search_stops_at_the_candidate_break() -> None:
-    """Insertion cannot reuse formats hidden behind a local break rule."""
-    _, tools = insertion_registry()
-    workflow = {
-        'steps': [{'id': 'mk_1'}, {'id': 'mk_2'}, {'id': 'use_1'}],
-        'wic': {'steps': {
-            '(2, mk_2)': {'wic': {'inference': {'file': 'break'}}},
-        }},
-    }
-    _, linked, registry = _typed(workflow, tools)
-    result = infer(linked, InferencePolicy(insert_steps_automatically=True),
-                   InsertionCatalog.from_registry(registry))
-    assert result.graph is not None, list(result.diagnostics)
-    assert not any(step.synthesized for step in result.graph.steps)
-    assert [Names.of(result.graph).port(port.name) for port in result.graph.workflow_inputs] == [
-        'use_1~file']
-    live = compile_hermetic(copy.deepcopy(workflow), tools=copy.deepcopy(tools),
-                            insert_steps_automatically=True)
-    assert not any('insert_steps_automatically_' in step['id']
-                   for step in live.artifact.cwl['steps'])
-
-
-def _model_candidate(steps: tuple[StepNode, ...], position: int,
-                     sink: Port) -> PortId | None:
-    """Independent, deliberately small model of default candidate selection."""
-    sink_type = _model_sink_type(steps[position], sink)
-    sink_formats = _model_formats(sink.declaration)
-    for producer in reversed(steps[:position]):
-        matches = [output for output in producer.outputs
-                   if _model_types_match(sink_type, _model_source_type(producer, output))
-                   and _model_formats_match(sink_formats, _model_formats(output.declaration),
-                                            _model_source_type(producer, output))]
-        if matches:
-            through = _model_exposed_through(matches[-1].id.port)
-            return next(output.id for output in matches
-                        if _model_exposed_through(output.id.port) == through)
-    return None
-
-
-def _model_exposed_through(name: PortName) -> list[object]:
-    """The steps a port name was exposed through, outermost first."""
-    steps: list[object] = []
-    while isinstance(name, DerivedName):
-        steps.append(name.step)
-        name = name.port
-    return steps
-
-
-def _model_types_match(sink: Any, source: Any) -> bool:
-    if sink == source:
-        return True
-    sink_members = sink if isinstance(sink, list) else [sink]
-    source_members = source if isinstance(source, list) else [source]
-    return any(member in sink_members for member in source_members)
-
-
-def _model_formats(declaration: PortDeclaration | None) -> tuple[Any, ...]:
-    if declaration is None or not declaration.has_format:
-        return ()
-    return tuple(declaration.format) if isinstance(declaration.format, list) \
-        else (declaration.format,)
-
-
-def _model_formats_match(sink: tuple[Any, ...], source: tuple[Any, ...],
-                         source_type: Any) -> bool:
-    if not sink:
-        return True
-    if source:
-        return any(item in sink for item in source)
-    return not _model_permits_format(source_type)
-
-
-def _model_permits_format(value: Any) -> bool:
-    if value == 'File':
-        return True
-    if isinstance(value, list):
-        return any(_model_permits_format(item) for item in value)
-    if isinstance(value, dict) and value.get('type') == 'array':
-        return _model_permits_format(value.get('items'))
-    return False
-
-
-def _model_source_type(step: StepNode, port: Port) -> Any:
-    """CWL v1.2: `nested_crossproduct` nests one array per scattered input;
-    every other method yields one flat array. Rank is `output_rank`."""
-    return layered(port.type, output_rank(step)).canonical
-
-
-def _model_sink_type(step: StepNode, port: Port) -> Any:
-    """One array per time `scatter:` names the input, which is `input_rank`."""
-    return layered(port.type, input_rank(step, port.id.port)).canonical
-
-
-def _port(ports: tuple[Port, ...], name: PortName) -> Port:
-    return next(port for port in ports if port.id.port == name)
-
-
-def _graphs(graph: WorkflowGraph) -> tuple[WorkflowGraph, ...]:
-    return (graph,) + tuple(item for child in graph.children for item in _graphs(child))
-
-
-@pytest.mark.fast
-def test_a_positional_output_source_compiles_beside_an_inferred_edge() -> None:
-    """Inference moves no step, so `(4, count)` still names the fourth step."""
-    mk = {'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'x'}}}
-    compiled = compile_hermetic({'outputs': {'n': {'type': 'int', 'outputSource': '(4, count)/n'}},
-                                 'steps': [mk, {'id': 'count'}, mk, {'id': 'count'}]})
-    cwl = compiled.artifact.cwl
-    assert cwl['outputs']['n']['outputSource'] == 'count@4/n'
-    fourth = next(step for step in cwl['steps'] if step['id'] == 'count@4')
-    assert fourth['in']['file'] == 'mk_file@3/file'
+@pytest.mark.parametrize('theme', [pytest.param(path, id=path.name)
+                                   for path in sorted((DATA / 'infer').iterdir()) if path.is_dir()])
+def test_inference_decides_each_case_as_its_theme_states(theme: Path) -> None:
+    """For each case: `refused` (default false) is no graph; `diagnostics` is every diagnostic, in order, by code,
+    severity, step and port, and what a guess or refusal names; `edges` the inferred edges as sink: source; `inputs`
+    the workflow inputs left to the job; `inserted` how many converter steps were inserted, in `iterations` passes."""
+    for name, expected in stated(theme).items():
+        graph, diagnostics, iterations = _inferred(theme / name, expected)
+        assert (graph is None) is expected.get('refused', False), (name, list(diagnostics))
+        assert match(expected.get('diagnostics', []), [diagnostic(d) for d in diagnostics]), (name, list(diagnostics))
+        if graph is None:
+            continue
+        names = Names.of(graph)
+        edges = {f'{e.sink.step.name}@{e.sink.step.index}.{names.port(e.sink.port)}':
+                 f'{e.source.step.name}@{e.source.step.index}.{names.port(e.source.port)}'
+                 for e in graph.linked_edges if e.origin is EdgeOrigin.INFERRED}
+        assert match(expected.get('edges', edges), edges), name
+        assert match(expected.get('inputs', [names.port(port.name) for port in graph.workflow_inputs]),
+                     [names.port(port.name) for port in graph.workflow_inputs]), name
+        assert expected.get('inserted', 0) == sum(step.synthesized for step in graph.steps), name
+        assert expected.get('iterations', iterations) == iterations, name

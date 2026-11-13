@@ -1,0 +1,11 @@
+# CWL's merge fields on a workflow output, and a list `outputSource:`, are wic038: they were copied out unread, and a
+# list named steps by their authored ids, which cwltool cannot resolve.
+steps:
+- id: s
+  out: [f]
+outputs:
+  merged: {type: File, outputSource: s/f, linkMerge: merge_flattened}
+  picked: {type: File, outputSource: s/f, pickValue: first_non_null}
+  two_sources: {type: File, outputSource: [a/f, b/f]}
+  one_listed: {type: File, outputSource: [s/f]}
+  none_listed: {type: File, outputSource: []}

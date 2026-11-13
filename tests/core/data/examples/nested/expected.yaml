@@ -1,0 +1,23 @@
+# Every output of workflow.wic, by step and port, in the order of its steps.
+outputs:
+  write_source~result: {class: File, basename: message.txt, contents: "nested composition\n"}
+  child~copy: {class: File, basename: copy.txt, contents: "nested composition\n"}
+  child~copy_file~result: {class: File, basename: copy.txt, contents: "nested composition\n"}
+  child~echo_each~result:
+  - {class: File, basename: out.txt, contents: "a\n"}
+  - {class: File, basename: out.txt, contents: "b\n"}
+  child~grandchild~touch_n~out: null
+  child~grandchild~write_source~result: {class: File, basename: message.txt, contents: "two levels down\n"}
+  count_lines~count: {class: File, basename: count.txt, contents: "1\n"}
+  sibling~copy_file~result: {class: File, basename: copy.txt, contents: "nested composition\n"}
+  touch_n~out: {class: File, basename: n.txt, contents: ""}
+# The CWL workflow.wic compiles to: its requirements, and of each step, in order, what it reads from another
+# step or from a workflow input, and its scatter and when; a literal an input is given is left out.
+compiled:
+  requirements: {SubworkflowFeatureRequirement: {}}
+  steps:
+    write_source: {}
+    child: {in: {source: {source: write_source/result}}}
+    count_lines: {in: {source: {source: child/copy}}}
+    sibling: {in: {source: {source: write_source/result}}}
+    touch_n: {}

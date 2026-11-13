@@ -1,0 +1,11 @@
+# The parent's (index, id) contribution overrides the child's own bare-id entry.
+wic:
+  steps:
+    (1, child.wic):
+      wic:
+        steps:
+          (1, mk_file):
+            in:
+              name: !ii from_root.txt
+steps:
+- id: child.wic

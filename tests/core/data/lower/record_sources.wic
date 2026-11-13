@@ -1,0 +1,8 @@
+# One input crosses a workflow boundary through one relay, so a record with several sources takes none from outside
+# its document.
+inputs:
+  w: string
+steps:
+- id: use
+  in:
+    f: !cwl {source: [!* e, w]}

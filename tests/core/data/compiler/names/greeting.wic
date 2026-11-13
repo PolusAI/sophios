@@ -1,0 +1,34 @@
+# Compiled CWL calls each step what its author wrote and spells nothing of its own (docs/compiling-to-cwl.md).
+# mk_file, xform and count are the suite's synthetic tools (tests/core/synthetic_tools.py).
+inputs:
+  echo: string            # an input named like a step: CWL keeps inputs and steps in one id space
+  mk_file__name: string   # an input spelled like a name the compiler once made is just an input
+steps:
+- id: child.wic           # a call is called by its stem; called twice, each copy carries its position
+- id: child.wic
+- id: child               # named like the call, so numbered too
+  run: count
+- id: echo                # named like the input, so numbered
+  run: mk_file
+  in: {name: echo}
+- id: mk_file
+- id: Touch               # ids that differ only in case are one id: one step directory on macOS and Windows
+  run: mk_file
+- id: touch
+  run: mk_file
+- id: xform               # one tool run three times is written three times, once per step
+- id: xform
+- id: xform
+- id: con                 # a Windows device name is a suffix of the file's name, so an ordinary file
+  run: mk_file
+- id: greeting__step__1__mk_file   # an id that looks generated is just an id
+  run: mk_file
+- id: hello               # two tools with one file name are named by the steps that run them
+  run: a/echo.cwl
+  in: {a: !ii x}
+- id: shout
+  run: b/echo.cwl
+  in: {a: !ii y}
+- id: probe               # a port named a~b
+outputs:
+  generated: {type: File, outputSource: greeting__step__1__mk_file/file}

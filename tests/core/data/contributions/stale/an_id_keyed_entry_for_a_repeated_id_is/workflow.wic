@@ -1,0 +1,9 @@
+# A bare id naming several steps is reported and ignored.
+wic:
+  steps:
+    mk_file:
+      in:
+        name: !ii x.txt
+steps:
+- id: mk_file
+- id: mk_file

@@ -1,0 +1,11 @@
+# A parent contributes to the one step with that id by its bare id.
+wic:
+  steps:
+    (1, child.wic):
+      wic:
+        steps:
+          mk_file:
+            in:
+              name: !ii from_root.txt
+steps:
+- id: child.wic

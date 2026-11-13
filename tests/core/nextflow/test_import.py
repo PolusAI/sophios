@@ -38,13 +38,13 @@ from sophios.nf_types import ExecutableNextflowWorkflow
 
 from ..budgets import budget
 from ..cases import DATA
+from ..helpers import EXAMPLES, example_workflow, examples
 from ..hermetic import network_refused
 from ..provocations import IMPORT_EDITS, import_edited
 from .test_phase3_cells import calculator_workflow, predicates_workflow
-from .testkit import example_workflow, examples
 
-#: The example workflows of tests/core/data/nextflow/runs, by name.
-RUNS = [param.values[0].name for param in examples("runs")]
+#: The example workflows of tests/core/data/examples, by name.
+RUNS = [param.values[0].name for param in examples()]
 _FILES = (NEXTFLOW_SCRIPT, NEXTFLOW_PARAMS, NEXTFLOW_CONFIG)
 
 
@@ -56,7 +56,7 @@ def _model(name: str) -> ExecutableNextflowWorkflow:
         return calculator_workflow().compile(target="nextflow").nextflow_workflow
     with tempfile.TemporaryDirectory() as scratch:
         directory = Path(scratch) / name
-        workflow = example_workflow(DATA / "nextflow" / "runs" / name, directory)
+        workflow = example_workflow(EXAMPLES / name, directory)
         with contextlib.chdir(directory):
             return workflow.compile(target="nextflow").nextflow_workflow
 
@@ -85,7 +85,7 @@ def _echo(name: str, **inputs: Input) -> CommandLineTool:
 @pytest.mark.parametrize("name", RUNS)
 def test_the_pipeline_of_an_example_imports_to_its_model(
         name: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """The three files written for each example of tests/core/data/nextflow/runs, alone in a directory and read with
+    """The three files written for each example of tests/core/data/examples, alone in a directory and read with
     the network refused, import to a workflow that compiles to the model they were written from; no path a parameter
     names is looked at: not `nextflow_workflow.json`, no tool registry, no input file."""
     model = _model(name)

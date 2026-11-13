@@ -65,13 +65,6 @@ def _step_nested_in(depth: int) -> StepId:
     return step
 
 
-@pytest.mark.fast
-def test_hashing_a_nested_step_does_not_double_per_level() -> None:
-    """A step id holds its namespace and the namespace holds every enclosing step
-    id, so a hash that walks them is called twice as often at each level down."""
-    _assert_growth_is_bounded(lambda depth: hash(_step_nested_in(depth)), range(10, 21, 2))
-
-
 class _CountedHashes(str):
     """A name that counts how often it is hashed."""
 
@@ -83,24 +76,18 @@ class _CountedHashes(str):
 
 
 @pytest.mark.fast
-def test_hashing_a_derived_name_does_not_hash_what_it_was_derived_from_again() -> None:
-    """A derived name is a key all through the compiler and holds the name it was
-    derived from, which may be derived in turn, so a hash that walks them costs
-    one step for every level the name was exposed through, on every lookup."""
+def test_the_cost_of_a_nested_step_does_not_double_per_nesting_level() -> None:
+    """Every phase names the steps of a nested workflow by identities that hold their enclosing steps, so anything that
+    writes them out, hashes them or reports on them eagerly pays twice as much at each level down: compiling a nested
+    workflow, and hashing a step id, whose namespace holds every enclosing step id, keep their growth per level
+    bounded; and a derived name, a key all through the compiler that holds the name it was derived from, hashes the
+    name it was derived from once, not once per level it was exposed through."""
+    _assert_growth_is_bounded(lambda depth: compile_hermetic(nested_workflow(depth)), range(6, 13, 2))
+    _assert_growth_is_bounded(lambda depth: hash(_step_nested_in(depth)), range(10, 21, 2))
     port = _CountedHashes('port')
     name: PortName = AuthoredName(port)
     for level in range(1, 6):
         name = DerivedName(StepId(Namespace(), level, 'level'), name)
-
     for _ in range(3):
         hash(name)
-
     assert port.hashed <= 1
-
-
-@pytest.mark.fast
-def test_compile_time_does_not_double_per_nesting_level() -> None:
-    """Every phase names the steps of a nested workflow by identities that hold
-    their enclosing steps, so anything that writes them out, hashes them or
-    reports on them eagerly pays twice as much at each level down."""
-    _assert_growth_is_bounded(lambda depth: compile_hermetic(nested_workflow(depth)), range(6, 13, 2))

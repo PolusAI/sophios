@@ -1,0 +1,7 @@
+wic:
+  steps:
+    mk_file:
+      in:
+        name: !ii child_own.txt
+steps:
+- id: mk_file

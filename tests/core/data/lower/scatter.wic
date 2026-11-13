@@ -1,0 +1,18 @@
+# `scatter:` names inputs. An entry that is no name, or a `scatter:` that is neither a name nor a list, names none of
+# them: reported, not dropped or emitted as written.
+steps:
+- id: mk_file
+  in: {name: !ii [a, b]}
+  scatter: [1]
+- id: mk_file
+  in: {name: !ii [a, b]}
+  scatter: [null]
+- id: mk_file
+  in: {name: !ii [a, b]}
+  scatter: 5
+- id: mk_file
+  in: {name: !ii [a, b]}
+  scatter: {a: 1}
+- id: mk_file
+  in: {name: !ii [a, b]}
+  scatter: [name, 1]

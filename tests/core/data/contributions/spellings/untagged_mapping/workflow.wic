@@ -1,0 +1,13 @@
+# A contribution is opaque content, where each construct has two spellings. The tagged one is what a human writes
+# and the desugared one is what the Python API and `render` emit, so a contribution that only understood tags would
+# apply to a hand-written document and vanish from a round-tripped one.
+wic:
+  steps:
+    (1, child.wic):
+      wic:
+        steps:
+          (1, mk_file):
+            in:
+              name: {a: 1}
+steps:
+- id: child.wic

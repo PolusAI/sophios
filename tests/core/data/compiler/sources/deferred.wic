@@ -1,0 +1,5 @@
+# An empty implementation body defers to the registry's workflow of its name: fast.wic, which the command line reads
+# because the `safe` body calls it.
+wic:
+  implementations: {fast: {}, safe: {steps: [{id: fast.wic}]}}
+  implementation: fast

@@ -1,0 +1,11 @@
+# A child bare id naming two steps addresses none, so it is not merged under the parent's (1, id) key.
+wic:
+  steps:
+    (1, child.wic):
+      wic:
+        steps:
+          (1, mk_file):
+            in:
+              name: !ii from_root.txt
+steps:
+- id: child.wic

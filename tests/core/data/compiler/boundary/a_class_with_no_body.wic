@@ -1,0 +1,4 @@
+# Held today: a requirement written with no body, which nothing needs, stays null in the compiled CWL, which cwltool
+# refuses; it should be the empty body {}.
+requirements: {ResourceRequirement: null}
+steps: [{id: mk_file, in: {name: {wic_inline_input: a}}}]

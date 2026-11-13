@@ -1,0 +1,4 @@
+# probe's myns:format_1 against the document's own myns: neither binding is kept.
+$namespaces: {myns: 'http://other.example/'}
+steps:
+- id: probe

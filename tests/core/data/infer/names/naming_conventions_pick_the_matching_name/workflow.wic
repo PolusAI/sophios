@@ -1,0 +1,4 @@
+# With no setting, `input_structure` takes `output_structure` although `output_other` is declared first.
+steps:
+- id: producer
+- id: consumer

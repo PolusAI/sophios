@@ -1,0 +1,4 @@
+# With conventions off the first declared output is taken.
+steps:
+- id: producer
+- id: consumer

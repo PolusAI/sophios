@@ -1,0 +1,15 @@
+# The `when` both targets read alike: a comparison gives true or false, so the CWL target notes nothing and the
+# Nextflow target lowers it, reading each input the step binds and one only the `when` reads.
+inputs:
+  n: int
+  s: string
+  ns: int[]
+steps:
+- id: gated
+  in: {n: n, s: !cwl {source: s}}
+  when: $(inputs.n > 0 && inputs.s === "a")
+- id: each
+  run: gated
+  in: {n: ns}
+  scatter: [n]
+  when: '  $(inputs.n > 0)  '

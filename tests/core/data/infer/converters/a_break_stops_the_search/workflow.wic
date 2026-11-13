@@ -1,0 +1,10 @@
+# Insertion cannot reuse formats hidden behind a local break rule: use_1 takes its file from the workflow.
+wic:
+  steps:
+    (2, mk_2):
+      wic:
+        inference: {file: break}
+steps:
+- id: mk_1
+- id: mk_2
+- id: use_1

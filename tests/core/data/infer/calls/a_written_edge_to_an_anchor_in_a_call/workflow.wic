@@ -1,0 +1,7 @@
+# `left` is written to the anchor `f` inside the call; `right` is inferred from the call's exposed port. Compiled
+# whole, so the written edge reaches the deep output the way a document's does.
+steps:
+- id: src.wic
+- id: pair
+  in:
+    left: !* f

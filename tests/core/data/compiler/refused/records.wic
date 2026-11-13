@@ -1,0 +1,13 @@
+# `{wic_raw_cwl: {...}}` contributed through `wic: steps:` is the record `!cwl {...}` spells, so a field it may not
+# carry is refused, not dropped.
+inputs:
+  w: File
+steps:
+- id: count
+- id: count
+- id: count
+wic:
+  steps:
+    (1, count): {in: {file: {wic_raw_cwl: {source: w, nope: 1}}}}
+    (2, count): {in: {file: {wic_raw_cwl: {source: {wic_inline_input: 3}}}}}
+    (3, count): {in: {file: {wic_raw_cwl: {source: 3}}}}

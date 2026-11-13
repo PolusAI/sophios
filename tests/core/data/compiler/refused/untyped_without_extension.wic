@@ -1,0 +1,7 @@
+# wic036 says which half of the outputSource: to fix, here the call's id.
+steps:
+- id: mk_file
+  in: {name: !ii a}
+- id: kid.wic
+outputs:
+  o: {outputSource: kid/res}

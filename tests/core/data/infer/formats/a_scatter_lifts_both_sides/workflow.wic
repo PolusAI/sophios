@@ -1,0 +1,7 @@
+# A producing scatter matches an array sink, and a scalar sink it does not.
+steps:
+- id: mk_file
+  in: {name: !ii [a, b]}
+  scatter: name
+- id: file_array_sink
+- id: count

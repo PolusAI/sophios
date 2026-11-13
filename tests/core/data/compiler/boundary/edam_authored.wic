@@ -1,0 +1,6 @@
+# Each File format a runner reads against `$namespaces` needs edam bound; no ontology is added.
+inputs:
+  f: {type: File, format: "edam:format_2330"}
+steps:
+- id: count
+  in: {file: f}

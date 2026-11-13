@@ -1,15 +1,13 @@
-"""The leak boundary against the real compiler: passthrough keys survive byte-identically, none is both interpreted
-and passed through, the interpreted set is exhaustive and the residue validates; owned keys are pinned one by one."""
-import copy
-import tempfile
+"""The leak boundary against the real compiler: keys the language does not claim survive byte for byte and change
+nothing else, and the residue validates as CWL. What the compiler does with the keys it owns is stated by
+tests/core/data/compiler/boundary."""
 from pathlib import Path
-from typing import Any, cast
-
-from functools import partial
+import tempfile
+from typing import Any
 
 import pytest
 import yaml
-from hypothesis import HealthCheck, given, settings
+from hypothesis import HealthCheck, example, given, settings
 from hypothesis import strategies as st
 
 import sophios.post_compile
@@ -17,309 +15,81 @@ from sophios.lang import Grammar, parse
 from sophios.lang.cwl import CWL_VERSION
 from sophios.wic_types import Yaml
 
+from . import ast_strategies as strat
 from .ast_strategies import hints_values, passthrough_keys, passthrough_values
-from .compile_harness import COMPILED, FAST, compile_cwl, compile_info
+from .compile_harness import COMPILED, compile_info
 from .cwl_validation import validate_cwl
 from .hermetic import compile_hermetic_cwl
 
-#: Top-level keys the *compiler* owns, which is a larger set than the syntax
-#: layer's. `_document` claims only `steps` and `wic`; `compile_workflow` also
-#: writes `class` and `cwlVersion`, merges into `inputs`, `outputs` and
-#: `requirements`, and reads `outputSource` out of the `outputs` you supply.
-#: These properties drive the compiler, so they must exclude what the compiler
-#: owns — the old filter named the parser's two and was saved from the rest
-#: only by the improbability of `st.text` spelling `class`, which is safety by
-#: luck rather than by statement.
+#: Top-level keys the *compiler* owns, a larger set than the parser claims: it writes `class` and `cwlVersion`,
+#: merges into `inputs`, `outputs` and `requirements`, and keeps `$namespaces` and `$schemas` by its own rules.
 COMPILER_OWNED_TOP_KEYS = frozenset({
-    'steps', 'wic', 'class', 'cwlVersion', 'inputs', 'outputs', 'requirements',
-    '$namespaces', '$schemas',
+    'steps', 'wic', 'class', 'cwlVersion', 'inputs', 'outputs', 'requirements', '$namespaces', '$schemas',
 })
 
 
-#: `compile_cwl` under this file's name, so every call site reads the same.
-_compile = partial(compile_cwl, name='leak')
-_hermetic = partial(compile_hermetic_cwl, name='leak')
-
-
-def _step(cwl: Yaml) -> Yaml:
-    """The single step of a compiled one-step workflow, as the live sub-dict (callers mutate it); `steps` is always a
-    list."""
-    return cast(Yaml, cwl['steps'][0])
-
-
-def _touch_workflow(extra_step_keys: dict[str, Any], extra_top_keys: dict[str, Any]) -> Yaml:
-    """A minimal real workflow carrying the given passthrough freight."""
-    return {
-        **extra_top_keys,
-        'steps': [{'id': 'touch',
-                   'in': {'filename': {'wic_inline_input': 'empty.txt'}},
-                   **extra_step_keys}],
-    }
-
-
-def _mk_file_workflow(extra_step_keys: dict[str, Any], extra_top_keys: dict[str, Any]) -> Yaml:
-    """The synthetic mk_file, for `_hermetic`; `_touch_workflow` is the real registry's tool, for `_compile`."""
-    return {**extra_top_keys, 'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'empty.txt'}},
-                                         **extra_step_keys}]}
-
-
 @pytest.mark.slow
-@given(st.dictionaries(passthrough_keys, passthrough_values, min_size=1, max_size=4))
+@given(st.data())
 @COMPILED
-def test_step_passthrough_is_byte_identical(freight: dict[str, Any]) -> None:
-    """A step key outside the claimed set survives compilation unchanged."""
-    compiled = _hermetic(_mk_file_workflow(freight, {}))
-    step = _step(compiled)
-    for key, value in freight.items():
-        assert step[key] == value, f'{key} was altered by compilation'
+def test_freight_survives_byte_for_byte_and_changes_nothing_else(data: st.DataObject) -> None:
+    """Step keys outside the claimed set, top-level keys outside the compiler's, and `hints:` on the document and the
+    step survive compilation unchanged, and compiled without them the document is the same: the observable meaning of
+    "not interpreted". The document has several steps and the freighted one scatters, so the requirement merge, which
+    reads step facts and writes a top-level key, fires beside the freight. The parser routes each freight key, and
+    no claimed one, to a step's passthrough, and each claimed key to what it interprets, never to both."""
+    document, index = data.draw(strat.freighted_documents())
+    step_freight = data.draw(st.dictionaries(passthrough_keys, passthrough_values, min_size=1, max_size=4))
+    top_freight = data.draw(st.dictionaries(passthrough_keys.filter(lambda key: key not in COMPILER_OWNED_TOP_KEYS),
+                                            passthrough_values, max_size=3))
+    hints = data.draw(hints_values)
+    hinted = {'hints': hints} if hints else {}
+    freighted = strat.to_yml_with_freight(document, index, {**step_freight, **hinted})
+    freighted.update(top_freight, **hinted)
+
+    compiled = compile_hermetic_cwl(freighted)
+    assert 'ScatterFeatureRequirement' in compiled['requirements']
+    step = compiled['steps'][index]
+    for key, value in {**step_freight, **hinted}.items():
+        assert step.pop(key) == value, f'{key} was altered by compilation'
+    for key, value in {**top_freight, **hinted}.items():
+        assert compiled.pop(key) == value, f'{key} was altered by compilation'
+    assert compiled == compile_hermetic_cwl(strat.to_yml(document))
+
+    for key in [*step_freight, *Grammar.INTERPRETED_STEP_KEYS]:
+        parsed = parse(f'steps:\n- id: s\n  {key}: x\n', 'freight.wic').document
+        assert parsed is not None
+        routed = (key in dict(parsed.steps[0].interpreted), key in dict(parsed.steps[0].passthrough))
+        assert routed == ((True, False) if key in Grammar.INTERPRETED_STEP_KEYS else (False, True)), key
 
 
-@pytest.mark.slow
-@given(st.dictionaries(passthrough_keys.filter(lambda k: k not in COMPILER_OWNED_TOP_KEYS),
-                       passthrough_values, min_size=1, max_size=3))
-@COMPILED
-def test_top_level_passthrough_is_byte_identical(freight: dict[str, Any]) -> None:
-    """An uninterpreted top-level key survives compilation unchanged."""
-    compiled = _hermetic(_mk_file_workflow({}, freight))
-    for key, value in freight.items():
-        assert compiled[key] == value, f'{key} was altered by compilation'
-
-
-@pytest.mark.slow
-@given(hints_values)
-@COMPILED
-def test_hints_survive_on_the_document_and_the_step_and_change_nothing_else(hints: dict[str, Any]) -> None:
-    """`hints:` is read by the parser, so it is generated as the mapping the parser keeps."""
-    without = _hermetic(_mk_file_workflow({}, {}))
-    with_hints = _hermetic(_mk_file_workflow({'hints': hints}, {'hints': hints}))
-    assert _step(with_hints).pop('hints') == hints
-    assert with_hints.pop('hints') == hints
-    assert with_hints == without
-
-
-@pytest.mark.skip_pypi_ci
-@pytest.mark.fast
-@pytest.mark.parametrize('key', ['requirements', 'hints'])
-def test_a_list_holding_an_import_is_emitted_as_authored_on_the_document_and_the_step(key: str) -> None:
-    """cwltool resolves an `$import` entry, so a list holding one reaches the emitted document untouched."""
-    def entries() -> list[dict[str, Any]]:
-        return [{'$import': 'shared.yml'}, {'class': 'ResourceRequirement', 'coresMin': 1}]
-
-    compiled = _compile(_touch_workflow({key: entries()}, {key: entries()}))
-    assert compiled[key] == entries()
-    assert _step(compiled)[key] == entries()
-
-
-@pytest.mark.skip_pypi_ci
-@pytest.mark.fast
-def test_a_requirements_list_holding_an_import_is_not_merged_into() -> None:
-    """The one `requirements:` that is not extended: a list holding an `$import` is emitted as written.
-
-    The file it names is read only by cwltool, so the compiler adds nothing to
-    it, not the `ScatterFeatureRequirement` a scattering step needs.
-    """
-    authored = [{'$import': 'shared.yml'}]
-    compiled = _compile({
-        'requirements': copy.deepcopy(authored),
-        'steps': [{'id': 'touch', 'in': {'filename': {'wic_inline_input': ['a.txt', 'b.txt']}},
-                   'scatter': ['filename']}],
-    })
-    assert compiled['requirements'] == authored
-
-
-@pytest.mark.skip_pypi_ci
-@pytest.mark.fast
-@pytest.mark.parametrize('key', ['inputs', 'outputs'])
-def test_a_root_inputs_or_outputs_list_holding_an_import_is_not_carried_into_the_output(key: str) -> None:
-    """The compiler models only the mapping form of `inputs:` and `outputs:`; the list is neither merged nor emitted."""
-    compiled = _compile(_touch_workflow({}, {key: [{'$import': 'shared.yml'}]}))
-    assert '$import' not in yaml.safe_dump(compiled)
-
-
-@pytest.mark.skip_pypi_ci
-@pytest.mark.fast
-def test_user_namespaces_survive_and_edam_is_edams_where_a_format_says_it() -> None:
-    """`$namespaces` keeps every user binding. In a document whose formats say
-    `edam:`, the compiler reads those CURIEs as EDAM's and binds `edam` to the
-    canonical URL over the user's; in one whose formats do not, the user's
-    `edam` binding is theirs and survives too.
-    """
-    bindings = {'$namespaces': {'mine': 'https://mine/', 'edam': 'https://not-edam/'}}
-    unused = _compile(_touch_workflow({}, bindings))
-    assert unused['$namespaces'] == {'mine': 'https://mine/', 'edam': 'https://not-edam/'}
-    used = _compile(_touch_workflow({}, {**bindings, 'inputs': {'f': {'type': 'File', 'format': 'edam:format_2330'}}}))
-    assert used['$namespaces'] == {'mine': 'https://mine/', 'edam': 'https://edamontology.org/'}
-
-
-@pytest.mark.skip_pypi_ci
-@pytest.mark.fast
-def test_class_is_written_while_inputs_outputs_and_version_are_not() -> None:
-    """The other four compiler-owned keys, each behaving differently.
-
-    These four had no test behind them, and the footnote claiming each was
-    pinned was wrong about three: `inputs`/`outputs` are merged, not written
-    (`{**yours, **generated}`, so your entry survives unless the compiler
-    generates the same name), and `cwlVersion` used to be *defaulted* — a
-    document declaring `v1.0` kept it and still received `when:`, emitting CWL
-    that cwltool rejects against the version it names. The compiler now writes
-    it. A row asserting facts about the compiler needs a test per fact, or it
-    is prose that drifts.
-    """
-    # `outputs` entries are *read*, not merely kept: the compiler pulls
-    # `outputSource` out of each one, so a supplied entry needs a real one.
-    user_output = {'type': 'File', 'outputSource': 'touch/file'}
-    compiled = _compile({
-        'class': 'ExpressionTool',        # a lie the compiler must overwrite
-        'inputs': {'mine': {'type': 'string'}},
-        'outputs': {'mine': user_output},
-        'cwlVersion': 'v1.0',             # older than the declared substrate
-        **_touch_workflow({}, {}),
-    })
-
-    assert compiled['class'] == 'Workflow', 'class is written, not merged'
-    assert compiled['inputs']['mine'] == {'type': 'string'}, 'user input lost'
-    assert len(compiled['inputs']) > 1, 'compiler inputs not merged alongside'
-    # Kept entry, rewritten reference: `outputSource` is the one field of a
-    # supplied output the compiler must not carry through, because emission
-    # renames the step it names. Asserting the authored spelling survived was
-    # asserting a document cwltool rejects.
-    assert compiled['outputs']['mine'] == {
-        **user_output, 'outputSource': 'touch/file',
-    }, 'user output lost, or its source not rewritten to the emitted step'
-    assert len(compiled['outputs']) > 1, 'compiler outputs not merged alongside'
-
-    # The compiler wins. Sophios generates for one substrate version, so a
-    # document cannot claim another and still be valid: declaring v1.0 and
-    # receiving `when:` produced CWL that cwltool rejects. The tag is ignored
-    # with a warning rather than refused — a stale pin should not stop a
-    # workflow compiling.
-    assert compiled['cwlVersion'] == CWL_VERSION, 'a supplied cwlVersion must not win'
-
-
-@pytest.mark.package
-@pytest.mark.fast
-@pytest.mark.parametrize('key', sorted(Grammar.INTERPRETED_STEP_KEYS))
-def test_every_declared_key_is_interpreted(key: str) -> None:
-    """Exhaustive half: each declared key routes to `interpreted`."""
-    result = parse(f'steps:\n- id: s\n  {key}: x\n', 'p11.wic')
-    assert result.document is not None
-    step = result.document.steps[0]
-    assert key in dict(step.interpreted)
-    assert key not in dict(step.passthrough)
-
-
-@pytest.mark.fast
-@given(passthrough_keys)
-@FAST
-def test_no_key_lands_on_both_sides(key: str) -> None:
-    """Generated half: any other key routes to passthrough, never both."""
-    result = parse(f'steps:\n- id: s\n  {key}: x\n', 'p11.wic')
-    assert result.document is not None
-    step = result.document.steps[0]
-    interpreted, passthrough = dict(step.interpreted), dict(step.passthrough)
-    assert key in passthrough
-    assert key not in interpreted
-    assert not set(interpreted) & set(passthrough)
-
-
-@pytest.mark.slow
-@given(passthrough_keys, passthrough_values)
-@COMPILED
-def test_unknown_keys_change_nothing_else(key: str, value: Any) -> None:
-    """Adding an uninterpreted key changes exactly that key and nothing
-    else in the output — the observable meaning of "not interpreted".
-    """
-    without = _hermetic(_mk_file_workflow({}, {}))
-    with_key = _hermetic(_mk_file_workflow({key: value}, {}))
-
-    # The whole document, not just the step: the requirement merge reads
-    # step facts and writes a *top-level* key, so a step key reaching that path
-    # would change the document while leaving the step subtree identical — and
-    # comparing only the step would call that inert. `_step` returns a
-    # reference into `with_key`, so popping there removes the key from the
-    # document being compared.
-    assert _step(with_key).pop(key) == value
-    assert with_key == without, f'{key} altered more than itself'
-
-
-#: Passthrough spelled in CWL vocabulary, because CWL v1.2 itself rejects
-#: unknown step fields — arbitrary keys are covered by the fidelity properties
-#: above, but a document carrying them is not *valid CWL*, and this last claim
-#: is about validity.
-cwl_passthrough = st.fixed_dictionaries(
-    {},
-    optional={
-        'label': st.text('abc xyz', min_size=1, max_size=20),
-        'doc': st.text('abc xyz.', min_size=1, max_size=40),
-        'hints': st.just({'LoadListingRequirement': {'loadListing': 'shallow_listing'}}),
-    },
-)
+#: Passthrough spelled in CWL vocabulary: CWL v1.2 rejects unknown step fields, so arbitrary keys are the property
+#: above's, and this one's claim is validity.
+cwl_passthrough = st.fixed_dictionaries({}, optional={
+    'label': st.text('abc xyz', min_size=1, max_size=20),
+    'doc': st.text('abc xyz.', min_size=1, max_size=40),
+    'hints': st.just({'LoadListingRequirement': {'loadListing': 'shallow_listing'}}),
+})
 
 
 @pytest.mark.needs_cwltool
 @pytest.mark.skip_pypi_ci
 @pytest.mark.slow
-# Ten examples, not the shared hundred: `cwl_passthrough` varies only in which
-# of three optional keys are present — eight shapes — and the free text inside
-# `label`/`doc` cannot change whether a document is valid CWL. Hypothesis keeps
-# drawing new strings and so never detects the exhaustion, spending about a
-# minute and a half of CI on a claim eight examples settle.
-@given(cwl_passthrough)
+# Ten examples, not the shared hundred: `cwl_passthrough` varies only in which of three optional keys are present,
+# and the free text inside `label`/`doc` cannot change whether a document is valid CWL.
+@given(cwl_passthrough, st.booleans())
+@example({}, True)
 @settings(max_examples=10, suppress_health_check=[HealthCheck.too_slow], deadline=None)
-def test_residue_validates_as_cwl_v1_2(freight: dict[str, Any]) -> None:
-    """Strip the Sophios syntax, inline the tools, and cwltool agrees the
-    residue is CWL v1.2."""
-    info = compile_info(_touch_workflow(freight, {}), 'leak')
-    inlined = sophios.post_compile.inline_artifact_runs(info.artifact).cwl
-
-    # A throwaway file, not a repo artifact: it exists only to hand cwltool a
-    # path. `tmp_path` would be the obvious choice, but it is function-scoped
-    # and Hypothesis rightly refuses to reuse one fixture across examples.
+def test_residue_validates_as_cwl_v1_2(freight: dict[str, Any], authored: bool) -> None:
+    """Strip the Sophios syntax, inline the tools, and cwltool agrees the residue is CWL v1.2. An `outputSource:` the
+    author wrote names a step cwltool finds: the workflow strategy never writes one, and the authored path once
+    carried the document's own spelling into a document whose steps are all renamed."""
+    workflow: Yaml = {'steps': [{'id': 'touch', 'in': {'filename': {'wic_inline_input': 'empty.txt'}}, **freight}]}
+    if authored:
+        workflow['outputs'] = {'mine': {'type': 'File', 'outputSource': 'touch/file'}}
+    inlined = sophios.post_compile.inline_artifact_runs(compile_info(workflow, 'leak').artifact).cwl
+    assert not authored or inlined['outputs']['mine']['outputSource'] == 'touch/file'
     with tempfile.TemporaryDirectory() as workdir:
         target = Path(workdir) / 'residue.cwl'
         target.write_text(yaml.safe_dump(inlined, sort_keys=False), encoding='utf-8')
         assert validate_cwl(str(target)) == 0
     assert inlined['cwlVersion'] == CWL_VERSION
-
-
-@pytest.mark.needs_cwltool
-@pytest.mark.skip_pypi_ci
-@pytest.mark.fast
-def test_an_authored_output_source_validates() -> None:
-    """A supplied `outputSource` names a step cwltool can find.
-
-    Planted rather than generated: the workflow strategy never writes an
-    authored `outputSource:`, so the property above reaches only the
-    synthesized path, which computes the emitted step name correctly. The
-    authored path carried the document's own spelling through to a document
-    whose steps are all renamed, and nothing looked until a runner did.
-    """
-    info = compile_info({
-        'outputs': {'mine': {'type': 'File', 'outputSource': 'touch/file'}},
-        **_touch_workflow({}, {}),
-    }, 'leak')
-    inlined = sophios.post_compile.inline_artifact_runs(info.artifact).cwl
-    assert inlined['outputs']['mine']['outputSource'] == 'touch/file'
-    with tempfile.TemporaryDirectory() as workdir:
-        target = Path(workdir) / 'authored_output_source.cwl'
-        target.write_text(yaml.safe_dump(inlined, sort_keys=False), encoding='utf-8')
-        assert validate_cwl(str(target)) == 0
-
-
-@pytest.mark.skip_pypi_ci
-@pytest.mark.fast
-def test_allow_raw_cwl_is_the_difference_between_report_and_compile() -> None:
-    """A bare unresolved name is reported without the flag and compiles
-    with it — the flag's one-line definition, observed at the boundary."""
-    from sophios.lang.diagnostics import SophiosError
-    from sophios.lang.error_codes import SophiosErrorCode
-
-    bare: Yaml = {'steps': [{'id': 'touch', 'in': {'filename': 'not_a_workflow_input'}}]}
-
-    with pytest.raises(SophiosError) as caught:
-        _compile(bare)
-    assert caught.value.diagnostics[0].code is SophiosErrorCode.UNRESOLVED_INPUT
-    assert '!ii' in caught.value.diagnostics[0].message
-
-    permitted = compile_cwl(bare, 'raw_cwl', allow_raw_cwl=True)
-    assert permitted['class'] == 'Workflow'

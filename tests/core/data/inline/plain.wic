@@ -1,0 +1,5 @@
+steps:
+- id: xform
+  in: {name: !ii b}
+outputs:
+  file: {type: File, outputSource: xform/file}

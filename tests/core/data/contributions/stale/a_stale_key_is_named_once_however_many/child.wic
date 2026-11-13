@@ -1,0 +1,5 @@
+wic:
+  steps:
+    (2, mk_file): {}
+steps:
+- id: mk_file

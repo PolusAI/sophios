@@ -1,0 +1,4 @@
+# Two inner steps read the guessed output through the one call the author wrote, so one note says it.
+steps:
+- id: make.wic
+- id: use.wic

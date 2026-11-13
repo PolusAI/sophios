@@ -1,0 +1,20 @@
+# A `.wic` is read where it is and written elsewhere: a relative location in a `default:` names a file beside the
+# `.wic` that wrote it, as a URI for a `location` and a path for a `path`. xform is a synthetic tool.
+inputs:
+  cfg: {type: File, default: {class: File, location: data/config.txt}}
+  ref: {type: File, default: {class: File, path: data/ref.txt}}
+  far: {type: File, default: {class: File, location: "file:///elsewhere/far.txt"}}
+steps:
+- id: xform
+  in: {file: cfg, name: !ii a.txt}
+- id: again
+  run: xform
+  in: {file: ref, name: !ii b.txt}
+- id: third
+  run: xform
+  in: {file: far, name: !ii c.txt}
+- id: call
+  run: sub/child.wic
+- id: fourth
+  run: xform
+  in: {file: !cwl {default: {class: File, location: data/step.txt}}, name: !ii d.txt}

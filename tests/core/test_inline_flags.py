@@ -1,5 +1,6 @@
-"""`--cwl_inline_runtag` packages a compiled workflow as one file with every step's `run:` carrying its process, without
-changing meaning: a tool embedded in a newer document keeps the defaults its own version gave it."""
+"""`--cwl_inline_subworkflows` and `--cwl_inline_runtag`, judged on the inline tree of tests/core/data/inline: the flat
+document it states, which calls dissolve and which stay and why, and what each step runs under each flag; a tool
+embedded in a newer document keeps the defaults its own version gave it; and the flags on the command line."""
 import sys
 from dataclasses import replace
 from pathlib import Path
@@ -10,36 +11,88 @@ import yaml
 
 import sophios.main
 from sophios import post_compile
+from sophios.cli import default_compilation_settings
+from sophios.compiler import compile_source
 from sophios.ir.artifacts import CompilationArtifact
+from sophios.ir.frontdoor import bundle_from_disk
 from sophios.lang.diagnostics import SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
 from sophios.wic_types import Yaml
 
-from .cases import cases
-from .hermetic import compile_hermetic, subworkflow_step
+from .cases import DATA, match
+from .helpers import stated
+from .test_compiler import _tools
 from .test_setup import workflow_paths
 
 pytestmark = pytest.mark.package
 
-MK_FILE: Yaml = {'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'a'}}}
+TREE = DATA / 'inline'
+
+
+def _compiled(root: str) -> CompilationArtifact:
+    """`root` of the inline tree compiled, its children the other `.wic` files beside it."""
+    others = {'global': {path.stem: path for path in TREE.glob('*.wic') if path.name != root}}
+    artifact = compile_source(bundle_from_disk(TREE / root, others, _tools(TREE)), default_compilation_settings(),
+                              quiet=True).artifact
+    assert artifact is not None
+    return artifact
+
+
+def _runs(form: CompilationArtifact) -> list[str]:
+    """What each step of `form` runs, `T` a CommandLineTool and `W` a Workflow: embedded in its `run:`, or the child
+    document its step names."""
+    children = {child.namespace: child.cwl['class'] for child in form.children}
+    classes = [step['run']['class'] if isinstance(step['run'], dict) else children[(step['id'],)]
+               for step in form.cwl['steps']]
+    return ['T' if kind == 'CommandLineTool' else 'W' for kind in classes]
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize('case', cases('embedded_tools', 'tool', 'embedded', 'says'))
-def test_an_embedded_tool_keeps_the_defaults_its_own_version_gave_it(case: Yaml) -> None:
+def test_the_inline_tree_flattens_to_the_document_it_states(capsys: pytest.CaptureFixture[str]) -> None:
+    """Flattened, the tree is the document expected.yaml states, with the root's interface and job unchanged, and
+    each kept call said once, with its reason; the flags apply shape first and do not depend on each other."""
+    nested = _compiled('workflow.wic')
+    expected = stated(TREE)
+    flat = post_compile.flatten_subworkflows(nested)
+    assert match(expected['said'], capsys.readouterr().err.splitlines())
+    assert match(expected['flat'], flat.cwl)
+    assert (list(flat.cwl['inputs']), list(flat.cwl['outputs']), flat.job_inputs) == \
+        (list(nested.cwl['inputs']), list(nested.cwl['outputs']), nested.job_inputs)
+    assert post_compile.apply_inline_options(nested, subworkflows=False, runtag=False) is nested
+    forms = {'nested': nested, '--cwl_inline_subworkflows': flat,
+             '--cwl_inline_runtag': post_compile.apply_inline_options(nested, subworkflows=False, runtag=True),
+             'both': post_compile.apply_inline_options(nested, subworkflows=True, runtag=True)}
+    assert {name: _runs(form) for name, form in forms.items()} == expected['runs']
+    assert [step['id'] for step in forms['both'].cwl['steps']] == [step['id'] for step in flat.cwl['steps']]
+    # A child whose requirements a script listed after the compile keeps its call: flattening reads the mapping only.
+    listed = replace(nested, children=tuple(
+        replace(child, cwl={**child.cwl, 'requirements': [{'class': 'EnvVarRequirement', 'envDef': {'A': 'b'}}]})
+        if child.namespace == ('plain',) else child for child in nested.children))
+    assert [step['id'] for step in post_compile.flatten_subworkflows(listed).cwl['steps']][1] == 'plain'
+    assert match({'contains': [{'contains': ["step 'plain.wic'", 'requirements are written as a list']}]},
+                 capsys.readouterr().err.splitlines())
+
+
+@pytest.mark.fast
+def test_an_embedded_tool_keeps_the_defaults_its_own_version_gave_it() -> None:
     """Embedded, a tool loses its `cwlVersion`, and nothing updates it as cwltool updates a file it loads: what its
-    version implied is written out, what it declares itself is kept, or a version Sophios cannot read is refused."""
-    artifact = compile_hermetic({'steps': [MK_FILE]}).artifact
-    artifact = replace(artifact, children=(replace(artifact.children[0], cwl=case['tool']),))
-    if 'says' in case:
-        with pytest.raises(SophiosError) as caught:
-            post_compile.inline_artifact_runs(artifact)
-        (diagnostic,) = caught.value.diagnostics
-        assert diagnostic.code is SophiosErrorCode.UNSUPPORTED_CWL_VERSION and case['says'] in diagnostic.message
-        return
-    (step,) = post_compile.inline_artifact_runs(artifact).cwl['steps']
-    assert 'cwlVersion' not in step['run']
-    assert {key: step['run'][key] for key in case['embedded']} == case['embedded']
+    version implied is written out, what it declares itself is kept, and a version Sophios cannot read is refused.
+    Each tool of tests/core/data/inline/embedded stands in for the one step of plain.wic."""
+    artifact = _compiled('plain.wic')
+    tools = TREE / 'embedded'
+    for name, expected in stated(tools).items():
+        tool = yaml.safe_load((tools / name).read_text(encoding='utf-8'))
+        swapped = replace(artifact, children=(replace(artifact.children[0], cwl=tool),))
+        if 'refused' in expected:
+            with pytest.raises(SophiosError) as caught:
+                post_compile.inline_artifact_runs(swapped)
+            (diagnostic,) = caught.value.diagnostics
+            assert diagnostic.code is SophiosErrorCode.UNSUPPORTED_CWL_VERSION, name
+            assert expected['refused'] in diagnostic.message, name
+            continue
+        (step,) = post_compile.inline_artifact_runs(swapped).cwl['steps']
+        assert 'cwlVersion' not in step['run'], name
+        assert match(expected, step['run']), (name, step['run'])
 
 
 def _cli(directory: Path, monkeypatch: pytest.MonkeyPatch, workflow: str, *flags: str) -> Path:
@@ -53,248 +106,51 @@ def _cli(directory: Path, monkeypatch: pytest.MonkeyPatch, workflow: str, *flags
     return directory / 'autogenerated'
 
 
-@pytest.mark.fast
-def test_inline_runtag_embeds_a_tool_with_the_defaults_it_was_written_for(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The flag, end to end: `echo.cwl` is v1.0 and the embedded copy still reaches the network."""
-    written = _cli(tmp_path / 'embedded', monkeypatch, 'helloworld', '--cwl_inline_runtag')
-    loaded = yaml.safe_load((written / 'helloworld.cwl').read_text(encoding='utf-8'))
-    (step,) = loaded['steps']
-    assert step['run']['hints']['NetworkAccess'] == {'networkAccess': True}
-
-
 def _document(written: Path, name: str) -> Yaml:
     """The root document the CLI wrote into `written`."""
     return cast(Yaml, yaml.safe_load((written / f'{name}.cwl').read_text(encoding='utf-8')))
 
 
-NESTED_IDS = ['touch', 'append_twice', 'cat']
-FLAT_IDS = ['touch', 'append_twice~append@1', 'append_twice~append@2', 'cat']
-
-
 @pytest.mark.fast
-def test_inline_subworkflows_writes_one_flat_workflow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-                                                      capsys: pytest.CaptureFixture[str]) -> None:
-    """Shape: no step runs a Workflow, tools stay files, and the root interface is the nested one's."""
-    nested = _cli(tmp_path / 'default', monkeypatch, 'multistep3')
+def test_the_inline_flags_on_the_command_line(  # pylint: disable=too-many-locals
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """End to end on the tutorials. multistep3 (touch, append_twice.wic calling append twice, cat) flattened: tools
+    stay files, a dissolved call leaves no Workflow document, the root interface and job are the nested one's, and
+    nothing is said; with --cwl_inline_runtag too, one document carrying every process. helloworld's echo.cwl is
+    v1.0, and embedded it still reaches the network. test_rand_fail scatters over fail.wic, and the `when`
+    --partial_failure_enable gives a call gates its inputs: both calls keep their place, and one line names each."""
+    nested = _cli(tmp_path / 'nested', monkeypatch, 'multistep3')
     flat = _cli(tmp_path / 'flat', monkeypatch, 'multistep3', '--cwl_inline_subworkflows')
     document, default = _document(flat, 'multistep3'), _document(nested, 'multistep3')
-    assert [step['id'] for step in default['steps']] == NESTED_IDS
-    assert [step['id'] for step in document['steps']] == FLAT_IDS
-    assert all(isinstance(step['run'], str) for step in document['steps']), 'tools stay separate files'
-    assert document['steps'][1]['run'] == 'multistep3~append_twice~append@1.cwl'
-    assert (flat / 'multistep3~append_twice~append@1.cwl').is_file()
-    assert not (flat / 'multistep3~append_twice.cwl').exists(), 'a dissolved call leaves no Workflow document'
+    flat_ids = ['touch', 'append_twice~append@1', 'append_twice~append@2', 'cat']
+    assert [step['id'] for step in document['steps']] == flat_ids
+    assert [step['run'] for step in document['steps']] == [f'multistep3~{name}.cwl' for name in flat_ids]
+    assert all((flat / step['run']).is_file() for step in document['steps'])
+    assert not (flat / 'multistep3~append_twice.cwl').exists()
     assert 'SubworkflowFeatureRequirement' not in document.get('requirements', {})
-    assert document['steps'][2]['in']['file'] == f'{FLAT_IDS[1]}/file'
-    assert document['steps'][3]['in']['file'] == f'{FLAT_IDS[2]}/file'
-    for key in ('inputs', 'outputs'):
-        assert list(document[key]) == list(default[key]), f'the flat form keeps the root {key}'
-    last = 'append_twice~append@2~file'
-    assert document['outputs'][last]['outputSource'] == f'{FLAT_IDS[2]}/file'
+    assert [document['steps'][2]['in']['file'], document['steps'][3]['in']['file']] == \
+        [f'{flat_ids[1]}/file', f'{flat_ids[2]}/file']
+    assert document['outputs']['append_twice~append@2~file']['outputSource'] == f'{flat_ids[2]}/file'
+    assert (list(document['inputs']), list(document['outputs'])) == (list(default['inputs']), list(default['outputs']))
     assert (flat / 'multistep3_inputs.yml').read_text() == (nested / 'multistep3_inputs.yml').read_text()
-    assert 'Warning!' not in capsys.readouterr().err, 'nothing stayed nested, so nothing is said'
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize('flags, ids, runs, requirements', [
-    (['--cwl_inline_runtag'], NESTED_IDS, ['CommandLineTool', ['CommandLineTool'] * 2, 'CommandLineTool'],
-     {'SubworkflowFeatureRequirement': {}}),
-    (['--cwl_inline_subworkflows', '--cwl_inline_runtag'], FLAT_IDS, ['CommandLineTool'] * 4, None)])
-# pylint: disable-next=too-many-arguments,too-many-positional-arguments
-def test_inline_runtag_writes_one_document_that_carries_every_process(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
-        flags: list[str], ids: list[str], runs: list[Any], requirements: Yaml | None) -> None:
-    """The root and its job, nothing beside them; a subworkflow step embeds its Workflow, here the classes of its
-    steps. The flags are orthogonal: with `--cwl_inline_subworkflows`, the flat shape with every process embedded."""
-    written = _cli(tmp_path / 'embedded', monkeypatch, 'multistep3', *flags)
-    assert sorted(path.name for path in written.iterdir()) == ['multistep3.cwl', 'multistep3_inputs.yml']
-    document = _document(written, 'multistep3')
-    assert [step['id'] for step in document['steps']] == ids
-    assert [[inner['run']['class'] for inner in step['run']['steps']] if step['run']['class'] == 'Workflow'
-            else step['run']['class'] for step in document['steps']] == runs
-    assert document.get('requirements') == requirements
     assert 'Warning!' not in capsys.readouterr().err
 
+    both = _cli(tmp_path / 'both', monkeypatch, 'multistep3', '--cwl_inline_subworkflows', '--cwl_inline_runtag')
+    assert sorted(path.name for path in both.iterdir()) == ['multistep3.cwl', 'multistep3_inputs.yml']
+    assert [(step['id'], step['run']['class']) for step in _document(both, 'multistep3')['steps']] == \
+        [(name, 'CommandLineTool') for name in flat_ids]
+    (echo,) = _document(_cli(tmp_path / 'hello', monkeypatch, 'helloworld', '--cwl_inline_runtag'),
+                        'helloworld')['steps']
+    assert echo['run']['hints']['NetworkAccess'] == {'networkAccess': True}
 
-@pytest.mark.fast
-def test_a_scattered_call_stays_nested_and_the_compile_says_so(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-                                                               capsys: pytest.CaptureFixture[str]) -> None:
-    """`test_rand_fail` scatters over `fail.wic`: the call keeps its place, and one line names it."""
-    written = _cli(tmp_path / 'kept', monkeypatch, 'test_rand_fail', '--cwl_inline_subworkflows')
-    document = _document(written, 'test_rand_fail')
-    kept = next(step for step in document['steps'] if step['id'] == 'fail')
-    assert kept['run'].endswith('fail.cwl') and 'scatter' in kept
-    assert (written / kept['run']).is_file(), 'the Workflow document it runs is still written'
-    assert document['requirements']['SubworkflowFeatureRequirement'] == {}
-    stderr = capsys.readouterr().err
-    assert "step 'fail.wic' stays a subworkflow under --cwl_inline_subworkflows: it carries `scatter`" in stderr
-    assert stderr.count('Warning!') == 1
-
-
-@pytest.mark.fast
-def test_the_when_partial_failure_adds_keeps_a_call_nested(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-                                                           capsys: pytest.CaptureFixture[str]) -> None:
-    """The `when` partial failure gives a call gates all its inputs, so dissolving the call would drop it."""
-    written = _cli(tmp_path / 'both', monkeypatch, 'multistep3', '--cwl_inline_subworkflows',
-                   '--partial_failure_enable')
-    document = _document(written, 'multistep3')
-    assert [step['id'] for step in document['steps']] == NESTED_IDS
-    assert document['requirements']['SubworkflowFeatureRequirement'] == {}
-    stderr = capsys.readouterr().err
-    assert "stays a subworkflow under --cwl_inline_subworkflows: it carries `when`" in stderr
-
-
-XFORM: Yaml = {'id': 'xform', 'in': {'name': {'wic_inline_input': 'b'}}}
-
-
-def _called(subtree: Yaml | None = None, **call: Any) -> Yaml:
-    """A step that runs `child.wic` (one `xform` unless `subtree`), with `call` keys of its own."""
-    return {**subworkflow_step('child.wic', subtree or {'steps': [XFORM]}), 'parentargs': call}
-
-
-def _nested(**call: Any) -> CompilationArtifact:
-    return compile_hermetic({'steps': [MK_FILE, _called(**call)]}, 'wf').artifact
-
-
-def _stays(artifact: CompilationArtifact, capsys: pytest.CaptureFixture[str]) -> str:
-    """Flatten, assert the call kept its place as a Workflow, and return what was said on stderr."""
-    flat = post_compile.flatten_subworkflows(artifact)
-    assert [step['id'] for step in flat.cwl['steps']] == [step['id'] for step in artifact.cwl['steps']]
-    assert flat.children[1].cwl['class'] == 'Workflow'
-    assert flat.cwl['requirements']['SubworkflowFeatureRequirement'] == {}
-    return capsys.readouterr().err
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize('case', cases('kept_calls', 'root', 'child', 'call', 'kept'))
-def test_a_call_dissolves_unless_it_or_its_child_says_otherwise(case: Yaml, capsys: pytest.CaptureFixture[str]) -> None:
-    """A kept call keeps its place as a Workflow and the root its requirements, and one line says why; a dissolved
-    call says nothing. `scatter` is pinned end to end by `test_a_scattered_call_stays_nested...`."""
-    child = {**case.get('child', {}), 'steps': [XFORM]}
-    artifact = compile_hermetic({**case.get('root', {}), 'steps': [MK_FILE, _called(child, **case.get('call', {}))]},
-                                'wf').artifact
-    if case['kept']:
-        assert f"step 'child.wic' stays a subworkflow under --cwl_inline_subworkflows: {case['kept']}" in _stays(
-            artifact, capsys)
-        assert post_compile.flatten_subworkflows(artifact).cwl['requirements'] == artifact.cwl['requirements']
-    else:
+    kept: dict[str, Any] = {}
+    for name, workflow, step, flags in (('scattered', 'test_rand_fail', 'fail', ()),
+                                        ('gated', 'multistep3', 'append_twice', ('--partial_failure_enable',))):
         capsys.readouterr()
-        assert all(child.cwl['class'] != 'Workflow' for child in post_compile.flatten_subworkflows(artifact).children)
-        assert 'Warning!' not in capsys.readouterr().err
-
-
-@pytest.mark.fast
-def test_a_call_stays_nested_when_dissolving_it_would_have_to_guess(capsys: pytest.CaptureFixture[str]) -> None:
-    """Each boundary the flat form cannot remove without guessing keeps its call, with the reason."""
-    merged = _nested()
-    name = next(iter(merged.cwl['steps'][1]['in']))
-    merged.cwl['steps'][1]['in'][name] = {'source': 'a', 'valueFrom': '$(self)'}
-    assert f"input '{name}' is bound to" in _stays(merged, capsys)
-
-    defaulted = _nested()
-    (child,) = (c for c in defaulted.children if c.cwl['class'] == 'Workflow')
-    next(iter(child.cwl['inputs'].values()))['default'] = 'x'
-    assert 'has a default' in _stays(defaulted, capsys)
-
-    listed = _nested()
-    (child,) = (c for c in listed.children if c.cwl['class'] == 'Workflow')
-    child.cwl['requirements'] = [{'class': 'EnvVarRequirement', 'envDef': {'A': 'b'}}]
-    assert "its workflow's requirements are written as a list" in _stays(listed, capsys)
-
-
-@pytest.mark.fast
-def test_a_kept_call_does_not_stop_the_others_from_flattening(capsys: pytest.CaptureFixture[str]) -> None:
-    """Calls are judged one at a time; a reference to a dissolved call's output is rewired past a kept one."""
-    two = {'steps': [MK_FILE, _called({'wic': {'inlineable': False}, 'steps': [XFORM]}),
-                     subworkflow_step('other.wic', {'steps': [{**XFORM, 'id': 'xform'}]})]}
-    nested = compile_hermetic(two, 'wf').artifact
-    flat = post_compile.flatten_subworkflows(nested)
-    kinds = [(step['id'], child.cwl['class']) for step, child in zip(flat.cwl['steps'], flat.children)]
-    assert kinds == [('mk_file', 'CommandLineTool'), ('child', 'Workflow'),
-                     ('other~xform', 'CommandLineTool')]
-    assert capsys.readouterr().err.count('Warning!') == 1
-
-
-@pytest.mark.fast
-def test_flattening_moves_what_the_subworkflow_required_onto_the_steps_that_ran_under_it() -> None:
-    """Requirements move with the steps they applied to, and the step's own entry wins over the subworkflow's, as in
-    CWL; the engine's own features go to the root."""
-    child = {'requirements': {'EnvVarRequirement': {'envDef': {'FOO': 'bar'}}, 'ResourceRequirement': {'ramMin': 100}},
-             'steps': [{**XFORM, 'when': '$(inputs.name != null)'}]}
-    nested = compile_hermetic({'steps': [MK_FILE, _called(child)]}).artifact
-    inner = next(c for c in nested.children if c.cwl['class'] == 'Workflow')
-    inner.cwl['steps'][0]['requirements'] = {'ResourceRequirement': {'ramMin': 5}}
-    flat = post_compile.flatten_subworkflows(nested).cwl
-    mk_file, xform = flat['steps']
-    assert 'requirements' not in mk_file
-    assert xform['requirements'] == {'EnvVarRequirement': {'envDef': {'FOO': 'bar'}},
-                                     'ResourceRequirement': {'ramMin': 5}}
-    assert flat['requirements'] == {'InlineJavascriptRequirement': {}}, (
-        'the engine reads `when` against the root, so the feature goes there, and the call is gone')
-
-
-@pytest.mark.fast
-def test_an_input_the_call_leaves_unbound_keeps_what_else_the_inner_step_says_about_it() -> None:
-    """Unbound, a source yields null: the entry loses its source and keeps its `valueFrom`, or goes."""
-    nested = _nested()
-    call = nested.cwl['steps'][1]
-    inner = next(c for c in nested.children if c.cwl['class'] == 'Workflow')
-    formal = next(iter(call['in']))
-    del call['in'][formal]
-    (entry,) = (name for name, value in inner.cwl['steps'][0]['in'].items() if value == formal)
-    inner.cwl['steps'][0]['in'][entry] = {'source': formal, 'valueFrom': '$(self)'}
-    assert post_compile.flatten_subworkflows(nested).cwl['steps'][1]['in'][entry] == {'valueFrom': '$(self)'}
-
-
-@pytest.mark.fast
-def test_a_list_of_sources_that_names_a_dissolved_call_follows_its_steps() -> None:
-    """A merged input lists the call's output among its sources; the flat step is named instead."""
-    nested = _nested()
-    call = nested.cwl['steps'][1]
-    produced = f"{call['id']}/{call['out'][0]}"
-    nested.cwl['steps'][0]['in']['merged'] = {'source': ['elsewhere', produced], 'linkMerge': 'merge_flattened'}
-    flat = post_compile.flatten_subworkflows(nested)
-    sources = flat.cwl['steps'][0]['in']['merged']['source']
-    assert sources[0] == 'elsewhere'
-    assert sources[1] != produced
-    assert sources[1].split('/')[0] in {step['id'] for step in flat.cwl['steps']}
-
-
-@pytest.mark.fast
-def test_every_level_of_nesting_is_dissolved_and_named_for_where_the_step_came_from() -> None:
-    """A step in a subworkflow in a subworkflow carries both calls in its id."""
-    middle = {'steps': [subworkflow_step('inner.wic', {'steps': [XFORM]})]}
-    nested = compile_hermetic({'steps': [MK_FILE, subworkflow_step('middle.wic', middle)]}, 'wf').artifact
-    flat = post_compile.flatten_subworkflows(nested)
-    assert [step['id'] for step in flat.cwl['steps']] == [
-        'mk_file', 'middle~inner~xform']
-    assert [child.namespace for child in flat.children] == [(step['id'],) for step in flat.cwl['steps']]
-    assert all(child.cwl['class'] == 'CommandLineTool' for child in flat.children)
-    assert flat.job_inputs == nested.job_inputs
-
-
-@pytest.mark.fast
-def test_a_call_left_nested_inside_a_dissolved_workflow_keeps_the_subworkflow_requirement(
-        capsys: pytest.CaptureFixture[str]) -> None:
-    """The root still contains a Workflow step, so it still declares `SubworkflowFeatureRequirement`."""
-    middle = {'steps': [subworkflow_step('inner.wic', {'wic': {'inlineable': False}, 'steps': [XFORM]})]}
-    nested = compile_hermetic({'steps': [MK_FILE, subworkflow_step('middle.wic', middle)]}, 'wf').artifact
-    flat = post_compile.flatten_subworkflows(nested)
-    assert [child.cwl['class'] for child in flat.children] == ['CommandLineTool', 'Workflow']
-    assert flat.cwl['requirements']['SubworkflowFeatureRequirement'] == {}
-    assert 'it is marked `wic: inlineable: false`' in capsys.readouterr().err
-
-
-@pytest.mark.fast
-def test_the_flags_apply_shape_first_and_do_not_depend_on_each_other() -> None:
-    """Each flag alone, and both, from one nested workflow."""
-    nested = _nested()
-    flat = post_compile.apply_inline_options(nested, subworkflows=True, runtag=False)
-    embedded = post_compile.apply_inline_options(nested, subworkflows=False, runtag=True)
-    both = post_compile.apply_inline_options(nested, subworkflows=True, runtag=True)
-    assert post_compile.apply_inline_options(nested, subworkflows=False, runtag=False) is nested
-    assert all(isinstance(step['run'], str) for step in flat.cwl['steps'])
-    assert embedded.cwl['steps'][1]['run']['class'] == 'Workflow'
-    assert [step['run']['class'] for step in both.cwl['steps']] == ['CommandLineTool'] * 2
-    assert [step['id'] for step in both.cwl['steps']] == [step['id'] for step in flat.cwl['steps']]
+        written = _cli(tmp_path / name, monkeypatch, workflow, '--cwl_inline_subworkflows', *flags)
+        call = next(each for each in _document(written, workflow)['steps'] if each['id'] == step)
+        assert (written / call['run']).is_file() and _document(written, workflow)['requirements'][
+            'SubworkflowFeatureRequirement'] == {}
+        kept[name] = [line for line in capsys.readouterr().err.splitlines() if line.startswith('Warning!')]
+    assert match({'scattered': [{'contains': ["step 'fail.wic'", 'carries `scatter`']}],
+                  'gated': [{'contains': ["step 'append_twice.wic'", 'carries `when`']}]}, kept)

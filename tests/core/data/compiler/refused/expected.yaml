@@ -1,0 +1,37 @@
+# Each root is refused, every diagnostic by code, severity, step and port, and what it names.
+untyped_no_source.wic:
+  refused: [{code: UNTYPED_OUTPUT, severity: error, message: {contains: ["'o'", "has no `outputSource:` to take one"]}}]
+untyped_misspelled.wic:
+  refused: [{code: UNTYPED_OUTPUT, severity: error, message: {contains: ["`outputSource: mk_file/fiel`",  # codespell:ignore fiel
+                                                                         "Did you mean 'mk_file/file'?"]}}]
+untyped_without_extension.wic:
+  refused: [{code: UNTYPED_OUTPUT, severity: error, message: {contains: ["`outputSource: kid/res`",
+                                                                         "Did you mean 'kid.wic/res'?"]}}]
+untyped_nothing_close.wic:
+  refused: [{code: UNTYPED_OUTPUT, severity: error, message: {contains: [nothing/at_all, Check the step and output]}}]
+untyped_derived_name.wic:
+  refused: [{code: UNTYPED_OUTPUT, severity: error, message: {contains: [kid.wic/mk_file~file,
+                                                                         "Did you mean 'mk_file/file'?"]}}]
+untyped_old_generated.wic:
+  refused: [{code: UNTYPED_OUTPUT, severity: error, message: {contains: [oracle__step__1__mk_file/file]}}]
+undeclared.wic:
+  refused:
+  - {code: UNDECLARED_PORT, severity: error, step: kid.wic, index: 1, port: child__step__1__mk_file___file}
+  - {code: UNDECLARED_PORT, severity: error, step: mk_file, index: 3, port: go}
+imports.wic:
+  refused:
+  - {code: SUBWORKFLOW_INVALID, severity: error, message: {contains: ["global/inputs_imported lists its inputs:"]}}
+  - {code: SUBWORKFLOW_INVALID, severity: error, message: {contains: ["global/inputs_included lists its inputs:"]}}
+  - {code: SUBWORKFLOW_INVALID, severity: error, message: {contains: ["global/outputs_imported lists its outputs:"]}}
+  - {code: SUBWORKFLOW_INVALID, severity: error, message: {contains: ["global/outputs_included lists its outputs:"]}}
+records.wic:
+  refused:
+  - {code: STEP_INPUT_RECORD, severity: error, message: {contains: ["'nope'"]}}
+  - {code: STEP_INPUT_RECORD, severity: error, message: {contains: ["`source` names edges"]}}
+  - {code: STEP_INPUT_RECORD, severity: error, message: {contains: ["`source` names edges"]}}
+disjoint.wic:
+  refused: [{code: INCOMPATIBLE_INPUT_REFERENCE, severity: error, step: mk_file, index: 1, port: name,
+             message: {contains: ["'int'", "'string'"]}}]
+unresolved.wic:
+  refused: [{code: UNRESOLVED_INPUT, severity: error, step: mk_file, index: 1, port: name,
+             message: {contains: ['!ii', not_a_workflow_input]}}]

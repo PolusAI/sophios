@@ -1,0 +1,15 @@
+# `parse` accepts empty names; the types refuse them, and lowering bridges that with a diagnostic, not a ValueError.
+# `!& ""` and `!* ""` agree: neither puts '' into the edge table as a live producer name.
+steps:
+- id: s
+  in:
+    "": !* e
+- id: t
+  out:
+  - "": f
+- id: u
+  out:
+  - f: !& ""
+- id: v
+  in:
+    f: !* ""

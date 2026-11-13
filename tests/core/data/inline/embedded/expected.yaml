@@ -1,0 +1,22 @@
+# Expected by hand from CWL v1.0 -> v1.1 as cwltool's updater (cwltool/update.py, v1_0to1_1) applies it to a file it
+# loads: the keys of the embedded `run:`, which has no cwlVersion, or the refusal.
+v1_0.cwl:
+  hints: {exact: {LoadListingRequirement: {loadListing: deep_listing}, NetworkAccess: {networkAccess: true}}}
+  inputs: {name: {secondaryFiles: [{pattern: .fai}]}, other: {secondaryFiles: [.crai, .csi]}, plain: string}
+  outputs: {file: {secondaryFiles: [.bai]}}
+v1_0_without_hints.cwl:
+  hints: {exact: {LoadListingRequirement: {loadListing: deep_listing}, NetworkAccess: {networkAccess: true}}}
+  inputs: [{id: name, secondaryFiles: [.fai]}]
+  outputs: [{id: file, secondaryFiles: [.bai]}]
+v1_1.cwl: {hints: {exact: {ResourceRequirement: {ramMin: 8}}}}
+declared.cwl: {hints: {exact: {NetworkAccess: {networkAccess: false}}}}
+listed.cwl:
+  hints: [{class: LoadListingRequirement, loadListing: deep_listing}, {class: ResourceRequirement, ramMin: 8}]
+cwltool_names.cwl:
+  hints: {exact: {LoadListingRequirement: {loadListing: shallow_listing}, NetworkAccess: {networkAccess: false}}}
+cwltool_names_listed.cwl:
+  hints: [{class: LoadListingRequirement, loadListing: no_listing}]
+  requirements: [{class: NetworkAccess, networkAccess: true}]
+no_ports.cwl: {exact: {class: CommandLineTool, baseCommand: 'true'}}
+v1_3_dev.cwl: {refused: "declares cwlVersion 'v1.3.0-dev1'"}
+no_version.cwl: {refused: declares no cwlVersion}

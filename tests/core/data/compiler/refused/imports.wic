@@ -1,0 +1,7 @@
+# A called workflow listing its ports with an `$import` or `$include` keeps them in a file only cwltool reads, so no
+# step can be checked against them: reported at the call, not met with a KeyError.
+steps:
+- id: inputs_imported.wic
+- id: inputs_included.wic
+- id: outputs_imported.wic
+- id: outputs_included.wic

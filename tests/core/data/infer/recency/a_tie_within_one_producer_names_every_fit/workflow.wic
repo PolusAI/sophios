@@ -1,0 +1,4 @@
+# One line names the input, the output it reads and the output that also fit.
+steps:
+- id: multi_file
+- id: count

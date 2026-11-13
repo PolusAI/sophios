@@ -1,0 +1,12 @@
+# The written `left` does not vouch for the inferred `right`, so the refusal points at `right`, the first inferred
+# input.
+steps:
+- id: mk_file
+  in:
+    name: !ii a.txt
+  out:
+  - file: !& f
+- id: join
+  in:
+    name: !ii o.txt
+    left: !* f

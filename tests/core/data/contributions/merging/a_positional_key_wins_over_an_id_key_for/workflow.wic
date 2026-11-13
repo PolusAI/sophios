@@ -1,0 +1,11 @@
+# Within one sidecar a positional key wins over a bare id for the same step.
+wic:
+  steps:
+    mk_file:
+      in:
+        name: !ii by_id.txt
+    (1, mk_file):
+      in:
+        name: !ii by_position.txt
+steps:
+- id: mk_file

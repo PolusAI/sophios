@@ -1,0 +1,3 @@
+# Presence, not truthiness, suppresses inference for a defaulted port: none is inferred or lifted.
+steps:
+- id: defaulted

@@ -1,0 +1,2 @@
+# The workflow deferred.wic runs for its empty `fast` body.
+steps: [{id: mk_file, in: {name: {wic_inline_input: deferred}}}]

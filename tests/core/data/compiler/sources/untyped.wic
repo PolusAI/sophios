@@ -1,0 +1,22 @@
+# An output with an `outputSource:` and no `type:` takes its producer's type: an array under a scatter; through a
+# call, the called workflow's untyped output and the caller's output that names it alike.
+steps:
+- id: mk_file
+  in: {name: !ii a}
+- id: mk_file
+  in: {name: !ii [a, b]}
+  scatter: [name]
+- id: kid.wic
+  in: {name: !ii a}
+- id: kid.wic
+  in: {name: !ii [a, b]}
+  scatter: [name]
+outputs:
+  plain:
+    outputSource: (1, mk_file)/file
+  scattered:
+    outputSource: (2, mk_file)/file
+  called:
+    outputSource: (3, kid.wic)/res
+  called_scattered:
+    outputSource: (4, kid.wic)/res

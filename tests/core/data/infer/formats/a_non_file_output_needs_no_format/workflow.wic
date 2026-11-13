@@ -1,0 +1,4 @@
+# A non-File cannot declare a format, so omission is unconstrained.
+steps:
+- id: producer
+- id: consumer

@@ -1,0 +1,62 @@
+# The keys a compiled document's boundary holds, by hand from each root's comments.
+owned.wic:
+  written:
+    owned.cwl:
+      class: Workflow
+      cwlVersion: v1.2
+      $namespaces: {exact: {mine: 'https://mine/', edam: 'https://edamontology.org/'}}
+      $schemas: [https://example.org/ontologies/mine.owl]
+      inputs: {mine: string, mk_file~name: {type: {type: array, items: string}}}
+      outputs: {mine: {type: 'File[]', outputSource: mk_file/file}, mk_file~file: {format: 'edam:format_2330'}}
+      requirements: [{$import: shared.yml}]
+      hints: [{$import: shared.yml}, {class: ResourceRequirement, coresMin: 1}]
+      steps: [{id: mk_file, requirements: [{$import: shared.yml}, {class: ResourceRequirement, coresMin: 1}],
+               hints: [{$import: shared.yml}]}]
+a_class_with_no_body.wic: {written: {a_class_with_no_body.cwl: {requirements: {exact: {ResourceRequirement: null}}}}}
+imported_ports.wic:
+  written:
+    imported_ports.cwl:
+      $namespaces: {exact: {mine: 'https://mine/', edam: 'https://not-edam/'}}
+      inputs: {exact: {count~file: {type: File}}}
+      outputs: {exact: {count~n: {type: int, outputSource: count/n}}}
+no_edam.wic: {files: [no_edam.cwl, no_edam_inputs.yml, no_edam~count.cwl], written: {no_edam.cwl: {keys: [steps,
+              cwlVersion, class, inputs, outputs]}}}
+edam_authored.wic: {written: {edam_authored.cwl: {$namespaces: {exact: {edam: 'https://edamontology.org/'}}}}}
+edam_promoted.wic: {written: {edam_promoted.cwl: {$namespaces: {exact: {edam: 'https://edamontology.org/'}}}}}
+edam_job.wic: {written: {edam_job.cwl: {$namespaces: {exact: {edam: 'https://edamontology.org/'}}}}}
+edam_default.wic: {written: {edam_default.cwl: {$namespaces: {exact: {edam: 'https://edamontology.org/'}}}}}
+edam_step_default.wic: {written: {edam_step_default.cwl: {$namespaces: {exact: {edam: 'https://edamontology.org/'}}}}}
+prefixes.wic:
+  written:
+    prefixes.cwl:
+      $namespaces: {exact: {myns: 'http://tool.example/', elsens: 'http://else.example/',
+                            edam: 'https://edamontology.org/'}}
+      inputs:
+        called~probe~f: {format: 'myns:format_1'}
+        probe~f: {format: 'myns:format_1'}
+        twin~f: {format: 'myns:format_1'}
+        elsewhere~g: {format: 'elsens:format_2'}
+      outputs: {maker~o: {format: 'myns:format_1'}, mk_file~file: {format: 'edam:format_2330'}}
+    prefixes~called.cwl: {$namespaces: {exact: {myns: 'http://tool.example/'}}}
+    prefixes~through.cwl: {$namespaces: {exact: {myns: 'http://tool.example/'}}, inputs: {probe~f: {format: 'myns:format_1'}}}
+authored.wic:
+  written: {authored.cwl: {$namespaces: {exact: {myns: 'http://other.example/'}}}}
+# Two sources binding one prefix a promoted format uses differently: neither binding is kept, and wic031 names both.
+clash_document.wic:
+  refused: [{code: DUPLICATE_DOCUMENT_NAME, severity: error, step: probe,
+             message: {contains: ["'myns'", "'http://other.example/'", this document, "'http://tool.example/'"]}}]
+clash_tools.wic:
+  refused: [{code: DUPLICATE_DOCUMENT_NAME, severity: error, step: rival,
+             message: {contains: ["'myns'", "step 'probe'", "'http://tool.example/'", "step 'rival'"]}}]
+clash_beneath.wic:
+  refused: [{code: DUPLICATE_DOCUMENT_NAME, severity: error, step: rival,
+             message: {contains: ["'myns'", "step 'called.wic'", "step 'rival'", "'http://other.example/'"]}}]
+clash_inside.wic:
+  refused: [{code: DUPLICATE_DOCUMENT_NAME, severity: error, step: rival,
+             message: {contains: ["workflow 'both'", "step 'probe'", "step 'rival'"]}}]
+format_expression.wic:
+  written:
+    format_expression.cwl:
+      inputs:
+        formatted~reference: {format: $(inputs.source.format)}
+        formatted~body: {format: '${ return inputs.source.format; }'}

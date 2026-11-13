@@ -1,0 +1,8 @@
+# `inputs:` and `outputs:` lists holding an `$import` are neither merged nor emitted: the compiler models the mapping.
+$namespaces: {mine: 'https://mine/', edam: 'https://not-edam/'}   # no format says edam:, so both are the author's
+inputs:
+- $import: shared.yml
+outputs:
+- $import: shared.yml
+steps:
+- id: count

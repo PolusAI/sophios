@@ -1,0 +1,4 @@
+# A promoted input carries its tool's `format` as written, an expression too, the spelling a rewrite would most
+# likely break.
+steps:
+- id: formatted

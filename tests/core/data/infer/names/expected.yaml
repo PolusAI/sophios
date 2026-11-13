@@ -1,0 +1,25 @@
+a_tie_settled_by_names_is_not_noted:
+  policy: {use_naming_conventions: true}
+an_output_log_feeds_an_input_log:
+  policy: {use_naming_conventions: true}
+  edges: {reader@2.input_log_path: logger@1.output_log_path}
+a_log_is_a_file_like_any_other:
+  policy: {use_naming_conventions: true}
+  edges: {reader@3.input_crd_path: logger@2.output_log_path}
+  diagnostics:
+  - {code: INFERENCE_GUESS, step: reader, index: 3, port: input_crd_path, severity: note, message: {contains: [reader.input_crd_path
+            <- logger.output_log_path]}}
+an_input_pairs_by_its_own_name_first:
+  policy: {use_naming_conventions: true, renaming_conventions: [[structure_, tpr_]]}
+  edges: {reader@2.input_structure_file: maker@1.output_structure_file}
+a_renamed_name_pairs_when_its_own_is_missing:
+  policy: {use_naming_conventions: true, renaming_conventions: [[structure_, tpr_]]}
+  edges: {reader@2.input_structure_file: maker@1.output_tpr_file}
+naming_conventions_pick_the_matching_name:
+  edges: {consumer@2.input_structure: producer@1.output_structure}
+naming_conventions_off_take_the_first_output:
+  policy: {use_naming_conventions: false}
+  edges: {consumer@2.input_structure: producer@1.output_other}
+  diagnostics:
+  - {code: INFERENCE_GUESS, step: consumer, index: 2, port: input_structure, severity: note, message: {contains: [consumer.input_structure
+            <- producer.output_other]}}

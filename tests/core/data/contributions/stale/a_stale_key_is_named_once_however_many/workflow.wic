@@ -1,0 +1,4 @@
+# A stale key is reported once however many steps call the workflow.
+steps:
+- id: child.wic
+- id: child.wic

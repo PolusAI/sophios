@@ -1,0 +1,11 @@
+two_insertions_reach_one_fixed_point:
+  policy: {insert_steps_automatically: true}
+  inserted: 2
+  iterations: 3
+a_call_output_feeds_a_converter:
+  policy: {insert_steps_automatically: true}
+  inserted: 1
+a_break_stops_the_search:
+  policy: {insert_steps_automatically: true}
+  inserted: 0
+  inputs: [use_1~file]

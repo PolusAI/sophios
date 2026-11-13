@@ -1,0 +1,4 @@
+# No `output_structure_file`, so the renamed name of `input_structure_file` pairs: `output_tpr_file`.
+steps:
+- id: maker
+- id: reader

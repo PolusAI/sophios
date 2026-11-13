@@ -1,0 +1,4 @@
+# When the naming conventions single out one output, order did not decide.
+steps:
+- id: named
+- id: count

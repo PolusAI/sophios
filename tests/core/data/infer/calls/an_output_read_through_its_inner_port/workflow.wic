@@ -1,0 +1,8 @@
+# `f` is anchored inside the subworkflow; `left` is written to it and `right` is inferred from the call's exposed
+# twin of the same file.
+steps:
+- id: src.wic
+- id: join
+  in:
+    name: !ii o.txt
+    left: !* f

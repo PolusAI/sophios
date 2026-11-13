@@ -1,0 +1,17 @@
+two_bare_inputs_reading_one_output_refuse:
+  refused: true
+  diagnostics:
+  - {code: INFERENCE_DUPLICATE, severity: error, step: join, index: 2, port: left, message: {contains: [join.left and
+            join.right would both read mk_file.file]}}
+a_written_edge_and_an_inferred_one:
+  refused: true
+  diagnostics:
+  - {code: INFERENCE_DUPLICATE, severity: error, step: join, index: 2, port: right, message: {contains: [join.left and
+            join.right would both read mk_file.file]}}
+two_written_edges_reading_one_output_are_meant: {}
+inputs_that_declare_the_format_may_share_an_output: {}
+one_input_without_the_evidence_refuses:
+  refused: true
+  diagnostics:
+  - {code: INFERENCE_DUPLICATE, severity: error, step: pair, index: 2, port: left, message: {contains: [pair.left and
+            pair.right would both read mk_file.file]}}

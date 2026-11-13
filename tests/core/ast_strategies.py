@@ -1,13 +1,13 @@
 """Strategies over the language AST, rendered and re-parsed by `parse` before compiling, so writer and reader must
 agree and a counterexample shrinks to a minimal document; stems and bindings name synthetic_tools' real ports."""
 import copy
-from typing import Any, Callable, Final, cast
+from typing import Any, Final, cast
 
 from hypothesis import strategies as st
 from hypothesis.strategies import SearchStrategy
 
 from sophios import utils_cwl
-from sophios.lang import (SophiosErrorCode, CwlRecord, Document, EdgeDef, EdgeRef, Grammar, InlineLiteral, InputValue,
+from sophios.lang import (CwlRecord, Document, EdgeDef, EdgeRef, Grammar, InlineLiteral, InputValue,
                           OpaqueCwl, OutputBinding, RawCwlRef, Step, StepKey, UnresolvedName, WicSidecar,
                           parse, render, to_json)
 from sophios.lang.spans import SourceSpan
@@ -18,60 +18,6 @@ from .synthetic_tools import SCHEMA_TYPES, STEMS, inputs_of, outputs_of, require
 
 #: The one span generated nodes carry: they have no source, and nothing downstream reads it.
 _SPAN: Final = SourceSpan('<generated>', 1, 1, 1, 1)
-
-#: Kinds the generator cannot draw, each with its reason; an InputValue member in neither this nor CONSTRUCTS fails
-#: test_the_construct_inventory_accounts_for_every_input_kind.
-NOT_GENERATED: Final[dict[str, str]] = {}
-
-#: The construct kinds the coverage property demands, from the .wic reference's tables rather than the strategy, so a
-#: kind the strategy stops producing fails instead of narrowing silently.
-CONSTRUCTS: Final[tuple[str, ...]] = (
-    'steps_mapping', 'steps_sequence',
-    'inline_literal', 'edge_ref', 'raw_cwl_ref', 'unresolved_name', 'cwl_record',
-    'output_bare', 'output_edge',
-    'interpreted_scatter', 'interpreted_scatterMethod', 'interpreted_when',
-    'step_passthrough', 'top_passthrough',
-    'sidecar', 'sidecar_steps',
-    'subworkflow', 'inferred_input',
-)
-
-
-def constructs_in(document: Document) -> frozenset[str]:
-    """Which construct kinds a document contains: one place, so coverage and the strategy agree on what one is."""
-    # pylint: disable=too-many-branches  # one branch per construct kind, by design
-    found = {'steps_mapping' if document.steps_as_mapping else 'steps_sequence'}
-    if document.passthrough:
-        found.add('top_passthrough')
-    if document.sidecar is not None:
-        found.add('sidecar')
-        if document.sidecar.steps:
-            found.add('sidecar_steps')
-    for step in document.steps:
-        if step.id.endswith('.wic'):
-            found.add('subworkflow')
-        if step.passthrough:
-            found.add('step_passthrough')
-        for key, _ in step.interpreted:
-            found.add(f'interpreted_{key}')
-        for binding in step.outputs:
-            found.add('output_edge' if binding.edge_def is not None else 'output_bare')
-        bound = {name for name, _ in step.inputs}
-        for _, value in step.inputs:
-            match value:
-                case InlineLiteral():
-                    found.add('inline_literal')
-                case EdgeRef():
-                    found.add('edge_ref')
-                case RawCwlRef():
-                    found.add('raw_cwl_ref')
-                case CwlRecord():
-                    found.add('cwl_record')
-                case _:
-                    found.add('unresolved_name')
-        if not step.id.endswith('.wic') and set(required_inputs_of(step.id)) - bound:
-            found.add('inferred_input')
-    return frozenset(found)
-
 
 literals: Final = st.one_of(
     st.text('abcxyz_.', min_size=1, max_size=8),
@@ -288,8 +234,9 @@ def _step(draw: st.DrawFn, stem: str, defined_edges: list[tuple[str, Any]],
 
 @st.composite
 def documents(draw: st.DrawFn) -> Document:  # pylint: disable=too-many-locals
-    """A well-formed document over every construct in CONSTRUCTS, well typed where it binds a literal, in both forms.
-    Mapping-form stems are drawn unique up front: a step drawn then discarded would leave its `!&` names dangling."""
+    """A well-formed document over every construct the .wic reference tabulates, well typed where it binds a literal,
+    in both forms. Mapping-form stems are drawn unique up front: a step drawn then discarded would leave its `!&` names
+    dangling."""
     as_mapping = draw(st.booleans())
     stems = draw(st.lists(st.sampled_from(STEMS), min_size=1, max_size=4,
                           unique=as_mapping))
@@ -334,30 +281,6 @@ def documents(draw: st.DrawFn) -> Document:  # pylint: disable=too-many-locals
                     steps_as_mapping=as_mapping)
 
 
-#: Constructs the specification admits and the compiler does not accept yet, each with its finding;
-#: test_the_compilable_subset_still_reaches_every_construct_it_does_not_exclude holds the filter to construct coverage.
-NOT_YET_COMPILABLE: Final[dict[str, str]] = {}
-
-
-#: One predicate per NOT_YET_COMPILABLE entry, keyed identically, as the assertion below checks.
-_EXCLUSION_PREDICATES: Final[dict[str, Callable[[Document], bool]]] = {}
-assert NOT_YET_COMPILABLE.keys() == _EXCLUSION_PREDICATES.keys(), (
-    'NOT_YET_COMPILABLE and _EXCLUSION_PREDICATES must name exactly the same exclusions')
-
-
-def compilable_documents() -> SearchStrategy[Document]:
-    """`documents()` minus what NOT_YET_COMPILABLE names: the compile-driving properties need input that compiles, the
-    parse-level ones keep the whole language."""
-    # pylint: disable=no-member  # see workflows()'s identical disable, below
-    return documents().filter(lambda d: not any(pred(d) for pred in _EXCLUSION_PREDICATES.values()))
-
-
-def excluded_documents(name: str) -> SearchStrategy[Document]:
-    """Documents that trip the named exclusion, so its predicate's excuse can be shown still true."""
-    # pylint: disable=no-member  # see workflows()'s identical disable, below
-    return documents().filter(_EXCLUSION_PREDICATES[name])
-
-
 #: The bodies a subworkflow step's id selects, by its stem less the appended index; each literal is a child job value
 #: Complete lifts to the caller, and `decl` declares an input its caller binds and may scatter over.
 SUBWORKFLOW_BODIES: Final[dict[str, Yaml]] = {
@@ -389,8 +312,8 @@ def to_yml(document: Document) -> Yaml:
 
 
 def workflows() -> SearchStrategy[Yaml]:
-    """The strategy the compile-driving properties quantify over: `compilable_documents()` through `to_yml`."""
-    return compilable_documents().map(to_yml)
+    """The strategy the compile-driving properties quantify over: `documents()` through `to_yml`."""
+    return documents().map(to_yml)  # pylint: disable=no-member
 
 
 #: `join` is absent: its `left` and `right` would be inferred from one output, which inference refuses (wic055).
@@ -431,37 +354,6 @@ def to_yml_with_freight(document: Document, step_index: int, freight: dict[str, 
     loaded = to_yml(document)
     loaded['steps'][step_index].update(freight)
     return loaded
-
-
-@st.composite
-def partitionings(draw: st.DrawFn, steps: int) -> tuple[tuple[int, ...], ...]:
-    """A contiguous grouping of `range(steps)`: a subworkflow is the steps written in one file, so nothing else is
-    expressible."""
-    if steps <= 1:
-        return ((0,),) if steps else ()
-    cuts = sorted(draw(st.lists(st.integers(min_value=1, max_value=steps - 1), unique=True, max_size=steps - 1)))
-    bounds = [0, *cuts, steps]
-    return tuple(tuple(range(a, b)) for a, b in zip(bounds, bounds[1:]))
-
-
-#: Ill-formed source paired with the code it must provoke: a bare string would accept the wrong diagnostic.
-_HOSTILE: Final = (
-    ('steps:\n  s:\n    in:\n      f: !ii a\n      f: !ii b\n', SophiosErrorCode.DUPLICATE_KEY),
-    ('steps:\n- id: s\n  in:\n    f: !foo bar\n', SophiosErrorCode.UNKNOWN_TAG),
-    ('steps:\n- id: ""\n', SophiosErrorCode.EMPTY_STEP_ID),
-    # A sequence step names itself in `id:`, so an entry without one earns MISSING_STEP_ID.
-    ('steps:\n- {}\n', SophiosErrorCode.MISSING_STEP_ID),
-    ('steps:\n- id: s\n  out: {a: b}\n', SophiosErrorCode.EXPECTED_SEQUENCE),
-    ('steps: 3\n', SophiosErrorCode.EXPECTED_MAPPING),
-    # A step's own `wic:` key is passthrough: the malformed key must live in the document-level `wic: steps:`.
-    ('wic:\n  steps:\n    "not a key": {}\n', SophiosErrorCode.MALFORMED_WIC_STEP_KEY),
-    ('steps: &a\n- id: s\n  wic: {x: *a}\n', SophiosErrorCode.RECURSIVE_ALIAS),
-)
-
-
-def hostile_documents() -> SearchStrategy[tuple[str, SophiosErrorCode]]:
-    """Documents outside the language, each with the code it must earn."""
-    return st.sampled_from(_HOSTILE)
 
 
 #: Keys and JSON-shaped values the language does not claim and must preserve.

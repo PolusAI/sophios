@@ -1,0 +1,5 @@
+# A log is a File like any other: the nearest step with a fitting output wins, and the guess is noted.
+steps:
+- id: make
+- id: logger
+- id: reader

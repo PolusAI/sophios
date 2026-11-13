@@ -1,0 +1,4 @@
+steps:
+- id: mk_file
+  in:
+    name: !ii min.tpr

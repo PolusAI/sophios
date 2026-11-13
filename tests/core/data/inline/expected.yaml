@@ -1,0 +1,42 @@
+# Each kept call, and why, said once; the flat root, its steps named for the calls they came from; and what each
+# step of each form runs.
+said:
+- {contains: ["step 'gated.wic'", carries `when`]}
+- {contains: ["step 'required.wic'", carries `requirements`]}
+- {contains: ["step 'labelled.wic'", carries `label`]}
+- {contains: ["step 'opted_out.wic'", 'wic: inlineable: false']}
+- {contains: ["step 'javascript.wic'", different InlineJavascriptRequirement]}
+- {contains: ["step 'scattered.wic'", carries `scatter`]}
+- {contains: ["step 'valued.wic'", "input 'name' is bound to", not to a single source]}
+- {contains: ["step 'defaulted.wic'", "input 'name' has a default"]}
+- {contains: [sealing.wic, "step 'sealed.wic'", 'wic: inlineable: false']}
+flat:
+  requirements: {exact: {InlineJavascriptRequirement: {expressionLib: [var a = 1;]}, MultipleInputFeatureRequirement: {},
+                         ScatterFeatureRequirement: {}, StepInputExpressionRequirement: {},
+                         SubworkflowFeatureRequirement: {}}}
+  steps:
+  - {id: mk_file, run: workflow~mk_file.cwl}
+  - {id: plain~xform, run: workflow~plain~xform.cwl, in: {file: mk_file/file}}
+  - {id: opted_in~xform, in: {file: plain~xform/file}}
+  - {id: gated, run: workflow~gated.cwl, when: $(true)}
+  - {id: required, requirements: {exact: {ResourceRequirement: {ramMin: 1}}}}
+  - {id: labelled, label: a call}
+  - {id: opted_out}
+  - {id: javascript}
+  - {id: scattered, scatter: [name]}
+  - {id: valued, in: {name: {exact: {source: w, valueFrom: $(self)}}}}
+  - {id: defaulted}
+  - {id: listed~xform, requirements: {exact: {EnvVarRequirement: {envDef: {A: b}}}}}
+  - {id: moved~xform, when: $(inputs.name != null),
+     requirements: {exact: {EnvVarRequirement: {envDef: {FOO: bar}}, ResourceRequirement: {ramMin: 5}}}}
+  - {id: middle~inner~xform, run: workflow~middle~inner~xform.cwl}
+  - {id: sealing~sealed, run: workflow~sealing~sealed.cwl}
+  - {id: unbound~xform, in: {name: {exact: {valueFrom: fallback}}}}
+  - {id: sink, in: {file: {source: plain~xform/file},
+                    extras: {source: [plain~xform/file, plain~xform/file], linkMerge: merge_flattened}}}
+# What each step runs: T a CommandLineTool, W a Workflow, under each flag and both.
+runs:
+  nested: [T, W, W, W, W, W, W, W, W, W, W, W, W, W, W, W, T]
+  --cwl_inline_subworkflows: [T, T, T, W, W, W, W, W, W, W, W, T, T, T, W, T, T]
+  --cwl_inline_runtag: [T, W, W, W, W, W, W, W, W, W, W, W, W, W, W, W, T]
+  both: [T, T, T, W, W, W, W, W, W, W, W, T, T, T, W, T, T]

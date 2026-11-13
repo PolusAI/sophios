@@ -1,0 +1,12 @@
+# `out:` is a sequence, and a sequence the contributor supplies replaces. Merging the two instead would keep an edge
+# definition the contributor deliberately removed, and define it twice wherever the contributor put its own back.
+wic:
+  steps:
+    (1, child.wic):
+      wic:
+        steps:
+          (1, mk_file):
+            out:
+            - file
+steps:
+- id: child.wic

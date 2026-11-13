@@ -1,0 +1,28 @@
+a_note_names_the_call_and_the_steps_down:
+  compiled: true
+  diagnostics:
+  - {code: INFERENCE_GUESS, step: use.wic, index: 2, port: file, severity: note, message: {contains: [use.wic.file <-
+            make.wic/multi_file.first]}}
+an_edge_written_between_inner_steps_says_nothing:
+  compiled: true
+one_guess_read_by_two_inner_steps_is_one_note:
+  compiled: true
+  diagnostics:
+  - {code: INFERENCE_GUESS, step: use.wic, index: 2, port: file, severity: note, message: {contains: [use.wic.file <-
+            make.wic/multi_file.first]}}
+a_file_fanned_out_to_two_inner_steps: {}
+an_output_read_through_its_inner_port:
+  refused: true
+  diagnostics:
+  - {code: INFERENCE_DUPLICATE, severity: error, step: join, index: 2, port: right, message: {contains: [join.left and
+            join.right would both read src.wic/mk_file.file]}}
+two_inputs_of_a_call_reading_one_file: {}
+a_written_edge_to_an_anchor_in_a_call:
+  compiled: true
+  refused: true
+  diagnostics:
+  - {code: INFERENCE_DUPLICATE, severity: error, step: pair, index: 2, port: right, message: {contains: [pair.left and
+            pair.right would both read src.wic/mk_file.file]}}
+a_file_fanned_out_two_calls_down: {}
+a_call_output_is_a_candidate:
+  edges: {exact: {count@2.file: sub.wic@1.mk_file~file}}

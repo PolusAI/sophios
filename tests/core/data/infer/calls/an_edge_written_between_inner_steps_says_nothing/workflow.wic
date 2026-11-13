@@ -1,0 +1,4 @@
+# An edge written between the inner steps is not a choice, so nothing is said.
+steps:
+- id: make.wic
+- id: use.wic
