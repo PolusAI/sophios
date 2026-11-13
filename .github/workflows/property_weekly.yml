@@ -119,7 +119,7 @@ jobs:
           tests/core/test_realtime.py::test_a_declaration_is_returned_instead_of_emitted_or_is_wic044_at_each_port
           tests/core/test_backends.py::test_each_cwl_runner_reads_its_command_line_as_the_request_says
           tests/core/test_backends.py::test_failed_steps_are_read_from_the_runners_log_lines
-          tests/core/test_backends.py::test_toil_writes_the_output_object_it_printed_last_and_no_other
+          tests/core/test_backends.py::test_toil_reports_the_output_object_it_printed_last_and_no_other
           tests/core/test_backends.py::test_failed_nextflow_processes_are_read_from_its_log_lines
           tests/core/test_compute.py::test_the_request_carries_the_compiled_workflow_and_every_path_as_written
           tests/core/test_compute.py::test_a_run_id_is_the_workflow_name_the_time_and_four_hex_digits_within_the_services_rule

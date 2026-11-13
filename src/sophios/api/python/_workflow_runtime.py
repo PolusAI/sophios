@@ -691,12 +691,35 @@ class RunOptions:  # pylint: disable=too-many-instance-attributes
     lang_version: str | None = None
 
 
-def _realtime_refused(declarations: tuple[Declaration, ...]) -> SophiosError:
-    """`api008`, at each real-time analysis declaration: `run_async` never runs them."""
+def _realtime_refused(declarations: tuple[Declaration, ...], never: str = "run_async() never runs") -> SophiosError:
+    """`api008`, at each real-time analysis declaration: what `never` names never runs them."""
     return SophiosError(Diagnostic(
         Severity.ERROR, SophiosErrorCode.REALTIME_NOT_ASYNC,
-        f"this step declares the real-time analysis {declaration.analysis!r}, and run_async() never runs "
+        f"this step declares the real-time analysis {declaration.analysis!r}, and {never} "
         "real-time analyses", declaration.span) for declaration in declarations)
+
+
+def lowered_for_site(workflow: "Workflow", *, target: str, root: PurePath, tool_registry: Tools | None,
+                     inference: Inference) -> tuple[run_setup.Lowered[Any] | None, tuple[Diagnostic, ...]]:
+    """`workflow` compiled and lowered to `target`, as `run()` lowers it, for a run on another machine whose relative
+    paths are read against `root` there, printing nothing: the model (for CWL, the one document `compile()` returns)
+    and every note the compile and the target made, with `api008` at each real-time analysis, which no site runs; or
+    None and every refusal of the target, where `compile()` raises `NotLowered`.
+
+    Raises:
+        SophiosError: The workflow does not compile.
+        ValueError: No target has that name.
+    """
+    row = targets.target(target)
+    result = compile_workflow_result(workflow, tool_registry=tool_registry, inference=inference, quiet=True)
+    realtime_ = _realtime_refused(result.realtime, "a site never runs").diagnostics if result.realtime else ()
+    try:
+        lowered = row.lower(result, run_setup.absolute_view(_view(workflow, result), root))
+    except NotLowered as refused:
+        return None, (*result.diagnostics, *refused.diagnostics, *realtime_)
+    if row.name == "cwl":
+        lowered = replace(lowered, model=_one_document(workflow, result))
+    return lowered, (*result.diagnostics, *lowered.notes, *realtime_)
 
 
 def _run_request(workflow: "Workflow", options: RunOptions, *, refuse_realtime: bool) -> backends.RunRequest:
