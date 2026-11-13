@@ -25,7 +25,7 @@ from .ir.policy import RunPolicy, tolerant_tool
 from .ir.resolved import ResolvedTool, ResolvedWorkflow, non_boolean_whens, resolve
 from .ir.types import RegistryKey, StepId, StepNode, WorkflowGraph
 from .lang import versions
-from .lang.diagnostics import Diagnostic, Locator, Severity, SophiosError
+from .lang.diagnostics import Diagnostic, Diagnostics, Locator, Severity, SophiosError
 from .lang.nodes import CwlRecord, OpaqueCwl, UnresolvedName
 from .lang.parser import Grammar
 from .lang.error_codes import SophiosErrorCode
@@ -78,15 +78,13 @@ def compile_source(bundle: SourceBundle,
         raise SophiosError(inferred.diagnostics)
     graph = declare_namespaces(complete(inferred.graph), bundle.registry)
     names = Names.of(graph)
-    if not quiet:
-        for note in dict.fromkeys(_when_notes(graph, names)):
-            print(note, file=sys.stderr)
+    diagnostics = Diagnostics([*inferred.diagnostics, *dict.fromkeys(_when_notes(graph, names))])
     run_policy = RunPolicy(compiler_options['partial_failure_enable'],
                            compiler_options['partial_failure_success_codes'])
     artifact = _artifact_tree(graph, graph.name, names, _Descriptions(bundle.registry), policy=run_policy)
     if not quiet:
         print('finishing compilation of', bundle.name)
-    return CompilationResult(graph, artifact, inferred.diagnostics, realtime, policy=run_policy)
+    return CompilationResult(graph, artifact, diagnostics, realtime, policy=run_policy)
 
 
 def resolved_view(result: CompilationResult, *, values: Mapping[str, OpaqueCwl] | None = None,
@@ -160,19 +158,17 @@ def _authored_spelling_notes(graph: WorkflowGraph) -> list[str]:
     return notes
 
 
-def _when_notes(graph: WorkflowGraph, names: Names) -> list[str]:
-    """One plain line for each `when:` that reads an input its step does not declare: it has
+def _when_notes(graph: WorkflowGraph, names: Names) -> list[Diagnostic]:
+    """A `wic056` note for each `when:` that reads an input its step does not declare: it has
     no value there, and cwltool stops the run at a `when:` that gives anything but true or false.
 
     Read from the finished graph, where a call declares every name its child exposes, as
     `names` spells it. A dotted read of a made name (`inputs.touch~filename`) reads
-    `inputs.touch`; the line names the bracket form.
+    `inputs.touch`; the note names the bracket form.
     """
-    notes: list[str] = []
-    spans = [step.span for step in graph.steps if step.span is not None]
-    if not spans:
+    notes: list[Diagnostic] = []
+    if not any(step.span is not None for step in graph.steps):
         return [note for child in graph.children for note in _when_notes(child, names)]
-    file = spans[0].file
     for step in graph.steps:
         declared = [names.port(port.id.port) for port in step.inputs]
         for read in _expression_inputs(dict(step.interpreted).get('when')):
@@ -180,9 +176,11 @@ def _when_notes(graph: WorkflowGraph, names: Names) -> list[str]:
                 made = [name for name in declared if name.startswith(f'{read}{NAMESPACE_SEPARATOR}')]
                 hint = f" Write {' or '.join(f'inputs[{name!r}]' for name in made)} to read one it declares." \
                     if made else ''
-                notes.append(f"Warning! {file}: step {step.id.name!r} reads inputs.{read} in `when:`, which "
-                             f'its process does not declare; it has no value there, and cwltool stops the run '
-                             f'at a `when:` that gives anything but true or false.{hint}')
+                notes.append(Diagnostic(
+                    Severity.NOTE, SophiosErrorCode.WHEN_NOT_BOOLEAN,
+                    f'when reads inputs.{read}, which its process does not declare; it has no value there, and '
+                    f'cwltool stops the run when it gives anything but true or false.{hint}',
+                    step.span, Locator(step=step.id.name)))
     for child in graph.children:
         notes.extend(_when_notes(child, names))
     return notes

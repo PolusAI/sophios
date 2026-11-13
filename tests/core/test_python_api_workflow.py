@@ -153,7 +153,7 @@ def test_a_python_workflow_compiles_as_the_wic_beside_it_and_as_the_wic_it_write
 
 def _warned_on_cwl() -> Workflow:
     """A guessed edge, noted on either target (`wic043`); a `when` that gives a string, noted on CWL (`wic056`); and
-    `cat` running on a `when` that reads an input it does not have, which the compile warns of in a plain line."""
+    `cat` running on a `when` that reads an input it does not have, noted on either target (`wic056`)."""
     echo = adapter_step("echo")
     echo.inputs.message = "hi"
     echo.when = "$(inputs.message)"
@@ -190,14 +190,14 @@ def _machine_ready(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.mark.fast
 @pytest.mark.usefixtures("machine_ready")
-@pytest.mark.parametrize("target, build, codes, warned", [("cwl", _warned_on_cwl, ["wic043", "wic056"], 1),
-                                                          ("nextflow", _noted_on_nextflow, ["wic046"], 0)])
+@pytest.mark.parametrize("target, build, codes", [("cwl", _warned_on_cwl, ["wic043", "wic056", "wic056"]),
+                                                  ("nextflow", _noted_on_nextflow, ["wic046"])])
 def test_check_returns_the_notes_compile_keeps_and_prints_and_writes_nothing(
-        target: Literal["cwl", "nextflow"], build: Callable[[], Workflow], codes: list[str], warned: int,
+        target: Literal["cwl", "nextflow"], build: Callable[[], Workflow], codes: list[str],
         capsys: pytest.CaptureFixture[str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """`check()` makes every note `compile()` keeps, the target's own among them, and prints nothing: none of them,
-    no plain warning of the compile's, nothing at all, so a `check()` and then a `compile()` show each once; it writes
-    nothing into the working directory, where the base path is. `compile()` prints the warnings, then the notes."""
+    nothing at all, so a `check()` and then a `compile()` show each once; it writes
+    nothing into the working directory, where the base path is. `compile()` prints the notes."""
     workflow = build()
     capsys.readouterr()
     monkeypatch.chdir(tmp_path)
@@ -208,8 +208,9 @@ def test_check_returns_the_notes_compile_keeps_and_prints_and_writes_nothing(
     assert notes == compiled.diagnostics
     assert [str(note.code) for note in notes] == codes
     printed = capsys.readouterr().err.splitlines()
-    assert printed == [*printed[:warned], *printed_lines(notes)]
-    assert all("reads inputs.nope in `when:`, which its process does not declare" in line for line in printed[:warned])
+    assert printed == printed_lines(notes)
+    assert any("reads inputs.nope, which its process does not declare" in note.message for note in notes) is (
+        target == "cwl")
 
 
 def _reading_a_file(path: Path) -> Workflow:
@@ -236,7 +237,8 @@ def test_check_reports_an_input_path_that_does_not_exist_as_run_does(
     with pytest.raises(SophiosError) as error:
         workflow.check(target=target)
     problem, = error.value.diagnostics
-    assert str(problem.code) == "wic016" and f"'{tmp_path / 'absent.txt'}', which does not exist" in problem.message
+    assert str(
+        problem.code) == "wic016" and f"'{tmp_path / 'absent.txt'}', which does not exist" in problem.message
     assert not list(tmp_path.iterdir())
     (tmp_path / "absent.txt").write_text("x", encoding="utf-8")
     assert workflow.check(target=target) == workflow.compile(target=target).diagnostics
