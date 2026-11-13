@@ -238,7 +238,7 @@ def test_check_reports_an_input_path_that_does_not_exist_as_run_does(
         workflow.check(target=target)
     problem, = error.value.diagnostics
     assert str(
-        problem.code) == "wic016" and f"'{tmp_path / 'absent.txt'}', which does not exist" in problem.message
+        problem.code) == "wic016" and f"{str(tmp_path / 'absent.txt')!r}, which does not exist" in problem.message
     assert not list(tmp_path.iterdir())
     (tmp_path / "absent.txt").write_text("x", encoding="utf-8")
     assert workflow.check(target=target) == workflow.compile(target=target).diagnostics
