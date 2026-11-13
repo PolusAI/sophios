@@ -148,7 +148,7 @@ local_scheme = "no-local-version"
 # first tag), git builds count from this base: 0.6.0.post0.devN after 0.6.0.
 # Without git at all it is the version itself. release-please moves it to each
 # new release through the marker below, so it always names the last release.
-fallback_version = "0.7.0.post0.dev0"  # x-release-please-version
+fallback_version = "0.8.0.post0.dev0"  # x-release-please-version
 # The version is also written beside the code, so sophios.__version__ describes
 # the files that are running rather than whichever install the metadata names.
 version_file = "src/sophios/_version.py"
