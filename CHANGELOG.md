@@ -6,6 +6,74 @@ Each release's generated notes list what changed. Where a release breaks
 something that worked in the one before it, an upgrade section beneath its
 notes says what to change in your files and code.
 
+## [0.8.0](https://github.com/PolusAI/sophios/compare/v0.7.0...v0.8.0) (2026-11-13)
+
+
+### ⚠ BREAKING CHANGES
+
+* **inference:** two inputs of one tool step that read one output, one of them inferred, fail with wic055 unless each declares a format the output carries.
+* **inference:** a tie that no name settles goes to the output declared first, not the last.
+* **inference:** an output with _log_ in its name is no longer skipped; a format on the input keeps a log out.
+* **api:** Python's Inference() applies the shipped renamings, so a Python workflow can infer different edges.
+* **inference:** --inference_use_naming_conventions is removed, and where the nearest step has several fitting outputs the one whose name pairs with the input's is chosen.
+
+### Features
+
+* **api:** partial failure from Python ([6600a89](https://github.com/PolusAI/sophios/commit/6600a89d0f7adc79a365c70c2b00a7815bd94a16))
+* **api:** Python starts from shipped renamings ([19d6ac7](https://github.com/PolusAI/sophios/commit/19d6ac76aad78eaca639acc58e8f40223d57757b))
+* **api:** Workflow.check() ([0ee22c0](https://github.com/PolusAI/sophios/commit/0ee22c04ffddd54c8b420c6b3d6948b1236cfe90))
+* **inference:** a duplicate needs evidence ([3933e2a](https://github.com/PolusAI/sophios/commit/3933e2ace00c9525651eeac3777029a5f2ea0a34))
+* **inference:** a tie goes to the output declared first ([a5ef796](https://github.com/PolusAI/sophios/commit/a5ef79673a0b989269eed631ff01da1481f710d1))
+* **inference:** logs are outputs like any other ([ab044c9](https://github.com/PolusAI/sophios/commit/ab044c927096f84043b22f2afa8fdf69cd4b114e))
+* **inference:** naming conventions on by default ([dbc2223](https://github.com/PolusAI/sophios/commit/dbc222397af2dccb46fa4829bd1a0855bc7b8ab7))
+* **inference:** one note lists the guessed edges ([aeea5d6](https://github.com/PolusAI/sophios/commit/aeea5d67dd23a4c30c60d1f6b2747ae91cf75889))
+* **nextflow:** carry step-only inputs ([a839faa](https://github.com/PolusAI/sophios/commit/a839faabca48dc8c17e765d9488a22b951fcd323))
+* **nextflow:** coded refusals as diagnostics ([4705390](https://github.com/PolusAI/sophios/commit/47053901e7ae44e5eff46744799ffd85ec5345f2))
+* **nextflow:** the model carries step-only inputs ([4e0e452](https://github.com/PolusAI/sophios/commit/4e0e452671ae09baabea87fb3d3287cc33ea5ae9))
+* **nextflow:** tools inherit requirements ([5639cc6](https://github.com/PolusAI/sophios/commit/5639cc6ab4b195be425d44d139e53d65b1e3c325))
+* note a when that cannot give a boolean ([eb9b5db](https://github.com/PolusAI/sophios/commit/eb9b5db9244b30d994f398ffe79ff1097b991ec4))
+
+
+### Bug Fixes
+
+* a cwltool run prints no rdflib warning about its N-Triples encoding ([9687e58](https://github.com/PolusAI/sophios/commit/9687e583ae10f573e5d8749ed32de36c7587dce7))
+* a step's own when runs after the null checks ([ddb46ed](https://github.com/PolusAI/sophios/commit/ddb46edc17d0bc6c5b0c36d1d72b75f46bbef670))
+* an output directory is a Directory literal ([123ab48](https://github.com/PolusAI/sophios/commit/123ab482430d8518e8537b40c74c094af54c204b))
+* check() returns the when-input note as wic056 ([c6fec06](https://github.com/PolusAI/sophios/commit/c6fec06cb8ad6b3d04f6205d958b8e48d5ada53a))
+* narrow yaml.compose for the new PyYAML stubs ([674277b](https://github.com/PolusAI/sophios/commit/674277b3f57d7696b383c3baf1cf2670a7152eaf))
+* **nextflow:** a value keeps its indentation, a `$` beside a reference is text, and `T[]` lowers ([1e8890b](https://github.com/PolusAI/sophios/commit/1e8890b4499e21285b56b54b28b86f4cb253fb7f))
+* **nextflow:** accept step inputs nothing reads ([aaae002](https://github.com/PolusAI/sophios/commit/aaae0021de09d52d5af3347a8f5b4c011948a90e))
+* read a Nextflow record after launcher text ([79fc337](https://github.com/PolusAI/sophios/commit/79fc337eddf25f42b9d1bd1e17c1a9386c877714))
+* tools take partial failure at emission ([03c1923](https://github.com/PolusAI/sophios/commit/03c1923243ee980effa79bd3afa08373c7ca4682))
+* **tools:** append quotes its message, writes a copy ([496420f](https://github.com/PolusAI/sophios/commit/496420f486301049946ceb53f051c68572520ebd))
+* **tools:** append writes the message with printf ([a5bc191](https://github.com/PolusAI/sophios/commit/a5bc1919cebbb0f1fa60e6c6b38dbd86b6d26e02))
+* **types:** make Lowered's model type invariant ([85ec0d1](https://github.com/PolusAI/sophios/commit/85ec0d1ff75cb71f2f1869ba0e71358c5ef2c07f))
+
+
+### Documentation
+
+* call step-to-step dataflow an edge ([430f83c](https://github.com/PolusAI/sophios/commit/430f83c9f2e2235c52a8ea81474db527e85176c5))
+* host verified LMS course lab downloads ([3a06ed6](https://github.com/PolusAI/sophios/commit/3a06ed67af15537cb0a9c5c28c78ce54fa35703a))
+* install Nextflow, and the shipped example the Nextflow target runs ([304eb21](https://github.com/PolusAI/sophios/commit/304eb21126dd6e5546812607bfc737039fbdccf5))
+* **install:** the multistep examples run on Nextflow ([a439aa0](https://github.com/PolusAI/sophios/commit/a439aa03b5dfb3582b8834bf5c505088cab1040b))
+* keep the LMS downloads out of the site ([8e6c2bc](https://github.com/PolusAI/sophios/commit/8e6c2bc5bbc38393aed3915eb0a52eb0994b118b))
+* names decide between a step's outputs ([4a05873](https://github.com/PolusAI/sophios/commit/4a0587346c9c42f48f01fd78a0870f1fff8a6b66))
+* nf-s codes in the Nextflow docs ([cbda31e](https://github.com/PolusAI/sophios/commit/cbda31e2d12eea13d4063bc3e38dee167b0f13d1))
+* partial failures run on push ([f0a4850](https://github.com/PolusAI/sophios/commit/f0a48503ab9e5b63e6326c6d73d608853a15b68c))
+* the inferred graph stops at the join ([825b169](https://github.com/PolusAI/sophios/commit/825b16951f92bbaec2811c98dcec1d078dd25671))
+* the run folder holds one file per append copy ([ed1aa6c](https://github.com/PolusAI/sophios/commit/ed1aa6ce37acdf78526dc3b03c12ba151a5908e0))
+
+
+### Code Refactoring
+
+* compile_source takes quiet ([1785b33](https://github.com/PolusAI/sophios/commit/1785b33da42ac0ad19e8a82e5f755a3d097cf570))
+* **ir:** the resolved view of the graph ([048c2fa](https://github.com/PolusAI/sophios/commit/048c2faca54cff50a2a0bf025e935399190bba39))
+* **nextflow:** delete the CWL projection ([39cedee](https://github.com/PolusAI/sophios/commit/39cedee13526d485c2046336dc00e83d09f90e43))
+* **nextflow:** lower from the resolved view ([496a4d3](https://github.com/PolusAI/sophios/commit/496a4d33b60832c949d63cc3daa0f1f2b3827ed3))
+* **nextflow:** refusals at the user's line ([4d42e4e](https://github.com/PolusAI/sophios/commit/4d42e4e95f81e1731169c6a96bf97b44d6edb3f7))
+* one table of targets ([100c4d7](https://github.com/PolusAI/sophios/commit/100c4d75fa7b1e3d682480d12b75cfa5fed1647f))
+* the safe subset moves to lang.subset ([5b89b9e](https://github.com/PolusAI/sophios/commit/5b89b9ed4f458a190c1d18ece0b321f524aa2bdd))
+
 ## 0.8.0: upgrading from 0.7.0
 
 Codes in parentheses are the codes Sophios prints with each diagnostic.
