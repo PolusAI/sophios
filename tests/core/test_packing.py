@@ -14,8 +14,7 @@ from schema_salad.fetcher import DefaultFetcher
 
 from sophios import run_local
 from sophios.api.python.workflow import Step, Workflow
-from sophios.cli import default_compilation_settings
-from sophios.compiler import compile_source
+from sophios.compiler import CompileSettings, compile_source
 from sophios.ir.artifacts import CompilationArtifact
 from sophios.ir.frontdoor import bundle_from_disk
 from sophios.lang.diagnostics import SophiosError
@@ -34,7 +33,7 @@ PRINTED: Final = 'from-include\n' + (TOOLS / 'data.txt').read_text(encoding='utf
 
 
 def _compile(wic: Path, tools: Tools | None = None) -> CompilationArtifact:
-    return compile_source(bundle_from_disk(wic, {}, tools or {}), default_compilation_settings(),
+    return compile_source(bundle_from_disk(wic, {}, tools or {}), CompileSettings(),
                           quiet=True).artifact
 
 

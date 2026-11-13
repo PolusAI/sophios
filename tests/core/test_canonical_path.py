@@ -12,7 +12,6 @@ from hypothesis import strategies as st
 from sophios.api.python import _workflow_runtime
 import sophios.compiler
 from sophios.api.python.workflow import Step, Workflow
-from sophios.cli import default_compilation_settings
 from sophios.ir.artifacts import CompilationResult
 from sophios.ir.frontdoor import bundle_from_disk
 from sophios.wic_types import StepId, Yaml
@@ -82,7 +81,7 @@ def _compile_bundle(root: Path) -> CompilationResult:
     (`quiet=False` included) so the only variable between the arms is where the document came from."""
     yml_paths = {'global': {path.stem: path for path in root.parent.glob('*.wic')}}
     return sophios.compiler.compile_source(
-        bundle_from_disk(root, yml_paths, SYNTHETIC_TOOLS), default_compilation_settings(),
+        bundle_from_disk(root, yml_paths, SYNTHETIC_TOOLS), sophios.compiler.CompileSettings(),
         quiet=False)
 
 

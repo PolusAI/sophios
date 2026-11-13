@@ -9,8 +9,7 @@ from typing import Any
 
 import yaml
 
-from sophios.cli import default_compilation_settings
-from sophios.compiler import compile_source, resolved_view
+from sophios.compiler import CompileSettings, compile_source, resolved_view
 from sophios.input_output_nf import write_nextflow_artifacts
 from sophios.ir.artifacts import CompilationResult
 from sophios.ir.frontdoor import bundle_from_disk
@@ -134,7 +133,7 @@ def compiled_case(data: Yaml) -> CompilationResult:
     document, tools = _case_document(data)
     registry = {StepId(run["id"], SYNTHETIC_NS): Tool(f"{run['id']}.cwl", desugar_into_canonical_normal_form(
         copy.deepcopy(run))) for run in tools}
-    return compile_source(bundle(document, "wf", registry), default_compilation_settings(), quiet=True)
+    return compile_source(bundle(document, "wf", registry), CompileSettings(), quiet=True)
 
 
 def lowered(result: CompilationResult, values: Yaml | None = None) -> ExecutableNextflowWorkflow:
@@ -154,7 +153,7 @@ def refusal_of(root: Path) -> NotLowered:
     tools and the other workflows of its directory, given the values of the `.yml` of its name beside it, if any."""
     tools = get_tools_cwl({"search_paths_cwl": {"global": [str(root.parent)]}})
     others = {"global": {path.stem: path for path in root.parent.glob("*.wic") if path != root}}
-    result = compile_source(bundle_from_disk(root, others, tools), default_compilation_settings(), quiet=True)
+    result = compile_source(bundle_from_disk(root, others, tools), CompileSettings(), quiet=True)
     job = root.with_suffix(".yml")
     try:
         lowered(result, yaml.safe_load(job.read_text(encoding="utf-8")) if job.exists() else None)

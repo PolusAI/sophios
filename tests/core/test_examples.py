@@ -31,7 +31,7 @@ from sophios.lang.diagnostics import SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
 from sophios.ir.artifacts import CompilationArtifact, CompilationResult
 from sophios.ir.types import WorkflowGraph
-from sophios.wic_types import CompilerOptions, Json
+from sophios.wic_types import Json
 
 # pylint: disable-next=unused-import  # `corpus_registry` is a pytest fixture
 from .test_setup import CorpusRegistry, corpus_registry, workflow_paths
@@ -192,8 +192,8 @@ def test_cwl_docker_extract(yml_path_str: str, yml_path: Path,
 def _compiled(yml_path: Path, args: argparse.Namespace, registry: CorpusRegistry) -> CompilationResult:
     """`yml_path` compiled for `args`, before the inline flags shape its artifact tree."""
     bundle = frontdoor.bundle_from_disk(Path(yml_path), yml_paths, registry.tools)
-    compiler_options, _graph_settings = sophios.cli.get_dicts_for_compilation(args)
-    return sophios.compiler.compile_source(bundle, compiler_options, quiet=True)
+    settings, _graph_settings = sophios.cli.settings_from_args(args)
+    return sophios.compiler.compile_source(bundle, settings, quiet=True)
 
 
 def _inlined(artifact: CompilationArtifact, args: argparse.Namespace) -> CompilationArtifact:
@@ -322,7 +322,7 @@ def is_isomorphic_with_timeout(g_m: isomorphism.GraphMatcher, yml_path_str: str)
 
 
 def _check_embedding_independence(yml_path_str: str, nested: CompilationArtifact, registry: CorpusRegistry,
-                                  options: CompilerOptions) -> None:
+                                  options: sophios.compiler.CompileSettings) -> None:
     """Each subworkflow compiled alone, from its own file, as a root is the CWL it is embedded as (but for `run:`
     paths, whose namespaces differ in length) and an isomorphic graph."""
     for embedded in [artifact for artifact in _artifacts(nested) if artifact.graph is not None][1:]:
@@ -423,7 +423,7 @@ def test_corpus_compiles_clean_in_every_form(yml_path_str: str, yml_path: Path, 
 
     Serial: the isomorphism check's alarm needs the main thread."""
     result = _compile_corpus_workflow(yml_path_str, yml_path, corpus_registry)
-    options = sophios.cli.get_dicts_for_compilation(get_args(str(yml_path)))[0]
+    options = sophios.cli.settings_from_args(get_args(str(yml_path)))[0]
     _check_residue(result.artifact)
     if yml_path_str not in large_workflows:
         _check_embedding_independence(yml_path_str, result.artifact, corpus_registry, options)

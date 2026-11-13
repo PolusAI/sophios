@@ -11,8 +11,7 @@ import yaml
 
 import sophios.main
 from sophios import post_compile
-from sophios.cli import default_compilation_settings
-from sophios.compiler import compile_source
+from sophios.compiler import CompileSettings, compile_source
 from sophios.ir.artifacts import CompilationArtifact
 from sophios.ir.frontdoor import bundle_from_disk
 from sophios.lang.diagnostics import SophiosError
@@ -30,7 +29,7 @@ TREE = DATA / 'inline'
 def _compiled(root: str) -> CompilationArtifact:
     """`root` of the inline tree compiled, its children the other `.wic` files beside it."""
     others = {'global': {path.stem: path for path in TREE.glob('*.wic') if path.name != root}}
-    artifact = compile_source(bundle_from_disk(TREE / root, others, _tools(TREE)), default_compilation_settings(),
+    artifact = compile_source(bundle_from_disk(TREE / root, others, _tools(TREE)), CompileSettings(),
                               quiet=True).artifact
     assert artifact is not None
     return artifact

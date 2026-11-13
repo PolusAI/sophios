@@ -23,7 +23,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, cast
 
 from sophios import compiler
-from sophios.cli import default_compilation_settings
 from sophios.ir.frontdoor import SourceBundle, bundle_from_disk
 from sophios.ir.lower import output_step
 from sophios.ir.resolve import ResolvedDocument, ResolvedStep, resolve
@@ -98,10 +97,9 @@ def workflow_from_wic(path: Path, tool_registry: Tools,
     """
     bundle = bundle_from_disk(path, {namespace: dict(paths) for namespace, paths in workflow_paths.items()},
                               tool_registry)
-    compiler_options = default_compilation_settings()
-    compiler.compile_source(bundle, compiler_options, quiet=False)
+    compiler.compile_source(bundle, compiler.CompileSettings(), quiet=False)
     assert bundle.parsed.document is not None  # the compile above raised otherwise
-    version = resolve_lang_version(compiler_options.get('lang_version'), bundle.lang_version_pins)
+    version = resolve_lang_version(None, bundle.lang_version_pins)
     resolved = resolve(bundle.parsed.document, bundle.registry, name=bundle.name, lang_version=version)
     assert resolved.document is not None  # the compile above resolved it
 

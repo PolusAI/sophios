@@ -1,6 +1,7 @@
 from pathlib import Path
 import copy
 import sys
+from dataclasses import replace
 
 
 import uvicorn
@@ -12,7 +13,6 @@ from sophios import compiler
 from sophios import input_output
 from sophios import utils_cwl
 from sophios.post_compile import inline_artifact_runs
-from sophios.cli import get_args, get_dicts_for_compilation
 from sophios.runtime_inputs import output_target_inputs, runner_job_inputs
 from sophios.wic_types import Json, Tools
 from sophios.contrib import converter
@@ -63,7 +63,6 @@ async def compile_wf(request: Request) -> Json:
     # schema non-preserving
     workflow_temp = converter.wfb_to_wic(wfb_payload, req["plugins"])
     wkflw_name = "workflow_"
-    args = get_args(wkflw_name)  # Mock CLI args
 
     # Build canonical workflow object
     workflow_can = utils_cwl.desugar_into_canonical_normal_form(workflow_temp)
@@ -72,18 +71,15 @@ async def compile_wf(request: Request) -> Json:
     # Build a list of CLTs
     # The default list
     tools_cwl: Tools = {}
-    global_config = input_output.get_config(args.config_file, Path(args.homedir))
-    tools_cwl = plugins.get_tools_cwl(global_config, args.validate_plugins)
-
-    # From the arguments this endpoint actually built, not a fresh default
-    # parse: re-deriving configuration that is already in hand is how the two drift.
-    compiler_options, _graph_settings = get_dicts_for_compilation(args)
-    compiler_options['renaming_conventions'] = input_output.renamings_of(global_config)
+    global_config = input_output.get_config(None, Path.home())
+    tools_cwl = plugins.get_tools_cwl(global_config)
+    settings = compiler.CompileSettings(replace(
+        compiler.CompileSettings().inference, renaming_conventions=tuple(input_output.renamings_of(global_config))))
 
     # ========= COMPILE WORKFLOW ================
     bundle = frontdoor.bundle_from_source(
         yaml.safe_dump(workflow_can, sort_keys=False), wkflw_name, {}, tools_cwl)
-    result = compiler.compile_source(bundle, compiler_options, quiet=False)
+    result = compiler.compile_source(bundle, settings, quiet=False)
     if result.realtime:
         analyses = ', '.join(declaration.analysis for declaration in result.realtime)
         print(f'Real-time analysis runs only with --run_local; the returned workflow has no step for {analyses}',
