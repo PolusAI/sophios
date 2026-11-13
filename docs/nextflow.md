@@ -221,6 +221,13 @@ or `-stub-run` this way is not supported: Sophios supports neither
 user-written configuration nor dry runs. `run.sh` holds the same command, and
 runs it from wherever you start it.
 
+A [site](sites.md) is the one exception: it sets its own scheduler's
+settings in a block it appends to the run's copy of `nextflow.config`,
+`executor.queueSize` with its `max_parallel`, and on Slurm each task's
+executor, partition, time and `clusterOptions`, with the run's partition,
+the steps' time, and the run's comment and account; a task with an
+`accelerator` goes to the partition with GPUs, asking for them with `--gres`.
+
 ## Names
 
 Process and parameter names come from the step ids of the compiled CWL. A
@@ -522,7 +529,9 @@ diagnostics. In Python, `compile(target="nextflow")` prints it on stderr, in the
 same words, and keeps it in `diagnostics`; a run, `run()`, `start()` or
 `run_async()`, prints it too and keeps it on the result. Where a task runs is
 the executor's choice: the local executor accepts the directive and runs the
-task on the machine as it is.
+task on the machine as it is. Nextflow's Slurm executor reads no
+`accelerator`, so a [site](sites.md) on Slurm sends a task with one to the
+partition with GPUs and asks for its GPUs itself.
 
 ## Staging with InitialWorkDirRequirement
 

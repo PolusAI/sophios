@@ -36,7 +36,7 @@ Fix: Write a literal as `!ii <value>`, or declare the name under `inputs:` (.wic
 
 The word in parentheses is the kind: what you change. `document` is the
 `.wic` file or the Python workflow, `call` the Python API call, `machine`
-this machine, `run` nothing in Sophios. [Error codes](error_codes.md) is the
+this machine or a [site](sites.md), `run` nothing in Sophios. [Error codes](error_codes.md) is the
 whole catalog.
 
 ## The layers
@@ -90,8 +90,9 @@ In detail, layer by layer:
 | Parse | as each `.wic` file is read | it is YAML, a mapping, with keys of the right shape, known tags in the right places, a well-formed `wic:` block | `wic001`–`wic010`, `wic019`, `wic024`, `wic030`, `wic033`–`wic035`, `wic038` |
 | Compile | after every file is read | every step names a tool or subworkflow that exists, every input and output a port it declares, every reference something defined, every literal a value of its type, every version pin a known one | `wic011`–`wic014`, `wic017`, `wic018`, `wic020`, `wic022`–`wic028`, `wic031`, `wic032`, `wic036`, `wic039`, `wic044`, `wic055`; notes `wic043` and `wic056`, and under `--target nextflow` `wic046` |
 | Pre-flight | before a local run pulls or runs anything; the base path is checked before every compile | the container engine, input paths, writable directories, installed programs; then the image pulls | `wic015`, `wic016`, `wic021`, `wic029`, `wic037` |
+| A site's check | before a [site](sites.md) is sent a run, by `check()` and `submit()` | the site itself, then as the pre-flight checks this machine: input paths, the runner in `bin`, the container engine, writable folders; on Slurm, its commands, partitions and your `SBATCH_` settings | `wic057`–`wic060`, `wic062`, `wic015`, `wic016`, `wic021`; note `wic061` |
 | Run | while the runner runs | nothing of Sophios's; a tool failed | `api005` in Python; `Failure!` lines on the command line |
-| The Python call | at the assignment or call | a value an input cannot take, a step the workflow cannot place, a link between mismatched ports, a tool that will not load, a `.wic` construct with no Python spelling, contradictory inference settings, real-time analyses given to `run_async` | `api001`–`api004`, `api006`–`api008` |
+| The Python call | at the assignment or call | a value an input cannot take, a step the workflow cannot place, a link between mismatched ports, a tool that will not load, a `.wic` construct with no Python spelling, contradictory inference settings, real-time analyses given to `run_async` or a site | `api001`–`api004`, `api006`–`api008` |
 
 Python workflows skip the parse layer, since they build the document in
 memory; everything from the compile layer on is the same, reported at the
@@ -171,8 +172,8 @@ workflow's own output; `api004` a tool file that will not load; `api006` a
 `.wic` construct `from_wic()` cannot hold; `api007` an `Inference` whose
 settings cannot work together, such as renamings without naming
 conventions or format rules without step insertion; `api008` a workflow
-that declares real-time analyses given to `Workflow.run_async()`, which
-never runs them, one per declaration step. The first four are raised as
+that declares real-time analyses given to `Workflow.run_async()` or to a
+site, which never run them, one per declaration step. The first four are raised as
 `InvalidInputValueError`, `InvalidStepError`, `InvalidLinkError` and
 `InvalidCLTError`, subclasses of `SophiosError` importable from
 `sophios.api.python.workflow`, each carrying the script line; `api006` is a

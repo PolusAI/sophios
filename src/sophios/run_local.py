@@ -5,6 +5,7 @@ backend launches as a child process, streams what it prints, and reports how it 
 `start` returns the `RunHandle` that `run` waits on, which `Workflow.start()` hands to its caller.
 """
 import atexit
+import json
 import os
 import shlex
 import signal
@@ -82,8 +83,8 @@ def log_path(request: RunRequest) -> Path:
 STOP_GRACE_SECONDS: Final = 30.0
 
 
-def _spawn(launch: Launch) -> sub.Popen[bytes]:
-    """Start `launch` with its streams piped, in its own session, where a terminal's Ctrl-C does not reach it:
+def _spawn(launched: Launch) -> sub.Popen[bytes]:
+    """Start `launched` with its streams piped, in its own session, where a terminal's Ctrl-C does not reach it:
     Sophios stops it.
 
     The program is this Python environment's own when it has one (`preflight.runner_program`). POSIX
@@ -91,8 +92,8 @@ def _spawn(launch: Launch) -> sub.Popen[bytes]:
     """
     if sys.platform == 'win32':
         raise AssertionError('the pre-flight stops a run on Windows')
-    executable = preflight.runner_program(launch.argv[0])
-    return sub.Popen(launch.argv, executable=executable, env=dict(launch.env), cwd=launch.cwd,
+    executable = preflight.runner_program(launched.argv[0])
+    return sub.Popen(launched.argv, executable=executable, env=dict(launched.env), cwd=launched.cwd,
                      stdin=sub.DEVNULL, stdout=sub.PIPE, stderr=sub.PIPE, start_new_session=True)
 
 
@@ -169,12 +170,12 @@ class RunHandle:  # pylint: disable=too-many-instance-attributes
     """
 
     # pylint: disable-next=too-many-arguments,too-many-positional-arguments
-    def __init__(self, request: RunRequest, backend: Backend, launch: Launch,
+    def __init__(self, request: RunRequest, backend: Backend, launched: Launch,
                  plans: tuple[realtime.Plan, ...], analysis: realtime.Command | None) -> None:
         """Start the run; ``Workflow.start()`` does this, so a script never calls the class itself."""
         self._request = request
         self._backend = backend
-        self._launch = launch
+        self._launch = launched
         self._plans = plans
         self._analysis = analysis
         self._log = log_path(request).absolute()
@@ -319,7 +320,7 @@ class RunHandle:  # pylint: disable=too-many-instance-attributes
         if status.state is not RunState.COMPLETED:
             assert status.reason is not None
             raise WorkflowRunError(self._request.workflow_name, status.exit_code, status.reason)
-        return RunResult(status.state, status.outputs, self._launch.cwd / self._launch.outdir, self._log,
+        return RunResult(status.state, status.outputs, Path(self._launch.outdir), self._log,
                          status.exit_code, self._request.diagnostics)
 
     def status(self) -> RunStatus:
@@ -417,9 +418,14 @@ class RunHandle:  # pylint: disable=too-many-instance-attributes
         exit_code = self._process.returncode
         self._release_watcher()
         self._streams.log.close()
-        outcome = self._backend.outcome(self._request, exit_code, ''.join(self._streams.stdout), self._log)
-        if outcome.summary is not None:
-            print(f'Final output json metadata blob is in output_{self._request.workflow_name}.json')
+        outcome = self._backend.outcome(self._request, exit_code, ''.join(self._streams.stdout), self.logs(),
+                                        self._read)
+        summary = f'output_{self._request.workflow_name}.json'
+        if outcome.outputs is not None and not self._backend.writes_summary:
+            (self._request.basepath / summary).write_text(json.dumps(outcome.outputs, indent=4) + '\n',
+                                                          encoding='utf-8')
+        if outcome.outputs is not None or self._backend.writes_summary:
+            print(f'Final output json metadata blob is in {summary}')
         self._stop_watching(cancelled=False)
         atexit.unregister(self._end_with_interpreter)
         if self._streams.error is not None:
@@ -437,6 +443,13 @@ class RunHandle:  # pylint: disable=too-many-instance-attributes
             self._status = RunStatus(RunState.FAILED, f'the runner exited with status {exit_code}',
                                      self._status.started_at, datetime.now(), steps, exit_code=exit_code)
         return self._status
+
+    def _read(self, name: str) -> str | None:
+        """The text of the file `name` in the run's base path, or None when there is none: how an outcome reads it."""
+        try:
+            return (self._request.basepath / name).read_text(encoding='utf-8')
+        except FileNotFoundError:
+            return None
 
 
 def _slice(deadline: float | None) -> float:
@@ -472,6 +485,23 @@ def _realtime(request: RunRequest, backend: Backend) -> tuple[RunRequest, realti
     return request, command
 
 
+def launch(request: RunRequest, backend: Backend) -> Launch:
+    """How this machine starts the run `request` describes: `backend`'s launch of it, its paths read as this machine
+    reads them, its output directory named when it names none, and this process's environment under the run's.
+
+    The default output directory is named after the workflow, like every other path a run writes (provenance, the
+    summary, the job store), so two workflows started in the same second from one basepath never share it, and after
+    the runner's program up to its first `-`: `outdir_cwltool_...`, `outdir_toil_...`.
+    """
+    basepath = request.basepath.absolute().resolve()
+    date_time = datetime.now().strftime('%Y_%m_%d_%H.%M.%S')
+    outdir = (str(Path(request.outdir).absolute().resolve()) if request.outdir else
+              f"{basepath}/outdir_{backend.program.partition('-')[0]}_{request.workflow_name}_{date_time}")
+    cachedir = str(Path(request.cachedir).absolute()) if request.cachedir else ''
+    launched = backend.launch(replace(request, basepath=basepath, outdir=outdir, cachedir=cachedir))
+    return replace(launched, env={**os.environ, **launched.env})
+
+
 def start(request: RunRequest) -> RunHandle:
     """Start the run `request` describes, and return its handle once the runner has started.
 
@@ -482,7 +512,7 @@ def start(request: RunRequest) -> RunHandle:
         raise ValueError('a run script is written by run(), not started')
     backend = targets.backend(request.target, request.runner)
     request, analysis = _realtime(request, backend)
-    return RunHandle(request, backend, backend.launch(request), request.realtime_plans, analysis)
+    return RunHandle(request, backend, launch(request, backend), request.realtime_plans, analysis)
 
 
 def run(request: RunRequest) -> int:
@@ -498,7 +528,7 @@ def run(request: RunRequest) -> int:
     backend = targets.backend(request.target, request.runner)
     if request.generate_run_script:
         _realtime(request, backend)
-        generate_run_script(shlex.join(backend.launch(request).argv))
+        generate_run_script(shlex.join(launch(request, backend).argv))
         return 0  # Do not actually run
     status = start(request).wait()
     assert status.exit_code is not None
