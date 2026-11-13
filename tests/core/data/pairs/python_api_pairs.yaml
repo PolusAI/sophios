@@ -1,0 +1,6 @@
+# What the pairs of tests/core/data/python_api_pairs compile to; one not named here compiles with no diagnostic. Each
+# function of pairs.py says what its pair pins.
+linear_inference:
+  notes: ['note [wic043] cat.file <- append.file (1 other fits)']
+equal_producers:
+  notes: ['note [wic043] cat.file <- second.file (1 other fits)']

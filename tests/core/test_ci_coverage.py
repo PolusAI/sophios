@@ -155,17 +155,16 @@ def test_the_weekly_property_lane_runs_the_whole_oracle_suite() -> None:
 
 @pytest.mark.fast
 def test_the_corpus_lane_round_trips_every_wic_root_through_the_python_api() -> None:
-    """The lane whose config reaches the external corpora runs the from_wic properties.
+    """The lane whose config reaches the external corpora runs the from_wic property.
 
-    `test_python_api_from_wic.py` parametrizes its two properties over every
+    `test_python_api_from_wic.py` parametrizes its corpus property over every
     `.wic` root `search_paths_wic` reaches. Only `run_workflows.yml` writes a
     config that reaches the mm-workflows and image-workflows roots; the
     package job does not select the file, and checks out neither corpus, so
-    the properties would see the repository's own roots and nothing else.
+    the property would see the repository's own roots and nothing else.
     """
     properties = {
         'tests/core/test_python_api_from_wic.py::test_a_wic_file_and_its_python_objects_compile_alike',
-        'tests/core/test_python_api_from_wic.py::test_write_wic_of_a_loaded_workflow_compiles_identically',
     }
     selected = set().union(*_collect_all(_invocations(WORKFLOWS / 'run_workflows.yml')))
     missing = sorted(properties - selected)
@@ -350,32 +349,25 @@ WINDOWS_EXCLUDED: Final = frozenset({
     # is the script's, not the test's. Its compact twin builds the same hinted
     # tool without validating it and still runs on Windows.
     'tests/core/test_example_scripts.py::test_the_integrated_ichnaea_script_compiles_its_hinted_tool',
-    # Loads the corpus into cwltool, to ask it what an embedded document means. Its
-    # platform-neutral sibling `test_embedding_keeps_meaning` runs on every leg.
-    'tests/core/test_examples.py::test_embedding_keeps_runtime_defaults',
-    # Loads the flat and flat-embedded corpus documents into cwltool to validate
-    # them. Its platform-neutral sibling `test_flatten_keeps_meaning` runs on
-    # every leg.
-    'tests/core/test_examples.py::test_flatten_validates_as_cwl',
-    # The same check over the weekly workflows, which only the weekly lane runs.
-    'tests/core/test_examples.py::test_weekly_corpus_flatten_validates_as_cwl',
+    # Loads the corpus into cwltool, to validate its flat and flat-embedded forms and ask
+    # what an embedded document means. Its platform-neutral sibling
+    # `test_corpus_compiles_clean_in_every_form` runs on every leg.
+    'tests/core/test_examples.py::test_corpus_validates_in_cwltool_in_every_form',
     # Plain CWL workflows run by cwltool through --run_local: a two-step one,
     # and twelve conformance workflows, each also run by cwltool directly, in
     # about four seconds. The file's other tests check what the runner is
     # given and run on Windows.
     'tests/core/test_plain_cwl.py::test_a_plain_cwl_workflow_runs_through_sophios_as_cwltool_runs_it',
     # One `Workflow.run()` of a one-step echo, by cwltool, from a script run by a new
-    # interpreter, under a second.
-    'tests/core/test_python_api_workflow.py::test_workflow_run_runs_a_workflow_from_a_users_script',
+    # interpreter, and one real cwltool run of a failing one-line tool, in a few seconds.
+    # The failure pins the wording of cwltool's job-failure record, which the summary
+    # reads; the other tests of the summary use a stand-in for cwltool and run on every leg.
+    'tests/core/test_python_api_workflow.py::test_a_real_run_prints_its_output_or_names_the_step_that_failed',
     # A workflow run by cwltool through --run_local, with two real-time analyses
     # run by cwltool beside it, one of them failing, in one run of about eight
     # seconds. The watcher's own tests use a stand-in for cwltool and run on
     # every leg.
     'tests/core/test_realtime.py::test_the_analysis_runs_beside_the_workflow_and_never_changes_its_outcome',
-    # One real cwltool run of a failing one-line tool, under a second. It pins the
-    # wording of cwltool's job-failure record, which the summary reads; the other
-    # tests of the summary use a stand-in for cwltool and run on every leg.
-    'tests/core/test_python_api_workflow.py::test_a_real_failed_step_is_named_with_its_status',
     # Two roots of a few echo steps, nested two deep, each run through the command line by cwltool
     # and by Toil with provenance, in about twenty seconds. Which files are written is checked on
     # every leg by tests/core/data/compiler/names; only a runner shows what its snapshot holds.

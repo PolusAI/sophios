@@ -224,7 +224,7 @@ jobs:
 
     - name: PyTest Inline Forms Keep Meaning (Weekly)
       if: ${{ !cancelled() && steps.setup.outcome == 'success' && steps.corpus.outcome == 'success' }}
-      run: cd sophios/ && pytest tests/core/test_examples.py -k test_weekly_corpus
+      run: cd sophios/ && pytest tests/core/test_examples.py -k weekly_corpus
 
     - name: PyTest Run Inlined Workflows (Weekly)
       if: ${{ !cancelled() && steps.setup.outcome == 'success' && steps.corpus.outcome == 'success' }}

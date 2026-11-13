@@ -2,9 +2,9 @@ import asyncio
 import copy
 import json
 from pathlib import Path
+import shutil
 import subprocess as sub
 import traceback
-from typing import Any
 
 from fastapi import Request
 from hypothesis import example, given, strategies as st
@@ -12,11 +12,12 @@ import pytest
 import yaml
 
 from core.budgets import budget
+from core.cases import match
 from sophios import preflight
-from sophios.contrib.converter import wfb_to_wic
+from sophios.contrib.converter import update_payload_missing_inputs_outputs, wfb_to_wic
 from sophios.contrib.rest import api
 from sophios.utils_yaml import Key
-from sophios.wic_types import CompilerOptions, Json
+from sophios.wic_types import Json
 
 try:
     import cwltool.main
@@ -177,84 +178,35 @@ def test_wfb_to_wic_keeps_settings_as_sent(settings: Json) -> None:
     assert wic['steps'][0]['in'] == {k: {Key.INLINE_INPUT: v} for k, v in settings.items()}
 
 
-def test_rest_core_blank_plugin_id_uses_node_name() -> None:
-    """Compile inline-run REST payloads even when pluginId is blank.
-
-    Returns:
-        None: The assertion verifies a step named for the node.
-    """
-    inp_path = REST_OBJECTS / "single_node_bbbc_download.json"
-    res = prepare_call_rest_api(inp_path)
-    assert int(res["retval"]) == 0
-    assert "bbbcdownload" in res["steps"]
-
-
-def test_rest_wfb_compile_infers_with_the_configurations_renamings(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The renamings the compiler gets are the configuration's, not the shipped ones the options start with."""
-    seen: list[Json] = []
-    real_compile = api.compiler.compile_source
-    real_config = api.input_output.get_config
-    custom = [["tpr_", "gro_"]]
-
-    def config(*args: Any, **kwargs: Any) -> Json:
-        return {**real_config(*args, **kwargs), "renaming_conventions": custom}
-
-    def spy(bundle: Any, options: CompilerOptions, *args: Any, **kwargs: Any) -> Any:
-        seen.append(dict(options))
-        return real_compile(bundle, options, *args, **kwargs)
-
-    monkeypatch.setattr(api.input_output, "get_config", config)
-    monkeypatch.setattr(api.compiler, "compile_source", spy)
-    res = prepare_call_rest_api(REST_OBJECTS / "multi_node_wfb.json")
-    assert int(res["retval"]) == 0
-    assert [list(pair) for pair in seen[0]["renaming_conventions"]] == custom
+def _payload(name: str) -> Json:
+    """The payload `name` names: a file of rest_wfb_objects, or `<payload>+<addition>`, the payload with the node and
+    link of the addition added."""
+    payload, *additions = name.split('+')
+    loaded: Json = json.loads((REST_OBJECTS / payload).read_text(encoding='utf-8'))
+    for addition in additions:
+        added = json.loads((REST_OBJECTS / addition).read_text(encoding='utf-8'))
+        loaded['state']['nodes'].append(added['node'])
+        loaded['state']['links'].append(added['link'])
+    return loaded
 
 
-def test_rest_compile_says_a_real_time_analysis_is_not_in_the_returned_workflow(
-        tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    """A declaration is taken out of the workflow; under REST nothing runs it, and one line says so.
-
-    The declaring node is the registered `cwl_subinterpreter` adapter, drawn after `touch`.
-    """
-    inp = json.loads((REST_OBJECTS / "multi_node_inline_cwl.json").read_text(encoding="utf-8"))
-    inp["state"]["nodes"].append({
-        "id": 99, "x": 0, "y": 0, "z": 9, "name": "cwl_subinterpreter", "pluginId": "cwl_subinterpreter",
-        "height": 50, "width": 250, "internal": False,
-        "settings": {"inputs": {"file_pattern": "empty.txt", "cwl_tool": "touch", "max_times": 2,
-                                "config": {"in": {"filename": "again.txt"}}}},
-    })
-    inp["state"]["links"].append({"sourceId": 7, "outletIndex": 0, "targetId": 99, "inletIndex": 0, "id": 6})
-    payload = tmp_path / "declaring.json"
-    payload.write_text(json.dumps(inp), encoding="utf-8")
-
-    res = prepare_call_rest_api(payload)
-
-    assert int(res["retval"]) == 0
-    # Numbered as written: the declaration was step 3, so the second append is `(4, append)`.
-    assert list(res["steps"]) == ["touch", "append@2", "append@4"]
-    assert ("Real-time analysis runs only with --run_local; the returned workflow has no step for touch"
-            in capsys.readouterr().err)
-
-
-def test_rest_compile_returns_an_inline_tool_packed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A node's inline tool that includes a file is returned with the file's text: the request is compiled in
-    the working directory, so that is where `s.sh` is read."""
-    (tmp_path / "s.sh").write_text("echo from-include\n", encoding="utf-8")
-    run = {"cwlVersion": "v1.2", "class": "CommandLineTool", "baseCommand": ["sh", "s.sh"],
-           "requirements": {"InitialWorkDirRequirement": {
-               "listing": [{"entryname": "s.sh", "entry": {"$include": "s.sh"}}]}},
-           "inputs": {}, "outputs": {}}
-    node = {"id": 1, "x": 0, "y": 0, "z": 1, "name": "say", "pluginId": "say", "height": 50, "width": 250,
-            "settings": {}, "run": run, "internal": False}
-    payload = tmp_path / "packed.json"
-    payload.write_text(json.dumps({"state": {"nodes": [node], "links": [], "selection": []}, "plugins": []}),
-                       encoding="utf-8")
+def test_rest_compiles_each_payload_to_what_it_states(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+                                                      capsys: pytest.CaptureFixture[str]) -> None:
+    """Each payload of rest_wfb_objects/expected.yaml compiles, in a directory holding s.sh, to the steps it states,
+    and says what it states; each input a WFB payload's edge feeds is filled with the output that feeds it."""
+    shutil.copyfile(REST_OBJECTS / 's.sh', tmp_path / 's.sh')
     monkeypatch.chdir(tmp_path)
-
-    res = prepare_call_rest_api(payload)
-
-    assert int(res["retval"]) == 0
-    requirements = res["steps"]["say"]["run"]["requirements"]
-    listing = (requirements["InitialWorkDirRequirement"] if isinstance(requirements, dict)
-               else next(item for item in requirements if item["class"] == "InitialWorkDirRequirement"))["listing"]
-    assert listing == [{"entryname": "s.sh", "entry": "echo from-include\n"}]
+    for name, stated in yaml.safe_load((REST_OBJECTS / 'expected.yaml').read_text(encoding='utf-8')).items():
+        payload = tmp_path / 'payload.json'
+        payload.write_text(json.dumps(_payload(name)), encoding='utf-8')
+        capsys.readouterr()
+        res = prepare_call_rest_api(payload)
+        assert int(res['retval']) == 0, name
+        assert match(stated['steps'], res['steps']), (name, res['steps'])
+        assert stated.get('said', '') in capsys.readouterr().err, name
+        if 'filled' in stated:
+            wfb = _payload(name)
+            expected = copy.deepcopy(wfb)
+            for node, inputs in stated['filled'].items():
+                expected['state']['nodes'][node]['settings']['inputs'].update(inputs)
+            assert update_payload_missing_inputs_outputs(wfb) == expected

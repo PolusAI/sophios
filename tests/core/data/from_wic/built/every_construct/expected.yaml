@@ -1,0 +1,7 @@
+# Reading root.wic warns that its drawing settings are dropped; the bundle the objects write names each step as
+# written; the compiled workflow has a step for each but the declaration, which it returns instead.
+warns: ['root.wic: wic: graphviz, inlineable dropped']
+inputs: [name, names]
+steps: [mk_file, xform, count, sink, shout, child, left, right, pair_src, pair_sink]
+realtime: [{analysis: count, max_times: 20}]
+written: {outputs: {result: {outputSource: xform/file}}}

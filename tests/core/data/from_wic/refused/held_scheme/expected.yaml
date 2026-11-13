@@ -1,0 +1,2 @@
+# Held today, though the file compiles: a step of a tool with a SchemaDefRequirement is refused as api004.
+refused: [{code: INVALID_TOOL}]

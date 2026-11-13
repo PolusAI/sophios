@@ -1,0 +1,4 @@
+child~count~scale: 0.5
+write_dir~outDir: result.outDir
+cat~f: {class: File, location: /cluster/images.ome.zarr}
+message: hello

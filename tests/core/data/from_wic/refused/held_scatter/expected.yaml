@@ -1,0 +1,2 @@
+# Held today, though the file compiles: a scatter over a port nothing binds raises a bare ValueError, not api006.
+raises: ValueError

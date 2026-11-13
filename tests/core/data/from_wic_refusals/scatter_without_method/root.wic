@@ -1,1 +1,0 @@
-steps: [{id: mk_file, scatter: name, in: {name: !ii [a, b]}}]

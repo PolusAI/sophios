@@ -1,1 +1,0 @@
-{diagnostics: [{code: NO_PYTHON_SPELLING, file: root.wic, message: {contains: ["compile(lang_version='0.0.1')"]}}]}

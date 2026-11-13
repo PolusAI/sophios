@@ -1,0 +1,15 @@
+refused:
+- {code: NO_PYTHON_SPELLING, file: root.wic, message: {contains: ["compile(lang_version='0.0.1')"]}}
+- {code: NO_PYTHON_SPELLING, file: root.wic, message: {contains: ["no top-level 'hints'"]}}
+- {code: NO_PYTHON_SPELLING, file: root.wic, message: {contains: ["no Python port can be called 'ref-t'"]}}
+- {code: NO_PYTHON_SPELLING, file: root.wic, message: {contains: ['inputs: d: carries default']}}
+- {code: NO_PYTHON_SPELLING, file: root.wic, line: 11, message: {contains: ["step 'mk_file': label:"]}}
+- {code: NO_PYTHON_SPELLING, file: root.wic, message: {contains: ["namespace: 'gpu' has no Python spelling"]}}
+- {code: NO_PYTHON_SPELLING, file: root.wic, line: 15, message: {contains: ["steps 1 and 2 are both called 'mk_file'"]}}
+- {code: NO_PYTHON_SPELLING, file: root.wic, line: 15, message: {contains: ['add scatterMethod: dotproduct']}}
+- {code: NO_PYTHON_SPELLING, file: root.wic, line: 19, message: {contains: ['!cwl a/b', never as CWL text]}}
+- {code: NO_PYTHON_SPELLING, file: root.wic, line: 20, message: {contains: ['write the step as id: child.wic']}}
+- {code: NO_PYTHON_SPELLING, file: root.wic, line: 23, message: {contains: ['calls a workflow with scatter:, scatterMethod:']}}
+- {code: NO_PYTHON_SPELLING, file: reader.wic, message: {contains: ['reads !* f, which no earlier step of this document']}}
+- {code: NO_PYTHON_SPELLING, file: right.wic, message: {contains: ['twice.wic is called here and at left.wic:']}}
+- {code: NO_PYTHON_SPELLING, file: root.wic, message: {contains: ['root__step__3__xform/file names no step output']}}

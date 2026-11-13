@@ -1,0 +1,4 @@
+# A Python Workflow has one body, so a document of implementations has no spelling.
+refused:
+- {code: NO_PYTHON_SPELLING, file: root.wic, message: {contains: ["default_implementation: 'one' has no Python spelling"]}}
+- {code: NO_PYTHON_SPELLING, file: root.wic, message: {contains: [a Python Workflow has one body]}}

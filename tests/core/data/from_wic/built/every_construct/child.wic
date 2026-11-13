@@ -1,0 +1,6 @@
+inputs: {names: 'string[]'}
+steps:
+- id: mk_file
+  scatter: name
+  scatterMethod: dotproduct
+  in: {name: names}
