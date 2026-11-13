@@ -1,5 +1,5 @@
-"""A run on Windows stops at the pre-flight with one diagnostic, as does a compute service (cwltool and Toil import
-`pwd`; no Unix socket): these run on the Windows leg, against the platform."""
+"""A run on Windows stops at the pre-flight with one diagnostic, as do a compute service and a site (cwltool and Toil
+import `pwd`; no Unix socket; a site's paths are POSIX): these run on the Windows leg, against the platform."""
 import sys
 import asyncio
 from collections.abc import Callable
@@ -9,8 +9,9 @@ import pytest
 
 from sophios import compute
 from sophios import preflight
+from sophios import sites
 from sophios.api.python.workflow import Workflow
-from sophios.lang import SophiosError
+from sophios.lang import SophiosError, SophiosErrorCode
 
 from .helpers import HELLOWORLD, echo_workflow, run_cli
 
@@ -30,11 +31,12 @@ def _refused(runner: str) -> str:
 
 @pytest.mark.fast
 @pytest.mark.parametrize('door', ['command line cwltool', 'command line toil-cwl-runner', 'run', 'start', 'run_async',
-                                  'compute ssh', 'compute unix'])
+                                  'compute ssh', 'compute unix', 'site'])
 def test_each_door_says_to_run_in_wsl(door: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
                                       capsys: pytest.CaptureFixture[str]) -> None:
     """The platform says why no runner runs: the command line and each Python front door stop at the pre-flight with
-    one diagnostic, and a compute service, which needs a Unix socket, is unavailable."""
+    one diagnostic; a compute service, which needs a Unix socket, is unavailable; and a `Machine` is refused when it is
+    made, so no call of a site is made from Windows itself."""
     assert preflight.PLATFORM_LACKS_RUNNERS == WINDOWS
     if door.startswith('command line'):
         runner = door.split()[-1]
@@ -46,6 +48,13 @@ def test_each_door_says_to_run_in_wsl(door: str, tmp_path: Path, monkeypatch: py
         assert unavailable.value.messages == (
             'the compute client needs macOS, Linux or WSL: it reaches the service over a Unix socket, which Python on '
             'Windows itself cannot open; run Sophios inside WSL',)
+    elif door == 'site':
+        with pytest.raises(SophiosError) as caught:
+            sites.Machine('my-ec2', root='/data/cp', bin='/opt/run/bin')
+        assert [(d.code, d.message) for d in caught.value.diagnostics] == [(
+            SophiosErrorCode.SITE_UNREACHABLE,
+            'my-ec2 cannot be used as a site: Sophios runs on Windows itself, whose paths no site reads: run it inside '
+            'WSL.')]
     else:
         front_door: dict[str, Callable[[Workflow, str], object]] = {
             'run': lambda workflow, base: workflow.run(basepath=base),

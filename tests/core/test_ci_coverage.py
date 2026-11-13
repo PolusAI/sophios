@@ -416,6 +416,9 @@ WINDOWS_EXCLUDED: Final = frozenset({
     # Seven runs (four pinned, three drawn) of a one-step tool under Nextflow and under cwltool, in about twelve
     # seconds. Lint And Test's Linux Nextflow step collects it, so the Windows leg gives up nothing it ran.
     'tests/core/nextflow/test_runtime.py::test_a_command_receives_the_arguments_cwltool_gives_it',
+    # cwltool's own requirement lookup, which Toil asks, over 256 placements of a ResourceRequirement, in under a
+    # second. Only Linux lanes collect test_sites.py, so the Windows leg gives up nothing it ran.
+    'tests/core/test_sites.py::test_a_step_declares_memory_exactly_when_cwltools_lookup_which_toil_asks_finds_it',
 })
 
 

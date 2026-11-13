@@ -1,28 +1,29 @@
-"""What a local run asks of the program that runs a workflow, one backend per (target, runner).
+"""What a run asks of the program that runs a workflow, one backend per (target, runner).
 
 A run is described once, as a `RunRequest`, by every front door: the command line,
-`Workflow.run()` and the CI harness. The backend for its target and runner answers
-four questions about it and runs nothing itself:
+`Workflow.run()` and the CI harness. The backend for its target and runner describes
+the run, and acts only on this machine, only in `prepare`:
 
-- check: what this machine needs before the run starts;
-- prepare: what the runner reads, written under the base path;
-- launch: the runner's command line, environment and working directory;
-- outcome: after the runner exits, its outputs and the steps that failed.
+- write: what the runner reads, written under a folder, and what its machine must still do;
+- needs: what the run asks of the machine it runs on, which `check` judges on this one;
+- prepare: `write`, then this machine's part: the check, the images, the folders;
+- launch: the runner's command line, environment and working directory, from the request alone;
+- outcome: after the runner exits, its outputs and the steps that failed, read from what it left.
 
 `run_local` starts the launch as a child process and reports the outcome. A target
 is the language a workflow is handed to its runner in: `cwl`, run by cwltool or Toil,
 or `nextflow`, run by Nextflow.
 """
 import json
-import os
 import re
 import sys
 import tempfile
-from collections.abc import Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Final, Protocol
+
+from cwl_utils.parser import cwl_v1_2
 
 from . import input_output_nf as io_nf
 from . import preflight, realtime, run_setup
@@ -54,6 +55,9 @@ def _check_env_var_names(env_vars: Mapping[str, str]) -> None:
 class RunRequest:  # pylint: disable=too-many-instance-attributes
     """One local run of a workflow, as every front door describes it.
 
+    A backend launches it as it is given; `run_local.launch` first makes its paths absolute, as this machine reads
+    them, and names its output directory.
+
     Attributes:
         workflow_name: The workflow's name: its files are `<name>.cwl`, `output_<name>.json`, ...
         basepath: The directory the workflow was written to, and the run's files go.
@@ -64,7 +68,7 @@ class RunRequest:  # pylint: disable=too-many-instance-attributes
             Nextflow is always given the files `prepare` wrote.
         container_engine: `docker`, `podman`, `singularity`, or another docker-compatible command.
         cachedir: Where cwltool caches a job whose tool and inputs are unchanged; '' for no cache.
-        outdir: The runner's output directory; '' for `<basepath>/outdir_<runner>_<name>_<time>`.
+        outdir: The runner's output directory; '' for `run_local`'s `<basepath>/outdir_<runner>_<name>_<time>`.
         quiet: Pass `--quiet` to cwltool (never to Toil), which hides its own log.
         provenance: Have the runner write its record of the run under `<basepath>/provenance/<name>`.
         passthrough_args: Arguments for the runner, unchecked, before the documents.
@@ -99,14 +103,15 @@ class RunRequest:  # pylint: disable=too-many-instance-attributes
 
 @dataclass(frozen=True, slots=True)
 class Launch:
-    """How the runner is started: its command line, its whole environment and its working directory.
+    """How the runner is started: its command line, the variables it gets on top of its machine's environment, and
+    its working directory, None for wherever it is started.
 
     `outdir` is where the runner puts the workflow's outputs.
     """
 
     argv: tuple[str, ...]
     env: Mapping[str, str]
-    cwd: Path
+    cwd: Path | None
     outdir: str
 
 
@@ -116,33 +121,54 @@ class Outcome:
 
     Attributes:
         outputs: The workflow's output object, when the runner gave one.
-        summary: The file the output object is in, to say where it is; None to say nothing.
         failed: Each step that failed, in the order it failed: its exit status, the name of the
             signal that ended it, or None when the runner said neither.
     """
 
     outputs: Json | None
-    summary: Path | None
     failed: Mapping[str, int | str | None]
+
+
+#: How an outcome reads a file the run left, named relative to the run's folder: its text, None when there is none.
+Read = Callable[[str], str | None]
 
 
 class Backend(Protocol):
     """The questions a run asks of the program that runs it. Nothing here starts a process."""
 
-    def check(self, documents: Sequence[Path], jobs: Sequence[preflight.Job],
-              settings: preflight.RunSettings) -> None:
-        """Raise every problem running `documents` with `jobs` would hit on this machine."""
+    @property
+    def program(self) -> str:
+        """The runner's executable, as a machine that has it runs it: `launch`'s `argv[0]` but for cwltool, which
+        this machine runs as `cwltool_filterlog`."""
+
+    @property
+    def writes_summary(self) -> bool:
+        """Whether the runner writes the run's summary, `output_<name>.json`, itself; else the caller writes there
+        the output object `outcome` returns."""
+
+    def write(self, lowered: run_setup.Lowered[Any], analyses: tuple[realtime.Analysis, ...], basepath: Path, *,
+              inputs_file: str, root_dir: Path) -> run_setup.Prepared:
+        """Write what the runner reads of the model its target `lowered` under `basepath`, and nothing elsewhere:
+        `inputs_file` holds values that win over the workflow's, and a relative path is read against `root_dir`.
+        What the runner's machine must still do before the run starts is in what it returns."""
+
+    def needs(self, documents: Sequence[Path], jobs: Sequence[preflight.Job]) -> preflight.Needs:
+        """What running `documents` with `jobs` asks of its machine: the paths the jobs name and the images."""
+
+    def check(self, needs: preflight.Needs, settings: preflight.RunSettings) -> None:
+        """Raise every problem a run that `needs` this, and the backend's program, would hit on this machine."""
 
     def prepare(self, lowered: run_setup.Lowered[Any], analyses: tuple[realtime.Analysis, ...], basepath: Path,
                 settings: run_setup.Settings) -> run_setup.Prepared:
-        """Write what the runner reads of the model its target `lowered` under `basepath`, and make the machine ready
-        to run it."""
+        """`write` under `basepath`, then make this machine ready to run it."""
 
     def launch(self, request: RunRequest) -> Launch:
-        """The runner's command line, environment and working directory for `request`."""
+        """The runner's command line, environment and working directory for `request`, from it alone."""
 
-    def outcome(self, request: RunRequest, exit_code: int, stdout: str, log: Path) -> Outcome:
-        """What the run left: `stdout` is everything the runner printed there, `log` both its streams."""
+    # pylint: disable-next=too-many-arguments,too-many-positional-arguments
+    def outcome(self, request: RunRequest, exit_code: int, stdout: str, log: str, read: Read) -> Outcome:
+        """What the run left, without writing anything: `stdout` is everything the runner printed there, `log`
+        both its streams, and `read` reads the other files it left."""
 
     def realtime_command(self, request: RunRequest) -> realtime.Command | str:
         """How a real-time analysis runs beside this run, or a line saying why none can."""
@@ -157,19 +183,6 @@ def _container_flags(container_engine: str) -> list[str]:
     return ['--user-space-docker-cmd', container_engine]
 
 
-def _runner_outdir(basepath: str, request: RunRequest, runner_name: str) -> str:
-    """The explicit output directory, else the default one.
-
-    The default is named after the workflow, like every other path a run writes (provenance, the
-    summary, the job store), so two workflows started in the same second from one basepath never
-    share it.
-    """
-    if request.outdir:
-        return str(Path(request.outdir).absolute().resolve())
-    date_time = datetime.now().strftime('%Y_%m_%d_%H.%M.%S')
-    return f'{basepath}/outdir_{runner_name}_{request.workflow_name}_{date_time}'
-
-
 def _documents(basepath: str, request: RunRequest) -> list[str]:
     if request.documents is not None:
         return list(request.documents)
@@ -178,10 +191,6 @@ def _documents(basepath: str, request: RunRequest) -> list[str]:
 
 def _provenance_flags(basepath: str, request: RunRequest) -> list[str]:
     return ['--provenance', f'{basepath}/provenance/{request.workflow_name}'] if request.provenance else []
-
-
-def _environment(request: RunRequest) -> dict[str, str]:
-    return {**os.environ, **request.env}
 
 
 #: cwltool's messages for a job that did not succeed (cwltool/job.py), as its log prints them.
@@ -214,20 +223,22 @@ def failed_steps(lines: Iterable[str]) -> dict[str, int | str | None]:
     return failed
 
 
-def _log_lines(log: Path) -> list[str]:
-    try:
-        return log.read_text(encoding='utf-8', errors='replace').splitlines()
-    except FileNotFoundError:
-        return []
-
-
 class _Cwl:
-    """What every CWL runner shares: the pre-flight checks the machine, `run_setup` writes the files."""
+    """What every CWL runner shares: `run_setup` writes the files, the pre-flight checks the machine."""
 
-    def check(self, documents: Sequence[Path], jobs: Sequence[preflight.Job],
-              settings: preflight.RunSettings) -> None:
+    def write(self, lowered: run_setup.Lowered[CompilationArtifact], analyses: tuple[realtime.Analysis, ...],
+              basepath: Path, *, inputs_file: str, root_dir: Path) -> run_setup.Prepared:
+        """The workflow and its job under `basepath`, and its analyses beside it; the runner makes every folder."""
+        return run_setup.write(lowered.model, analyses, basepath, inputs_file=inputs_file, root_dir=root_dir,
+                               output_targets=output_target_inputs(lowered.view))
+
+    def needs(self, documents: Sequence[Path], jobs: Sequence[preflight.Job]) -> preflight.Needs:
+        """Every DockerRequirement of the documents, as cwl-docker-extract reads them."""
+        return preflight.needs(documents, jobs)
+
+    def check(self, needs: preflight.Needs, settings: preflight.RunSettings) -> None:
         """The pre-flight's checks: paths, programs and the container engine."""
-        preflight.check(preflight.needs(documents, jobs), settings)
+        preflight.check(needs, settings)
 
     def prepare(self, lowered: run_setup.Lowered[CompilationArtifact], analyses: tuple[realtime.Analysis, ...],
                 basepath: Path, settings: run_setup.Settings) -> run_setup.Prepared:
@@ -239,32 +250,31 @@ class _Cwl:
 
 
 class CwltoolBackend(_Cwl):
-    """cwltool, through Sophios's `cwltool_filterlog`, which silences known noise in its log."""
+    """cwltool, through Sophios's `cwltool_filterlog` on this machine, which silences known noise in its log."""
+
+    program: Final = 'cwltool'
+    writes_summary: Final = True
 
     def launch(self, request: RunRequest) -> Launch:
         """`cwltool_filterlog` with the flags every Sophios run gives cwltool, then the documents."""
-        basepath = str(request.basepath.absolute().resolve())
-        outdir = _runner_outdir(basepath, request, 'cwltool')
+        basepath = str(request.basepath)
         # --skip-schemas: cwltool would download each $schemas file on every run, and a firewall or VPN
         # turns each download into a ~30 s timeout.
         # --disable-pull: the pre-flight pulled every image (cwl-docker-extract).
         argv = ['cwltool_filterlog', '--disable-pull', *(['--quiet'] if request.quiet else []),
                 *_provenance_flags(basepath, request), *_container_flags(request.container_engine),
                 '--write-summary', f'{basepath}/output_{request.workflow_name}.json',
-                '--skip-schemas', '--relax-path-checks', '--move-outputs', '--enable-ext', '--outdir', outdir]
+                '--skip-schemas', '--relax-path-checks', '--move-outputs', '--enable-ext', '--outdir', request.outdir]
         if request.cachedir:
-            argv += ['--cachedir', str(Path(request.cachedir).absolute())]
+            argv += ['--cachedir', request.cachedir]
         argv += [*request.passthrough_args, *_documents(basepath, request)]
-        return Launch(tuple(argv), _environment(request), Path.cwd(), outdir)
+        return Launch(tuple(argv), dict(request.env), None, request.outdir)
 
-    # pylint: disable-next=unused-argument
-    def outcome(self, request: RunRequest, exit_code: int, stdout: str, log: Path) -> Outcome:
+    # pylint: disable-next=too-many-arguments,too-many-positional-arguments,unused-argument
+    def outcome(self, request: RunRequest, exit_code: int, stdout: str, log: str, read: Read) -> Outcome:
         """cwltool writes the output object to the summary it is given, and prints none."""
-        summary = Path(f'{request.basepath.absolute().resolve()}/output_{request.workflow_name}.json')
-        outputs = None
-        if exit_code == 0 and summary.is_file():
-            outputs = json.loads(summary.read_text(encoding='utf-8'))
-        return Outcome(outputs, summary, failed_steps(_log_lines(log)))
+        summary = read(f'output_{request.workflow_name}.json') if exit_code == 0 else None
+        return Outcome(None if summary is None else json.loads(summary), failed_steps(log.splitlines()))
 
     def realtime_command(self, request: RunRequest) -> realtime.Command:
         """cwltool in a subprocess, with this run's container engine.
@@ -285,36 +295,34 @@ class CwltoolBackend(_Cwl):
 class ToilBackend(_Cwl):
     """Toil's CWL runner, `toil-cwl-runner`."""
 
+    program: Final = 'toil-cwl-runner'
+    writes_summary: Final = False
+
     def launch(self, request: RunRequest) -> Launch:
         """`toil-cwl-runner` with a job store per workflow under the base path, then the documents."""
-        basepath = str(request.basepath.absolute().resolve())
-        outdir = _runner_outdir(basepath, request, 'toil')
+        basepath = str(request.basepath)
         argv = ['toil-cwl-runner', *_container_flags(request.container_engine), '--relax-path-checks']
         # Toil writes no provenance under Slurm: an argument that is exactly `slurm` (as in
         # `--batchSystem slurm`) drops the provenance flags.
         if 'slurm' not in request.passthrough_args:
             argv += _provenance_flags(basepath, request)
-        argv += ['--outdir', outdir,
+        argv += ['--outdir', request.outdir,
                  # Toil's equivalent of cwltool's --cachedir.
                  '--jobStore', f'file:{basepath}/jobStore_{request.workflow_name}',
                  '--clean', 'always', '--noLinkImports',
                  '--disableProgress',  # no progress bar in the terminal
                  *request.passthrough_args, *_documents(basepath, request)]
-        return Launch(tuple(argv), _environment(request), Path.cwd(), outdir)
+        return Launch(tuple(argv), dict(request.env), None, request.outdir)
 
-    def outcome(self, request: RunRequest, exit_code: int, stdout: str, log: Path) -> Outcome:
-        """Toil prints the output object on stdout and writes no summary: it is written here, as cwltool's is.
+    # pylint: disable-next=too-many-arguments,too-many-positional-arguments
+    def outcome(self, request: RunRequest, exit_code: int, stdout: str, log: str, read: Read) -> Outcome:
+        """Toil prints the output object on stdout and writes no summary.
 
         No failed steps: the job lines Toil relays from its workers name its own jobs, not the
         workflow's steps, so a failure is reported by the runner's own messages.
         """
-        del log
-        outputs = _last_json_object(stdout) if exit_code == 0 else None
-        summary = None
-        if outputs is not None:
-            summary = Path(f'{request.basepath.absolute().resolve()}/output_{request.workflow_name}.json')
-            summary.write_text(json.dumps(outputs, indent=4) + '\n', encoding='utf-8')
-        return Outcome(outputs, summary, {})
+        del request, log, read
+        return Outcome(_last_json_object(stdout) if exit_code == 0 else None, {})
 
     def realtime_command(self, request: RunRequest) -> str:
         """Why none can: an analysis watches cwltool's job directories, and Toil has none."""
@@ -403,33 +411,59 @@ def _cwl_objects(value: Any) -> Any:
 class NextflowBackend:
     """Nextflow, which runs the pipeline the Nextflow target lowers the workflow to."""
 
-    def check(self, documents: Sequence[Path], jobs: Sequence[preflight.Job],
-              settings: preflight.RunSettings) -> None:
-        """The paths `jobs` name, `nextflow`, starting with a Java it can run, and the container engine when a
-        process has a container.
+    program: Final = 'nextflow'
+    writes_summary: Final = False
 
-        `documents` are the artifacts `prepare` wrote, in one directory; the processes are read from the pipeline
-        there, as the import reads them.
-        """
+    def needs(self, documents: Sequence[Path], jobs: Sequence[preflight.Job]) -> preflight.Needs:
+        """The image of each process that has one, read from the pipeline `write` wrote into the directory of
+        `documents`, as the import reads it."""
         workflow, _ = read_nextflow(documents[0].parent)
-        problems = preflight.path_problems(jobs) + preflight.nextflow_problems(settings)
-        images = [process.container for process in workflow.processes if process.container is not None]
-        if images:
-            problems += preflight.engine_problems(images, settings)
+        return preflight.Needs(tuple(documents), tuple(cwl_v1_2.DockerRequirement(dockerPull=process.container)
+                                                       for process in workflow.processes
+                                                       if process.container is not None),
+                               tuple(jobs))
+
+    def check(self, needs: preflight.Needs, settings: preflight.RunSettings) -> None:
+        """The paths the jobs name, `nextflow`, starting with a Java it can run, and the container engine when a
+        process has a container."""
+        problems = preflight.path_problems(needs.jobs) + preflight.nextflow_problems(settings)
+        if needs.containers:
+            problems += preflight.engine_problems(needs.images, settings)
         if problems:
             raise SophiosError(problems)
 
+    def write(self, lowered: run_setup.Lowered[ExecutableNextflowWorkflow], analyses: tuple[realtime.Analysis, ...],
+              basepath: Path, *, inputs_file: str, root_dir: Path) -> run_setup.Prepared:
+        """The four artifacts and `nextflow_names.json` in the workflow's `nextflow_directory`, and the analyses
+        under `basepath`; the folders are each output-target Directory input, which the pipeline stages, so it must
+        exist, where a CWL runner makes it.
+
+        The workflow was lowered from a view whose relative File or Directory paths are read against `root_dir`
+        and written absolute (`run_setup.absolute_view`): Nextflow runs from its `nextflow_directory`. An inputs
+        file is a CWL runner's.
+        """
+        del inputs_file
+        view, workflow = lowered.view, lowered.model
+        directory = nextflow_directory(basepath, view.name)
+        io_nf.remove_nextflow_artifacts(directory)
+        documents = io_nf.write_nextflow_artifacts(workflow, directory)
+        (directory / _NEXTFLOW_NAMES).write_text(json.dumps(nextflow_names(view), indent=2) + '\n',
+                                                 encoding='utf-8')
+        bound = {port.name: port.value for port in view.inputs if port.has_value}
+        folders = []
+        for name in sorted(output_target_inputs(view)):
+            match bound.get(name):
+                case {'class': 'Directory', 'path': str() as path}:
+                    folders.append(path)
+        return run_setup.Prepared(view.name, realtime.write(analyses, basepath, view.name, root_dir), documents,
+                                  tuple(folders))
+
     def prepare(self, lowered: run_setup.Lowered[ExecutableNextflowWorkflow], analyses: tuple[realtime.Analysis, ...],
                 basepath: Path, settings: run_setup.Settings) -> run_setup.Prepared:
-        """The four artifacts and `nextflow_names.json` in the workflow's `nextflow_directory`, the analyses under
-        `basepath`, the check, and each output-target Directory input that names nothing yet made.
+        """`write`, the check, and each of its folders that names nothing yet made.
 
-        The workflow was lowered from a view whose relative File or Directory paths are read against
-        `settings.root_dir` and written absolute (`run_setup.absolute_view`): Nextflow runs from its
-        `nextflow_directory`.
-
-        A check (`settings.check`) writes them into a temporary directory instead, removed when the check ends,
-        so it leaves `basepath` as it found it.
+        A check (`settings.check`) writes into a temporary directory instead, removed when the check ends,
+        so it leaves `basepath` as it found it, and makes no folder.
 
         Raises:
             SophiosError: What the check found in the way.
@@ -442,26 +476,18 @@ class NextflowBackend:
     def _prepare(self, lowered: run_setup.Lowered[ExecutableNextflowWorkflow], analyses: tuple[realtime.Analysis, ...],
                  basepath: Path, settings: run_setup.Settings) -> run_setup.Prepared:
         """`prepare`, writing under `basepath`."""
-        view, workflow = lowered.view, lowered.model
-        bound = {port.name: port.value for port in view.inputs if port.has_value}
-        directory = nextflow_directory(basepath, view.name)
-        io_nf.remove_nextflow_artifacts(directory)
-        documents = io_nf.write_nextflow_artifacts(workflow, directory)
-        (directory / _NEXTFLOW_NAMES).write_text(json.dumps(nextflow_names(view), indent=2) + '\n',
-                                                 encoding='utf-8')
-        plans = realtime.write(analyses, basepath, view.name, settings.root_dir)
+        written = self.write(lowered, analyses, basepath, inputs_file=settings.inputs_file, root_dir=settings.root_dir)
+        view = lowered.view
         targets = output_target_inputs(view)
-        # An output-target Directory need not exist yet: it is made below.
-        job = preflight.Job({name: value for name, value in bound.items() if name not in targets}, settings.root_dir,
-                            'the workflow')
-        self.check(documents, (job,), settings.run)
+        # A folder need not exist yet: it is made below.
+        job = preflight.Job({port.name: port.value for port in view.inputs
+                             if port.has_value and port.name not in targets}, settings.root_dir, 'the workflow')
+        self.check(self.needs(written.documents, (job,)), settings.run)
         if not settings.check:
-            # The pipeline stages an output-target Directory as an input, so it must exist; a CWL runner makes it.
-            for name in targets:
-                match bound.get(name):
-                    case {'class': 'Directory', 'path': str() as path} if not Path(path).exists():
-                        Path(path).mkdir(parents=True)
-        return run_setup.Prepared(view.name, plans, documents)
+            for folder in written.folders:
+                if not Path(folder).exists():
+                    Path(folder).mkdir(parents=True)
+        return written
 
     def launch(self, request: RunRequest) -> Launch:
         """`nextflow` reading only the generated configuration, with the pipeline, its parameters, its work directory
@@ -469,27 +495,26 @@ class NextflowBackend:
 
         From there, Nextflow's own log and cache are with the pipeline they belong to.
         """
-        directory = nextflow_directory(request.basepath.absolute().resolve(), request.workflow_name)
+        directory = nextflow_directory(request.basepath, request.workflow_name)
         workdir = str(directory / 'work')
         argv = ['nextflow', '-C', str(directory / io_nf.NEXTFLOW_CONFIG), 'run',
                 str(directory / io_nf.NEXTFLOW_SCRIPT), '-params-file', str(directory / io_nf.NEXTFLOW_PARAMS),
                 '-work-dir', workdir, '-ansi-log', 'false', *request.passthrough_args]
-        return Launch(tuple(argv), {**_environment(request), 'NXF_SYNTAX_PARSER': 'v2'}, directory, workdir)
+        return Launch(tuple(argv), {**request.env, 'NXF_SYNTAX_PARSER': 'v2'}, directory, workdir)
 
-    def outcome(self, request: RunRequest, exit_code: int, stdout: str, log: Path) -> Outcome:
-        """The outputs the pipeline recorded, by their Sophios names and written to the summary as cwltool's are;
-        the failed processes from Nextflow's log, by their Sophios step names."""
-        basepath = request.basepath.absolute().resolve()
-        names = json.loads((nextflow_directory(basepath, request.workflow_name) / _NEXTFLOW_NAMES)
-                           .read_text(encoding='utf-8'))
+    # pylint: disable-next=too-many-arguments,too-many-positional-arguments
+    def outcome(self, request: RunRequest, exit_code: int, stdout: str, log: str, read: Read) -> Outcome:
+        """The outputs the pipeline recorded, by their Sophios names; the failed processes from Nextflow's log, by
+        their Sophios step names."""
+        names_file = read(str(nextflow_directory(Path(), request.workflow_name) / _NEXTFLOW_NAMES))
+        assert names_file is not None, 'write writes it'
+        names = json.loads(names_file)
         failed = {names['processes'][process]: status
-                  for process, status in nextflow_failed_steps(_log_lines(log)).items()}
+                  for process, status in nextflow_failed_steps(log.splitlines()).items()}
         if exit_code != 0:
-            return Outcome(None, None, failed)
-        outputs = {names['outputs'][name]: _cwl_objects(value) for name, value in recorded_outputs(stdout)}
-        summary = basepath / f'output_{request.workflow_name}.json'
-        summary.write_text(json.dumps(outputs, indent=4) + '\n', encoding='utf-8')
-        return Outcome(outputs, summary, failed)
+            return Outcome(None, failed)
+        return Outcome({names['outputs'][name]: _cwl_objects(value) for name, value in recorded_outputs(stdout)},
+                       failed)
 
     def realtime_command(self, request: RunRequest) -> str:
         """Why none can: an analysis watches cwltool's job directories, and a Nextflow run has none."""

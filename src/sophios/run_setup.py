@@ -8,7 +8,7 @@ images without entrypoints when asked.
 from dataclasses import dataclass, replace
 from collections.abc import Collection
 from typing import Generic, TypeVar
-from pathlib import Path
+from pathlib import Path, PurePath
 import tempfile
 
 from sophios import input_output, post_compile, preflight, realtime
@@ -56,7 +56,7 @@ class Lowered(Generic[ModelT]):
     view: ResolvedWorkflow
 
 
-def absolute_view(view: ResolvedWorkflow, root_dir: Path) -> ResolvedWorkflow:
+def absolute_view(view: ResolvedWorkflow, root_dir: PurePath) -> ResolvedWorkflow:
     """`view`, each value a run reads a relative File or Directory path of, written absolute against `root_dir`:
     a runner does not run where the workflow's paths are read."""
     bound = absolute_paths(local_locations_as_paths({port.name: port.value for port in view.inputs
@@ -67,22 +67,37 @@ def absolute_view(view: ResolvedWorkflow, root_dir: Path) -> ResolvedWorkflow:
 
 @dataclass(frozen=True, slots=True)
 class Prepared:
-    """A run ready to start: the name of the workflow the runner gets, its analyses' plans, and the documents
-    written for it."""
+    """A run's files, written: the name of the workflow the runner gets, its analyses' plans, the documents written
+    for it, and the folders its machine makes before it starts."""
 
     name: str
     plans: tuple[realtime.Plan, ...]
     documents: tuple[Path, ...]
+    folders: tuple[str, ...] = ()
+
+
+# pylint: disable-next=too-many-arguments
+def write(artifact: CompilationArtifact, analyses: tuple[realtime.Analysis, ...], basepath: Path, *,
+          inputs_file: str, root_dir: Path, output_targets: Collection[str]) -> Prepared:
+    """Write `artifact` and `analyses` under `basepath` as they are given, and nothing elsewhere.
+
+    `artifact` is written as it is: a tree from the command line, one document under
+    `--cwl_inline_runtag` and from Python. Its job is the values bound in the workflow,
+    a relative path read against `root_dir`, under the inputs file's. Each of `output_targets`
+    (`runtime_inputs.output_target_inputs`) is a name for the run to create.
+    """
+    # As the runner gets them, in which an output-target Directory is a name for the run to create.
+    bound = runner_job_inputs(artifact.job_inputs, output_targets)
+    # The runner reads the job from `basepath`, so a relative path is written absolute.
+    artifact = replace(artifact, job_inputs=absolute_paths(bound, root_dir))
+    input_output.write_artifacts_to_disk(artifact, basepath, inputs_file, output_targets=output_targets)
+    plans = realtime.write(analyses, basepath, artifact.name, root_dir)
+    return Prepared(artifact.name, plans, (basepath / f'{artifact.name}.cwl', *realtime.documents(analyses, basepath)))
 
 
 def prepare(artifact: CompilationArtifact, analyses: tuple[realtime.Analysis, ...], basepath: Path,
             settings: Settings, output_targets: Collection[str]) -> Prepared:
-    """Write `artifact` and `analyses` under `basepath` as they are given, and make the machine ready to run them.
-
-    `artifact` is written as it is: a tree from the command line, one document under
-    `--cwl_inline_runtag` and from Python. Its job is the values bound in the workflow,
-    a relative path read against `settings.root_dir`, under the inputs file's. Each of `output_targets`
-    (`runtime_inputs.output_target_inputs`) is a name for the run to create.
+    """`write`, then make this machine ready to run what it wrote.
 
     A check (`settings.check`) writes them into a temporary directory instead, removed
     when the check ends, so it leaves `basepath` as it found it.
@@ -99,32 +114,30 @@ def prepare(artifact: CompilationArtifact, analyses: tuple[realtime.Analysis, ..
 def _prepare(artifact: CompilationArtifact, analyses: tuple[realtime.Analysis, ...], basepath: Path,
              settings: Settings, output_targets: Collection[str]) -> Prepared:
     """`prepare`, writing under `basepath`."""
-    # As the runner gets them, in which an output-target Directory is a name for the run to create.
-    bound = runner_job_inputs(artifact.job_inputs, output_targets)
-    # The runner reads the job from `basepath`, so a relative path is written absolute.
-    artifact = replace(artifact, job_inputs=absolute_paths(bound, settings.root_dir))
-    input_output.write_artifacts_to_disk(artifact, basepath, settings.inputs_file, output_targets=output_targets)
-    plans = realtime.write(analyses, basepath, artifact.name, settings.root_dir)
+    inputs_file, root_dir = settings.inputs_file, settings.root_dir
     # The pre-flight reads the CWL the runner will get, so it runs after the write.
-    documents = (basepath / f'{artifact.name}.cwl', *realtime.documents(analyses, basepath))
-    inputs_file = settings.inputs_file
+    written = write(artifact, analyses, basepath, inputs_file=inputs_file, root_dir=root_dir,
+                    output_targets=output_targets)
+    documents = written.documents
+    # The values `write` gave the runner, by the same function: a site calls `write` alone, so it derives its own.
+    bound = runner_job_inputs(artifact.job_inputs, output_targets)
     extra = runner_job_inputs(input_output.read_inputs_file(inputs_file), output_targets) if inputs_file else {}
     # The inputs file wins over a value bound in the workflow for the same input when the job is written.
     jobs = (preflight.Job({key: value for key, value in bound.items() if key not in extra},
-                          settings.root_dir, 'the workflow'),
+                          root_dir, 'the workflow'),
             *((preflight.Job(extra, Path(inputs_file).parent.absolute(), settings.inputs_file_named),)
               if inputs_file else ()))
     if settings.check:
         preflight.check(preflight.needs(list(documents), jobs), settings.run)
-        return Prepared(artifact.name, plans, documents)
+        return written
     if settings.pull:
         # The real-time analyses' images too: they run with --disable-pull.
         preflight.prepare(list(documents), settings.run, jobs)
     else:
         preflight.check(preflight.needs(list(documents), jobs), settings.run)
     if settings.remove_entrypoints:
-        artifact = post_compile.remove_artifact_entrypoints(settings.run.container_engine, artifact)
         # The images are built from the ones the pre-flight pulled, so the rewrite is written over the first write.
-        input_output.write_artifacts_to_disk(artifact, basepath, settings.inputs_file, output_targets=output_targets)
-        plans = realtime.write(realtime.without_entrypoints(analyses), basepath, artifact.name, settings.root_dir)
-    return Prepared(artifact.name, plans, documents)
+        return write(post_compile.remove_artifact_entrypoints(settings.run.container_engine, artifact),
+                     realtime.without_entrypoints(analyses), basepath, inputs_file=inputs_file, root_dir=root_dir,
+                     output_targets=output_targets)
+    return written

@@ -187,7 +187,8 @@ def _preflight(args: argparse.Namespace, documents: list[Path], jobs: tuple[pref
     if not args.check:
         preflight.prepare(documents, settings, jobs)
         return True
-    targets.backend(args.target, _runner(args)).check(documents, jobs, settings)
+    backend = targets.backend(args.target, _runner(args))
+    backend.check(backend.needs(documents, jobs), settings)
     _checked(documents[0])
     return False
 
