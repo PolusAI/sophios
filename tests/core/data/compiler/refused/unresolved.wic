@@ -1,0 +1,5 @@
+# A bare name no input declares is reported, with the tag that would make it a literal; --allow_raw_cwl lets it
+# through.
+steps:
+- id: mk_file
+  in: {name: not_a_workflow_input}

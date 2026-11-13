@@ -1,0 +1,7 @@
+# wic036 says which half of the outputSource: to fix, not only to add a type:.
+steps:
+- id: mk_file
+  in: {name: !ii a}
+- id: kid.wic
+outputs:
+  o: {label: no type here}

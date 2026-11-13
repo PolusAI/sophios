@@ -1,0 +1,27 @@
+the_most_recent_step_and_its_first_output_win:
+  edges: {count@3.file: multi_file@2.first}
+  diagnostics:
+  - {code: INFERENCE_GUESS, step: count, index: 3, port: file, severity: note, message: {contains: [count.file <- multi_file.first]}}
+a_tie_within_one_producer_names_every_fit:
+  diagnostics:
+  - {code: INFERENCE_GUESS, step: count, index: 2, port: file, severity: note, message: {contains: [count.file <- multi_file.first]}}
+recency_between_producers_is_noted:
+  edges: {count@3.file: mk_file@2.file}
+  diagnostics:
+  - {code: INFERENCE_GUESS, step: count, index: 3, port: file, severity: note, message: {contains: [count.file <- mk_file@2.file]}}
+strict_mode_turns_notes_into_errors:
+  policy: {strict: true}
+  refused: true
+  diagnostics:
+  - {code: INFERENCE_GUESS, severity: error, step: count, index: 3, port: file, message: {contains: [count.file <- mk_file@2.file]}}
+a_pinned_edge_is_not_noted: {}
+a_lenient_compile_carries_the_note:
+  compiled: true
+  diagnostics:
+  - {code: INFERENCE_GUESS, step: count, index: 3, port: file, severity: note, message: {contains: [count.file <- mk_file@2.file]}}
+a_strict_compile_refuses:
+  policy: {strict: true}
+  compiled: true
+  refused: true
+  diagnostics:
+  - {code: INFERENCE_GUESS, severity: error, step: count, index: 3, port: file, message: {contains: [count.file <- mk_file@2.file]}}

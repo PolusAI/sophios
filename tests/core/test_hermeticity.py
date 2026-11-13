@@ -83,17 +83,12 @@ def test_the_registry_reaches_the_branches_it_claims_to() -> None:
 #: Test files whose passing constitutes "the oracle suite ran with plugin
 #: discovery disabled".
 ORACLE_FILES: tuple[str, ...] = (
-    'tests/core/test_generators.py',
-    'tests/core/test_equivalence.py',
-    'tests/core/test_equivalences.py',
     'tests/core/test_predicates.py',
     'tests/core/test_reference_compatibility.py',
     'tests/core/test_canonical_path.py',
     'tests/core/test_emit.py',
     'tests/core/test_resolve.py',
-    'tests/core/test_link.py',
     'tests/core/test_infer_phase.py',
-    'tests/core/test_names_emitted.py',
     'tests/core/test_edge_binding.py',
 )
 

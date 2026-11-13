@@ -1,0 +1,12 @@
+# An anchor on a name the called workflow never declares, and an input bound plainly that its tool does not
+# declare, are wic028; the graph is not built from a document the phase refused.
+inputs:
+  go: boolean
+steps:
+- id: kid.wic
+  out: [child__step__1__mk_file___file: !& e]
+- id: sink
+  in: {file: !* e, n: !ii 1}
+- id: mk_file
+  in: {name: !ii a, go: go}
+  when: $(inputs.go)

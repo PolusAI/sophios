@@ -1,0 +1,7 @@
+# The author's own binding of a prefix their formats use is theirs: probe's port is bound, so probe promotes none.
+$namespaces: {myns: 'http://other.example/'}
+inputs:
+  x: {type: File, format: 'myns:format_1'}
+steps:
+- id: probe
+  in: {f: x}

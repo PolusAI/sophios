@@ -1,0 +1,4 @@
+# A format name that is merely a substring is not a candidate.
+steps:
+- id: producer
+- id: consumer

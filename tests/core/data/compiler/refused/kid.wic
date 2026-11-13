@@ -1,0 +1,5 @@
+steps:
+- id: mk_file
+  in: {name: !ii x}
+outputs:
+  res: {type: File, outputSource: mk_file/file}

@@ -1,0 +1,4 @@
+steps:
+- id: multi_file
+  out:
+  - first: !& f

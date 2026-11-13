@@ -1,0 +1,21 @@
+# Records: a step input written as CWL's WorkflowStepInput, `!cwl {...}`, reaches the step as written.
+inputs:
+  f: File
+  go: boolean
+  w: File
+  wf_name: string
+steps:
+- id: sink               # one source beside linkMerge stays a list: CWL merges a list
+  in: {file: f, n: !ii 1, extras: !cwl {source: [f], linkMerge: merge_nested}}
+- id: mk_file            # `go` is bound only for `when` to read: the step declares it, so nothing is said
+  in: {name: !cwl wf_name, go: !cwl {source: go}}
+  when: $(inputs.go)
+- id: mk_file
+  in: {name: !ii a}
+  out: [file: !& made]
+- id: relayed.wic        # its record reads `made`, relayed through the call's boundary input
+- id: count              # bound through `wic: steps:` in the desugared spelling, as the tagged one binds
+wic:
+  steps:
+    (5, count):
+      in: {file: {wic_raw_cwl: {source: w, loadContents: true}}}

@@ -13,20 +13,14 @@ TESTS = Path(__file__).resolve().parent
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize('class_name', sorted(SUPPORT_MATRIX))
-def test_every_schema_field_is_classified(class_name: str) -> None:
-    """A field the schema has and the matrix lacks, or one the schema dropped, fails here, and every row carries one
-    of the three classifications."""
-    schema_fields = set(getattr(cwl_v1_2, class_name).attrs)
-    assert set(SUPPORT_MATRIX[class_name]) == schema_fields, (
-        f'{class_name}: unclassified {schema_fields - set(SUPPORT_MATRIX[class_name])}, '
-        f'stale {set(SUPPORT_MATRIX[class_name]) - schema_fields}')
-    assert all(row.support in Support for row in SUPPORT_MATRIX[class_name].values())
-
-
-@pytest.mark.fast
-def test_every_row_is_pinned_by_a_test_that_exists() -> None:
-    """A row's `pinned_by` names a test function that exists under `tests/core`."""
+def test_every_schema_field_is_classified_and_pinned_by_a_test_that_exists() -> None:
+    """A field the CWL schema has and the matrix lacks, or one the schema dropped, fails here; every row carries one of
+    the three classifications, and its `pinned_by` names a test function that exists under `tests/core`."""
+    for class_name, table in SUPPORT_MATRIX.items():
+        schema_fields = set(getattr(cwl_v1_2, class_name).attrs)
+        assert set(table) == schema_fields, (
+            f'{class_name}: unclassified {schema_fields - set(table)}, stale {set(table) - schema_fields}')
+        assert all(row.support in Support for row in table.values())
     existing = {node.name for path in TESTS.glob('test_*.py')
                 for node in ast.walk(ast.parse(path.read_text(encoding='utf-8')))
                 if isinstance(node, ast.FunctionDef) and node.name.startswith('test_')}

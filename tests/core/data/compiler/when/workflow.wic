@@ -1,0 +1,68 @@
+# A `when` must give true or false (CWL v1.2's WorkflowStep), and cwltool stops the run at one that gives anything
+# else: the CWL target notes each one the shared check finds (wic056) and the Nextflow target refuses it. A `when`
+# that reads an input its step does not declare reads nothing, and the compile says so.
+inputs:
+  n: int
+  s: string
+  ns: int[]
+steps:
+- id: a_number             # 2 is not a boolean
+  run: gated
+  in: {n: n}
+  when: $(inputs.n + 1)
+- id: a_string             # typed by what each input delivers, a step-only one among them
+  run: gated
+  in: {n: n, s: !cwl {source: s}}
+  when: $(inputs.s)
+- id: a_null               # null is neither true nor false
+  run: gated
+  in: {n: n}
+  when: $(null)
+- id: an_element           # evaluated in each job of a scatter, over one element
+  run: gated
+  in: {n: ns}
+  scatter: [n]
+  when: $(inputs.n)
+- id: text                 # no expression in it, so no CWL Expression
+  run: gated
+  in: {n: n}
+  when: 'true'
+- id: a_template           # text around an expression is interpolated into a string
+  run: gated
+  in: {n: n}
+  when: $(inputs.n > 0) or not
+- id: child.wic            # a call's when is a CWL when like any other
+  in: {n: n}
+  when: $(inputs.n)
+- id: a_boolean            # a comparison gives true or false
+  run: gated
+  in: {n: n}
+  when: '  $(inputs.n > 0)  '
+- id: outside_the_subset   # the shared check cannot read it, so says nothing of it
+  run: gated
+  in: {n: n}
+  when: $(inputs.n ** 2)
+- id: a_body               # a ${...} body is one expression the check does not read
+  run: gated
+  in: {n: n}
+  when: '${ return inputs.n; }'
+- id: not_a_string         # cwltool's schema validation refuses it
+  run: gated
+  in: {n: n}
+  when: true
+- id: dotted_absent        # reads `nope`, which mk_file does not declare
+  run: mk_file
+  in: {name: !ii a}
+  when: $(inputs.nope != null)
+- id: bracketed_absent
+  run: mk_file
+  in: {name: !ii b}
+  when: $(inputs["nope"] != null)
+- id: minus                # `inputs.name - 1`: `name` is declared
+  run: mk_file
+  in: {name: !ii c}
+  when: $(inputs.name-1 > 0)
+- id: maker.wic            # declares the names its child exposes, read in brackets
+  when: $(inputs["mk_file~name"] != null)
+- id: maker.wic            # `inputs.mk_file~name` is `inputs.mk_file`, then `~name`
+  when: $(inputs.mk_file~name != null)

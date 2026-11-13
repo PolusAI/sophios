@@ -1,0 +1,74 @@
+# What each step reads and each output names, as compiled. Written by hand from each root's comments.
+positions.wic:
+  notes: [{code: INFERENCE_GUESS, severity: note, step: count, index: 4, port: file}]
+  said: [{contains: ["output 'first'", "2 steps have the id 'mk_file'", "'(1, mk_file)/file'"]}]
+  written:
+    positions.cwl:
+      steps:
+      - {id: mk_file@1}
+      - {id: count@2, in: {file: mk_file@1/file}}
+      - {id: mk_file@3}
+      - {id: count@4, in: {file: mk_file@3/file}}
+      - {id: xform, scatter: [name, file], scatterMethod: nested_crossproduct}
+      outputs:
+        n: {outputSource: count@4/n}
+        first: {outputSource: mk_file@1/file}
+        third: {outputSource: mk_file@3/file}
+        only: {outputSource: xform/file}
+        old: {outputSource: positions__step__1__mk_file/file}
+        mk_file@1~file: {outputSource: mk_file@1/file}   # lifted as if nothing had asked for it
+records.wic:
+  written:
+    records.cwl:
+      steps:
+      - {id: sink, in: {file: f, extras: {exact: {source: [f], linkMerge: merge_nested}}}}
+      - {id: mk_file@2, in: {name: wf_name, go: {exact: {source: go}}}, when: $(inputs.go)}
+      - {id: mk_file@3}
+      - {id: relayed, in: {sink~file: {source: mk_file@3/file}}}
+      - {id: count, in: {file: {exact: {source: w, loadContents: true}}}}
+      requirements: {keys: [InlineJavascriptRequirement, MultipleInputFeatureRequirement,
+                            SubworkflowFeatureRequirement]}
+    records~relayed.cwl:
+      steps: [{id: sink, in: {file: {source: sink~file}}}]   # the boundary input the edge is relayed through
+untyped.wic:
+  written:
+    untyped.cwl:
+      outputs:
+        plain: {type: File, outputSource: mk_file@1/file}
+        scattered: {type: {type: array, items: File}, outputSource: mk_file@2/file}
+        called: {type: File, outputSource: kid@3/res}
+        called_scattered: {type: {type: array, items: File}, outputSource: kid@4/res}
+    untyped~kid@3.cwl: {outputs: {res: {type: File}}}
+    untyped~kid@4.cwl: {outputs: {res: {type: File}}}
+listed.wic:
+  written:
+    listed.cwl:
+      inputs: {keys: [zeta, alpha, mk_file~name, mk_text~name]}
+      outputs: {o: {type: 'File[]', outputSource: mk_file/file}}
+      requirements: {exact: {InlineJavascriptRequirement: {}, ScatterFeatureRequirement: {}}}
+calls.wic:
+  written:
+    calls.cwl:
+      steps:
+      - {id: string_source}
+      - {id: wrapper, in: {mk_file~name: {source: string_source/value}}}
+      - {id: made}
+      - {id: count, in: {file: {source: made/result}}}
+      - {id: producer, scatter: [seed]}
+      - {id: consumer, in: {outer_name: {source: producer/make~value}}, scatter: [outer_name]}
+      - {id: unbound, in: {name: string_source/value}}   # left unbound by the call, so inference's to give
+      inputs: {keys: [made~mk_file~name, producer~seed]}
+    # `shared` is threaded down through one boundary input per level, each reaching the same sink.
+    calls~wrapper.cwl: {steps: [{id: deep, in: {mk_file~name: {source: mk_file~name}}}], inputs: {keys: [mk_file~name]}}
+    calls~wrapper~deep.cwl: {steps: [{id: mk_file, in: {name: {source: mk_file~name}}}],
+                             inputs: {keys: [mk_file~name]}}
+    calls~consumer.cwl: {steps: [{id: take, in: {inner_name: outer_name}}]}
+choice.wic:
+  written: {choice.cwl: {steps: [{id: mk_file}]}, choice_inputs.yml: {exact: {mk_file~name: fast}}}
+deferred.wic:
+  written: {deferred.cwl: {steps: [{id: mk_file}]}, deferred_inputs.yml: {exact: {mk_file~name: deferred}}}
+namespaced.wic:
+  written: {namespaced~mk_file.cwl: {baseCommand: alt}}
+raw_names.wic:
+  options: {allow_raw_cwl: true}
+  written: {raw_names.cwl: {steps: [{id: mk_file, in: {name: not_a_workflow_input}}]}}

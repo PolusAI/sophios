@@ -1,15 +1,21 @@
 """Setup many tests repeat: files written under a directory, the command line run in-process, the shipped tools
-as Python API steps, a real-time analysis declared, a run kept off the container engine, and a test run under
-each CWL runner."""
+as Python API steps, a real-time analysis declared, a run kept off the container engine, a test run under
+each CWL runner, and the example workflows of tests/core/data/examples read and run."""
+from collections.abc import Callable
 import functools
+import hashlib
+import io
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Final, Iterable, Mapping
+from urllib.parse import unquote, urlsplit
 
 import pytest
+import yaml
 
 import sophios
 import sophios.plugins
@@ -22,6 +28,7 @@ REPO_ROOT: Final = Path(__file__).resolve().parents[2]
 ADAPTERS: Final = REPO_ROOT / 'cwl_adapters'
 HELLOWORLD: Final = REPO_ROOT / 'docs' / 'tutorials' / 'helloworld.wic'
 EACH_RUNNER: Final = pytest.mark.parametrize('runner', ['cwltool', 'toil-cwl-runner'])
+EXAMPLES: Final = Path(__file__).resolve().parent / 'data' / 'examples'
 
 
 def write_tree(root: Path, files: Mapping[str, str]) -> Path:
@@ -102,3 +109,78 @@ def run_local_process(workflow: Path, *flags: str, **options: Any) -> subprocess
     logging state that one process running both leaves broken."""
     return python_process('-m', 'sophios.main', '--yaml', workflow, '--run_local', '--ignore_docker_install',
                           '--ignore_docker_processes', *flags, **options)
+
+
+def examples() -> list[Any]:
+    """Each example directory of tests/core/data/examples, by its name."""
+    return [pytest.param(path, id=path.name) for path in sorted(EXAMPLES.iterdir()) if path.is_dir()]
+
+
+def stated(folder: Path) -> Any:
+    """What the example `folder`'s expected.yaml states."""
+    return yaml.safe_load((folder / 'expected.yaml').read_text(encoding='utf-8'))
+
+
+def example_workflow(folder: Path, directory: Path) -> Workflow:
+    """A copy of the example `folder` at `directory`, and the workflow its `workflow.wic` is: read with the tools and
+    child workflows beside it and the tools Sophios ships, its inputs given the values of `job.yml`. A relative path in
+    it is read against the working directory, which the caller makes `directory`."""
+    shutil.copytree(folder, directory)
+    tools = sophios.plugins.get_tools_cwl({'search_paths_cwl': {'global': [str(directory), str(ADAPTERS)]}})
+    children = {'global': {path.stem: path for path in directory.glob('*.wic') if path.name != 'workflow.wic'}}
+    workflow = Workflow.from_wic(directory / 'workflow.wic', tool_registry=tools, workflow_paths=children)
+    job = directory / 'job.yml'
+    for name, value in (yaml.safe_load(job.read_text(encoding='utf-8')) if job.exists() else {}).items():
+        setattr(workflow.inputs, name, value)
+    return workflow
+
+
+def tree(path: Path) -> Any:
+    """What a runner-independent observer sees at `path`: a file's text, or a directory's files and texts."""
+    if path.is_dir():
+        return {str(item.relative_to(path)): tree(item) for item in sorted(path.rglob('*')) if item.is_file()}
+    data = path.read_bytes()
+    try:
+        return data.decode('utf-8')
+    except UnicodeDecodeError:
+        return hashlib.sha256(data).hexdigest()
+
+
+def observed(value: Any) -> Any:
+    """An output as a runner-independent observer sees it: a File's or Directory's class, basename and contents,
+    never its path; null and a string, number or boolean as they are."""
+    if isinstance(value, list):
+        return [observed(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+    # cwltool gives a Directory it left where its step made it a location and no path, and an entry it captured the
+    # path of the file the entry links to: the name is the object's.
+    path = Path(value['path'] if 'path' in value else unquote(urlsplit(value['location']).path))
+    return {'class': value['class'], 'basename': value.get('basename', path.name), 'contents': tree(path)}
+
+
+def files_beside(directory: Path) -> dict[str, Any]:
+    """What `directory` holds, each file as its text."""
+    return {path.name: tree(path) for path in directory.iterdir()}
+
+
+def cwltool_run(cwltool_main: Callable[..., int], workflow: Workflow, directory: Path) -> tuple[int, str, str]:
+    """cwltool's exit code, output object and messages for the CWL `workflow` compiles to, written in `directory`.
+    Each output stays where its step left it: moved into one directory, two steps' out.txt could not both keep
+    the name."""
+    compiled = workflow.compile()
+    document, job = compiled.write_cwl(directory), compiled.write_job_inputs(directory)
+    stdout, stderr = io.StringIO(), io.StringIO()
+    code = cwltool_main(
+        ['--quiet', '--leave-outputs', '--leave-tmpdir', '--tmpdir-prefix', f'{directory}/tmp/',
+         '--tmp-outdir-prefix', f'{directory}/tmp_out/', str(document), str(job)],
+        stdout=stdout, stderr=stderr,
+    )
+    return code, stdout.getvalue(), stderr.getvalue()
+
+
+def cwltool_outputs(cwltool_main: Callable[..., int], workflow: Workflow, directory: Path) -> dict[str, Any]:
+    """The output object of a successful `cwltool_run`."""
+    code, outputs, messages = cwltool_run(cwltool_main, workflow, directory)
+    assert code == 0, messages
+    return dict(json.loads(outputs))

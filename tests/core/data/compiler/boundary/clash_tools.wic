@@ -1,0 +1,4 @@
+# probe and rival bind myns differently, and both promote a myns: port.
+steps:
+- id: probe
+- id: rival

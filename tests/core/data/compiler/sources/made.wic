@@ -1,0 +1,5 @@
+steps:
+- id: mk_file
+  in: {name: !ii child.txt}
+outputs:
+  result: {type: File, outputSource: mk_file/file}

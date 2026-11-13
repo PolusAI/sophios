@@ -1,0 +1,11 @@
+why: cwltool runs the tool only on a machine with the two devices, so there is no reference run. Nextflow's local
+  executor takes the three requests and runs the task; none of them changes the Directory it makes.
+reference: none
+outputs:
+  make_dir~result: {class: Directory, basename: made, contents: {}}
+# The CWL workflow.wic compiles to: its requirements, and of each step, in order, what it reads from another
+# step or from a workflow input, and its scatter and when; a literal an input is given is left out.
+compiled:
+  requirements: {exact: {}}
+  steps:
+    make_dir: {}

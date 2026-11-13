@@ -1,0 +1,10 @@
+wic:
+  steps:
+    mk_file:
+      in:
+        other: !ii o
+    (1, mk_file):
+      in:
+        name: !ii child_pos.txt
+steps:
+- id: mk_file

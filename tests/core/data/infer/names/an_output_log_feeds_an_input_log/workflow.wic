@@ -1,0 +1,5 @@
+# Names decide nothing against an output that fits: `output_log_path` feeds `input_log_path`, the sander_mdrun to
+# process_mdout pattern.
+steps:
+- id: logger
+- id: reader

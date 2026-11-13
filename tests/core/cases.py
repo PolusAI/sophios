@@ -7,10 +7,11 @@ A case list is a YAML list of mappings with an `id`; a case directory holds its 
 - `{startswith: text}`: text starting with `text`
 - `{contains: [item, ...]}`: text holding each item, or a list in which each item matches some element
 - `{exact: value}`: equal to `value`, so a mapping with any other key fails
+- `{keys: [key, ...]}`: a mapping with exactly these keys, in this order
 - any other mapping: a mapping with at least its keys, each value matching
 - a list: a list of the same length, matching element by element
 - anything else: an equal value
-A mapping whose one key is re, startswith, contains or exact is therefore always a form, never data.
+A mapping whose one key is re, startswith, contains, exact or keys is therefore always a form, never data.
 `contains: []` matches nothing, so an empty list cannot pass for an expectation.
 
 The loaders raise ValueError, a collection error of the calling module, for no cases, a repeated id, or a key the
@@ -101,6 +102,8 @@ def match(expected: Any, actual: Any) -> bool:  # pylint: disable=too-many-retur
                                        else any(match(item, each) for each in actual) for item in given)
         if form == 'exact':
             return bool(actual == given)
+        if form == 'keys':
+            return isinstance(actual, dict) and list(actual) == given
     if isinstance(expected, dict):
         return isinstance(actual, dict) and all(key in actual and match(value, actual[key])
                                                 for key, value in expected.items())

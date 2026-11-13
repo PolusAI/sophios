@@ -1,0 +1,5 @@
+requirements:
+  InlineJavascriptRequirement: {expressionLib: ['var a = 2;']}
+steps:
+- id: xform
+  in: {name: !ii b}

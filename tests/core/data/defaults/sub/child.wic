@@ -1,0 +1,5 @@
+inputs:
+  cfg: {type: File, default: {class: File, location: other.txt}}
+steps:
+- id: xform
+  in: {file: cfg, name: !ii out.txt}

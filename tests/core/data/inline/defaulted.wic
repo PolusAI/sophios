@@ -1,0 +1,5 @@
+inputs:
+  name: {type: string, default: x}
+steps:
+- id: xform
+  in: {name: name}

@@ -1,0 +1,5 @@
+inputs:
+  name: string?
+steps:
+- id: xform
+  in: {name: !cwl {source: name, valueFrom: fallback}}

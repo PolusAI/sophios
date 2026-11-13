@@ -1,0 +1,4 @@
+# The parser recovers a step with an empty id; lowering reports it as the parser does, wic007, not wic006.
+steps:
+- id: ""
+  in: {}

@@ -1,7 +1,6 @@
 """The versioned, conservative boundary for user-authored references."""
 
 import copy
-from functools import partial
 from typing import Any, Final
 
 import pytest
@@ -13,17 +12,14 @@ from sophios.api.python.workflow import _python_api_types_match
 from sophios.lang.compatibility import TypeRelation, reference_relation
 from sophios.lang.diagnostics import SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
-from sophios.utils_cwl import desugar_into_canonical_normal_form
 from sophios.wic_types import StepId, Tool, Tools, Yaml
 
 from .synthetic_tools import clt
 
 from .budgets import budget
-from .helpers import REPO_ROOT
 from .hermetic import ORACLE, compile_hermetic
 from .reference_model import ReferenceExpectation, reference_expectation
 from .strategies import cwl_types, pinned
-from .wic_reading import read_wic
 
 _CASES: Final = (
     ('same atom', 'string', 'string', ReferenceExpectation.OVERLAPS),
@@ -102,16 +98,12 @@ def test_the_versioned_judge_matches_the_independent_model(
     if found is not TypeRelation.UNKNOWN and _loaded(source) and _loaded(sink):
         refused = check_types(copy.deepcopy(source), copy.deepcopy(sink), None, None, None) == 'exception'
         assert refused is (found is TypeRelation.DISJOINT) or refused and 'null' in repr((source, sink)), found
+    assert reference_relation(_RECURSIVE, _STR_ARR, lang_version='0.0.1') is TypeRelation.UNKNOWN
 
 
-@pytest.mark.fast
-def test_a_recursive_or_malformed_declaration_is_unknown_not_a_crash() -> None:
-    """A cyclic Python value cannot make the total raw judge recurse forever."""
-    recursive: dict[str, Any] = {'type': 'array'}
-    recursive['items'] = recursive
-    assert reference_relation(
-        recursive, {'type': 'array', 'items': 'string'}, lang_version='0.0.1') \
-        is TypeRelation.UNKNOWN
+#: A cyclic Python value, which the total raw judge must call unknown rather than recurse on forever.
+_RECURSIVE: Final[dict[str, Any]] = {'type': 'array'}
+_RECURSIVE['items'] = _RECURSIVE
 
 
 @pytest.mark.fast
@@ -139,148 +131,68 @@ def test_the_eager_api_check_defers_what_scatter_could_rescue(
     assert _python_api_types_match(sink, source) is accepted, claim
 
 
-_ENDPOINTS: Final = (
-    ('mk_file', 'name', 'string'),
-    ('count', 'file', 'File'),
-    ('scale', 'n', 'int'),
-    ('scale', 'factor', 'float'),
-    ('poly', 'value', ['int', 'string']),
-)
-_SOURCE_TYPES: Final = (
-    'string', 'File', 'int', 'float', 'Any', 'string[]',
-    {'type': 'array', 'items': 'Any'},
-)
-
-
-@pytest.mark.slow
-@given(st.sampled_from(_ENDPOINTS), st.sampled_from(_SOURCE_TYPES), st.booleans())
-@ORACLE
-def test_workflow_input_references_follow_the_independent_outcome(
-        endpoint: tuple[str, str, Any], source_type: Any, scattered: bool) -> None:
-    """Unknown/overlapping references compile; only disjoint ones are wic023."""
-    stem, argument, declared_sink = endpoint
-    sink_type = {'type': 'array', 'items': declared_sink} if scattered else declared_sink
-    expected = reference_expectation(source_type, sink_type)
-    step: Yaml = {'id': stem, 'in': {argument: 'wf_source'}}
-    if scattered:
-        step['scatter'] = [argument]
-    document: Yaml = {'inputs': {'wf_source': {'type': source_type}}, 'steps': [step]}
-
-    if expected is ReferenceExpectation.DISJOINT:
-        with pytest.raises(SophiosError) as caught:
-            compile_hermetic(document, 'reference')
-        assert [diagnostic.code for diagnostic in caught.value.diagnostics] == [
-            SophiosErrorCode.INCOMPATIBLE_INPUT_REFERENCE]
-    else:
-        compile_hermetic(document, 'reference')
-
-
-#: `clt` in canonical normal form — the shape the inference and
-#: explicit-edge paths read.
-_clt = partial(clt, canonical=True)
-
-
-def _edge_tools(source_type: Any, sink_type: Any) -> Tools:
-    """Return two tools exposing the requested raw endpoint declarations."""
-    return {
-        StepId('typed_source', 'global'): Tool(
-            '/synthetic/typed_source.cwl',
-            _clt({'seed': {'type': 'string'},
-                  'seed2': {'type': 'string', 'default': 'y'}},
-                 {'value': {'type': source_type}})),
-        StepId('typed_sink', 'global'): Tool(
-            '/synthetic/typed_sink.cwl',
-            _clt({'value': {'type': sink_type}}, {})),
-    }
-
-
-#: A scatter as the test models it: the entries, and the method. Kept apart from
-#: the production helpers so the expectations below are a restatement of CWL's
-#: rule rather than a second call into the code under test.
+#: Each sink a reference may reach, as `typed_sink` declares it: atoms, a union, and arrays one and two deep.
 _STR_ARR: Final[Yaml] = {'type': 'array', 'items': 'string'}
 _STR_ARR2: Final[Yaml] = {'type': 'array', 'items': _STR_ARR}
+_SINKS: Final = ('string', 'File', 'int', 'float', ['int', 'string'], _STR_ARR, _STR_ARR2)
+_SOURCES: Final = ('string', 'File', 'int', 'float', 'Any', 'string[]', {'type': 'array', 'items': 'Any'}, _STR_ARR2)
+#: How `typed_source` scatters: the inputs it scatters, and the method.
+_SCATTERS: Final = (((), ''), (('seed',), 'dotproduct'), (('seed', 'seed2'), 'nested_crossproduct'),
+                    (('seed', 'seed2'), 'flat_crossproduct'))
 
 
-def _model_output_rank(keys: tuple[str, ...], method: str) -> int:
-    """Array layers a scatter adds to every output of the step carrying it."""
-    if not keys:
-        return 0
-    return len(keys) if method == 'nested_crossproduct' else 1
-
-
-def _model_wrap(cwl_type: Any, layers: int) -> Any:
+def _wrap(cwl_type: Any, layers: int) -> Any:
     for _ in range(layers):
         cwl_type = {'type': 'array', 'items': cwl_type}
     return cwl_type
 
 
-@pytest.mark.fast
-@pytest.mark.parametrize('source_type, sink_type, source_scatter, sink_scatter', [
-    ('string', 'string', ((), ''), ()),
-    ('string', 'File', ((), ''), ()),
-    ('Any', 'string', ((), ''), ('value',)),
-    ({'type': 'array', 'items': 'Any'}, 'string', ((), ''), ('value',)),
-    ('string', 'string', (('seed',), 'dotproduct'), ('value',)),
-    ('File', 'string', (('seed',), 'dotproduct'), ('value',)),
-    # nested_crossproduct nests one level per scattered input, so a two-input
-    # scatter over a `string` output is `string[][]` and this sink is satisfied.
-    ('string', _STR_ARR2, (('seed', 'seed2'), 'nested_crossproduct'), ()),
-    # flat_crossproduct produces one flat array however many inputs it scatters.
-    ('string', _STR_ARR, (('seed', 'seed2'), 'flat_crossproduct'), ()),
-    # ... so against the same sink it is one layer short, and provably disjoint.
-    ('string', _STR_ARR2, (('seed', 'seed2'), 'flat_crossproduct'), ()),
-    # An input listed twice is scattered twice.
-    (_STR_ARR2, 'string', ((), ''), ('value', 'value')),
-])
-def test_explicit_edges_follow_the_same_judgment(
-        source_type: Any, sink_type: Any,
-        source_scatter: tuple[tuple[str, ...], str], sink_scatter: tuple[str, ...]) -> None:
-    """Both endpoint scatter lifts occur before the shared judgment, at the rank
-    CWL gives them rather than one layer whenever any scatter is present."""
-    source_keys, source_method = source_scatter
-    effective_source = _model_wrap(source_type, _model_output_rank(source_keys, source_method))
-    effective_sink = _model_wrap(sink_type, sink_scatter.count('value'))
-    expected = reference_expectation(effective_source, effective_sink)
-    source: Yaml = {
-        'id': 'typed_source',
-        'in': {'seed': {'wic_inline_input': ['x'] if source_keys else 'x'}},
-        'out': [{'value': {'wic_anchor': 'edge'}}],
+def _typed_tools(source_type: Any, sink_type: Any) -> Tools:
+    """`typed_source`, whose output is `source_type`, and `typed_sink`, whose input is `sink_type`."""
+    return {
+        StepId('typed_source', 'global'): Tool('/synthetic/typed_source.cwl', clt(
+            {'seed': {'type': 'string'}, 'seed2': {'type': 'string', 'default': 'y'}},
+            {'value': {'type': source_type}}, canonical=True)),
+        StepId('typed_sink', 'global'): Tool('/synthetic/typed_sink.cwl', clt(
+            {'value': {'type': sink_type}}, {}, canonical=True)),
     }
-    sink: Yaml = {'id': 'typed_sink', 'in': {'value': {'wic_alias': 'edge'}}}
-    if source_keys:
-        source['scatter'] = list(source_keys)
-        source['scatterMethod'] = source_method
-        if 'seed2' in source_keys:
-            source['in']['seed2'] = {'wic_inline_input': ['y']}
-    if sink_scatter:
-        sink['scatter'] = list(sink_scatter)
-
-    if expected is ReferenceExpectation.DISJOINT:
-        with pytest.raises(SophiosError) as caught:
-            compile_hermetic({'steps': [source, sink]}, 'edges',
-                             tools=_edge_tools(source_type, sink_type))
-        assert caught.value.diagnostics[0].code is SophiosErrorCode.INCOMPATIBLE_INPUT_REFERENCE
-    else:
-        compile_hermetic({'steps': [source, sink]}, 'edges',
-                         tools=_edge_tools(source_type, sink_type))
 
 
-@pytest.mark.fast
-def test_echo_multi_scatter_keeps_any_at_the_cwl_boundary() -> None:
-    """The exact tutorial that exposed the old matcher's Any false positive."""
-    path = REPO_ROOT / 'docs/tutorials/echo_multi_scatter.wic'
-    document = desugar_into_canonical_normal_form(
-        read_wic(path.read_text(encoding='utf-8'), path.name))
-    tools: Tools = {
-        StepId('array_indices', 'global'): Tool(
-            '/synthetic/array_indices.cwl',
-            _clt(
-                {'input_array': {'type': 'string[]'}, 'input_indices': {'type': 'int[]'}},
-                {'output_array': {'type': 'Any'}},
-            )),
-        StepId('echo_3', 'global'): Tool(
-            '/synthetic/echo_3.cwl',
-            _clt({'message1': {'type': 'string'}, 'message2': {'type': 'string'},
-                  'message3': {'type': 'string'}}, {})),
-    }
-    compile_hermetic(document, 'echo_multi_scatter', tools=tools)
+def _compiles(document: Yaml, tools: Tools) -> bool:
+    """Whether `document` compiles; a refusal must be wic023 alone."""
+    try:
+        compile_hermetic(document, 'reference', tools=tools)
+    except SophiosError as error:
+        assert [d.code for d in error.diagnostics] == [SophiosErrorCode.INCOMPATIBLE_INPUT_REFERENCE]
+        return False
+    return True
+
+
+@pytest.mark.slow
+@given(st.tuples(st.sampled_from(_SOURCES), st.sampled_from(_SINKS), st.sampled_from(_SCATTERS), st.integers(0, 2)))
+@pinned(('string', 'string', _SCATTERS[0], 0), ('string', 'File', _SCATTERS[0], 0), ('Any', 'string', _SCATTERS[0], 1),
+        ({'type': 'array', 'items': 'Any'}, 'string', _SCATTERS[0], 1), ('string', 'string', _SCATTERS[1], 1),
+        ('File', 'string', _SCATTERS[1], 1), ('string', _STR_ARR2, _SCATTERS[2], 0),
+        ('string', _STR_ARR, _SCATTERS[3], 0), ('string', _STR_ARR2, _SCATTERS[3], 0),
+        (_STR_ARR2, 'string', _SCATTERS[0], 2))
+@ORACLE
+def test_a_reference_compiles_unless_the_model_proves_it_disjoint(case: tuple[Any, Any, Any, int]) -> None:
+    """A workflow input of `source_type`, and `typed_source`'s output of that type by an edge, each feed
+    `typed_sink`'s input, scattered `layers` times: each compiles exactly when the independent model does not prove
+    the two disjoint, at the ranks CWL gives them. A scatter lifts the source one layer, or one per scattered input
+    under nested_crossproduct, and the sink once per time `scatter:` names it, before the shared judgment; unknown
+    and overlapping references compile, and only a disjoint one is wic023."""
+    source_type, sink_type, (keys, method), layers = case
+    sink: Yaml = {'id': 'typed_sink', 'in': {'value': 'wf_source'},
+                  **({'scatter': ['value'] * layers} if layers else {})}
+    lifted = _wrap(sink_type, layers)
+    tools = _typed_tools(source_type, sink_type)
+    assert _compiles({'inputs': {'wf_source': {'type': source_type}}, 'steps': [sink]}, tools) is (
+        reference_expectation(source_type, lifted) is not ReferenceExpectation.DISJOINT)
+    source: Yaml = {'id': 'typed_source', 'in': {'seed': {'wic_inline_input': ['x'] if keys else 'x'},
+                                                 **({'seed2': {'wic_inline_input': ['y']}} if 'seed2' in keys else {})},
+                    'out': [{'value': {'wic_anchor': 'edge'}}],
+                    **({'scatter': list(keys), 'scatterMethod': method} if keys else {})}
+    produced = _wrap(source_type, (len(keys) if method == 'nested_crossproduct' else 1) if keys else 0)
+    assert _compiles({'steps': [source, {**sink, 'in': {'value': {'wic_alias': 'edge'}}}]}, tools) is (
+        reference_expectation(produced, lifted) is not ReferenceExpectation.DISJOINT)

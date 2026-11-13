@@ -1,0 +1,5 @@
+inputs:
+  n: int
+steps:
+- id: gated
+  in: {n: n}

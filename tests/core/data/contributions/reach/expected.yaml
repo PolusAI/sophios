@@ -1,0 +1,17 @@
+a_contributed_input_reaches_a_step_of_a:
+  expect:
+  - {depth: 1, inputs: {name: [InlineLiteral, contributed.txt]}}
+a_contributed_output_defines_an_edge_on:
+  expect:
+  - {depth: 2, outputs: [[file, min.tpr]]}
+a_bare_wic_body_only_recurses_until_it:
+  expect:
+  - {depth: 3, inputs: {name: [EdgeRef, deep.txt]}}
+a_contribution_to_a_wic_step_addresses:
+  expect:
+  - {inputs: {exact: {}}}
+  - {depth: 1, inputs: {name: [InlineLiteral, contributed.txt]}}
+an_id_keyed_contribution_reaches_the_one:
+  expect:
+  - {depth: 1, inputs: {name: [InlineLiteral, from_root.txt]}}
+  said: []

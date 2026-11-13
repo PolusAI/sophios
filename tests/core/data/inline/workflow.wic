@@ -1,0 +1,38 @@
+# --cwl_inline_subworkflows dissolves each call of only `in` and `out` into the steps of its workflow, named for
+# where they came from; a call that carries more, or whose workflow opts out or would have to be guessed at, keeps its
+# place as a Workflow, and one line says why. Calls are judged one at a time. mk_file and xform are the suite's
+# synthetic tools (tests/core/synthetic_tools.py).
+inputs:
+  w: string
+requirements:
+  InlineJavascriptRequirement: {expressionLib: ['var a = 1;']}
+steps:
+- id: mk_file
+  in: {name: !ii a}
+- id: plain.wic            # dissolves
+  out: [file: !& made]
+- id: opted_in.wic         # dissolves: its workflow opts in
+- id: gated.wic            # kept: the call carries `when`
+  when: $(true)
+- id: required.wic         # kept: the call carries `requirements`
+  requirements: {ResourceRequirement: {ramMin: 1}}
+- id: labelled.wic         # kept: the call carries `label`
+  label: a call
+- id: opted_out.wic        # kept: its workflow says `wic: inlineable: false`
+- id: javascript.wic       # kept: two InlineJavascriptRequirement bodies cannot both be the root's
+- id: scattered.wic        # kept: the call carries `scatter`
+  in: {name: !ii [b, c]}
+  scatter: [name]
+- id: valued.wic           # kept: dissolving would drop the valueFrom its input is bound with
+  in: {name: !cwl {source: w, valueFrom: $(self)}}
+- id: defaulted.wic        # kept: its input has a default
+- id: listed.wic           # dissolves: its requirements, a list, are read as the mapping and move with its step
+- id: moved.wic            # dissolves: its requirements move onto the step that ran under them
+- id: middle.wic           # dissolves at every level: middle~inner~xform
+- id: sealing.wic          # dissolves, but the call it holds is sealed, so the root still runs a Workflow
+- id: unbound.wic          # dissolves: its input, left unbound, is null, and the valueFrom it is bound with applies
+- id: sink                 # reads a dissolved call's output among its sources: the flat step is named instead
+  in:
+    file: !* made
+    n: !ii 1
+    extras: !cwl {source: [!* made, !* made], linkMerge: merge_flattened}

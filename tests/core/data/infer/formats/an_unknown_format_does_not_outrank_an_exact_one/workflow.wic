@@ -1,0 +1,4 @@
+# A formatless File is unknown, not a wildcard over exact formats.
+steps:
+- id: producer
+- id: consumer

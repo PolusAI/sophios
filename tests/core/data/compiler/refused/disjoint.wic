@@ -1,0 +1,5 @@
+# An int, defined here, read as the string a step two calls down takes: proven disjoint, so wic023.
+steps:
+- id: int_source
+  out: [value: !& shared]
+- id: wrapper.wic

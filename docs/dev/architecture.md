@@ -42,8 +42,8 @@ real-time declarations.
 An idempotent completion step, run before Link and again after Infer, materialises emission
 facts already decided (boundary spellings, source strings); it looks nothing
 up and decides nothing. The phases are tested one by one (`tests/core/test_resolve.py`,
-`test_lower.py`, `test_link.py`, `test_infer_phase.py`, `test_emit.py`) and
-together (`test_pipeline.py`).
+`test_lower.py`, `test_infer_phase.py`), together by the laws of `test_emit.py`, and
+on example workflows in files (`tests/core/data/examples`, `tests/core/data/compiler`).
 
 ## Names
 

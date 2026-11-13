@@ -1,0 +1,7 @@
+inputs:
+  name: string
+steps:
+- id: mk_file
+  in: {name: name}
+outputs:
+  res: {outputSource: mk_file/file}

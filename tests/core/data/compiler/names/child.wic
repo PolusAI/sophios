@@ -1,0 +1,8 @@
+inputs:
+  file: File
+steps:
+- id: inner.wic
+- id: xform
+  in: {file: file}
+outputs:
+  file: {outputSource: xform/file}

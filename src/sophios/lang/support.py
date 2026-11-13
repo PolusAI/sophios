@@ -34,13 +34,13 @@ class Row:
 
 _N, _P, _R = Support.NATIVE, Support.PASSTHROUGH, Support.REJECTED
 
-_WRITTEN: Final = 'test_class_is_written_while_inputs_outputs_and_version_are_not'
-_TOP_LEVEL: Final = 'test_top_level_passthrough_is_byte_identical'
-_STEP: Final = 'test_step_passthrough_is_byte_identical'
-_INTERPRETED: Final = 'test_every_declared_key_is_interpreted'
-_OUTPUT_MERGE: Final = 'test_link_merge_and_pick_value_on_an_output_are_wic038'
-_PROMOTED_INPUT: Final = 'test_a_promoted_input_keeps_the_fields_a_workflow_input_may_state'
-_PROMOTED_OUTPUT: Final = 'test_a_promoted_output_keeps_the_fields_a_workflow_output_may_state'
+_WRITTEN: Final = 'test_a_compiler_example_compiles_as_it_states'
+_TOP_LEVEL: Final = 'test_freight_survives_byte_for_byte_and_changes_nothing_else'
+_STEP: Final = 'test_freight_survives_byte_for_byte_and_changes_nothing_else'
+_INTERPRETED: Final = 'test_freight_survives_byte_for_byte_and_changes_nothing_else'
+_OUTPUT_MERGE: Final = 'test_a_document_lowers_to_the_diagnostics_its_family_states'
+_PROMOTED_INPUT: Final = 'test_a_promoted_port_keeps_the_fields_a_workflow_port_may_state'
+_PROMOTED_OUTPUT: Final = 'test_a_promoted_port_keeps_the_fields_a_workflow_port_may_state'
 _DOCUMENTED: Final = 'test_a_referenced_input_merges_the_documentation_of_the_argument_it_binds'
 _RECORD: Final = 'test_a_cwl_record_emits_the_fields_it_carries'
 
@@ -88,8 +88,8 @@ WORKFLOW_STEP_INPUT: Final[Mapping[str, Row]] = MappingProxyType({
 
 WORKFLOW_OUTPUT_PARAMETER: Final[Mapping[str, Row]] = MappingProxyType({
     'id': Row(_N, _WRITTEN),
-    'type': Row(_N, 'test_an_untyped_authored_output_takes_its_producers_type'),
-    'outputSource': Row(_N, 'test_an_authored_output_source_validates', 'one step/port reference; a list is wic038'),
+    'type': Row(_N, 'test_a_compiler_example_compiles_as_it_states'),
+    'outputSource': Row(_N, 'test_residue_validates_as_cwl_v1_2', 'one step/port reference; a list is wic038'),
     'format': Row(_P, _WRITTEN),
     'doc': Row(_P, _WRITTEN),
     'label': Row(_P, _WRITTEN),
@@ -101,8 +101,8 @@ WORKFLOW_OUTPUT_PARAMETER: Final[Mapping[str, Row]] = MappingProxyType({
 
 WORKFLOW_INPUT_PARAMETER: Final[Mapping[str, Row]] = MappingProxyType({
     'id': Row(_N, _WRITTEN),
-    'type': Row(_N, 'test_only_proven_disjoint_cross_scope_types_are_rejected', 'read for the reference judgment'),
-    'format': Row(_N, 'test_promoted_input_preserves_a_cwl_format_expression', 'read by inference'),
+    'type': Row(_N, 'test_a_compiler_example_compiles_as_it_states', 'read for the reference judgment'),
+    'format': Row(_N, 'test_a_compiler_example_compiles_as_it_states', 'read by inference'),
     'default': Row(_P, _WRITTEN),
     'doc': Row(_P, _DOCUMENTED),
     'label': Row(_P, _DOCUMENTED),

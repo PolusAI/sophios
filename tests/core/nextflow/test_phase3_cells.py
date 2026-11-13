@@ -1,6 +1,6 @@
 """The Phase 3 acceptance cells (design §6) as builders. A1-A9, W1-W7 are decided in test_subset_differential.py,
 S1-S14 in test_runtime.py's scatter property, W8-W11 and A11 in the example workflows of
-tests/core/data/nextflow/runs and stops; A10 has no runtime test (rejected)."""
+tests/core/data/examples and nextflow/stops; A10 has no runtime test (rejected)."""
 
 # pylint: disable=missing-function-docstring
 

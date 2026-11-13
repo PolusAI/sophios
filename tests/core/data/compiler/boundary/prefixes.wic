@@ -1,0 +1,13 @@
+# A promoted port keeps its tool's CURIE, so the document promoting it declares the prefix. Tools agreeing on a
+# prefix are no conflict; a tool binding a prefix no promoted port uses is no source for it; `edam` is the compiler's.
+steps:
+- id: called.wic   # promotes probe's port from beneath a call
+- id: probe        # myns: tool.example; also edam over http and s over http
+- id: twin         # myns: tool.example too; edam over https, s over https
+- id: maker        # promotes an output in myns:
+- id: bystander    # binds myns elsewhere, but promotes no myns: port
+- id: elsewhere    # promotes an elsens: port
+- id: mk_file      # promotes edam:format_2330
+  in: {name: !ii x}
+  out: [file: !& shared]
+- id: through.wic  # an edge into a grandchild promotes its port through the child, which declares the prefix

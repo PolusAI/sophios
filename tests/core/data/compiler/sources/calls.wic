@@ -1,0 +1,18 @@
+# Edges across calls. `shared`, defined here, is read two documents down; `made` is an output of a call, whose
+# producer is the step inside it; `scattered`, defined in a scattered call, feeds a call that threads its declared input to an inner port of
+# another name; and an input a call leaves unbound is lifted, not bound by the call.
+steps:
+- id: string_source
+  out: [value: !& shared]
+- id: wrapper.wic
+- id: made.wic
+  out: [result: !& made]
+- id: count
+  in: {file: !* made}
+- id: producer.wic        # `scattered` is defined inside it
+  in: {seed: !ii [a, b]}
+  scatter: [seed]
+- id: consumer.wic
+  in: {outer_name: !* scattered}
+  scatter: [outer_name]
+- id: unbound.wic

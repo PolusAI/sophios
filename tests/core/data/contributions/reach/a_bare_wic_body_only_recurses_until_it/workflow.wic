@@ -1,0 +1,17 @@
+# Three nested `wic:` bodies carry nothing themselves; the fourth binds.
+wic:
+  steps:
+    (1, a.wic):
+      wic:
+        steps:
+          (1, b.wic):
+            wic:
+              steps:
+                (1, c.wic):
+                  wic:
+                    steps:
+                      (1, mk_file):
+                        in:
+                          name: !* deep.txt
+steps:
+- id: a.wic

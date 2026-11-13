@@ -1,0 +1,15 @@
+# `(N, name)` addresses one step, so half a match is no match: the key is ignored, and each such key is named once
+# on stderr.
+wic:
+  steps:
+    (1, child.wic):
+      wic:
+        steps:
+          (2, mk_file):
+            in:
+              name: !ii wrong_index.txt
+          (1, mk_text):
+            in:
+              name: !ii wrong_name.txt
+steps:
+- id: child.wic

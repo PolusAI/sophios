@@ -1,0 +1,8 @@
+# Every input has to declare a format the output carries: a bare `right` does not.
+steps:
+- id: mk_file
+  in:
+    name: !ii a.txt
+  out:
+  - file: !& f
+- id: pair

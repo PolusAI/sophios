@@ -1,0 +1,43 @@
+# Every output of workflow.wic, by step and port, in the order of its steps.
+outputs:
+  write_each~file:
+  - {class: File, basename: out.txt, contents: "a\n"}
+  - {class: File, basename: out.txt, contents: "b\n"}
+  write_one~file: {class: File, basename: out.txt, contents: "c\n"}
+  write_two~file: {class: File, basename: out.txt, contents: "d\n"}
+  skipped~said: null
+  ran~said: only
+  cat_flat~line: {class: File, basename: all.txt, contents: "a\nb\nc\n"}
+  cat_nested~line: {class: File, basename: all.txt, contents: "d\nc\n"}
+  cat_single~line: {class: File, basename: all.txt, contents: "c\n"}
+  say_nested~line: {class: File, basename: out.txt, contents: "x y z\n"}
+  say_single~line: {class: File, basename: out.txt, contents: "x\n"}
+  default_unsourced~line: {class: File, basename: out.txt, contents: "d1\n"}
+  default_for_absent~line: {class: File, basename: out.txt, contents: "d2\n"}
+  default_not_taken~line: {class: File, basename: out.txt, contents: "g\n"}
+  default_after_skip~line: {class: File, basename: out.txt, contents: "d4\n"}
+  pick_first~line: {class: File, basename: out.txt, contents: "g\n"}
+  pick_only~line: {class: File, basename: out.txt, contents: "only\n"}
+  pick_all~line: {class: File, basename: out.txt, contents: "g only\n"}
+# The CWL workflow.wic compiles to: its requirements, and of each step, in order, what it reads from another
+# step or from a workflow input, and its scatter and when; a literal an input is given is left out.
+compiled:
+  requirements: {InlineJavascriptRequirement: {}, MultipleInputFeatureRequirement: {}, ScatterFeatureRequirement: {}}
+  steps:
+    write_each: {scatter: [name], scatterMethod: dotproduct}
+    write_one: {}
+    write_two: {}
+    skipped: {when: $(inputs.go)}
+    ran: {when: $(inputs.go)}
+    cat_flat: {in: {files: {source: [write_each/file, write_one/file], linkMerge: merge_flattened}}}
+    cat_nested: {in: {files: {source: [write_two/file, write_one/file]}}}
+    cat_single: {in: {files: {source: [write_one/file], linkMerge: merge_nested}}}
+    say_nested: {in: {words: {source: [x, y]}}}
+    say_single: {in: {words: {source: [x], linkMerge: merge_nested}}}
+    default_unsourced: {in: {words: {default: d1}}}
+    default_for_absent: {in: {words: {source: unset, default: d2}}}
+    default_not_taken: {in: {words: {source: given, default: d3}}}
+    default_after_skip: {in: {words: {source: skipped/said, default: d4}}}
+    pick_first: {in: {words: {source: [unset, skipped/said, given, x], pickValue: first_non_null}}}
+    pick_only: {in: {words: {source: [skipped/said, ran/said], pickValue: the_only_non_null}}}
+    pick_all: {in: {words: {source: [given, skipped/said, ran/said, unset], pickValue: all_non_null}}}

@@ -1,0 +1,25 @@
+# The keys the compiler owns, each its own way: `class` and `cwlVersion` are written over what the author wrote,
+# `inputs` and `outputs` merged into, `$namespaces` and `$schemas` kept. A `requirements:` or `hints:` list holding
+# an `$import`, which only cwltool reads, is emitted as written, not merged into, though a step scatters.
+class: ExpressionTool        # not what a .wic compiles to
+cwlVersion: v1.0             # Sophios writes one CWL version
+$namespaces: {mine: 'https://mine/', edam: 'https://not-edam/'}   # mine is kept; edam:, which a format says, is EDAM's
+$schemas: [https://example.org/ontologies/mine.owl]               # the author's ontology, and no other
+inputs:
+  mine: string
+outputs:
+  mine: {type: 'File[]', outputSource: mk_file/file}
+requirements:
+- $import: shared.yml
+hints:
+- $import: shared.yml
+- {class: ResourceRequirement, coresMin: 1}
+steps:
+- id: mk_file
+  in: {name: !ii [a.txt, b.txt]}
+  scatter: [name]
+  requirements:
+  - $import: shared.yml
+  - {class: ResourceRequirement, coresMin: 1}
+  hints:
+  - $import: shared.yml

@@ -36,7 +36,6 @@ from sophios.wic_types import Json
 from .test_setup import CorpusRegistry, corpus_registry, workflow_paths
 from .cwl_validation import validate_cwl
 from .equivalence import Strength, equivalent, flatten_model
-from .test_metadata_emitted import DECLARATIONS, declared_beneath
 
 yml_paths = workflow_paths()
 
@@ -535,6 +534,22 @@ def test_a_corpus_declaration_compiles_its_analysis(stem: str, analysis: str,
                                          compiler_options)
     assert [compiled.declaration.analysis for compiled in analyses] == [analysis]
     assert analyses[0].artifact.cwl['steps']
+
+
+#: The fields a CWL document declares its prefixes and ontologies in.
+DECLARATIONS: Final = ('$namespaces', '$schemas')
+
+
+def declared_beneath(artifact: CompilationArtifact) -> dict[str, Any]:
+    """The `$namespaces` and `$schemas` of `artifact` and of every process beneath it, merged as
+    embedding merges them: an embedded process may not declare its own, so they move up."""
+    namespaces = dict(artifact.cwl.get('$namespaces', {}))
+    schemas = list(artifact.cwl.get('$schemas', []))
+    for child in artifact.children:
+        below = declared_beneath(child)
+        namespaces |= below.get('$namespaces', {})
+        schemas += [schema for schema in below.get('$schemas', []) if schema not in schemas]
+    return {field: value for field, value in zip(DECLARATIONS, (namespaces, schemas)) if value}
 
 
 def _check_embedding_keeps_meaning(yml_path_str: str, yml_path: Path, corpus_registry: CorpusRegistry) -> None:

@@ -1,0 +1,11 @@
+# The contribution wins over a child that spells the same step both ways.
+wic:
+  steps:
+    (1, child.wic):
+      wic:
+        steps:
+          mk_file:
+            in:
+              name: !ii from_root.txt
+steps:
+- id: child.wic

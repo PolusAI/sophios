@@ -1,0 +1,6 @@
+inputs:
+  seed: string
+steps:
+- id: make
+  in: {seed: seed}
+  out: [value: !& scattered]

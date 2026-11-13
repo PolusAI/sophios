@@ -1,0 +1,13 @@
+# An explicit `!&`/`!*` edge is not a choice, so nothing is said.
+steps:
+- id: mk_file
+  in:
+    name: !ii a
+- id: mk_file
+  in:
+    name: !ii b
+  out:
+  - file: !& f
+- id: count
+  in:
+    file: !* f

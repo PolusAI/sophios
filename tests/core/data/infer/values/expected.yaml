@@ -1,0 +1,16 @@
+a_scalar_literal_under_scatter_is_refused:
+  compiled: true
+  refused: true
+  diagnostics:
+  - {code: LITERAL_TYPE_MISMATCH, step: mk_file, index: 1, port: name, severity: error, message: {contains: [scattered]}}
+a_list_literal_under_scatter_is_unchanged:
+  compiled: true
+  job_inputs: {exact: {mk_file~name: [a, b]}}
+iteration_exhaustion_is_exactly_wic022:
+  policy: {iteration_limit: 0}
+  refused: true
+  diagnostics:
+  - {code: FIXED_POINT_NOT_REACHED, severity: error}
+falsy_defaults_satisfy_inputs:
+  edges: {exact: {}}
+  inputs: []

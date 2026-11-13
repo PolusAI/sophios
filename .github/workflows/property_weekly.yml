@@ -82,18 +82,14 @@ jobs:
       # The oracle suite (tests/core/test_hermeticity.py::ORACLE_FILES) and the
       # phase properties beside it, slow ones included: the `--validate`
       # property is slow-marked, and deepening it is the point of this lane.
-      # test_leak_boundary.py's other tests compile against a discovered
-      # registry, so its five hermetic properties are named.
+      # test_leak_boundary.py's other test compiles against a discovered
+      # registry, so its hermetic property is named.
       - name: PyTest Oracle and Phase Properties
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         timeout-minutes: 180
         run: >-
-          pytest tests/core/test_generators.py tests/core/test_equivalence.py tests/core/test_equivalences.py tests/core/test_predicates.py tests/core/test_reference_compatibility.py tests/core/test_canonical_path.py tests/core/test_emit.py tests/core/test_resolve.py tests/core/test_link.py tests/core/test_infer_phase.py tests/core/test_names_emitted.py tests/core/test_edge_binding.py tests/core/test_lower.py tests/core/test_pipeline.py
-          tests/core/test_leak_boundary.py::test_step_passthrough_is_byte_identical
-          tests/core/test_leak_boundary.py::test_top_level_passthrough_is_byte_identical
-          tests/core/test_leak_boundary.py::test_hints_survive_on_the_document_and_the_step_and_change_nothing_else
-          tests/core/test_leak_boundary.py::test_unknown_keys_change_nothing_else
-          tests/core/test_leak_boundary.py::test_no_key_lands_on_both_sides
+          pytest tests/core/test_predicates.py tests/core/test_reference_compatibility.py tests/core/test_canonical_path.py tests/core/test_emit.py tests/core/test_resolve.py tests/core/test_infer_phase.py tests/core/test_edge_binding.py tests/core/test_lower.py
+          tests/core/test_leak_boundary.py::test_freight_survives_byte_for_byte_and_changes_nothing_else
           --hypothesis-seed="$HYPOTHESIS_SEED" --junitxml=property-reports/oracle.xml
 
       # The language layer's properties. Its skip_pypi_ci tests compile against

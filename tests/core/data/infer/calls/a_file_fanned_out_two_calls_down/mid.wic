@@ -1,0 +1,10 @@
+steps:
+- id: fan.wic
+  in:
+    a: x
+    b: y
+inputs:
+  x:
+    type: File
+  y:
+    type: File

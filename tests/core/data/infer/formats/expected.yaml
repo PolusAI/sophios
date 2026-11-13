@@ -1,0 +1,9 @@
+a_format_substring_is_no_candidate:
+  edges: {exact: {}}
+a_non_file_output_needs_no_format:
+  edges: {exact: {consumer@2.value: producer@1.value}}
+an_unknown_format_does_not_outrank_an_exact_one:
+  edges: {consumer@2.file: producer@1.matching}
+a_scatter_lifts_both_sides:
+  edges: {exact: {file_array_sink@2.files: mk_file@1.file}}
+  inputs: [count~file]

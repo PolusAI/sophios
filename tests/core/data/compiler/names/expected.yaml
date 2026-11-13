@@ -1,0 +1,56 @@
+# Both roots are written into one directory, the second after the first, so a file the second overwrote fails the
+# first's statement. A step is `<id>@<position>` exactly when another id, or a workflow input, casefolds to its id;
+# a made name is `<step>~<port>`; each document is `<root>~<address>.cwl`, its address the calls above it.
+greeting.wic:
+  # One file per step, not per tool: the three xform files are three, and none is a device name.
+  files: [greeting.cwl, greeting_inputs.yml, greeting~Touch@6.cwl, greeting~child@1.cwl, greeting~child@1~inner.cwl,
+          greeting~child@1~inner~mk_file.cwl, greeting~child@1~xform.cwl, greeting~child@2.cwl,
+          greeting~child@2~inner.cwl, greeting~child@2~inner~mk_file.cwl, greeting~child@2~xform.cwl,
+          greeting~child@3.cwl, greeting~con.cwl, greeting~echo@4.cwl, greeting~greeting__step__1__mk_file.cwl,
+          greeting~hello.cwl, greeting~mk_file.cwl, greeting~probe.cwl, greeting~shout.cwl, greeting~touch@7.cwl,
+          greeting~xform@10.cwl, greeting~xform@8.cwl, greeting~xform@9.cwl]
+  notes:   # each input inference gave a value, at the step that reads it (the guesses themselves are inference's)
+  - {code: INFERENCE_GUESS, severity: note, step: child.wic, index: 2, port: file}
+  - {code: INFERENCE_GUESS, severity: note, step: child, index: 3, port: file}
+  - {code: INFERENCE_GUESS, severity: note, step: xform, index: 8, port: file}
+  - {code: INFERENCE_GUESS, severity: note, step: xform, index: 9, port: file}
+  - {code: INFERENCE_GUESS, severity: note, step: xform, index: 10, port: file}
+  written:
+    greeting.cwl:
+      steps:
+      - {id: child@1, run: greeting~child@1.cwl}
+      - {id: child@2, run: greeting~child@2.cwl, in: {file: child@1/xform~file}}
+      - {id: child@3, run: greeting~child@3.cwl, in: {file: child@2/xform~file}}
+      - {id: echo@4, run: greeting~echo@4.cwl, in: {name: echo}}
+      - {id: mk_file, run: greeting~mk_file.cwl}
+      - {id: Touch@6, run: greeting~Touch@6.cwl}
+      - {id: touch@7, run: greeting~touch@7.cwl}
+      - {id: xform@8, run: greeting~xform@8.cwl, in: {file: touch@7/file}}
+      - {id: xform@9, run: greeting~xform@9.cwl, in: {file: xform@8/file}}
+      - {id: xform@10, run: greeting~xform@10.cwl, in: {file: xform@9/file}}
+      - {id: con, run: greeting~con.cwl}
+      - {id: greeting__step__1__mk_file, run: greeting~greeting__step__1__mk_file.cwl}
+      - {id: hello, run: greeting~hello.cwl}
+      - {id: shout, run: greeting~shout.cwl}
+      - {id: probe, run: greeting~probe.cwl, in: {a~b: probe~a~b}}
+      inputs: {keys: [echo, mk_file__name, child@1~file, child@1~inner~mk_file~name, child@1~xform~name,
+                      child@2~inner~mk_file~name, child@2~xform~name, mk_file~name, Touch@6~name, touch@7~name,
+                      xform@8~name, xform@9~name, xform@10~name, con~name, greeting__step__1__mk_file~name,
+                      hello~a, shout~a, probe~a~b]}
+      outputs:
+        generated: {outputSource: greeting__step__1__mk_file/file}
+        child@1~inner~mk_file~file: {outputSource: child@1/inner~mk_file~file}
+    greeting_inputs.yml: {exact: {hello~a: x, shout~a: y}}
+    greeting~child@1.cwl:
+      steps: [{id: inner, run: greeting~child@1~inner.cwl}, {id: xform, run: greeting~child@1~xform.cwl}]
+      inputs: {keys: [file, inner~mk_file~name, xform~name]}
+      outputs: {keys: [file, inner~mk_file~file, xform~file]}
+    greeting~child@1~inner.cwl: {steps: [{id: mk_file, run: greeting~child@1~inner~mk_file.cwl}]}
+    greeting~hello.cwl: {baseCommand: echo}   # a/echo.cwl
+    greeting~shout.cwl: {baseCommand: rm}     # b/echo.cwl
+other.wic:
+  files: [other.cwl, other_inputs.yml, other~hello.cwl]
+  written:
+    other.cwl: {steps: [{id: hello, run: other~hello.cwl}]}
+    other~hello.cwl: {baseCommand: rm}
+    other_inputs.yml: {exact: {hello~a: x}}

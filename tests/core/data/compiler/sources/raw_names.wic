@@ -1,0 +1,5 @@
+# Under --allow_raw_cwl a bare name no input declares reaches CWL as written: the flag is the difference between
+# this and refused/unresolved.wic.
+steps:
+- id: mk_file
+  in: {name: not_a_workflow_input}

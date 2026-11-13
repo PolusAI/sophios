@@ -1,0 +1,11 @@
+# A parent key that addresses no step leaves the child's valid bare-id entry alone.
+wic:
+  steps:
+    (1, child.wic):
+      wic:
+        steps:
+          (2, mk_file):
+            in:
+              name: !ii from_root.txt
+steps:
+- id: child.wic

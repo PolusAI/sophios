@@ -1,0 +1,25 @@
+a_contributed_value_wins_over_the_child:
+  expect:
+  - {depth: 1, inputs: {name: [InlineLiteral, from_the_parent.txt]}}
+a_contributed_out_replaces_the_step_s:
+  expect:
+  - {depth: 1, outputs: [[file, null]]}
+a_contribution_merges_with_the_child_s:
+  expect:
+  - {depth: 1, inputs: {file: [EdgeRef, upstream], name: [InlineLiteral, contributed.txt]}, outputs: [[file, its_own_edge]]}
+a_positional_key_wins_over_an_id_key_for:
+  expect:
+  - {inputs: {name: [InlineLiteral, by_position.txt]}}
+an_id_key_from_the_parent_merges_over:
+  expect:
+  - {depth: 1, inputs: {name: [InlineLiteral, from_root.txt]}}
+  said: []
+an_id_key_from_the_parent_wins_when_the:
+  expect:
+  - {depth: 1, inputs: {name: [InlineLiteral, from_root.txt], other: [InlineLiteral, o]}}
+a_positional_key_from_the_parent_merges:
+  expect:
+  - {depth: 1, inputs: {name: [InlineLiteral, from_root.txt]}}
+an_id_key_and_a_positional_key_for_the:
+  expect:
+  - {inputs: {a: [InlineLiteral, x.txt], b: [InlineLiteral, y.txt]}}

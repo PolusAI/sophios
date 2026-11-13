@@ -1,0 +1,7 @@
+# Candidate order is semantic, including ambiguity within one producer.
+steps:
+- id: mk_file
+  in:
+    name: !ii x
+- id: multi_file
+- id: count

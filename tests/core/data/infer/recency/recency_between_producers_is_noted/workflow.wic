@@ -1,0 +1,9 @@
+# An earlier producer that also matched is named; a repeated name carries its position and the choice is unchanged.
+steps:
+- id: mk_file
+  in:
+    name: !ii a
+- id: mk_file
+  in:
+    name: !ii b
+- id: count

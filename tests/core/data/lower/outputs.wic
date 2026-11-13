@@ -1,0 +1,17 @@
+# A positional `outputSource:` names a step by its place: a wrong name or a place past the last step is wic039, and a
+# port the step lacks is reported with the step's outputs.
+steps:
+- id: s
+  out: [f]
+- id: s
+  out: [f]
+outputs:
+  wrong_step:
+    type: File
+    outputSource: (2, t)/f
+  past_the_last:
+    type: File
+    outputSource: (3, s)/f
+  no_such_port:
+    type: File
+    outputSource: (2, s)/nope

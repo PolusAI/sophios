@@ -1,6 +1,5 @@
-"""Two front ends, one payload: the Python API and `write_wic`'s file compile to one result, every compiled workflow
-makes a request the compute schema takes, and passthrough survives beside a scatter."""
-import json
+"""Two front ends, one payload: the Python API and the file `write_wic` writes compile to one result, whatever the file
+is called and whatever the steps were renamed to after binding."""
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,17 +13,13 @@ from sophios.api.python import _workflow_runtime
 import sophios.compiler
 from sophios.api.python.workflow import Step, Workflow
 from sophios.cli import default_compilation_settings
-from sophios import compute
 from sophios.ir.artifacts import CompilationResult
 from sophios.ir.frontdoor import bundle_from_disk
 from sophios.wic_types import StepId, Yaml
 
-from . import ast_strategies as strat
-from .ast_strategies import passthrough_keys, passthrough_values
 from .equivalence import Strength, equivalent
-from .hermetic import ORACLE, PARTITION, compile_hermetic, compile_hermetic_cwl
+from .hermetic import PARTITION
 from .synthetic_tools import SYNTHETIC_NS, SYNTHETIC_TOOLS
-from .wic_reading import read_wic
 
 
 def _tool_document(stem: str) -> Yaml:
@@ -33,17 +28,20 @@ def _tool_document(stem: str) -> Yaml:
 
 
 @dataclass(frozen=True, slots=True)
-class _BundleSpec:
+class _BundleSpec:  # pylint: disable=too-many-instance-attributes  # one field per varied fact
     """A small workflow the Python API can build twice: two File sources feeding a `join` step; `rename`, `nest` and
-    `bound` vary its name, a nested call and a bound name. Narrower than ast_strategies.documents(): the API refuses
-    duplicate names and links to later siblings."""
+    `bound` vary its name, a nested call and a bound name, `renamed` renames `join` after its output is bound, and
+    `stem` names the file written. Narrower than ast_strategies.documents(): the API refuses duplicate names and links
+    to later siblings."""
 
     file_name: str
     text_name: str
     join_name: str
     rename: bool
     nest: bool
-    bound: bool = False
+    bound: bool
+    renamed: bool
+    stem: str
 
 
 def _build_workflow(spec: _BundleSpec) -> Workflow:
@@ -74,6 +72,8 @@ def _build_workflow(spec: _BundleSpec) -> Workflow:
     if spec.bound:
         join.inputs.name = workflow.inputs.name
         workflow.inputs.name = spec.join_name
+    if spec.renamed:
+        join.process_name = 'after'
     return workflow
 
 
@@ -86,33 +86,6 @@ def _compile_bundle(root: Path) -> CompilationResult:
         quiet=False)
 
 
-@pytest.mark.fast
-def test_the_written_wic_file_is_a_real_independent_document() -> None:
-    """Tautology guard for path agreement.
-
-    "A test whose assertion is guaranteed true by something other than the
-    thing it names is not a test": without this, the path-agreement property
-    could hold for free — if `write_wic` did not really produce an
-    independent, reloadable document, comparing "compiled directly" against
-    "compiled from the file" would just be comparing a workflow with itself
-    under a different name. Proves the file exists, is text, and loads into
-    the document of the workflow that wrote it.
-    """
-    workflow = _build_workflow(_BundleSpec('a', 'b', 'c', rename=True, nest=False))
-    with tempfile.TemporaryDirectory() as workdir:
-        path = workflow.write_wic(Path(workdir) / 'oracle.wic')
-        assert path.exists(), 'write_wic did not write a file'
-        text = path.read_text(encoding='utf-8')
-
-    assert isinstance(text, str) and 'steps:' in text, 'the written file is not .wic text'
-    loaded = read_wic(text)
-    assert [step['id'] for step in loaded['steps']] == ['mk_file', 'mk_text', 'joined'], (
-        'the file on disk does not even reflect the workflow that wrote it, so any '
-        'agreement downstream would prove nothing about the file-based path')
-    assert loaded['steps'][2]['run'] == 'join.cwl'
-    assert loaded['outputs']['result']['outputSource'] == 'joined/file'
-
-
 #: The three string-typed literals `_BundleSpec` carries, restricted to keep
 #: this property about path agreement rather than YAML's exotic corners.
 _safe_text: Final = st.text('abcxyz_', max_size=8)
@@ -120,8 +93,8 @@ _safe_text: Final = st.text('abcxyz_', max_size=8)
 
 @st.composite
 def _bundle_specs(draw: st.DrawFn) -> _BundleSpec:
-    return _BundleSpec(draw(_safe_text), draw(_safe_text), draw(_safe_text), draw(st.booleans()),
-                       draw(st.booleans()), draw(st.booleans()))
+    return _BundleSpec(draw(_safe_text), draw(_safe_text), draw(_safe_text), draw(st.booleans()), draw(st.booleans()),
+                       draw(st.booleans()), draw(st.booleans()), draw(st.sampled_from(['oracle', 'pipeline'])))
 
 
 @pytest.mark.slow
@@ -140,6 +113,9 @@ def test_the_two_front_ends_compile_to_the_same_cwl(spec: _BundleSpec) -> None:
     Built twice from one drawn `spec` (see `_build_workflow`'s own docstring
     for why sharing one object would weaken the claim).
 
+    The output is bound to `join` and named by its step's name at compile time, a rename after binding included:
+    binding once captured the name, so a rename raised a bare `KeyError` from inside serialization.
+
     BLIND SPOTS: one fixed topology (two File sources into one `join`, one
     workflow output) rather than the full grammar `ast_strategies.documents()`
     covers — see `_BundleSpec`'s docstring for why. No `scatter`/`when`, a
@@ -150,11 +126,13 @@ def test_the_two_front_ends_compile_to_the_same_cwl(spec: _BundleSpec) -> None:
 
     via_file_workflow = _build_workflow(spec)
     with tempfile.TemporaryDirectory() as workdir:
-        root = via_file_workflow.write_wic(workdir)
+        root = via_file_workflow.write_wic(Path(workdir) / f'{spec.stem}.wic')
         written_text = root.read_text(encoding='utf-8')
         info = _compile_bundle(root)
     via_file = _workflow_runtime.compiled_workflow_from_result(via_file_workflow, info)
 
+    step = 'after' if spec.renamed else 'joined' if spec.rename else 'join'
+    assert direct.cwl_workflow['outputs']['result']['outputSource'] == f'{step}/file', 'the output lost its step'
     found = equivalent(direct.cwl_workflow, via_file.cwl_workflow, Strength.IDENTICAL)
     assert found is None, (
         'the Python API and the bundle it writes disagree about what this workflow compiles to.\n'
@@ -168,105 +146,3 @@ def test_the_two_front_ends_compile_to_the_same_cwl(spec: _BundleSpec) -> None:
     assert inputs_found is None, (
         f'the two front ends disagree about the generated job inputs.\n{inputs_found}\n\n'
         f'--- written .wic ---\n{written_text}')
-
-
-@pytest.mark.fast
-@given(strat.workflows())
-@ORACLE
-def test_every_compiled_workflow_makes_a_request_the_compute_service_schema_takes(yml: Yaml) -> None:
-    """`request_for` builds and checks the request for everything this oracle compiles, against Sophios's copy of
-    the service's `run-request.schema.json`; it raises `RequestRefused` on a mismatch. Nothing is sent.
-
-    BLIND SPOTS: no `workflowOutDir`, `leader`, `steps` or `logLevel`; whether the copy is the service's
-    own is `test_compute_service.py`'s.
-    """
-    info = compile_hermetic(yml, 'oracle')
-    request = compute.request_for('oracle', info.artifact.cwl, info.artifact.job_inputs)
-    assert (request['workflow'], request['inputs']) == (info.artifact.cwl, info.artifact.job_inputs)
-    assert json.loads(json.dumps(request)) == request
-
-
-@pytest.mark.slow
-@given(st.data())
-@ORACLE
-def test_passthrough_survives_a_scatter_in_a_multi_step_workflow(data: st.DataObject) -> None:
-    """Passthrough fidelity, re-quantified over the workflows
-    `test_leak_boundary.py`'s single-step generator cannot reach.
-
-    `test_step_passthrough_is_byte_identical` and its siblings quantify over
-    `_touch_workflow`'s one, always-non-scattering step, so the requirement
-    merge in `ir/complete.py` never fires there and a step that scatters
-    *beside* its own passthrough freight is unreachable by that generator.
-    `ast_strategies.freighted_documents` forces exactly that shape; the
-    passthrough alphabets are imported from `test_leak_boundary` rather than
-    restated, so the next widening of either (`$`, uppercase, a real CWL key)
-    reaches this property too, instead of a second copy silently missing it.
-
-    Includes its own tautology guard: `ScatterFeatureRequirement` must appear
-    in the compiled `requirements`, proving the requirement merge really
-    fired for this example rather than this property silently degrading into
-    `test_leak_boundary`'s already-covered case.
-
-    BLIND SPOTS: `freighted_documents`'s own (no mapping-form `steps:`, no
-    subworkflow, no sidecar). Only one step is ever forced to scatter, and
-    only via `scatter` — `when` and a `.wic` subworkflow step are the
-    merge's other two triggers, neither exercised here.
-    """
-    document, index = data.draw(strat.freighted_documents())
-    freight = data.draw(st.dictionaries(passthrough_keys, passthrough_values, min_size=1, max_size=4))
-    yml = strat.to_yml_with_freight(document, index, freight)
-
-    compiled = compile_hermetic_cwl(yml, 'oracle')
-
-    requirements = compiled.get('requirements') or {}
-    assert 'ScatterFeatureRequirement' in requirements, (
-        'the designated step did not actually scatter; this example is vacuous for the claim')
-
-    step = compiled['steps'][index]
-    for key, value in freight.items():
-        assert step[key] == value, f'{key} was altered by compilation'
-
-
-def _written_output_source(workflow: Workflow, directory: Path) -> str:
-    """The `outputSource` of `result` in the document `write_wic` writes for `workflow`."""
-    document = read_wic(workflow.write_wic(directory).read_text(encoding='utf-8'))
-    return str(document['outputs']['result']['outputSource'])
-
-
-@pytest.mark.fast
-def test_a_renamed_step_still_resolves_the_workflow_output_bound_to_it(tmp_path: Path) -> None:
-    """`process_name` is a mutable public attribute, so a bound output may not
-    cache it.
-
-    Binding captured the source step's name at bind time and serialization
-    indexed the concrete-step mapping with that snapshot, so renaming a step
-    after binding raised a bare `KeyError` from inside serialization — on an
-    object graph that is still perfectly valid, since the output is bound to
-    the same child object it always was. Resolution goes through the source
-    parameter's live owner now.
-    """
-    workflow = _build_workflow(_BundleSpec('a', 'b', 'c', rename=False, nest=False))
-    before = _written_output_source(workflow, tmp_path / 'before')
-
-    renamed = next(step for step in workflow.steps if step.process_name == 'join')
-    renamed.process_name = 'after'
-    after = _written_output_source(workflow, tmp_path / 'after')
-
-    assert before == 'join/file'
-    assert after == 'after/file', 'the output did not follow the step it is bound to'
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize('stem', ['oracle', 'pipeline'])
-def test_a_written_document_compiles_under_any_file_name(stem: str) -> None:
-    """`write_wic` accepts any `*.wic` name, and nothing in the document depends
-    on it: outputs name their authored step, and the bundle compiles from disk
-    under the name it was saved as."""
-    workflow = _build_workflow(_BundleSpec('a', 'b', 'c', rename=True, nest=False))
-    with tempfile.TemporaryDirectory() as workdir:
-        root = workflow.write_wic(Path(workdir) / f'{stem}.wic')
-        document = read_wic(root.read_text(encoding='utf-8'))
-        compiled = _compile_bundle(root).artifact.cwl
-
-    assert document['outputs']['result']['outputSource'] == 'joined/file'
-    assert compiled['outputs']['result']['outputSource'] == 'joined/file'

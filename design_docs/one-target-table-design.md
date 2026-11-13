@@ -227,7 +227,7 @@ cases reach each code and each family of §5 no case reached. Other tests pin th
 
 - Expectations whose text D changes by design: a workflow input of a type the target does not lower names the type
   (`scatter_over_an_array_typed_port`, `scatter_over_a_non_array_workflow_input`); a `when` that is text is
-  `wic056`'s wording (`tests/core/data/when_boolean.yaml`); the made-input test and the no-inputs `when` test read
+  `wic056`'s wording (`tests/core/data/compiler/when`); the made-input test and the no-inputs `when` test read
   the diagnostic.
 
 **Measured.** The byte harness, taught that from D on only a `NotLowered` is a refusal and any other `ValueError` a

@@ -1,0 +1,72 @@
+# Every output of workflow.wic, by step and port, in the order of its steps.
+outputs:
+  up~result: "ok\n"
+  up_skipped~result: null
+  counted~result: "ok\n"
+  uncounted~result: null
+  carried~result: "ok\n"
+  gated~result: "1 2 3\n"
+  gated_prev_last~result: "1 2 3\n"
+  gated_after_skip~result: null
+  gated_flag_false~result: null
+  after_skip~done: {class: File, basename: done.txt, contents: ""}
+  write_note~note: {class: File, basename: note.txt, contents: "shared\n"}
+  copy_note~copy:
+  - {class: File, basename: a.txt, contents: "shared\n"}
+  - {class: File, basename: b.txt, contents: "shared\n"}
+  - {class: File, basename: c.txt, contents: "shared\n"}
+  echo_item~out:
+  - {class: File, basename: a.txt, contents: "1\n"}
+  - {class: File, basename: a.txt, contents: "2\n"}
+  - {class: File, basename: a.txt, contents: "3\n"}
+  cat_pair~out:
+  - {class: File, basename: b.txt, contents: "1\nREF\n"}
+  - {class: File, basename: b.txt, contents: "2\nREF\n"}
+  - {class: File, basename: b.txt, contents: "3\nREF\n"}
+  cat_pair_flat~out:
+  - {class: File, basename: b.txt, contents: "1\nREF\n"}
+  - {class: File, basename: b.txt, contents: "2\nREF\n"}
+  - {class: File, basename: b.txt, contents: "3\nREF\n"}
+  cat_pair_nested~out:
+  - {class: File, basename: b.txt, contents: "1\nREF\n"}
+  - {class: File, basename: b.txt, contents: "2\nREF\n"}
+  - {class: File, basename: b.txt, contents: "3\nREF\n"}
+  pair_nested~line:
+  - - {class: File, basename: out.txt, contents: a-x}
+    - {class: File, basename: out.txt, contents: a-y}
+  - - {class: File, basename: out.txt, contents: b-x}
+    - {class: File, basename: out.txt, contents: b-y}
+  pair_unless_b~line:
+  - {class: File, basename: out.txt, contents: "a-x"}
+  - null
+  - {class: File, basename: out.txt, contents: "c-z"}
+  pair_unless_skipped~line:
+  - {class: File, basename: out.txt, contents: "a-0.2"}
+  - null
+  - {class: File, basename: out.txt, contents: "c-0"}
+# The CWL workflow.wic compiles to: its requirements, and of each step, in order, what it reads from another
+# step or from a workflow input, and its scatter and when; a literal an input is given is left out.
+compiled:
+  requirements: {InlineJavascriptRequirement: {}, ScatterFeatureRequirement: {}}
+  steps:
+    up: {in: {go: go}, when: $(inputs.go)}
+    up_skipped: {in: {go: no_go}, when: $(inputs.go)}
+    counted: {in: {go: go}, when: $(inputs.n > 0)}
+    uncounted: {in: {go: go}, when: $(inputs.n > 0)}
+    carried: {in: {go: no_go, enabled: {source: go}}, when: $(inputs.enabled)}
+    gated: {in: {flag: go, maybe: maybe, xs: xs, prev: {source: up/result}},
+      when: &gate $(inputs.prev !== null && inputs.flag && inputs.maybe === null)}
+    gated_prev_last: {in: {flag: go, maybe: maybe, xs: xs, prev: {source: up/result}}, when: *gate}
+    gated_after_skip: {in: {flag: go, maybe: maybe, xs: xs, prev: {source: up_skipped/result}}, when: *gate}
+    gated_flag_false: {in: {flag: no_go, maybe: maybe, xs: xs, prev: {source: up/result}}, when: *gate}
+    after_skip: {in: {maybe: {source: uncounted/result}}}
+    write_note: {in: {after: {source: counted/result}}}
+    copy_note: {in: {note: {source: write_note/note}}, scatter: [name], scatterMethod: dotproduct}
+    echo_item: {scatter: [item], scatterMethod: dotproduct}
+    cat_pair: {in: {f: {source: echo_item/out}}, scatter: [f], scatterMethod: dotproduct}
+    cat_pair_flat: {in: {f: {source: echo_item/out}}, scatter: [f], scatterMethod: flat_crossproduct}
+    cat_pair_nested: {in: {f: {source: echo_item/out}}, scatter: [f], scatterMethod: nested_crossproduct}
+    pair_nested: {scatter: [first, second], scatterMethod: nested_crossproduct}
+    pair_unless_b: {scatter: [first, second], scatterMethod: dotproduct, when: $(inputs.first !== 'b')}
+    pair_unless_skipped: {scatter: [first, seconds], scatterMethod: dotproduct,
+      when: $(inputs.seconds !== inputs.skipped)}

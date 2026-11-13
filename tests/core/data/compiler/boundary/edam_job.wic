@@ -1,0 +1,3 @@
+steps:
+- id: count
+  in: {file: !ii {class: File, location: x.txt, format: "edam:format_2330"}}

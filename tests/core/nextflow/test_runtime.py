@@ -16,7 +16,6 @@ from typing import Any, NamedTuple
 
 from hypothesis import example, given, strategies as st
 import pytest
-import yaml
 
 from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
 from sophios.api.python.workflow import Step, StepInput, Workflow
@@ -26,11 +25,12 @@ from sophios.run_status import RunState, RunStatus
 
 from ..budgets import budget
 from ..cases import DATA, case_dirs
-from ..helpers import python_process, search_config
+from ..helpers import (cwltool_outputs, cwltool_run, example_workflow, examples, files_beside, observed, python_process,
+                       search_config, stated)
 from .test_executable_ir import NAMES
 from .test_public_api import supported_workflow
-from .test_reference_differential import _cwltool, _observed, _run_cwltool, _run_nextflow, _tree
-from .testkit import assert_succeeded, example_workflow, examples, execute_nextflow
+from .test_reference_differential import _run_nextflow
+from .testkit import assert_succeeded, execute_nextflow
 
 
 @pytest.mark.nextflow
@@ -168,45 +168,28 @@ def _example(folder: Path, directory: Path, monkeypatch: pytest.MonkeyPatch) -> 
     return workflow
 
 
-def _files(directory: Path) -> dict[str, Any]:
-    """What `directory` holds, each file as its text."""
-    return {path.name: _tree(path) for path in directory.iterdir()}
-
-
 def _kept(directory: Path, before: dict[str, Any]) -> bool:
     """Whether a run left every file `directory` held `before` it as it was."""
-    return {name: found for name, found in _files(directory).items() if name in before} == before
+    return {name: found for name, found in files_beside(directory).items() if name in before} == before
 
 
 @pytest.mark.nextflow
 @pytest.mark.serial
-@pytest.mark.needs_cwltool
-@pytest.mark.parametrize("folder", examples("runs"))
-def test_an_example_workflow_runs_under_nextflow_as_under_cwltool(
+@pytest.mark.parametrize("folder", examples())
+def test_an_example_workflow_runs_under_nextflow_as_stated(
         folder: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Each directory of tests/core/data/nextflow/runs is a workflow to read and to run: `workflow.wic`, the tools
-    and child workflows it names, `job.yml` for its inputs, and `expected.yaml` stating every output by class,
-    basename and contents. Run as Nextflow it gives exactly those outputs, and so does cwltool, the reference runner,
-    for the CWL the same workflow compiles to: the statement is CWL's answer, not Sophios's. The two runners agreeing
-    is not enough, since a compiler that reversed a list of sources would reverse it for both. Both leave the files
-    beside the workflow as they were. An example with no `reference` run here is run as Nextflow only. A
-    `workflow.nf` and `nextflow.config` are the pipeline written, for what no run shows."""
-    import cwltool.main  # pylint: disable=import-outside-toplevel
-
-    stated = yaml.safe_load((folder / "expected.yaml").read_text(encoding="utf-8"))
-    for runner in ("nextflow", "cwltool")[:1 if stated.get("reference") == "none" else 2]:
-        directory = tmp_path / runner
-        workflow = _example(folder, directory, monkeypatch)
-        before = _files(directory)
-        if runner == "nextflow":
-            ran = workflow.run(target="nextflow", basepath=str(directory / "out"))
-            assert ran is not None and isinstance(ran.outputs, dict)
-            outputs = ran.outputs
-        else:
-            outputs = _run_cwltool(cwltool.main.main, workflow, directory)
-        assert {name: _observed(value) for name, value in outputs.items()} == stated["outputs"], runner
-        assert _kept(directory, before), f"{runner} changed a file beside the workflow"
-    pipeline = tmp_path / "nextflow" / "out" / "nextflow_workflow"
+    """Each directory of tests/core/data/examples, run as Nextflow, gives exactly the outputs its `expected.yaml`
+    states by class, basename and contents, the outputs cwltool gives too (test_compiler.py's cwltool leg), and
+    leaves the files beside the workflow as they were. A `workflow.nf` and `nextflow.config` beside it are the
+    pipeline written, for what no run shows."""
+    directory = tmp_path / "example"
+    workflow = _example(folder, directory, monkeypatch)
+    before = files_beside(directory)
+    ran = workflow.run(target="nextflow", basepath=str(directory / "out"))
+    assert ran is not None and isinstance(ran.outputs, dict)
+    assert {name: observed(value) for name, value in ran.outputs.items()} == stated(folder)["outputs"]
+    assert _kept(directory, before), "Nextflow changed a file beside the workflow"
+    pipeline = directory / "out" / "nextflow_workflow"
     for written in ("workflow.nf", "nextflow.config"):
         if (folder / written).exists():
             assert (pipeline / written).read_text(encoding="utf-8") == (folder / written).read_text(encoding="utf-8")
@@ -222,7 +205,7 @@ def _stopped(folder: Path, expected: dict[str, Any], tmp_path: Path,
 
     directory = tmp_path / "nextflow"
     workflow = _example(folder, directory, monkeypatch)
-    before = _files(directory)
+    before = files_beside(directory)
     handle = workflow.start(target="nextflow", basepath=str(directory / "out"))
     status = handle.wait()
     assert status.state is RunState.FAILED, handle.logs()
@@ -232,7 +215,7 @@ def _stopped(folder: Path, expected: dict[str, Any], tmp_path: Path,
     assert expected["says"] in logs + (pipeline / ".nextflow.log").read_text(encoding="utf-8"), logs
     assert _kept(directory, before)
     reference = _example(folder, tmp_path / "cwltool", monkeypatch)
-    code, _, messages = _cwltool(cwltool.main.main, reference, tmp_path / "cwltool")
+    code, _, messages = cwltool_run(cwltool.main.main, reference, tmp_path / "cwltool")
     assert ("fails" if code else "runs") == expected["cwltool"], messages
     return status, pipeline / "work"
 
@@ -374,8 +357,9 @@ def test_a_command_receives_the_arguments_cwltool_gives_it(
     import cwltool.main  # pylint: disable=import-outside-toplevel
 
     root = tmp_path_factory.mktemp("argv")
+    runners = (("nextflow", _run_nextflow), ("cwltool", partial(cwltool_outputs, cwltool.main.main)))
     printed = {runner: Path(run(_argv_workflow(spec), root / runner)["out"]["path"]).read_bytes()
-               for runner, run in (("nextflow", _run_nextflow), ("cwltool", partial(_run_cwltool, cwltool.main.main)))}
+               for runner, run in runners}
     assert printed["nextflow"] == printed["cwltool"]
     assert not list(root.rglob("SHOULD_NOT_EXIST"))
 

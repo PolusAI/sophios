@@ -1,0 +1,3 @@
+steps:
+- id: mk_file
+  in: {name: !ii child.txt}

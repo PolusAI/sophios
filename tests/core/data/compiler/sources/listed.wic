@@ -1,0 +1,15 @@
+# CWL's list forms of `outputs:` and `requirements:` compile as their mappings do. Authored inputs keep the order
+# written and come first; inputs exposing a step's port follow the steps.
+inputs:
+  zeta: string
+  alpha: string
+requirements:
+- class: InlineJavascriptRequirement
+steps:
+- id: mk_file             # its name is lifted, after mk_text's literal already exposed its own
+  in: {name: !ii [a, b]}
+  scatter: [name]
+- id: mk_text
+  in: {name: !ii a}
+outputs:
+- {id: o, type: 'File[]', outputSource: mk_file/file}

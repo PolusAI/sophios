@@ -1,0 +1,11 @@
+# An `in:` written at a distance binds that step's input in the child.
+wic:
+  steps:
+    (1, child.wic):
+      wic:
+        steps:
+          (1, mk_file):
+            in:
+              name: !ii contributed.txt
+steps:
+- id: child.wic

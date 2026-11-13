@@ -1,0 +1,5 @@
+inputs:
+  f: {type: File, default: {class: File, location: x.txt, format: "edam:format_2330"}}
+steps:
+- id: count
+  in: {file: f}

@@ -1,0 +1,4 @@
+steps:
+- id: mk_file
+  out:
+  - file: !& its_own_edge

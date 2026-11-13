@@ -1,0 +1,8 @@
+# `join` would take the one file as `left` and as `right`, and nothing says that is meant.
+steps:
+- id: mk_file
+  in:
+    name: !ii a.txt
+- id: join
+  in:
+    name: !ii o.txt

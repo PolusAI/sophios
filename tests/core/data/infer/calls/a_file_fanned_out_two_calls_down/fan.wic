@@ -1,0 +1,12 @@
+steps:
+- id: count
+  in:
+    file: a
+- id: xform
+  in:
+    file: b
+inputs:
+  a:
+    type: File
+  b:
+    type: File

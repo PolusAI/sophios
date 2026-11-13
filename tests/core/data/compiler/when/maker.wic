@@ -1,0 +1,2 @@
+steps:
+- id: mk_file   # leaves `name` for its caller

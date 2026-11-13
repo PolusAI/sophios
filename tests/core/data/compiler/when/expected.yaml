@@ -1,0 +1,54 @@
+# Expected by hand from design_docs/resolved-view-design.md §10: the CWL target notes each `when` the shared check
+# finds gives no boolean, at its step, and refuses nothing; the Nextflow target refuses it, and also each `when` its
+# subset cannot read, and a `when` on a call. A `when` that reads an input its step does not declare is a note too,
+# naming the input and, for a made name read dotted, the bracket form.
+workflow.wic:
+  notes:
+  - {code: WHEN_NOT_BOOLEAN, severity: note, step: dotted_absent, message: {contains: [inputs.nope, does not declare]}}
+  - {code: WHEN_NOT_BOOLEAN, severity: note, step: bracketed_absent, message: {contains: [inputs.nope, does not declare]}}
+  - {code: WHEN_NOT_BOOLEAN, severity: note, step: maker.wic,
+     message: {contains: [inputs.mk_file, does not declare, "inputs['mk_file~name']"]}}
+  - {code: WHEN_NOT_BOOLEAN, severity: note, step: a_number, message: {contains: [not a number]}}
+  - {code: WHEN_NOT_BOOLEAN, severity: note, step: a_string, message: {contains: [not a string]}}
+  - {code: WHEN_NOT_BOOLEAN, severity: note, step: a_null, message: {contains: [not a null]}}
+  - {code: WHEN_NOT_BOOLEAN, severity: note, step: an_element, message: {contains: [not a number]}}
+  - {code: WHEN_NOT_BOOLEAN, severity: note, step: text, message: {contains: ["not one $(...) or ${...} expression"]}}
+  - {code: WHEN_NOT_BOOLEAN, severity: note, step: a_template, message: {contains: [not one $(...)]}}
+  - {code: WHEN_NOT_BOOLEAN, severity: note, step: child, message: {contains: [not a number]}}
+  nextflow:
+  - {step: child, says: {contains: [a when on a nested-workflow step]}}
+  - {step: maker@15, says: {contains: [a when on a nested-workflow step]}}
+  - {step: maker@16, says: {contains: [a when on a nested-workflow step]}}
+  - {step: a_number, says: {contains: [not a number]}}
+  - {step: a_string, says: {contains: [not a string]}}
+  - {step: a_null, says: {contains: [not a null]}}
+  - {step: an_element, says: {contains: [not a number]}}
+  - {step: text, says: {contains: [not one $(...)]}}
+  - {step: a_template, says: {contains: [not one $(...)]}}
+  - {step: outside_the_subset, says: {contains: [outside the safe JavaScript subset, "'**'"]}}
+  - {step: a_body, says: {contains: ["safe JavaScript subset $( … ) expression"]}}
+  - {step: not_a_string, says: {contains: ["safe JavaScript subset $( … ) expression"]}}
+  - {step: dotted_absent, says: {contains: [inputs.nope, does not bind]}}
+  - {step: bracketed_absent, says: {contains: [outside the safe JavaScript subset]}}
+  - {step: minus, says: {contains: [number operands]}}
+  written:
+    workflow.cwl:
+      steps:
+      - {id: a_number, when: $(inputs.n + 1)}
+      - {id: a_string, in: {s: {source: s}}}
+      - {id: a_null}
+      - {id: an_element, scatter: [n]}
+      - {id: text, when: 'true'}
+      - {id: a_template}
+      - {id: child, when: $(inputs.n)}
+      - {id: a_boolean, when: '  $(inputs.n > 0)  '}
+      - {id: outside_the_subset}
+      - {id: a_body}
+      - {id: not_a_string, when: true}
+      - {id: dotted_absent, when: $(inputs.nope != null)}   # still compiles, as written
+      - {id: bracketed_absent}
+      - {id: minus}
+      - {id: maker@15, in: {mk_file~name: maker@15~mk_file~name}}
+      - {id: maker@16}
+lowers.wic:
+  nextflow: []

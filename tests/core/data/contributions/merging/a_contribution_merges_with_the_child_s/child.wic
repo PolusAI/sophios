@@ -1,0 +1,9 @@
+wic:
+  steps:
+    (1, xform):
+      in:
+        file: !* upstream
+      out:
+      - file: !& its_own_edge
+steps:
+- id: xform

@@ -1,0 +1,7 @@
+# wic036 says which half of the outputSource: to fix, here a spelling the compiler no longer makes.
+steps:
+- id: mk_file
+  in: {name: !ii a}
+- id: kid.wic
+outputs:
+  o: {outputSource: oracle__step__1__mk_file/file}

@@ -1,0 +1,8 @@
+wic:
+  steps:
+    (1, mk_file):
+      wic:
+        graphviz:
+          label: a label
+steps:
+- id: mk_file

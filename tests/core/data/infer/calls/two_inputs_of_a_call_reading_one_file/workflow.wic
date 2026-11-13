@@ -1,0 +1,6 @@
+# `a` goes to `count` and `b` to `xform`: two tool steps, each reading the one file once.
+steps:
+- id: mk_file
+  in:
+    name: !ii a.txt
+- id: fan.wic

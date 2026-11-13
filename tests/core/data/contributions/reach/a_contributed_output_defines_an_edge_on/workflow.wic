@@ -1,0 +1,16 @@
+# `out:` carries `!&` to a step two subworkflows down, as `basic.wic` does. The definition exists nowhere else:
+# writing it in the child would define it twice when that child is called from a second root, which is the whole
+# reason the corpus places it from above.
+wic:
+  steps:
+    (1, min.wic):
+      wic:
+        steps:
+          (1, cg.wic):
+            wic:
+              steps:
+                (1, mk_file):
+                  out:
+                  - file: !& min.tpr
+steps:
+- id: min.wic

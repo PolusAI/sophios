@@ -1,0 +1,5 @@
+# `input_structure_file` takes `output_structure_file` over `output_tpr_file`, the name its renaming gives, and over
+# `output_report_file`.
+steps:
+- id: maker
+- id: reader

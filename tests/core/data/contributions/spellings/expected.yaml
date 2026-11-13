@@ -1,0 +1,24 @@
+literal_tagged:
+  expect:
+  - {depth: 1, inputs: {name: [InlineLiteral, shared.txt]}}
+literal_desugared:
+  expect:
+  - {depth: 1, inputs: {name: [InlineLiteral, shared.txt]}}
+edge_reference_tagged:
+  expect:
+  - {depth: 1, inputs: {name: [EdgeRef, shared.txt]}}
+edge_reference_desugared:
+  expect:
+  - {depth: 1, inputs: {name: [EdgeRef, shared.txt]}}
+raw_cwl_reference_tagged:
+  expect:
+  - {depth: 1, inputs: {name: [RawCwlRef, shared.txt]}}
+raw_cwl_reference_desugared:
+  expect:
+  - {depth: 1, inputs: {name: [RawCwlRef, shared.txt]}}
+bare_name:
+  expect:
+  - {depth: 1, inputs: {name: [UnresolvedName, shared.txt]}}
+untagged_mapping:
+  expect:
+  - {depth: 1, inputs: {name: [InlineLiteral, {a: 1}]}}

@@ -1,0 +1,13 @@
+# A `.wic` step's body names steps inside it; nothing lands on the call site.
+wic:
+  steps:
+    (1, child.wic):
+      in:
+        name: !ii never_bound_here.txt
+      wic:
+        steps:
+          (1, mk_file):
+            in:
+              name: !ii contributed.txt
+steps:
+- id: child.wic

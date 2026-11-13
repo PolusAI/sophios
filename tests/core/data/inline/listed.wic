@@ -1,0 +1,5 @@
+requirements:
+- {class: EnvVarRequirement, envDef: {A: b}}
+steps:
+- id: xform
+  in: {name: !ii b}
