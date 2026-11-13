@@ -15,7 +15,6 @@ from hypothesis import given
 import sophios.compiler
 from sophios.api.python import _workflow_runtime
 from sophios.api.python.workflow import SophiosError, SophiosErrorCode, Workflow
-from sophios.cli import default_compilation_settings
 from sophios.ir.frontdoor import bundle_from_disk
 from sophios.ir.artifacts import CompilationResult
 from sophios.post_compile import inline_artifact_runs
@@ -68,7 +67,7 @@ def _long_form(spec: Any) -> Any:
 def _compile_file(path: Path, workflow_paths: WorkflowPaths, tools: Tools) -> CompilationResult:
     """`path` compiled as the CLI reads it, with the settings `Workflow.compile()` uses."""
     return sophios.compiler.compile_source(
-        bundle_from_disk(path, workflow_paths, tools), default_compilation_settings(),
+        bundle_from_disk(path, workflow_paths, tools), sophios.compiler.CompileSettings(),
         quiet=False)
 
 

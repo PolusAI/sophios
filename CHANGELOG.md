@@ -37,6 +37,13 @@ Codes in parentheses are the codes Sophios prints with each diagnostic.
   which no longer ran. Drop `[cyto]` from your install lines; `Workflow.draw()`
   and `--graphviz` draw a workflow.
 
+### Command line
+
+- `--ignore_validation_errors`, `--no_skip_dollar_schemas`, `--custom_net` and
+  the `cwltool_filterlog_pf` entry point are gone; drop them from your scripts,
+  and from `run_args_dict`. `sophios.ir` re-exports nothing: import a name from
+  the module that defines it.
+
 ## [0.7.0](https://github.com/PolusAI/sophios/compare/v0.6.0...v0.7.0) (2026-11-04)
 
 
@@ -1140,10 +1147,10 @@ Codes in parentheses are the codes Sophios prints with each diagnostic.
   from it. Write a value as the runner should see it. A key that is not an
   environment variable name raises `ValueError` before the run starts, where
   it used to be dropped with a warning; rename or remove it.
-- `compile_source` takes the bundle and the compiler options only: drop
-  `yaml_tag_paths`, the graph settings and `graph_target`.
-  `sophios.cli.default_compilation_settings()` returns the compiler options, and
-  `get_dicts_for_compilation()` returns `(compiler_options, graph_settings)`.
+- `compile_source` takes the bundle and a `sophios.compiler.CompileSettings`
+  only: drop `yaml_tag_paths`, the graph settings and `graph_target`.
+  `CompileSettings()` holds the command line's defaults, and
+  `sophios.cli.settings_from_args(args)` returns `(settings, graph_settings)`.
   The compiler no longer draws: `CompilationArtifact.graph_view` and
   `sophios.utils_graphs` are gone, and `sophios.drawing.draw(result, bundle,
   graph_settings, name, *, background)` draws a compiled workflow. The

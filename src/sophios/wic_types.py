@@ -1,4 +1,4 @@
-from typing import Any, Final, Literal, NamedTuple, NotRequired, TypeAlias, TypedDict, get_args
+from typing import Any, Final, Literal, NamedTuple, TypeAlias, TypedDict, get_args
 
 # See https://mypy.readthedocs.io/en/stable/kinds_of_types.html#type-aliases
 
@@ -36,23 +36,6 @@ Tools: TypeAlias = dict[StepId, Tool]
 
 # NOTE: Please read the Names section of docs/dev/architecture.md !!!
 Namespace: TypeAlias = str
-
-
-class CompilerOptions(TypedDict):
-    """Core compiler flags needed for compilation and transformation into CWL."""
-    partial_failure_enable: bool
-    #: The exit codes named to count as success under partial failure, as given; `RunPolicy` adds 0 and sorts them.
-    partial_failure_success_codes: tuple[int, ...]
-    inference_use_naming_conventions: bool
-    inference_strict: bool
-    insert_steps_automatically: bool
-    inference_disable: bool
-    allow_raw_cwl: bool
-    #: The explicit language version, if the user set one; None means infer.
-    #: NotRequired so existing constructors of this dict stay valid.
-    lang_version: NotRequired[str | None]
-    inference_rules: NotRequired[dict[str, str]]
-    renaming_conventions: NotRequired[list[tuple[str, str]]]
 
 
 class GraphSettings(TypedDict):

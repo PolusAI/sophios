@@ -36,27 +36,12 @@ class NoResolvedFilter(logging.Filter):
         return not bool(m)  # (True if m else False)
 
 
-class NoPartialFailureNullWarning(logging.Filter):
-    # pylint:disable=too-few-public-methods
-    def filter(self, record: logging.LogRecord) -> bool:
-        err_str = "Source is from conditional step and may produce `null`"
-        # this will indiscriminately filter this error string
-        return err_str not in record.getMessage()
-
-
-def logging_filters(allow_pf: bool = False) -> None:
-    """Install logging filters that silence known-noisy cwltool/salad log messages.
-
-    Args:
-        allow_pf (bool): Also silence the "may produce `null`" warning emitted
-            for conditional steps when partial failure is enabled.
-    """
+def logging_filters() -> None:
+    """Install logging filters that silence known-noisy cwltool/salad log messages."""
     logger_salad = logging.getLogger("salad")
     logger_salad.addFilter(NoPreviouslyDefinedFilter())
     logger_cwltool = logging.getLogger("cwltool")
     logger_cwltool.addFilter(NoResolvedFilter())
-    if allow_pf:
-        logger_cwltool.addFilter(NoPartialFailureNullWarning())
 
 
 def validate_cwl(cwl_path_str: str) -> None:

@@ -3,12 +3,14 @@ import re
 import sys
 from collections.abc import Collection, Iterator, Mapping
 from copy import deepcopy
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
 import yaml
 
 from . import utils_cwl
+from .input_output import SHIPPED_RENAMINGS
 
 from .ir.complete import complete
 from .ir.artifacts import CompilationArtifact, CompilationResult
@@ -29,12 +31,23 @@ from .lang.diagnostics import Diagnostic, Diagnostics, Locator, Severity, Sophio
 from .lang.nodes import CwlRecord, OpaqueCwl, UnresolvedName
 from .lang.parser import Grammar
 from .lang.error_codes import SophiosErrorCode
-from .wic_types import CompilerOptions, Cwl
+from .wic_types import Cwl
 
 
-# pylint: disable-next=too-many-locals
+@dataclass(frozen=True, slots=True)
+class CompileSettings:
+    """What a compilation is given besides its source: how it infers, how the workflow runs, the language version
+    (None infers it), and whether a step input may name what is not a workflow input. The defaults are the command
+    line's."""
+
+    inference: InferencePolicy = InferencePolicy(renaming_conventions=SHIPPED_RENAMINGS)
+    policy: RunPolicy = RunPolicy()
+    lang_version: str | None = None
+    allow_raw_cwl: bool = False
+
+
 def compile_source(bundle: SourceBundle,
-                   compiler_options: CompilerOptions,
+                   settings: CompileSettings,
                    *,
                    quiet: bool) -> CompilationResult:
     """Compile a parsed root workflow and every workflow it reaches.
@@ -46,8 +59,7 @@ def compile_source(bundle: SourceBundle,
     """
     if not quiet:
         print(' starting compilation of', bundle.name)
-    selected_version = versions.resolve(
-        compiler_options.get('lang_version'), bundle.lang_version_pins)
+    selected_version = versions.resolve(settings.lang_version, bundle.lang_version_pins)
     front = front_end(bundle.parsed, bundle.registry, name=bundle.name,
                       lang_version=selected_version)
     if front.graph is None or front.resolved is None or front.resolved.document is None:
@@ -56,7 +68,7 @@ def compile_source(bundle: SourceBundle,
         raise SophiosError.error(SophiosErrorCode.SUBWORKFLOW_INVALID,
                                  'workflows must define at least one step')
     authored, realtime = extract(front.graph)
-    _check_unresolved_names(authored, compiler_options['allow_raw_cwl'])
+    _check_unresolved_names(authored, settings.allow_raw_cwl)
     if not quiet:
         for note in dict.fromkeys(_authored_spelling_notes(authored)):
             print(note, file=sys.stderr)
@@ -65,26 +77,16 @@ def compile_source(bundle: SourceBundle,
     linked = link(prepared)
     if linked.graph is None:
         raise SophiosError(linked.diagnostics)
-    policy = InferencePolicy(
-        disabled=compiler_options['inference_disable'],
-        use_naming_conventions=compiler_options['inference_use_naming_conventions'],
-        renaming_conventions=tuple(compiler_options.get('renaming_conventions', ())),
-        insert_steps_automatically=compiler_options['insert_steps_automatically'],
-        format_rules=tuple(compiler_options.get('inference_rules', {}).items()),
-        strict=compiler_options['inference_strict'],
-    )
-    inferred = infer(linked.graph, policy, InsertionCatalog.from_registry(bundle.registry))
+    inferred = infer(linked.graph, settings.inference, InsertionCatalog.from_registry(bundle.registry))
     if inferred.graph is None:
         raise SophiosError(inferred.diagnostics)
     graph = declare_namespaces(complete(inferred.graph), bundle.registry)
     names = Names.of(graph)
     diagnostics = Diagnostics([*inferred.diagnostics, *dict.fromkeys(_when_notes(graph, names))])
-    run_policy = RunPolicy(compiler_options['partial_failure_enable'],
-                           compiler_options['partial_failure_success_codes'])
-    artifact = _artifact_tree(graph, graph.name, names, _Descriptions(bundle.registry), policy=run_policy)
+    artifact = _artifact_tree(graph, graph.name, names, _Descriptions(bundle.registry), policy=settings.policy)
     if not quiet:
         print('finishing compilation of', bundle.name)
-    return CompilationResult(graph, artifact, diagnostics, realtime, policy=run_policy)
+    return CompilationResult(graph, artifact, diagnostics, realtime, policy=settings.policy)
 
 
 def resolved_view(result: CompilationResult, *, values: Mapping[str, OpaqueCwl] | None = None,

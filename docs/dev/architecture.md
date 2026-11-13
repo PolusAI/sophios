@@ -8,10 +8,10 @@ around the compiler do.
 
 ## The pipeline
 
-`compile_source(bundle, options)` in `sophios.compiler` is the one entry
+`compile_source(bundle, settings)` in `sophios.compiler` is the one entry
 point. It takes a `SourceBundle`, the parsed root document, the registry of
 every parsed workflow and tool it reaches, and their version pins, plus
-immutable settings, and returns a `CompilationResult`: the final graph, the
+its `CompileSettings`, and returns a `CompilationResult`: the final graph, the
 artifact tree, the diagnostics, the resolved language version and the
 real-time declarations.
 
@@ -155,7 +155,7 @@ for a `StepInput` default against the working directory.
 ## Around the compiler
 
 - `sophios.main` is the command-line adapter: it parses arguments once,
-  converts them to settings at the boundary (`cli.get_dicts_for_compilation`),
+  converts them to settings at the boundary (`cli.settings_from_args`),
   loads the registry through `plugins`, runs the compile, the rewrites, the
   drawing, the pre-flight and the run, and converts a `SophiosError` to
   diagnostics and exit code 1. Nothing below it sees an argparse namespace.
