@@ -2,7 +2,6 @@
 expected.yaml states (every platform) and runs under cwltool to the outputs it states (POSIX); each example of
 tests/core/data/compiler compiles, or is refused, as its expected.yaml states."""
 import contextlib
-import copy
 import io
 from pathlib import Path
 from typing import Any, cast
@@ -22,7 +21,6 @@ from sophios.wic_types import CompilerOptions, StepId, Tool, Tools, Yaml
 
 from .cases import DATA, diagnostic, match
 from .helpers import cwltool_outputs, example_workflow, examples, files_beside, observed, stated
-from .hermetic import compile_hermetic_cwl
 from .synthetic_tools import SYNTHETIC_NS, SYNTHETIC_TOOLS
 
 
@@ -130,38 +128,3 @@ def test_a_compiler_example_compiles_as_it_states(folder: Path, tmp_path: Path,
         mine = [name for name in written if name.split('~')[0] in (f'{stem}.cwl', stem, f'{stem}_inputs.yml')]
         assert 'files' not in expected or mine == expected['files'], root
         assert match(expected.get('written', {}), written), root
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize(('claim', 'user', 'argument', 'expected'), [
-    ('nothing to merge', {}, {}, {}),
-    ('the user wrote it all', {'doc': 'mine', 'label': 'keep me'}, {},
-     {'doc': 'mine', 'label': 'keep me'}),
-    ('the argument documents a bare input', {}, {'doc': 'the file name'},
-     {'doc': 'the file name'}),
-    ('both, joined by one real newline', {'doc': 'mine', 'label': 'keep me'},
-     {'doc': 'the file name', 'label': 'File name'},
-     {'doc': 'mine\nthe file name', 'label': 'keep me\nFile name'}),
-    ('argument doc is a list', {'doc': 'mine'}, {'doc': ['one', 'two']}, {'doc': 'mine\none\ntwo'}),
-    ('user doc is a list', {'doc': ['one', 'two']}, {'doc': 'theirs'}, {'doc': 'one\ntwo\ntheirs'}),
-    ('both are lists', {'doc': ['a', 'b']}, {'doc': ['c', 'd']}, {'doc': 'a\nb\nc\nd'}),
-])
-def test_a_referenced_input_merges_the_documentation_of_the_argument_it_binds(
-        claim: str, user: Yaml, argument: Yaml, expected: Yaml) -> None:
-    """A workflow input keeps what its author wrote and appends what the bound
-    argument documents: no empty text, no synthesized field, no Python repr of
-    a list (CWL types `doc` as `string | string[]`; `label` is string-only),
-    and a newline character rather than the two-character escape.
-
-    Two steps reference the input and only `mk_text.name` is documented, so an
-    undocumented reference adds nothing.
-    """
-    tools = copy.deepcopy(SYNTHETIC_TOOLS)
-    tools[StepId('mk_text', SYNTHETIC_NS)].cwl['inputs']['name'].update(argument)
-    document: Yaml = {
-        'inputs': {'wf_name': {'type': 'string', **user}},
-        'steps': [{'id': 'mk_text', 'in': {'name': 'wf_name'}},
-                  {'id': 'mk_file', 'in': {'name': 'wf_name'}}],
-    }
-    compiled = compile_hermetic_cwl(document, 'docs', tools=tools)
-    assert compiled['inputs']['wf_name'] == {'type': 'string', **expected}, claim

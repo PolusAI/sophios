@@ -31,7 +31,7 @@ from .helpers import ADAPTERS, HELLOWORLD, REPO_ROOT, echo_workflow, live_workfl
 from .nextflow.test_public_api import CUDA_NOTES, gpu_workflow
 from .test_backends import _Frozen
 
-pytestmark = [POSIX_ONLY, pytest.mark.package]
+pytestmark = POSIX_ONLY
 
 
 @pytest.fixture(name='offline')

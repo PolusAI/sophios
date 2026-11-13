@@ -36,8 +36,6 @@ from sophios.wic_types import Yaml
 from .cases import DATA, case_dirs, cases
 from .synthetic_tools import SYNTHETIC_TOOLS
 
-pytestmark = pytest.mark.package
-
 DOOR: Final = DATA / 'frontdoor'
 
 

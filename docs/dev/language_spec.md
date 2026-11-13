@@ -128,8 +128,8 @@ step's tool is passthrough wholesale: Sophios does not classify
 | `type` | native | read for the reference judgment | `tests/core/data/compiler/refused` |
 | `format` | native | read by inference | `tests/core/data/compiler/boundary` |
 | `default` | passthrough | a relative File or Directory `location`/`path` is written absolute against the `.wic`'s directory | `tests/core/data/compiler/boundary`, `test_a_wic_file_default_is_written_absolute_against_the_wic` (`test_wic_defaults.py`) |
-| `doc` | passthrough | | `test_a_referenced_input_merges_the_documentation_of_the_argument_it_binds` (`test_compiler.py`) |
-| `label` | passthrough | | `test_a_referenced_input_merges_the_documentation_of_the_argument_it_binds` (`test_compiler.py`) |
+| `doc` | passthrough | | `tests/core/data/compiler/boundary` |
+| `label` | passthrough | | `tests/core/data/compiler/boundary` |
 | `inputBinding` | passthrough | | `tests/core/data/compiler/boundary` |
 | `loadContents` | passthrough | | `test_emit.py` |
 | `loadListing` | passthrough | | `test_emit.py` |

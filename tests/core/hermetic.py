@@ -1,5 +1,5 @@
 """Compilation with no environment: compile_harness compiles against the registry test_setup discovers, so this
-sibling compiles against SYNTHETIC_TOOLS and runs with discovery poisoned under the hermeticity property."""
+sibling compiles against SYNTHETIC_TOOLS."""
 import socket
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -25,6 +25,18 @@ from .synthetic_tools import SYNTHETIC_TOOLS
 COVERAGE: Final = budget(500)
 ORACLE: Final = budget(100)
 PARTITION: Final = budget(50)
+
+#: The oracle suite: test files whose properties compile against SYNTHETIC_TOOLS alone, so the weekly property lane
+#: deepens them on a bare hosted runner.
+ORACLE_FILES: Final = (
+    'tests/core/test_predicates.py',
+    'tests/core/test_reference_compatibility.py',
+    'tests/core/test_canonical_path.py',
+    'tests/core/test_emit.py',
+    'tests/core/test_resolve.py',
+    'tests/core/test_infer_phase.py',
+    'tests/core/test_edge_binding.py',
+)
 
 
 @contextmanager

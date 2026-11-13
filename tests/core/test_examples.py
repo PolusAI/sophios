@@ -314,7 +314,7 @@ def is_isomorphic_with_timeout(g_m: isomorphism.GraphMatcher, yml_path_str: str)
     if sys.platform == 'win32':   # No SIGALRM on Windows: a plain call; the CI job has its own timeout.
         assert g_m.is_isomorphic()
     else:
-        # SIGALRM works only in the main thread, so not under --workers.
+        # SIGALRM is delivered to the main thread only.
         signal.signal(signal.SIGALRM, handler)
         signal.alarm(10)
         assert g_m.is_isomorphic()
@@ -421,7 +421,7 @@ def test_corpus_compiles_clean_in_every_form(yml_path_str: str, yml_path: Path, 
     the inline flags give means what the nested form means; each real-time analysis it declares compiles. cwltool
     finds each defect these find, but only in a run, behind a container pull: here each costs a compile.
 
-    Serial: the isomorphism check's alarm works only in the main thread, so not under --workers."""
+    Serial: the isomorphism check's alarm needs the main thread."""
     result = _compile_corpus_workflow(yml_path_str, yml_path, corpus_registry)
     options = sophios.cli.get_dicts_for_compilation(get_args(str(yml_path)))[0]
     _check_residue(result.artifact)

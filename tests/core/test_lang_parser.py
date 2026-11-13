@@ -484,7 +484,6 @@ def test_the_corpus_parses_validates_and_round_trips() -> None:
     assert not failed, failed
 
 
-@pytest.mark.package
 @pytest.mark.fast
 def test_reading_writing_and_the_schema_share_no_state() -> None:
     """Parsing, rendering and the schema export keep nothing between calls. A parse leaves `yaml.safe_load` blind to

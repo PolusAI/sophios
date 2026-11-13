@@ -14,8 +14,6 @@ from sophios import main
 from .cases import DATA, match
 from .helpers import no_preflight, run_cli
 
-pytestmark = pytest.mark.package
-
 DRAWING: Final = DATA / 'drawing'
 #: A node or edge name in DOT: quoted, or a bare word.
 _ID = r'"[^"]*"|\w+'

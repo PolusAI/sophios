@@ -79,7 +79,7 @@ jobs:
         id: setup
         run: 'true'
 
-      # The oracle suite (tests/core/test_hermeticity.py::ORACLE_FILES) and the
+      # The oracle suite (tests/core/hermetic.py::ORACLE_FILES) and the
       # phase properties beside it, slow ones included: the `--validate`
       # property is slow-marked, and deepening it is the point of this lane.
       # test_leak_boundary.py's other test compiles against a discovered
@@ -114,7 +114,6 @@ jobs:
         run: >-
           pytest tests/core/test_input_output.py tests/core/test_runtime_inputs.py tests/core/test_python_api_tool_builder.py
           tests/core/test_python_api_inference.py::test_an_inference_is_refused_at_construction_or_keeps_what_it_was_given
-          tests/core/test_python_api_workflow.py::test_python_api_uses_the_conservative_language_judgment
           tests/core/test_python_api_workflow.py::test_a_diagnostic_names_the_python_line_that_made_its_object
           tests/core/test_python_api_workflow.py::test_a_built_tool_is_one_step_through_every_door
           tests/core/test_realtime.py::test_a_declaration_is_returned_instead_of_emitted_or_is_wic044_at_each_port

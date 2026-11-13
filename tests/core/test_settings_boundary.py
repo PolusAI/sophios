@@ -14,8 +14,6 @@ from sophios.wic_types import CompilerOptions, GraphSettings
 
 from .cases import DATA
 
-pytestmark = pytest.mark.package
-
 
 #: A minimal workflow: enough to reach the compiler and the drawing, cheap enough to run once per setting. The
 #: compiler's options are caught before it does any work.

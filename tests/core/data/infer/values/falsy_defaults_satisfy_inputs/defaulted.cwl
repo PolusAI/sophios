@@ -6,4 +6,6 @@ inputs:
   flag: {type: boolean, default: false}
   text: {type: string, default: ''}
   items: {type: 'string[]', default: []}
+  nulled: {type: File, default: null}
+  maybe: {type: 'File?', default: null}
 outputs: {}

@@ -32,8 +32,6 @@ from .strategies import author_names, pinned
 from .synthetic_tools import clt, registered
 from .test_lang_parser import FAST
 
-pytestmark = pytest.mark.package
-
 _TYPES: Final = {'int': int, 'long': int, 'float': float, 'double': float, 'boolean': bool, 'string': str}
 _TEXTS = st.text('07.e+-:axy', max_size=4)
 _READ_BACK: Final[dict[type, Callable[[str], Any]]] = {str: str, int: int, float: float,

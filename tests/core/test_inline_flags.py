@@ -24,8 +24,6 @@ from .helpers import stated
 from .test_compiler import _tools
 from .test_setup import workflow_paths
 
-pytestmark = pytest.mark.package
-
 TREE = DATA / 'inline'
 
 

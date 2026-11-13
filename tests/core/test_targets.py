@@ -8,7 +8,6 @@ from sophios import cli
 from sophios.api.python.workflow import Workflow
 
 
-@pytest.mark.package
 @pytest.mark.fast
 def test_the_table_the_command_line_and_the_python_api_name_the_same_targets() -> None:
     """A target the table holds is one `--target` and every `target=` accept, and nothing else is."""

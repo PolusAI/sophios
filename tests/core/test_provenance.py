@@ -8,8 +8,6 @@ import pytest
 from .cases import DATA
 from .helpers import EACH_RUNNER, run_local_process
 
-pytestmark = pytest.mark.package
-
 PROJECT: Final = DATA / 'provenance_runs'
 
 

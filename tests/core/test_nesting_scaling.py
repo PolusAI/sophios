@@ -13,8 +13,6 @@ from sophios.ir.types import AuthoredName, DerivedName, Namespace, PortName, Ste
 
 from .hermetic import compile_hermetic, nested_workflow
 
-pytestmark = pytest.mark.package
-
 #: The most a cost may multiply by per nesting level. Polynomial growth in the
 #: depth stays under 1.2 over the depths used here; doubling per level is 2.
 MAX_GROWTH_PER_LEVEL: Final = 1.4

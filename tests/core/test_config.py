@@ -10,8 +10,6 @@ from sophios import input_output as io
 from .cases import DATA
 from .helpers import run_cli
 
-pytestmark = pytest.mark.package
-
 
 @pytest.mark.fast
 def test_an_explicit_config_file_is_only_read(monkeypatch: pytest.MonkeyPatch, tmp_path: Path,

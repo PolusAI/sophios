@@ -60,3 +60,14 @@ format_expression.wic:
       inputs:
         formatted~reference: {format: $(inputs.source.format)}
         formatted~body: {format: '${ return inputs.source.format; }'}
+docs.wic:
+  written:
+    docs.cwl:
+      inputs:
+        none: {exact: {type: string}}
+        own: {exact: {type: string, doc: mine, label: keep me}}
+        plain: {exact: {type: string, doc: the file name, label: File name}}
+        both: {exact: {type: string, doc: "mine\nthe file name", label: "keep me\nFile name"}}
+        mine: {exact: {type: string, doc: "mine\none\ntwo"}}
+        listed: {exact: {type: string, doc: "one\ntwo\nthe file name", label: File name}}
+        lists: {exact: {type: string, doc: "a\nb\none\ntwo"}}
