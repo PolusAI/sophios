@@ -71,10 +71,9 @@ Homepage = "https://github.com/PolusAI/sophios"
 test = [
     "networkx",
     "pre-commit",
-    "py", # See https://github.com/kevlened/pytest-parallel/pull/119
     "pytest",
     "pytest-cov",
-    "pytest-parallel",
+    "pytest-xdist",
     "coverage",
     "mypy",
     "numpy",
@@ -139,9 +138,6 @@ namespaces = true
 [tool.setuptools.package-data]
 "*" = ["*.txt"]
 "sophios" = ["**/*.json"]
-
-[tool.aliases]
-test = "pytest --workers 8"
 
 [tool.setuptools_scm]
 # A release is the tag vX.Y.Z that release-please puts on master.
@@ -237,13 +233,12 @@ ignore_missing_imports = true
 markers = [
     "fast: (i.e. for maximum speed, use 'pytest -m fast')",
     "slow: (i.e. for medium speed, use 'pytest -m \"not slow\"')",
-    "serial: (These tests CANNOT be run in parallel with --workers n > 1)",
+    "serial: (These tests CANNOT be run in parallel with -n n > 1)",
     "nextflow: invokes the installed Nextflow executable",
     "docker: requires a working Docker daemon",
     "nextflow_corpus: runs corpus workflows under Nextflow; only .github/workflows/run_workflows.yml collects it, on a push",
     "cwl_corpus: runs or reads the CWL corpus, the workflows search_paths_wic reaches in mm-workflows and image-workflows; Python Matrix Weekly leaves it out",
     "skip_pypi_ci: tests intentionally excluded from PyPI package-build CI",
-    "package: only the package job of build_wheel.yml collects it; no other pull-request lane runs it",
     "contrib: exercises a peripheral surface (ICT, Workflow Builder, REST) rather than the core compiler; run core only with 'pytest -m \"not contrib\"'",
     "needs_cwltool: runs cwltool; skipped off POSIX, see conftest.py",
 ]

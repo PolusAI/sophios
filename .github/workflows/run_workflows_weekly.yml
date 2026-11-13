@@ -183,7 +183,7 @@ jobs:
     - name: PyTest Run Workflows (On Push)
       if: ${{ !cancelled() && steps.setup.outcome == 'success' && steps.corpus.outcome == 'success' }}
       # NOTE: Do NOT add coverage to PYPY CI runs https://github.com/tox-dev/tox/issues/2252
-      run: cd sophios/ && pytest -k test_run_workflows_on_push --workers 8 --cwl_runner toil-cwl-runner --durations=0 # --cov
+      run: cd sophios/ && pytest -k test_run_workflows_on_push -n 8 --cwl_runner toil-cwl-runner --durations=0 # --cov
 
     - name: Disk usage (after workflows (on push))
       if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
@@ -196,7 +196,7 @@ jobs:
     - name: PyTest Run Inlined Workflows (On Push)
       if: ${{ !cancelled() && steps.setup.outcome == 'success' && steps.corpus.outcome == 'success' }}
       # NOTE: Do NOT add coverage to PYPY CI runs https://github.com/tox-dev/tox/issues/2252
-      run: cd sophios/ && pytest -k test_run_inlined_workflows_on_push --workers 8 --cwl_runner toil-cwl-runner --durations=0 # --cov
+      run: cd sophios/ && pytest -k test_run_inlined_workflows_on_push -n 8 --cwl_runner toil-cwl-runner --durations=0 # --cov
 
     - name: Disk usage (after inlined (on push))
       if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
@@ -209,7 +209,7 @@ jobs:
     - name: PyTest Run Workflows (Weekly)
       if: ${{ !cancelled() && steps.setup.outcome == 'success' && steps.corpus.outcome == 'success' }}
       # NOTE: Do NOT add coverage to PYPY CI runs https://github.com/tox-dev/tox/issues/2252
-      run: cd sophios/ && pytest -k test_run_workflows_weekly --workers 8 --cwl_runner toil-cwl-runner --durations=0 # --cov
+      run: cd sophios/ && pytest -k test_run_workflows_weekly -n 8 --cwl_runner toil-cwl-runner --durations=0 # --cov
 
     # The flat and the embedded forms of the weekly workflows, checked at
     # compile time; the pull-request lanes skip these workflows as large.
@@ -229,7 +229,7 @@ jobs:
     - name: PyTest Run Inlined Workflows (Weekly)
       if: ${{ !cancelled() && steps.setup.outcome == 'success' && steps.corpus.outcome == 'success' }}
       # NOTE: Do NOT add coverage to PYPY CI runs https://github.com/tox-dev/tox/issues/2252
-      run: cd sophios/ && pytest -k test_run_inlined_workflows_weekly --workers 8 --cwl_runner toil-cwl-runner --durations=0 # --cov
+      run: cd sophios/ && pytest -k test_run_inlined_workflows_weekly -n 8 --cwl_runner toil-cwl-runner --durations=0 # --cov
 
     - name: Disk usage (after inlined (weekly))
       if: ${{ !cancelled() && steps.setup.outcome == 'success' }}

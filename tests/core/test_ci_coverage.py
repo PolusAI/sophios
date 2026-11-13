@@ -146,7 +146,7 @@ def test_the_weekly_property_lane_runs_the_whole_oracle_suite() -> None:
     lets the weekly lane run on a bare hosted runner. A file added there and
     not to the lane would be deepened nowhere, and nothing else would notice.
     """
-    from .test_hermeticity import ORACLE_FILES  # pylint: disable=import-outside-toplevel
+    from .hermetic import ORACLE_FILES  # pylint: disable=import-outside-toplevel
 
     *lanes, oracle = _collect_all([*_invocations(WORKFLOWS / 'property_weekly.yml'), list(ORACLE_FILES)])
     missing = sorted(oracle - set().union(*lanes))
@@ -159,9 +159,9 @@ def test_the_corpus_lane_round_trips_every_wic_root_through_the_python_api() -> 
 
     `test_python_api_from_wic.py` parametrizes its corpus property over every
     `.wic` root `search_paths_wic` reaches. Only `run_workflows.yml` writes a
-    config that reaches the mm-workflows and image-workflows roots; the
-    package job does not select the file, and checks out neither corpus, so
-    the property would see the repository's own roots and nothing else.
+    config that reaches the mm-workflows and image-workflows roots; every
+    other lane checks out neither corpus, so there the property sees the
+    repository's own roots and nothing else.
     """
     properties = {
         'tests/core/test_python_api_from_wic.py::test_a_wic_file_and_its_python_objects_compile_alike',

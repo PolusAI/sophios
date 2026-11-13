@@ -22,8 +22,6 @@ from sophios.wic_types import Json
 from .budgets import budget
 from .helpers import search_config
 
-pytestmark = pytest.mark.package
-
 RENAMINGS = (("data", "file"),)
 
 

@@ -256,13 +256,7 @@ jobs:
       - name: PyTest Environment-Dependent
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         timeout-minutes: 20
-        run: cd sophios/ && pytest tests/core/test_predicates.py tests/core/test_leak_boundary.py tests/core/test_lang_version.py tests/core/test_lang_parser.py tests/core/test_hermeticity.py -m "skip_pypi_ci"
-
-      # The suite's own hermeticity checks. Its own step, so a red build is
-      # attributable to a zone without bisecting.
-      - name: PyTest Oracle
-        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
-        run: cd sophios/ && pytest tests/core/test_hermeticity.py -m "not skip_pypi_ci"
+        run: cd sophios/ && pytest tests/core/test_predicates.py tests/core/test_leak_boundary.py tests/core/test_lang_version.py tests/core/test_lang_parser.py -m "skip_pypi_ci"
 
       # Phase contracts, the laws every compile keeps, and the compiler judged on
       # example workflows in files: what each compiles to on every leg, and what

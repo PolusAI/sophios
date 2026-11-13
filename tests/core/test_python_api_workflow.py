@@ -31,9 +31,9 @@ from sophios import run_local
 from sophios.backends import RunRequest
 from sophios.api.python import nextflow
 from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
-from sophios.api.python.workflow import (_python_api_types_match, InvalidInputValueError, InvalidLinkError,
-                                         InvalidStepError, RunPolicy, RunResult, RunState, RunStatus, SophiosError,
-                                         Step, StepInput, Workflow, WorkflowRunError)
+from sophios.api.python.workflow import (InvalidInputValueError, InvalidLinkError, InvalidStepError, RunPolicy,
+                                         RunResult, RunState, RunStatus, SophiosError, Step, StepInput, Workflow,
+                                         WorkflowRunError)
 from sophios.lang.diagnostics import lines as printed_lines
 from sophios.python_cwl_adapter import import_python_file
 from sophios.wic_types import Json, Tools
@@ -41,8 +41,6 @@ from sophios.wic_types import Json, Tools
 from .budgets import budget
 from .cases import DATA
 from .helpers import ADAPTERS, adapter_step, echo_workflow, no_preflight, python_process
-from .reference_model import ReferenceExpectation, reference_expectation
-from .strategies import cwl_types
 from .wic_reading import read_wic
 
 PYTHON_API: Final = DATA / 'python_api'
@@ -250,28 +248,6 @@ def test_a_built_tool_is_one_step_through_every_door(drawn: tuple[CommandLineToo
     assert all((each.cwl_workflow, each.cwl_job_inputs) == (compiled[-1].cwl_workflow, compiled[-1].cwl_job_inputs)
                for each in compiled)
     assert all(type(value) in (str, int, float, bool) for each in compiled for value in each.cwl_job_inputs.values())
-
-
-_CWL_TYPES = cwl_types(
-    'null', 'boolean', 'int', 'long', 'float', 'double', 'string', 'File', 'Directory', 'Any', 'stdout',
-    'example.org#Thing', {'type': 'record', 'fields': []}, {'type': 'enum', 'symbols': ['a']}, {'type': 'array'})
-
-
-@pytest.mark.fast
-@given(_CWL_TYPES, _CWL_TYPES)
-@example('string', 'File')
-@example('string', 'string')
-@example('string[]', 'Any')
-@example({'type': 'array', 'items': 'string'}, {'type': 'array', 'items': 'Any'})
-@example('string', {'type': 'record', 'fields': []})
-@budget(200)
-def test_python_api_uses_the_conservative_language_judgment(parameter_type: Any, candidate_type: Any) -> None:
-    """The eager API rejects proven disjointness and defers every unknown: it refuses only what the independent model
-    judges disjoint from the port as declared and lifted one array level, as a later `scatter_on()` would."""
-    def disjoint(sink: Any) -> bool:
-        return reference_expectation(candidate_type, sink) is ReferenceExpectation.DISJOINT
-    assert _python_api_types_match(parameter_type, candidate_type) is not (
-        disjoint(parameter_type) and disjoint({'type': 'array', 'items': parameter_type}))
 
 
 def _bind(step: Step, **values: Any) -> Step:

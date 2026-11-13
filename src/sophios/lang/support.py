@@ -41,7 +41,6 @@ _INTERPRETED: Final = 'test_freight_survives_byte_for_byte_and_changes_nothing_e
 _OUTPUT_MERGE: Final = 'test_a_document_lowers_to_the_diagnostics_its_family_states'
 _PROMOTED_INPUT: Final = 'test_a_promoted_port_keeps_the_fields_a_workflow_port_may_state'
 _PROMOTED_OUTPUT: Final = 'test_a_promoted_port_keeps_the_fields_a_workflow_port_may_state'
-_DOCUMENTED: Final = 'test_a_referenced_input_merges_the_documentation_of_the_argument_it_binds'
 _RECORD: Final = 'test_a_cwl_record_emits_the_fields_it_carries'
 
 WORKFLOW: Final[Mapping[str, Row]] = MappingProxyType({
@@ -104,8 +103,8 @@ WORKFLOW_INPUT_PARAMETER: Final[Mapping[str, Row]] = MappingProxyType({
     'type': Row(_N, 'test_a_compiler_example_compiles_as_it_states', 'read for the reference judgment'),
     'format': Row(_N, 'test_a_compiler_example_compiles_as_it_states', 'read by inference'),
     'default': Row(_P, _WRITTEN),
-    'doc': Row(_P, _DOCUMENTED),
-    'label': Row(_P, _DOCUMENTED),
+    'doc': Row(_P, _WRITTEN),
+    'label': Row(_P, _WRITTEN),
     'inputBinding': Row(_P, _WRITTEN),
     'loadContents': Row(_P, _PROMOTED_INPUT),
     'loadListing': Row(_P, _PROMOTED_INPUT),

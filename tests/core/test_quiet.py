@@ -15,8 +15,6 @@ from sophios.api.python.workflow import Step, Workflow
 from .cases import DATA
 from .helpers import EACH_RUNNER, no_preflight, run_cli, run_local_process, search_config
 
-pytestmark = pytest.mark.package
-
 ADDRESSES: Final = ('say', 'local', 'inline', 'pair~say', 'pair~local', 'own')
 
 

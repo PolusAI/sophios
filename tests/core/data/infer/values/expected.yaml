@@ -13,4 +13,4 @@ iteration_exhaustion_is_exactly_wic022:
   - {code: FIXED_POINT_NOT_REACHED, severity: error}
 falsy_defaults_satisfy_inputs:
   edges: {exact: {}}
-  inputs: []
+  inputs: [defaulted~nulled]

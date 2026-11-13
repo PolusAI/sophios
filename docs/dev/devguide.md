@@ -69,7 +69,7 @@ falls back to the in-repository directories without writing one.
 ```bash
 pytest -m fast                      # the quick check: unit and API tests
 pytest tests/core/test_cookbook.py  # the cookbook pairs
-pytest -m "not serial" --workers 8  # the parallel part of the suite
+pytest -m "not serial" -n 8         # the parallel part of the suite
 pytest -m serial                    # the rest
 ```
 

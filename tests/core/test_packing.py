@@ -26,8 +26,6 @@ from sophios.wic_types import StepId, Tools
 from .cases import DATA
 from .helpers import ADAPTERS, EACH_RUNNER, no_preflight, run_cli, run_local_process, search_config
 
-pytestmark = pytest.mark.package
-
 PROJECT: Final = DATA / 'packing'
 TOOLS: Final = PROJECT / 'tools'
 #: What `relcat` includes and prints.

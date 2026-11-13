@@ -1,3 +1,4 @@
-# Presence, not truthiness, suppresses inference for a defaulted port: none is inferred or lifted.
+# Presence, not truthiness, suppresses inference for a defaulted port, but a null default satisfies only a type that
+# admits null: none is inferred, and `nulled` alone is lifted.
 steps:
 - id: defaulted

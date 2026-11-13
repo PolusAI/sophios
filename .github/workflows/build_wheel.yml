@@ -31,12 +31,11 @@ jobs:
       - name: Install sophios 🔧
         run: |
           pip install .[test]
-      # The tests marked package and the Nextflow tests that do not run
-      # Nextflow: no other pull-request lane runs them.
+      # Every test but those marked nextflow (no Nextflow here), cwl_corpus
+      # (no corpus checkout) or skip_pypi_ci: Lint And Test and Run
+      # Workflows run those.
       - name: Test with pytest
-        run: |
-          python -m pytest -m "package and not nextflow and not skip_pypi_ci" -vv
-          python -m pytest tests/core/nextflow -m "not nextflow and not nextflow_corpus and not skip_pypi_ci" -vv
+        run: python -m pytest -m "not skip_pypi_ci and not nextflow and not cwl_corpus" -vv
 
       - name: Build sophios
         run: |

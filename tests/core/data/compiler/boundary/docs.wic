@@ -1,0 +1,20 @@
+# A workflow input keeps what its author wrote and appends what each argument it binds documents, joined by one real
+# newline: no empty text, no synthesized field, no list. An undocumented argument, or one documenting it again, adds
+# nothing.
+inputs:
+  none: {type: string}                                 # nothing to merge
+  own: {type: string, doc: mine, label: keep me}       # the author wrote it all
+  plain: {type: string}                                # the argument documents a bare input
+  both: {type: string, doc: mine, label: keep me}      # both wrote it
+  mine: {type: string, doc: mine}                      # the argument's doc is a list
+  listed: {type: string, doc: [one, two]}              # the author's doc is a list
+  lists: {type: string, doc: [a, b]}                   # both are lists
+steps:
+- id: documented
+  in: {bare: none, text: plain, listed: mine}
+- id: documented
+  in: {bare: own, text: both, listed: lists}
+- id: documented
+  in: {bare: plain, text: listed}
+- id: documented
+  in: {bare: mine, text: plain}

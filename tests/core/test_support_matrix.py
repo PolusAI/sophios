@@ -7,8 +7,6 @@ from cwl_utils.parser import cwl_v1_2
 
 from sophios.lang import SUPPORT_MATRIX, Support
 
-pytestmark = pytest.mark.package
-
 TESTS = Path(__file__).resolve().parent
 
 

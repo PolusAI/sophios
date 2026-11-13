@@ -16,8 +16,6 @@ from sophios.api.python.workflow import Step, Workflow
 from .cases import DATA
 from .helpers import EACH_RUNNER, no_preflight, run_cli, search_config
 
-pytestmark = pytest.mark.package
-
 
 @pytest.fixture(name='project')
 def _project(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:

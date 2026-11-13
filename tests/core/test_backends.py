@@ -26,12 +26,6 @@ from .cases import DATA
 from .helpers import adapter_step, write_tree
 from .nextflow.testkit import runtime_workflow
 
-pytestmark = pytest.mark.package
-
-
-def _argv(request: RunRequest) -> list[str]:
-    return list(targets.backend(request.target, request.runner).launch(request).argv)
-
 
 class _Frozen(backends.datetime):
     @classmethod

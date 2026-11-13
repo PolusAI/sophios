@@ -106,29 +106,34 @@ _RECURSIVE: Final[dict[str, Any]] = {'type': 'array'}
 _RECURSIVE['items'] = _RECURSIVE
 
 
+#: What a Python API port or a value bound to one may declare: the declarations above but nothing, and `stdout`.
+_API_TYPES: Final = cwl_types(
+    *_ATOMS, 'stdout', 'example.org#Thing', {'type': 'array'}, {'type': 'record', 'fields': []},
+    {'type': 'enum', 'symbols': ['a']})
+
+
 @pytest.mark.fast
-@pytest.mark.parametrize(('claim', 'sink', 'source', 'accepted'), [
-    # scatter_on() lifts the sink after the binding, so an array source against a
-    # scalar sink is not provably disjoint at assignment time.
-    ('Any[] source, scalar sink', 'string', {'type': 'array', 'items': 'Any'}, True),
-    ('typed array source, scalar sink', 'string', {'type': 'array', 'items': 'string'}, True),
+@given(st.tuples(_API_TYPES, _API_TYPES, st.none()))
+@pinned(
+    # scatter_on() lifts the sink after the binding, so an array source against a scalar sink is not provably
+    # disjoint at assignment time
+    ('string', {'type': 'array', 'items': 'Any'}, True), ('string', {'type': 'array', 'items': 'string'}, True),
+    ('string[]', 'Any', True), ({'type': 'array', 'items': 'string'}, {'type': 'array', 'items': 'Any'}, True),
+    ('string', {'type': 'record', 'fields': []}, True), ('string', 'string', True),
     # no scatter arrangement rescues these
-    ('scalar source, incompatible scalar sink', 'File', 'string', False),
-    ('array source, incompatible scalar sink', 'File', {'type': 'array', 'items': 'string'}, False),
-    ('matching scalars', 'string', 'string', True),
-])
-def test_the_eager_api_check_defers_what_scatter_could_rescue(
-        claim: str, sink: Any, source: Any, accepted: bool) -> None:
+    ('File', 'string', False), ('File', {'type': 'array', 'items': 'string'}, False), ('string', 'File', False))
+@budget(200)
+def test_the_eager_api_check_defers_what_scatter_could_rescue(case: tuple[Any, Any, bool | None]) -> None:
     """The eager check has less information than the compiler and must say so.
 
-    A `Workflow` has no resolved language version *and* no scatter yet: binding
-    happens before `scatter_on()`, which lifts the sink to an array. An `Any[]`
-    output bound to a scalar input and scattered afterwards compiles, so
-    rejecting it at assignment preempts the judgment this check exists not to
-    preempt. Disjointness is proven here only when it holds for the sink as
-    declared and for the sink lifted one level.
-    """
-    assert _python_api_types_match(sink, source) is accepted, claim
+    A `Workflow` has no resolved language version *and* no scatter yet: binding happens before `scatter_on()`, which
+    lifts the sink to an array. The check refuses a value only when the independent model proves it disjoint from the
+    sink as declared and from the sink lifted one level, and each pinned case is accepted or refused as it states."""
+    sink, source, accepted = case
+    found = _python_api_types_match(sink, source)
+    assert found is not all(reference_expectation(source, declared) is ReferenceExpectation.DISJOINT
+                            for declared in (sink, {'type': 'array', 'items': sink}))
+    assert accepted is None or found is accepted
 
 
 #: Each sink a reference may reach, as `typed_sink` declares it: atoms, a union, and arrays one and two deep.

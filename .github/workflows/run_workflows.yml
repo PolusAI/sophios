@@ -215,7 +215,7 @@ jobs:
       # One compile and a round of docker pulls per corpus workflow, mostly
       # waiting on the registry: 2.2 min in series, so it gets the same
       # workers as the runs that follow it.
-      run: cd sophios/ && pytest tests/core/test_examples.py -k test_cwl_docker_extract --workers "${PYTEST_WORKERS}" --durations=0
+      run: cd sophios/ && pytest tests/core/test_examples.py -k test_cwl_docker_extract -n "${PYTEST_WORKERS}" --durations=0
       # For self-hosted runners, make sure the docker cache is up-to-date.
 
     - name: PyTest Tool Builder
@@ -240,7 +240,7 @@ jobs:
 
     - name: PyTest Run Workflows
       if: ${{ !cancelled() && steps.setup.outcome == 'success' && steps.corpus.outcome == 'success' }}
-      run: cd sophios/ && pytest tests/core/test_examples.py -k test_run_workflows_on_push --workers "${PYTEST_WORKERS}" --cwl_runner cwltool --durations=0 # --cov
+      run: cd sophios/ && pytest tests/core/test_examples.py -k test_run_workflows_on_push -n "${PYTEST_WORKERS}" --cwl_runner cwltool --durations=0 # --cov
 
     # The corpus workflows the Nextflow target supports, compiled with it and
     # run under Nextflow with Docker: tests/core/nextflow/test_corpus.py. The
