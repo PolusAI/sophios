@@ -1,0 +1,4 @@
+steps:
+- id: hi
+  run: say_edam.cwl
+  in: {message: !ii hi}

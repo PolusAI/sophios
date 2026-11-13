@@ -1,0 +1,6 @@
+steps:
+- id: cat
+  in:
+    file: !ii
+      class: File
+      location: locked.txt

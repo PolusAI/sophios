@@ -1,0 +1,7 @@
+# Read from beside this file, at any depth: CWL v1.2 section 5.1.5, the base IRI of the inputs document.
+file:
+  class: File
+  location: data/a.txt
+  secondaryFiles:
+  - class: File
+    path: data/a.txt

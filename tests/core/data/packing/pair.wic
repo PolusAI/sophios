@@ -1,0 +1,6 @@
+# Two tools both called echo.cwl, each with its own config.txt default.
+steps:
+- id: a
+  run: dataA/echo.cwl
+- id: b
+  run: dataB/echo.cwl

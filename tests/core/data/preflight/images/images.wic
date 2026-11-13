@@ -1,0 +1,7 @@
+# Every form a DockerRequirement fetches its image in.
+steps:
+- id: pull
+- id: pinned
+- id: load
+- id: download
+- id: import

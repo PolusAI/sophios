@@ -55,8 +55,8 @@ Three kinds of test carry the promises the documentation makes:
   directory's `config_ci.json` lists as `fragments` (they read an input or
   edge a parent supplies) or `intensive` (the weekly lane runs those);
   those named `run_partial_failures` run with `--partial_failure_enable`. `tests/core/test_examples.py` drives it.
-- **The catalog.** `test_the_error_codes_page_says_what_the_code_says` keeps
-  `docs/error_codes.md` equal to `EXPLANATIONS`; every code has a provocation,
+- **The catalog.** `tests/core/test_diagnostics.py` keeps
+  `docs/error_codes.md` and `sophios --explain` equal to `EXPLANATIONS`; every code has a provocation,
   a document under `tests/core/data/parse` or a callable in `tests/core/provocations.py`, and an
   explanation, or the suite fails.
 

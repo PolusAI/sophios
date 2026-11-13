@@ -1,0 +1,5 @@
+# A step input written without `!ii` names an edge or a workflow input, and `x` is neither.
+steps:
+- id: mk_file
+  in:
+    name: x

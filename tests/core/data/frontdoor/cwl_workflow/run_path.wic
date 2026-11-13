@@ -1,0 +1,4 @@
+steps:
+  - id: s
+    run: say.cwl
+    in: {text: !ii hi}

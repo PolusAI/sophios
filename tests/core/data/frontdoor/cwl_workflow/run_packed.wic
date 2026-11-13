@@ -1,0 +1,4 @@
+steps:
+  - id: s
+    run: packed.cwl
+    in: {text: !ii hi}

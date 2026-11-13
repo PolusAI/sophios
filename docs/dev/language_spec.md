@@ -86,7 +86,7 @@ step's tool is passthrough wholesale: Sophios does not classify
 | `label` | passthrough | | `test_leak_boundary.py` |
 | `out` | native | | `test_a_construct_reads_alike_in_either_spelling_and_position` (`test_lang_parser.py`) |
 | `requirements` | passthrough | | `test_leak_boundary.py` |
-| `run` | native | a registry stem, a path relative to the document, or an inline body | `test_each_step_runs_the_tool_its_run_names` (`test_frontdoor.py`) |
+| `run` | native | a registry stem, a path relative to the document, or an inline body | `tests/core/data/run_paths` (`test_frontdoor.py`) |
 | `scatter` | native | | `test_leak_boundary.py` |
 | `scatterMethod` | native | | `test_leak_boundary.py` |
 | `when` | native | | `test_leak_boundary.py` |
@@ -363,9 +363,8 @@ Every member is provoked, in one of two ways: a document under
 (`COMPILED`). `tests/core/test_lang_parser.py` fails for a member neither
 provokes, so a new code lands with its provocation in the same commit.
 Every member has an `Explanation` in `EXPLANATIONS` (kind, meaning, fix);
-`test_every_code_is_explained` fails for one without, and
-`test_the_error_codes_page_says_what_the_code_says` keeps the
-[error codes page](../error_codes.md) equal to it.
+`tests/core/test_diagnostics.py` fails for one without, and keeps the
+[error codes page](../error_codes.md) and `sophios --explain` equal to it.
 
 | Code | Member | Provoked in |
 |---|---|---|

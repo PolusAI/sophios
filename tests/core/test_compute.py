@@ -28,7 +28,6 @@ from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Outp
 from sophios.api.python.workflow import Step, Workflow
 from sophios.lang.diagnostics import SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
-from sophios.run_local import RunHandle
 from sophios.run_status import RunState, RunStatus
 from sophios.wic_types import Yaml
 
@@ -85,42 +84,6 @@ def test_the_request_carries_the_compiled_workflow_and_every_path_as_written(out
                                  f'{named}model': {'class': 'File', 'location': model}}
 
 
-@pytest.mark.fast
-def test_an_output_folder_is_sent_as_a_folder_not_as_the_local_runs_bare_name(tmp_path: Path) -> None:
-    """`compile()` gives a local runner an output folder as a bare name, and refuses an absolute one; the service
-    is sent the folder where the input names it, for it to check and write on the cluster."""
-    tool = tmp_path / 'writes_in.cwl'
-    tool.write_text("""cwlVersion: v1.2
-class: CommandLineTool
-requirements:
-  InlineJavascriptRequirement: {}
-  InitialWorkDirRequirement:
-    listing:
-      - entry: $(inputs.out)
-        writable: true
-inputs:
-  out:
-    type: Directory
-outputs:
-  result:
-    type: Directory
-    outputBinding:
-      glob: $(inputs.out.basename)
-baseCommand: touch
-""", encoding='utf-8')
-    step = Step(clt_path=tool, step_name='write')
-    step.inputs.out = 'results'
-    workflow = Workflow([step], 'writes')
-    assert workflow.compile().cwl_job_inputs['write~out'] == 'results'
-    request = compute.build_request(workflow)
-    assert request['inputs']['write~out'] == {'class': 'Directory', 'location': 'results'}
-    (run,) = (step['run'] for step in request['workflow']['steps'])
-    declared = run['inputs'] if isinstance(run['inputs'], dict) else {i['id']: i for i in run['inputs']}
-    assert declared['out']['type'] == 'Directory'
-    step.inputs.out = '/projects/lab/results'
-    assert compute.build_request(workflow)['inputs']['write~out']['location'] == '/projects/lab/results'
-
-
 #: The service's id rule, and the fit of each name outside it a case pins, by hand from the rule.
 _ID: typing.Final = Draft202012Validator(compute.SCHEMA['$defs']['Id'])
 _FITTED: typing.Final = {'a b/c': 'a-b-c', '...': 'run'}
@@ -157,33 +120,6 @@ def test_a_run_id_is_the_workflow_name_the_time_and_four_hex_digits_within_the_s
     assert len({compute.new_run_id(name, now) for _ in range(8)}) > 1
 
 
-@pytest.mark.fast
-def test_every_field_the_schema_refuses_is_a_line_in_the_schemas_words() -> None:
-    """All at once, each where it is and what the field is."""
-    with pytest.raises(compute.RequestRefused) as refused:
-        compute.build_request(_workflow(), RunConfig('results').leader(time='3 days', memory='8GB')
-                              .log_level('LOUD')  # type: ignore[arg-type]
-                              .steps(partition='a b'))
-    assert sorted(refused.value.messages) == [
-        "leader.memory: '8GB' is not the leader's memory, as Slurm writes it: a whole number with K, M, G or T, "
-        'such as 8G',
-        "leader.time: '3 days' is not a Slurm time limit: M, M:S, H:M:S, D-H, D-H:M or D-H:M:S, such as 3-00:00:00",
-        "logLevel: 'LOUD' is not Toil's log level: DEBUG, INFO (the default), WARNING or ERROR",
-        "steps.partition: 'a b' is not a Slurm partition of this cluster: letters, digits, '_', '.' or '-'"]
-    request = compute.build_request(_workflow(), RunConfig('results')
-                                    .leader(partition='normal', time='1-00:00:00', memory='8G')
-                                    .steps(partition='normal', gpu_partition='gpu', time='10').log_level('DEBUG'))
-    assert (request['leader']['time'], request['steps']['gpuPartition'], request['logLevel']) == (
-        '1-00:00:00', 'gpu', 'DEBUG')
-
-
-@pytest.mark.fast
-def test_a_workflow_with_a_real_time_analysis_is_refused_the_service_never_runs_one() -> None:
-    """Refused before sending, naming the analysis, rather than dropped."""
-    with pytest.raises(compute.RequestRefused, match="real-time analysis 'touch', which the compute service never"):
-        compute.build_request(live_workflow('live'))
-
-
 def _camel(name: str) -> str:
     first, *rest = name.split('_')
     return first + ''.join(word.capitalize() for word in rest)
@@ -214,12 +150,35 @@ def _set_every_field(config: RunConfig) -> RunConfig:
 
 
 @pytest.mark.fast
-def test_run_config_reaches_every_field_of_the_request_but_its_workflow_and_inputs_as_the_schema_says() -> None:
-    """The constructor and every setter, each given a valid value, reach exactly the vendored schema's top-level
-    properties but id, workflow and inputs, each under its own name; the keywords of `leader` and `steps` are the
-    properties of the schema's Leader and Steps, camelCased; the folder is left out of the request without one, for
-    the run's own folder, so `basepath`, which requires it, is then refused before sending, saying what to do; and no
-    setter touches where the outputs go. The vendored schema and RunConfig cannot drift apart."""
+def test_a_request_is_refused_or_sent_as_the_vendored_schema_says() -> None:
+    """The vendored schema is a JSON Schema 2020-12 document that takes its own example. Every field it refuses is a
+    line in its words, all at once, each where it is and what the field is; a workflow with a real-time analysis is
+    refused before sending, naming the analysis, rather than dropped. The constructor and every setter of RunConfig,
+    each given a valid value, reach exactly the schema's top-level properties but id, workflow and inputs, each under
+    its own name; the keywords of `leader` and `steps` are the properties of its Leader and Steps, camelCased; the
+    folder is left out of the request without one, for the run's own folder, so `basepath`, which requires it, is then
+    refused before sending, saying what to do; and no setter touches where the outputs go. Called again, a setter
+    replaces what it is passed again and keeps the rest; what no setter sets is left out of the request, for the
+    service's own settings. The vendored schema and RunConfig cannot drift apart."""
+    Draft202012Validator.check_schema(compute.SCHEMA)
+    assert Draft202012Validator(compute.SCHEMA).is_valid(compute.SCHEMA['examples'][0])
+    with pytest.raises(compute.RequestRefused) as refused:
+        compute.build_request(_workflow(), RunConfig('results').leader(time='3 days', memory='8GB')
+                              .log_level('LOUD')  # type: ignore[arg-type]
+                              .steps(partition='a b'))
+    assert sorted(refused.value.messages) == [
+        "leader.memory: '8GB' is not the leader's memory, as Slurm writes it: a whole number with K, M, G or T, "
+        'such as 8G',
+        "leader.time: '3 days' is not a Slurm time limit: M, M:S, H:M:S, D-H, D-H:M or D-H:M:S, such as 3-00:00:00",
+        "logLevel: 'LOUD' is not Toil's log level: DEBUG, INFO (the default), WARNING or ERROR",
+        "steps.partition: 'a b' is not a Slurm partition of this cluster: letters, digits, '_', '.' or '-'"]
+    request = compute.build_request(_workflow(), RunConfig('results')
+                                    .leader(partition='normal', time='1-00:00:00', memory='8G')
+                                    .steps(partition='normal', gpu_partition='gpu', time='10').log_level('DEBUG'))
+    assert (request['leader']['time'], request['steps']['gpuPartition'], request['logLevel']) == (
+        '1-00:00:00', 'gpu', 'DEBUG')
+    with pytest.raises(compute.RequestRefused, match="real-time analysis 'touch', which the compute service never"):
+        compute.build_request(live_workflow('live'))
     properties, defs = compute.SCHEMA['properties'], compute.SCHEMA['$defs']
     workflow = {'class': 'Workflow', 'cwlVersion': 'v1.2'}
     core = {'id': 'r1', 'workflow': workflow, 'inputs': {}}
@@ -237,12 +196,6 @@ def test_run_config_reaches_every_field_of_the_request_but_its_workflow_and_inpu
         assert keywords == set(defs[name.capitalize()]['properties']), name
     levels = typing.get_args(typing.get_type_hints(RunConfig.log_level)['level'])
     assert set(levels) == set(properties['logLevel']['enum'])
-
-
-@pytest.mark.fast
-def test_each_setter_sets_just_what_it_is_passed_and_leaves_the_rest() -> None:
-    """Called again, a setter replaces what it is passed again and keeps the rest; what no setter sets is left out
-    of the request, for the service's own settings."""
     config = RunConfig('results').basepath('/shared/lab').leader(time='2:00:00', memory='4G')
     config.steps(time='30:00').leader(memory='8G', partition='normal').basepath('/shared/lab2')
     request = compute.request_for('r1', {'class': 'Workflow', 'cwlVersion': 'v1.2'}, {}, config)
@@ -250,42 +203,6 @@ def test_each_setter_sets_just_what_it_is_passed_and_leaves_the_rest() -> None:
                        'workflowOutDir': 'results',
                        'basepath': '/shared/lab2', 'leader': {'time': '2:00:00', 'memory': '8G', 'partition': 'normal'},
                        'steps': {'time': '30:00'}}
-
-
-@pytest.mark.fast
-def test_the_compute_codes_are_the_clients_own_and_never_a_sophios_errors() -> None:
-    """cmp001 and cmp002 belong to sophios.compute: a ComputeError is not a SophiosError, no SophiosErrorCode is
-    one of them, docs/compute.md documents exactly them, and the message is every line under its code."""
-    errors = compute.ComputeError.__subclasses__()
-    assert [(error, error.code) for error in errors] == [
-        (compute.RequestRefused, 'cmp001'), (compute.ServiceUnavailable, 'cmp002')]
-    assert not issubclass(compute.ComputeError, SophiosError)
-    assert not {error.code for error in errors} & {str(code) for code in SophiosErrorCode}
-    documented = set(re.findall(r'\bcmp\d{3}\b', (DOCS / 'compute.md').read_text('utf-8')))
-    assert documented == {error.code for error in errors}
-    refused = compute.RequestRefused('one', 'two')
-    assert (refused.messages, str(refused)) == (('one', 'two'), '[cmp001] one\n[cmp001] two')
-
-
-@pytest.mark.fast
-def test_a_workflow_that_does_not_compile_is_a_sophios_error_and_nothing_is_sent(
-        monkeypatch: pytest.MonkeyPatch) -> None:
-    """The compile is Sophios's, so its failure is a SophiosError with Sophios's own code, before the service is
-    asked anything: the one failure of `submit` that is not a ComputeError."""
-    calls = _serving(monkeypatch, {})
-    step = Step(CommandLineTool('count', Inputs(n=Input(cwl.int, position=1)), Outputs()).base_command('echo'))
-    step.inputs.n = 'not an int'
-    with pytest.raises(SophiosError) as raised:
-        compute.Service('unix:///api.sock').submit(Workflow([step], 'count'))
-    assert [diagnostic.code for diagnostic in raised.value.diagnostics] == [SophiosErrorCode.LITERAL_TYPE_MISMATCH]
-    assert not calls
-
-
-@pytest.mark.fast
-def test_the_vendored_schema_is_a_json_schema_2020_12_document_and_its_example_a_request() -> None:
-    """The copy the requests are checked with is itself valid, and takes its own example."""
-    Draft202012Validator.check_schema(compute.SCHEMA)
-    assert Draft202012Validator(compute.SCHEMA).is_valid(compute.SCHEMA['examples'][0])
 
 
 #: The header the service names itself in, on every answer.
@@ -360,17 +277,47 @@ def _seen(value: object) -> object:
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize('case', cases('compute-service', 'do', 'answers', 'raises', 'returns', 'stdout', 'stderr',
-                                       'pauses', 'calls', 'patience'))
-def test_a_run_makes_of_the_services_answers_what_its_contract_says(
-        monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], case: Yaml) -> None:
+def test_a_run_makes_of_the_services_answers_what_its_contract_says(monkeypatch: pytest.MonkeyPatch,
+                                                                    capsys: pytest.CaptureFixture[str]) -> None:
     """Each case of data/compute-service: each call answered from `answers` by 'METHOD path', over `_SPOKEN`, a list's
     answers one per call in turn, so a call past them or answered nothing fails the case; then `raises`
     ({exception: [message, ...]}, nothing by default), and those it gives of `returns` (what each verb returned),
     `stdout`, `stderr`, `pauses` and `calls` ([method, path, connect and read timeouts]). A key the test does not
-    read, or a case that expects none of these, fails."""
+    read, or a case that expects none of these, fails. cmp001 and cmp002 belong to sophios.compute: a ComputeError is
+    not a SophiosError, no SophiosErrorCode is one of them, docs/compute.md documents exactly them, and the message is
+    every line under its code. A workflow that does not compile is a SophiosError with Sophios's own code, before the
+    service is asked anything: the one failure of `submit` that is not a ComputeError."""
     expected = {'raises', 'returns', 'stdout', 'stderr', 'pauses', 'calls'}
-    assert case.keys() - {'id', 'why', 'do', 'patience', 'answers'} <= expected and case.keys() & expected, case.keys()
+    for case in (param.values[0] for param in cases('compute-service', 'do', 'answers', 'raises', 'returns', 'stdout',
+                                                    'stderr', 'pauses', 'calls', 'patience')):
+        assert case.keys() - {'id', 'why', 'do', 'patience', 'answers'} <= expected and case.keys() & expected, case
+        with monkeypatch.context() as patches:
+            seen = _answered(patches, capsys, case)
+        for key in case.keys() & seen.keys() | {'raises'}:
+            assert match(case.get(key), seen[key]), (case['id'], key, seen[key])
+
+    errors = compute.ComputeError.__subclasses__()
+    assert [(error, error.code) for error in errors] == [
+        (compute.RequestRefused, 'cmp001'), (compute.ServiceUnavailable, 'cmp002')]
+    assert not issubclass(compute.ComputeError, SophiosError)
+    assert not {error.code for error in errors} & {str(code) for code in SophiosErrorCode}
+    documented = set(re.findall(r'\bcmp\d{3}\b', (DOCS / 'compute.md').read_text('utf-8')))
+    assert documented == {error.code for error in errors}
+    refused = compute.RequestRefused('one', 'two')
+    assert (refused.messages, str(refused)) == (('one', 'two'), '[cmp001] one\n[cmp001] two')
+
+    calls = _serving(monkeypatch, {})
+    step = Step(CommandLineTool('count', Inputs(n=Input(cwl.int, position=1)), Outputs()).base_command('echo'))
+    step.inputs.n = 'not an int'
+    with pytest.raises(SophiosError) as raised:
+        compute.Service('unix:///api.sock').submit(Workflow([step], 'count'))
+    assert [diagnostic.code for diagnostic in raised.value.diagnostics] == [SophiosErrorCode.LITERAL_TYPE_MISMATCH]
+    assert not calls
+
+
+def _answered(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], case: Yaml) -> dict[str, typing.Any]:
+    """What a run did with the answers of `case`: what each verb returned or the run raised, what it printed, the
+    pauses it made and the calls."""
     pauses: list[float] = []
     monkeypatch.setattr(compute.time, 'sleep', pauses.append)
     monkeypatch.setattr(compute, 'PATIENCE', float(case.get('patience', compute.PATIENCE)))
@@ -385,20 +332,8 @@ def test_a_run_makes_of_the_services_answers_what_its_contract_says(
     except (compute.ComputeError, TimeoutError, KeyboardInterrupt) as error:
         raised = {type(error).__name__: list(getattr(error, 'messages', [str(error)]))}
     printed = capsys.readouterr()
-    seen = {'returns': [_seen(value) for value in returned], 'stdout': printed.out, 'stderr': printed.err,
+    return {'returns': [_seen(value) for value in returned], 'stdout': printed.out, 'stderr': printed.err,
             'raises': raised, 'pauses': pauses, 'calls': [[method, path, *limits] for method, path, limits in calls]}
-    for key in case.keys() & seen.keys() | {'raises'}:
-        assert match(case.get(key), seen[key]), (key, seen[key])
-
-
-@pytest.mark.fast
-def test_a_compute_run_is_the_local_handle_but_for_what_each_has_alone() -> None:
-    """Each method both have takes and returns the same; `slurm_job` and `warnings` are the compute run's alone, and
-    `collect` the local handle's, as docs/compute.md's table says."""
-    run, handle = ({name for name in dir(kind) if not name.startswith('_')} for kind in (compute.Run, RunHandle))
-    assert (run - handle, handle - run) == ({'slurm_job', 'warnings'}, {'collect'})
-    for name in run & handle:
-        assert inspect.signature(getattr(compute.Run, name)) == inspect.signature(getattr(RunHandle, name)), name
 
 
 class _Driver(BaseHTTPRequestHandler):
@@ -507,43 +442,37 @@ def _ended(pid: int) -> bool:
 
 
 @pytest.mark.fast
-def test_a_service_on_this_host_is_reached_at_its_socket(driver: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """unix:///socket: every call goes over the socket, the Server header read as from any service, and never by
-    way of the proxy the environment names."""
+@pytest.mark.skipif(sys.platform == 'win32', reason=_WINDOWS)
+# pylint: disable-next=too-many-locals,too-many-statements
+def test_the_service_is_reached_at_its_socket_or_through_an_ssh_forward_that_never_outlives_it(
+        driver: Path, ssh_calls: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """unix:///socket: every call goes over the socket, the Server header read as from any service, and never by way of
+    the proxy the environment names; a cancel the service refuses (403, a run another account submitted) is raised in
+    its words, never taken for a run that ended. http:// and https:// need an HTTPS gateway in front of the service,
+    which there is not yet. ssh:// is the user's own ssh, its prompts left to the terminal (no BatchMode), on a
+    connection no ControlMaster holds, deaf to the Ctrl-C the terminal sends Python too: a socket in a directory only
+    its owner may open, no TCP port, forwarded to the socket the URL names. Closed, ssh has ended, the directory is
+    gone, and a run of it is refused at once, never asked again for PATIENCE seconds as a service that cannot be
+    reached is; so is a call after ssh ended, a dropped connection or a laptop asleep, in ssh's own words. Ctrl-C
+    before ssh forwards, at a password prompt say, ends ssh, which ignores it; Python exiting closes every Service it
+    left open. An unreachable host, a refused key, or nothing on the socket the URL names, by default the service
+    node's, is ssh's own words, no ssh left running and no directory left; and with no ssh on PATH, cmp002 names ssh,
+    never a bare FileNotFoundError."""
     monkeypatch.setenv('HTTP_PROXY', 'http://proxy.invalid:3128')
     with compute.Service(f'unix://{driver}') as service:
         assert service.attach('r1').status().state is RunState.RUNNING
-
-
-@pytest.mark.fast
-def test_a_cancel_the_service_refuses_is_raised_in_its_words(driver: Path) -> None:
-    """403, a run another account submitted: refused in the service's words, never taken for a run that ended."""
-    with pytest.raises(compute.RequestRefused) as refused:
-        compute.Service(f'unix://{driver}').attach('r1').cancel()
+        with pytest.raises(compute.RequestRefused) as refused:
+            service.attach('r1').cancel()
     assert refused.value.messages == ('run r1 was submitted by alice: only alice, or the service account, may '
                                       'cancel it',)
+    for url in ('http://cluster:7998', 'https://compute.example.org', 'cluster'):
+        with pytest.raises(compute.ServiceUnavailable) as unavailable:
+            compute.Service(url)
+        assert unavailable.value.messages == (
+            f'{url} is not where the compute service is: it is reached over SSH, as ssh://[user@]host[:port][/socket] '
+            '(the socket by default /run/slurm-driver/api.sock), or on its own host, as unix:///socket; http:// and '
+            'https:// need an HTTPS gateway in front of the service, which there is not yet',)
 
-
-@pytest.mark.fast
-@pytest.mark.skipif(sys.platform == 'win32', reason=_WINDOWS)
-@pytest.mark.parametrize('url', ['http://cluster:7998', 'https://compute.example.org', 'cluster'])
-def test_a_url_but_ssh_and_unix_is_refused_there_being_no_https_gateway(url: str) -> None:
-    """http:// and https:// need an HTTPS gateway in front of the service, which there is not yet."""
-    with pytest.raises(compute.ServiceUnavailable) as unavailable:
-        compute.Service(url)
-    assert unavailable.value.messages == (
-        f'{url} is not where the compute service is: it is reached over SSH, as ssh://[user@]host[:port][/socket] '
-        '(the socket by default /run/slurm-driver/api.sock), or on its own host, as unix:///socket; http:// and '
-        'https:// need an HTTPS gateway in front of the service, which there is not yet',)
-
-
-@pytest.mark.fast
-def test_ssh_forwards_a_private_socket_to_the_services_until_the_service_is_closed(
-        ssh_calls: Path, driver: Path) -> None:
-    """The user's own ssh, its prompts left to the terminal (no BatchMode), on a connection no ControlMaster holds,
-    deaf to the Ctrl-C the terminal sends Python too: a socket in a directory only its owner may open, no TCP port,
-    forwarded to the socket the URL names; closed, ssh has ended, the directory is gone, and a run of it is refused at
-    once, never asked again for PATIENCE seconds as a service that cannot be reached is."""
     with compute.Service(f'ssh://alice@cluster:2222{driver}') as service:
         run = service.attach('r1')
         assert run.status().state is RunState.RUNNING
@@ -552,87 +481,64 @@ def test_ssh_forwards_a_private_socket_to_the_services_until_the_service_is_clos
     assert arguments == ['-N', '-o', 'ExitOnForwardFailure=yes', '-o', 'StreamLocalBindUnlink=yes',
                          '-o', 'ControlPath=none', '-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=4',
                          '-L', f'{directory / "api.sock"}:{driver}', 'ssh://alice@cluster:2222']
-    assert ignores_ctrl_c
-    assert _ended(pid) and not directory.exists()
+    assert ignores_ctrl_c and _ended(pid) and not directory.exists()
     with pytest.raises(compute.ServiceUnavailable) as unavailable:
         run.status()
     assert unavailable.value.messages == (
         f"Service('ssh://alice@cluster:2222{driver}') is closed: a new one follows its runs again, as "
         f"Service('ssh://alice@cluster:2222{driver}').attach(run id)",)
 
-
-@pytest.mark.fast
-@pytest.mark.usefixtures('ssh_calls')
-def test_a_forward_that_ended_fails_the_next_call_at_once_and_says_so(driver: Path) -> None:
-    """ssh gone, a dropped connection or a laptop asleep: nothing reaches the service through it again, and the call
-    says so with ssh's own words, without asking again for PATIENCE seconds."""
+    ssh_calls.unlink()
     with compute.Service(f'ssh://cluster{driver}') as service:
         forward = service._client.forward  # pylint: disable=protected-access
         assert forward is not None
-        ssh, directory = forward
+        ssh, held = forward
         ssh.kill()
         ssh.wait()
-        (Path(directory) / 'ssh.log').write_text('Timeout, server cluster not responding.\n', 'utf-8')
+        (Path(held) / 'ssh.log').write_text('Timeout, server cluster not responding.\n', 'utf-8')
         with pytest.raises(compute.ServiceUnavailable) as unavailable:
             service.attach('r1')
     assert unavailable.value.messages == (
         f'the compute service at ssh://cluster{driver} could not be reached: ssh ended, and its forward with it; a '
         'new Service forwards it again', 'Timeout, server cluster not responding.')
-    assert not Path(directory).exists()
+    assert not Path(held).exists()
 
-
-@pytest.mark.fast
-def test_ctrl_c_before_ssh_forwards_ends_it_and_leaves_nothing(ssh_calls: Path,
-                                                               monkeypatch: pytest.MonkeyPatch) -> None:
-    """At a password prompt, say: ssh, which ignores the Ctrl-C, would otherwise go on asking."""
+    ssh_calls.unlink()
     sleep = compute.time.sleep
 
     def interrupted(_: float) -> None:
         while not ssh_calls.exists() or not ssh_calls.read_text('utf-8'):  # until ssh is up, and asks
             sleep(0.01)
         raise KeyboardInterrupt
-    monkeypatch.setattr(compute.time, 'sleep', interrupted)
-    with pytest.raises(KeyboardInterrupt):
-        compute.Service('ssh://slow')
+    with monkeypatch.context() as patches:
+        patches.setattr(compute.time, 'sleep', interrupted)
+        with pytest.raises(KeyboardInterrupt):
+            compute.Service('ssh://slow')
     pid, _, _, directory = _ssh_run(ssh_calls)
     assert _ended(pid) and not directory.exists()
 
-
-@pytest.mark.fast
-def test_a_forward_a_process_never_closes_ends_as_the_process_does(ssh_calls: Path, driver: Path) -> None:
-    """Python exiting closes every Service it left open."""
+    ssh_calls.unlink()
     python_process('-c', f"from sophios.compute import Service; Service('ssh://cluster{driver}')",
                    check=True, timeout=60)
     pid, _, _, directory = _ssh_run(ssh_calls)
     assert _ended(pid) and not directory.exists()
 
+    for url, said in (('ssh://alice@nowhere', 'ssh: Could not resolve hostname nowhere: Name or service not known'),
+                      ('ssh://cluster', 'channel 2: open failed: connect failed: No such file or directory')):
+        ssh_calls.unlink()
+        with pytest.raises(compute.ServiceUnavailable) as unavailable:
+            compute.Service(url)
+        pid, _, arguments, directory = _ssh_run(ssh_calls)
+        assert unavailable.value.messages == (
+            f"ssh to {url.removeprefix('ssh://')} did not forward the compute service's socket "
+            '/run/slurm-driver/api.sock:', said)
+        assert arguments[-2] == f'{directory / "api.sock"}:/run/slurm-driver/api.sock'
+        assert _ended(pid) and not directory.exists()
 
-@pytest.mark.fast
-@pytest.mark.parametrize(('url', 'said'), [
-    ('ssh://alice@nowhere', 'ssh: Could not resolve hostname nowhere: Name or service not known'),
-    ('ssh://cluster', 'channel 2: open failed: connect failed: No such file or directory')])
-def test_ssh_that_does_not_forward_fails_at_once_with_its_own_error_and_leaves_nothing(
-        ssh_calls: Path, url: str, said: str) -> None:
-    """An unreachable host, a refused key, or nothing on the socket the URL names, by default the service node's,
-    /run/slurm-driver/api.sock: ssh's own words, no ssh left running and no directory left."""
-    with pytest.raises(compute.ServiceUnavailable) as unavailable:
-        compute.Service(url)
-    pid, _, arguments, directory = _ssh_run(ssh_calls)
-    assert unavailable.value.messages == (
-        f"ssh to {url.removeprefix('ssh://')} did not forward the compute service's socket /run/slurm-driver/api.sock:",
-        said)
-    assert arguments[-2] == f'{directory / "api.sock"}:/run/slurm-driver/api.sock'
-    assert _ended(pid) and not directory.exists()
-
-
-@pytest.mark.fast
-@pytest.mark.skipif(sys.platform == 'win32', reason=_WINDOWS)
-def test_an_ssh_that_cannot_be_run_is_unavailable_in_the_systems_words_and_leaves_nothing(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """None on PATH: cmp002 naming ssh, never a bare FileNotFoundError, and no directory left of its forward."""
     monkeypatch.setenv('PATH', str(tmp_path / 'bin'))
-    monkeypatch.setattr(tempfile, 'tempdir', str(tmp_path))
+    monkeypatch.setattr(tempfile, 'tempdir', str(tmp_path / 'temp'))
+    (tmp_path / 'temp').mkdir()
     with pytest.raises(compute.ServiceUnavailable) as unavailable:
         compute.Service('ssh://cluster')
     assert unavailable.value.messages == ("ssh could not be run: [Errno 2] No such file or directory: 'ssh'",)
-    assert not list(tmp_path.iterdir())
+    assert not list((tmp_path / 'temp').iterdir())

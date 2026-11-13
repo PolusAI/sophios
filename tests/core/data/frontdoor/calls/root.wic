@@ -1,0 +1,9 @@
+# Calls child.wic twice, the second time under the namespace gpu.
+steps:
+- id: child.wic
+- id: child.wic
+wic:
+  steps:
+    (2, child.wic):
+      wic:
+        namespace: gpu

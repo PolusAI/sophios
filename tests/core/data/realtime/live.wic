@@ -1,0 +1,21 @@
+# Two analyses of the log slow_log writes: one that succeeds and one that fails.
+steps:
+- id: slow_log
+- id: cwl_subinterpreter
+  in:
+    file_pattern: !ii out.log
+    cwl_tool: !ii count_lines
+    max_times: !ii '5'
+    interval: !ii 1
+    config: !ii
+      in:
+        log: out.log
+- id: cwl_subinterpreter
+  in:
+    file_pattern: !ii out.log
+    cwl_tool: !ii fail_lines
+    max_times: !ii '5'
+    interval: !ii 1
+    config: !ii
+      in:
+        log: out.log

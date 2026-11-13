@@ -1,0 +1,42 @@
+# Every graphviz setting a document gives: the root's title and ranks, a step's label by its index and its style by its
+# id, a subworkflow called twice, each call drawn as a cluster of its own with the look its call gives it, a
+# subworkflow with no look of its own, and edges written (`!&`, `!*`), into a subworkflow too, beside inferred ones.
+wic:
+  graphviz:
+    label: My Pipeline
+    ranksame: ['(1, touch)', '(2, echo)']
+  steps:
+    (1, touch):
+      wic:
+        graphviz:
+          label: Make\nit
+    echo:
+      wic:
+        graphviz:
+          style: dashed, bold
+    (4, sub.wic):
+      wic:
+        graphviz:
+          label: Called
+    (5, sub.wic):
+      wic:
+        graphviz:
+          style: invis
+steps:
+- id: touch
+  in:
+    filename: !ii a.txt
+  out:
+  - file: !& made
+- id: echo
+  in:
+    message: !ii hi
+- id: cat
+  in:
+    file: !* made
+- id: sub.wic
+  run: sub.wic
+- id: sub.wic
+  run: sub.wic
+- id: plain.wic
+  run: plain.wic

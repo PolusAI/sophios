@@ -1,0 +1,6 @@
+# Two levels down, with an edge inference made.
+steps:
+- id: touch
+  in:
+    filename: !ii b.txt
+- id: cat

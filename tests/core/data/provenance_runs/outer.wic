@@ -1,0 +1,6 @@
+steps:
+- id: pair
+  run: pair.wic
+- id: b
+  run: say.cwl
+  in: {message: !ii c}

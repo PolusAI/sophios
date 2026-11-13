@@ -1,0 +1,4 @@
+steps:
+- id: say
+- id: local
+  run: local/local.cwl

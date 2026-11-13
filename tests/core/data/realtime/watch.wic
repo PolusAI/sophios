@@ -1,0 +1,11 @@
+# A subworkflow whose only step is a declaration: emitted with no steps.
+steps:
+- id: cwl_subinterpreter
+  in:
+    file_pattern: !ii '*.log'
+    cwl_tool: !ii count_lines
+    max_times: !ii 2
+    interval: !ii 5
+    config: !ii
+      in:
+        log: out.log

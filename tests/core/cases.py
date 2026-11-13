@@ -17,6 +17,7 @@ A mapping whose one key is re, startswith, contains, exact or keys is therefore 
 The loaders raise ValueError, a collection error of the calling module, for no cases, a repeated id, or a key the
 test does not read: pytest skips an empty parametrize silently, and a misspelled key would go unread.
 """
+import json
 import re
 from pathlib import Path
 from typing import Any
@@ -25,6 +26,7 @@ import pytest
 import yaml
 
 from sophios.lang.diagnostics import Diagnostic
+from sophios.lang.error_codes import SophiosErrorCode
 
 DATA = Path(__file__).resolve().parent / 'data'
 
@@ -87,6 +89,12 @@ def case_dirs(name: str, *keys: str) -> list[Any]:
 def diagnostic(found: Diagnostic) -> dict[str, Any]:
     """`found` as `--diagnostics json` prints it, but with its code by name, as cases write it."""
     return {**found.to_json(), 'code': found.code.name}
+
+
+def printed(err: str) -> list[dict[str, Any]]:
+    """The diagnostics `--diagnostics json` printed on `err`, each with its code by name, as cases write it."""
+    return [{**found, 'code': SophiosErrorCode(found['code']).name}
+            for found in map(json.loads, (line for line in err.splitlines() if line.startswith('{')))]
 
 
 def match(expected: Any, actual: Any) -> bool:  # pylint: disable=too-many-return-statements  # one per form

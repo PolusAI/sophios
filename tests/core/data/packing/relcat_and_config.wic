@@ -1,0 +1,5 @@
+steps:
+- id: relcat
+  run: tools/relcat.cwl
+- id: a
+  run: dataA/echo.cwl

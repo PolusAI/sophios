@@ -28,20 +28,15 @@ def _import_copy(root: Path, built_as: str | None) -> subprocess.CompletedProces
 
 @pytest.mark.fast
 @pytest.mark.parametrize(('built_as', 'version'), [('1.2.3', '1.2.3'), (None, 'unknown')])
-def test_the_version_is_the_one_built_beside_the_code(tmp_path: Path, built_as: str | None, version: str) -> None:
+def test_the_version_is_the_one_built_beside_the_code(tmp_path: Path, capsys: pytest.CaptureFixture[str],
+                                                      built_as: str | None, version: str) -> None:
     """__version__ is what the _version.py next to the package says; without one the version is unknown, and says
-    why."""
+    why. The header of compiled CWL and --version print the running version."""
     run = _import_copy(tmp_path, built_as)
     assert run.stdout.splitlines() == [str(tmp_path / 'sophios' / '__init__.py'), version]
     assert ('never built' in run.stderr) is (built_as is None)
     assert built_as or "RuntimeWarning: this copy of sophios was never built, so __version__ is 'unknown'" in run.stderr
-
-
-@pytest.mark.fast
-def test_the_compiled_header_and_the_cli_report_the_running_version(capsys: pytest.CaptureFixture[str]) -> None:
-    """The header of compiled CWL and --version print the same version as __version__."""
     assert f'Sophios, version {sophios.__version__}\n' in sophios.auto_gen_header
-
     with pytest.raises(SystemExit):
         sophios.cli.parser.parse_args(['--version'])
     assert capsys.readouterr().out.strip() == sophios.__version__

@@ -1,0 +1,10 @@
+# a leading comment
+
+wic:
+  graphviz:
+    label: Root
+
+steps:
+- id: mk_file
+  in:
+    name: made.txt

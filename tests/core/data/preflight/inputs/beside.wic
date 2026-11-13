@@ -1,0 +1,8 @@
+# A directory beside the workflow, which the run reads in place, however large: nothing is copied.
+steps:
+- id: subdirectory
+  in:
+    directory: !ii
+      class: Directory
+      location: shared
+    glob_pattern: !ii a.txt

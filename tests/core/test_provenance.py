@@ -1,50 +1,16 @@
-"""A run's provenance record holds every document Sophios wrote for it, and nothing Sophios added fails it."""
+"""A run's provenance record holds every document Sophios wrote for it, and nothing Sophios added fails it. The
+workflows are tests/core/data/provenance_runs, run where they are from a working directory of the test's own."""
 from pathlib import Path
+from typing import Final
 
 import pytest
 
+from .cases import DATA
 from .helpers import EACH_RUNNER, run_local_process
 
 pytestmark = pytest.mark.package
 
-SAY = '''cwlVersion: v1.2
-class: CommandLineTool
-baseCommand: echo
-stdout: out.txt
-inputs: {message: {type: string, inputBinding: {position: 1}}}
-outputs: {out: {type: File, outputBinding: {glob: out.txt}}}
-'''
-PAIR = '''steps:
-- id: hello
-  run: say.cwl
-  in: {message: !ii a}
-- id: shout
-  run: say.cwl
-  in: {message: !ii b}
-'''
-OUTER = '''steps:
-- id: pair
-  run: pair.wic
-- id: b
-  run: say.cwl
-  in: {message: !ii c}
-'''
-GREETING = '''steps:
-- id: hello
-  run: say.cwl
-  in: {message: !ii hi}
-- id: pair
-  run: pair.wic
-- id: outer
-  run: outer.wic
-'''
-OTHER = '''steps:
-- id: hello
-  run: say.cwl
-  in: {message: !ii there}
-- id: pair
-  run: pair.wic
-'''
+PROJECT: Final = DATA / 'provenance_runs'
 
 
 def _snapshot(root: str) -> set[str]:
@@ -57,12 +23,9 @@ def test_every_step_file_is_in_the_provenance_snapshot(monkeypatch: pytest.Monke
                                                        runner: str) -> None:
     """Two roots in one base path, each calling `pair.wic` directly and through `outer.wic`: each run's
     snapshot holds its root and every `<root>~<address>.cwl`, the nested ones too."""
-    for name, text in (('say.cwl', SAY), ('pair.wic', PAIR), ('outer.wic', OUTER),
-                       ('greeting.wic', GREETING), ('other.wic', OTHER)):
-        (tmp_path / name).write_text(text, encoding='utf-8')
     monkeypatch.chdir(tmp_path)
     for root in ('greeting', 'other'):
-        run_local_process(tmp_path / f'{root}.wic', '--cwl_runner', runner, check=True)
+        run_local_process(PROJECT / f'{root}.wic', '--cwl_runner', runner, check=True)
     pair = ['pair.cwl', 'pair~hello.cwl', 'pair~shout.cwl']
     expected = {
         'greeting': {'greeting.cwl', 'greeting~hello.cwl', *(f'greeting~{name}' for name in pair),
@@ -73,21 +36,14 @@ def test_every_step_file_is_in_the_provenance_snapshot(monkeypatch: pytest.Monke
         assert files <= _snapshot(root), sorted(files - _snapshot(root))
 
 
-#: The ontology from edamontology's default branch: a URL Sophios never wrote, with the basename of the one it did.
-EDAM_MAIN = 'https://raw.githubusercontent.com/edamontology/edamontology/main/EDAM_dev.owl'
-
-
 @pytest.mark.needs_cwltool
 @EACH_RUNNER
 def test_a_wic_with_its_own_edam_schemas_entry_runs_with_provenance(monkeypatch: pytest.MonkeyPatch,
                                                                     tmp_path: Path, runner: str) -> None:
     """The root's `$schemas` is the `.wic`'s, so no second `EDAM_dev.owl` meets it in the provenance record."""
-    (tmp_path / 'say.cwl').write_text(SAY, encoding='utf-8')
-    (tmp_path / 'wf.wic').write_text(f"$schemas: ['{EDAM_MAIN}']\nsteps:\n- id: hi\n  run: say.cwl\n"
-                                     '  in: {message: !ii hi}\n', encoding='utf-8')
     monkeypatch.chdir(tmp_path)
-    run_local_process(tmp_path / 'wf.wic', '--cwl_runner', runner, check=True)   # exits on a failed run
-    assert 'wf.cwl' in _snapshot('wf')
+    run_local_process(PROJECT / 'edam_root.wic', '--cwl_runner', runner, check=True)   # exits on a failed run
+    assert 'edam_root.cwl' in _snapshot('edam_root')
 
 
 @pytest.mark.needs_cwltool
@@ -95,9 +51,6 @@ def test_a_wic_with_its_own_edam_schemas_entry_runs_with_provenance(monkeypatch:
 def test_an_embedded_tool_with_its_own_edam_schemas_entry_runs_with_provenance(monkeypatch: pytest.MonkeyPatch,
                                                                                tmp_path: Path, runner: str) -> None:
     """Embedded, a tool's `$schemas` moves up to the one document, which holds no other `EDAM_dev.owl`."""
-    (tmp_path / 'say.cwl').write_text(f"$namespaces: {{edam: https://edamontology.org/}}\n$schemas: ['{EDAM_MAIN}']\n"
-                                      + SAY, encoding='utf-8')
-    (tmp_path / 'wf.wic').write_text('steps:\n- id: hi\n  run: say.cwl\n  in: {message: !ii hi}\n', encoding='utf-8')
     monkeypatch.chdir(tmp_path)
-    run_local_process(tmp_path / 'wf.wic', '--cwl_runner', runner, '--cwl_inline_runtag', check=True)
-    assert 'wf.cwl' in _snapshot('wf')
+    run_local_process(PROJECT / 'edam_tool.wic', '--cwl_runner', runner, '--cwl_inline_runtag', check=True)
+    assert 'edam_tool.cwl' in _snapshot('edam_tool')

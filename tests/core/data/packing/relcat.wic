@@ -1,0 +1,5 @@
+# relcat from the tool search path, three times.
+steps:
+- id: relcat
+- id: relcat
+- id: relcat

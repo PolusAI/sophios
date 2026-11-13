@@ -1,0 +1,3 @@
+# The broken tool beside it is on the search path, and no step runs it.
+steps:
+- id: echo

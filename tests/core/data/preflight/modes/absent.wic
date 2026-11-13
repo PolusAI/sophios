@@ -1,0 +1,7 @@
+# cat runs in a container too, and reads a file that is not there.
+steps:
+- id: cat
+  in:
+    file: !ii
+      class: File
+      location: absent.txt

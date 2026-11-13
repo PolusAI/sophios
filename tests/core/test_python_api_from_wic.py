@@ -2,6 +2,7 @@
 properties: a file the file door compiles is refused with `api006` alone or compiles to equal output, and `write_wic`
 round-trips."""
 # pylint: disable=redefined-outer-name  # `corpus_registry` is a pytest fixture
+import shutil
 import tempfile
 from dataclasses import replace
 from functools import lru_cache
@@ -26,12 +27,11 @@ from sophios.wic_types import Json, StepId, Tool, Tools
 
 from .ast_strategies import SUBWORKFLOW_BODIES, documents
 from .budgets import budget
-from .cases import case_dirs, diagnostic, match
+from .cases import DATA, case_dirs, diagnostic, match
 from .equivalence import Strength, equivalent
 from .helpers import ADAPTERS, REPO_ROOT, shipped_tools
 from .synthetic_tools import SYNTHETIC_NS, SYNTHETIC_TOOLS, clt
 from .test_examples import _is_includer_fragment, yml_paths_tuples_not_large
-from .test_frontdoor import PYTHON_SCRIPT
 # pylint: disable-next=unused-import  # `corpus_registry` is a pytest fixture
 from .test_setup import CorpusRegistry, corpus_registry
 from .wic_reading import read_wic
@@ -306,19 +306,13 @@ def test_a_python_script_step_is_api006(tmp_path: Path, monkeypatch: pytest.Monk
     """A tool generated from a script has no `Step`: the message says to build it with `tool_builder`.
 
     The script's generator imports `workflow_types` relative to the working directory, so the
-    fixture supplies that sibling file, as `test_frontdoor` does.
+    project, tests/core/data/frontdoor/script, holds that sibling file.
     """
-    types = tmp_path / 'sophios' / 'examples' / 'scripts'
-    types.mkdir(parents=True)
-    (types / 'workflow_types.py').write_text(
-        "string = {'type': 'string', 'format': 'edam:format_2330'}\n", encoding='utf-8')
-    work = tmp_path / 'work'
-    work.mkdir()
-    (work / 'my_script.py').write_text(PYTHON_SCRIPT, encoding='utf-8')
+    shutil.copytree(DATA / 'frontdoor' / 'script', tmp_path / 'script')
+    work = tmp_path / 'script' / 'work'
     monkeypatch.chdir(work)
     with pytest.raises(SophiosError) as caught:
-        _from_wic(work, root='steps:\n- id: python_script\n  in:\n    script: !ii my_script.py\n'
-                             '    name: !ii made.txt\n')
+        _from_wic(work, root=(work / 'compile.wic').read_text(encoding='utf-8'))
     assert [(item.code, 'tool_builder' in item.message) for item in caught.value.diagnostics] == [
         (SophiosErrorCode.NO_PYTHON_SPELLING, True)]
 

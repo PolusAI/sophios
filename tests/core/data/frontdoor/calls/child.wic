@@ -1,0 +1,5 @@
+# the child keeps its comments too
+steps:
+- id: mk_file
+  in:
+    name: child.txt

@@ -1,0 +1,10 @@
+steps:
+- id: say
+  run:
+    class: CommandLineTool
+    requirements:
+      InitialWorkDirRequirement:
+        listing: [{entryname: s.sh, entry: {$include: s.sh}}]
+    baseCommand: [sh, s.sh]
+    inputs: {}
+    outputs: {}

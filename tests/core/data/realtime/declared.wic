@@ -1,0 +1,39 @@
+# A producer and the analyses declared beside it, which are taken out of the workflow and compiled on their own.
+steps:
+- id: slow_log
+# A tool, its `config: in:` every one a literal of the analysis: a plain file name as the corpus npt_amber.wic
+# writes it (read as written, an edge, wic011), and a nested `!ii`.
+- id: cwl_subinterpreter
+  in:
+    file_pattern: !ii '*.log'
+    cwl_tool: !ii tag
+    max_times: !ii '3'
+    config: !ii
+      in:
+        file: a.txt
+        name: !ii b.txt
+# A .wic, configured per step as `wic: steps:`, as cwl_subinterpreter_protein.wic is; a nested literal in either
+# spelling.
+- id: cwl_subinterpreter
+  in:
+    file_pattern: !ii '*.log'
+    cwl_tool: !ii measure.wic
+    max_times: !ii 1
+    config: !ii
+      (1, count_lines):
+        in:
+          log: a.txt
+      (2, count_lines):
+        in:
+          log: {wic_inline_input: b.txt}
+# A tool whose image is built from the Dockerfile beside it, wherever the analysis is written.
+- id: cwl_subinterpreter
+  in:
+    file_pattern: !ii out.log
+    cwl_tool: !ii counted
+    max_times: !ii 2
+    interval: !ii 5
+    config: !ii
+      in:
+        log: out.log
+- id: watch.wic

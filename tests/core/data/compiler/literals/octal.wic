@@ -1,0 +1,5 @@
+# Quoted, an octal-looking number is text too, not the int YAML would read it as.
+steps:
+- id: scale
+  in:
+    n: !ii '007'

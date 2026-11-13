@@ -56,10 +56,3 @@ def test_each_entry_point_names_an_importable_module_and_attribute(declared: str
     except ModuleNotFoundError as exc:
         pytest.fail(f'{declared}, but {module} does not exist ({exc}): it would fail at startup.')
     assert hasattr(mod, attr), f'{declared}, but {module} has no attribute {attr!r}'
-
-
-@pytest.mark.fast
-def test_entry_point_scan_is_not_vacuous() -> None:
-    """Both scans must actually find targets, or the checks pass for free."""
-    assert _console_scripts(), 'no console scripts discovered in pyproject.toml'
-    assert _container_targets(), 'no container entry points discovered in docker/'

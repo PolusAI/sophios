@@ -1,0 +1,4 @@
+steps:
+- id: say
+  run: local/local.cwl
+  in: {word: !ii boom, status: !ii 3}
