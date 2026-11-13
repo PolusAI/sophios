@@ -19,6 +19,7 @@ from .ir.resolved import (
     tool_steps,
 )
 from .ir.types import AuthoredName, PortDeclaration, PortType
+from .lang.cwl import LINK_MERGES, PICK_VALUES, PICKS_ONE, SCATTER_METHODS
 from .lang.diagnostics import Diagnostic, Locator, Severity
 from .lang.error_codes import SophiosErrorCode
 from .lang.subset import Expr, is_safe_subset_text, references
@@ -27,8 +28,6 @@ from .nf_symbols import normalize_nextflow_identifier
 from .nf_types import (
     ExecutableNextflowWorkflow,
     GLOB_WILDCARDS,
-    LINK_MERGES,
-    PICK_VALUES,
     NF_INTERNAL_IDENTIFIERS,
     PARAM_TYPES,
     NfArrayBinding,
@@ -1291,8 +1290,6 @@ _TOOL_CONSUMED_FIELDS = consumed(FIELDS["CommandLineTool"]) | _DOCUMENT_KEYS
 _WORKFLOW_CONSUMED_FIELDS = consumed(FIELDS["Workflow"]) | _DOCUMENT_KEYS | {"sophios:lang_version"}
 # The step-input fields the fixed idioms lower (design §6, Topology, Step inputs).
 _STEP_INPUT_IDIOM_FIELDS = frozenset({"default", "linkMerge", "pickValue"})
-# The pickValue methods that give one value rather than a list.
-_PICKS_ONE = frozenset({"first_non_null", "the_only_non_null"})
 # The outputBinding fields that declare capture behavior, as opposed to naming
 # the file to capture.
 _OUTPUT_CAPTURE_FIELDS = frozenset({"loadContents", "outputEval"})
@@ -2141,9 +2138,6 @@ def _own_requirement_findings(requirements: tuple[Requirement, ...], fields: Map
     return findings
 
 
-_SCATTER_METHODS = frozenset({"dotproduct", "flat_crossproduct", "nested_crossproduct"})
-
-
 def _scatter_names(node: ResolvedStep) -> list[str]:
     """The input names one step scatters over.
 
@@ -2211,7 +2205,7 @@ def _scatter_findings(workflow: ResolvedWorkflow, steps: tuple[_Step, ...]) -> l
             findings.append(_Finding(exc.code, f"{step.path}.scatter: {exc}"))
             continue
         method = step.node.scatter.method
-        if method is not None and method not in _SCATTER_METHODS:
+        if method is not None and method not in SCATTER_METHODS:
             findings.append(_Finding(SophiosErrorCode.NF_INVALID_CWL,
                             f"{step.path}.scatterMethod: unsupported CWL scatter method {method!r}"))
         elif len(names) > 1 and method is None:
@@ -2372,7 +2366,7 @@ def _step_input_findings(workflow: ResolvedWorkflow, steps: tuple[_Step, ...]) -
                 findings.append(_Finding(SophiosErrorCode.NF_JOIN,
                                          f"{path}: {nullable[0]!r} may be null, and a joined list has no lowering of "
                                          "a null element; pick from it with pickValue"))
-            gives_list = pick_value not in _PICKS_ONE
+            gives_list = pick_value not in PICKS_ONE
             if merges is not None and port.declared is not None and gives_list != _lists(declared_type):
                 findings.append(_Finding(SophiosErrorCode.NF_JOIN,
                                          f"{path}: the step input gives {'a list' if gives_list else 'one value'}, "

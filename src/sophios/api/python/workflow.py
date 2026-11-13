@@ -14,6 +14,7 @@ from cwl_utils.parser import CommandLineTool as CWLCommandLineTool
 
 from sophios.lang import CwlRecord, EdgeRef, InputValue, OpaqueCwl, UnresolvedName, nodes
 from sophios.lang.compatibility import TypeRelation, reference_relation
+from sophios.lang.cwl import ScatterMethod
 from sophios.lang.diagnostics import Diagnostic, SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
 from sophios.lang.names import check_written_name
@@ -48,7 +49,6 @@ from ._utils import (
     serialize_value as _serialize_value,
 )
 from ._from_wic import workflow_from_wic as _workflow_from_wic
-from ._types import ScatterMethod
 from ._workflow_runtime import (
     RunHandle,
     RunOptions as _RunOptions,

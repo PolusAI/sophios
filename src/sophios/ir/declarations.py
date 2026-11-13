@@ -4,6 +4,7 @@ from copy import deepcopy
 from dataclasses import replace
 from typing import Any, Final
 
+from ..lang.cwl import PICKS_ONE
 from ..lang.nodes import OpaqueCwl
 from .types import (BoundaryDeclaration, DerivedName, Direction, Port, PortDeclaration, PortName, PortType, StepNode,
                     WorkflowGraph)
@@ -86,7 +87,7 @@ def delivered(produced: Any, *, sources: int, link_merge: OpaqueCwl, pick_value:
         merged = produced
     else:
         merged = {'type': 'array', 'items': produced}
-    if pick_value not in ('first_non_null', 'the_only_non_null'):
+    if pick_value not in PICKS_ONE:
         return merged
     match merged:
         case {'type': 'array', 'items': items}:

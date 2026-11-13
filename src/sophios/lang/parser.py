@@ -32,7 +32,7 @@ from .nodes import (
     WicSidecar,
     cwl_record,
 )
-from .cwl import CWL_VERSIONS
+from .cwl import CWL_VERSIONS, SCATTER_METHODS
 from .spans import SourceSpan
 from .support import STEP_INPUT_RECORD_KEYS
 from .values import Anything, AnyMapping, Flag, ListOf, OneOf, Record, Text, ValueShape
@@ -104,7 +104,7 @@ class Grammar:  # pylint: disable=too-few-public-methods  # a namespace, not a t
         'in': Anything(),
         'out': Anything(),
         'scatter': Anything(),
-        'scatterMethod': OneOf(('dotproduct', 'flat_crossproduct', 'nested_crossproduct')),
+        'scatterMethod': OneOf(tuple(sorted(SCATTER_METHODS))),
         'inference': Anything(),
     })
 

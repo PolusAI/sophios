@@ -9,6 +9,7 @@ import re
 from string import Formatter
 from typing import Any, Final
 
+from .lang.cwl import SCATTER_METHODS
 from .lang.subset import references, source_text
 from .nf_expr import (
     CONTROL_ESCAPES, GROOVY_IDENTIFIER, GROOVY_LITERAL, NF_EXPRESSION_FUNCTIONS, groovy_literal, render_groovy,
@@ -19,7 +20,6 @@ from .nf_types import (
     NF_NEST_HELPER,
     NF_OUTPUT_HELPER,
     NF_STEP_INPUT_HELPER,
-    MULTI_INPUT_ADAPTERS,
     ExecutableNextflowWorkflow,
     NF_LOAD_CONTENTS_HELPER,
     NF_LOAD_CONTENTS_LIMIT,
@@ -795,7 +795,7 @@ def _multi_input_sources(
         if (
             not isinstance(connection, (NfWorkflowInputConnection, NfProcessConnection))
             or connection.to_process != process.name
-            or connection.adapter not in MULTI_INPUT_ADAPTERS
+            or connection.adapter not in SCATTER_METHODS
         ):
             continue
         match connection:
@@ -813,7 +813,7 @@ def _multi_input_methods(workflow: ExecutableNextflowWorkflow) -> dict[str, str]
         connection.to_process: connection.adapter
         for connection in workflow.connections
         if isinstance(connection, (NfWorkflowInputConnection, NfProcessConnection))
-        and connection.adapter in MULTI_INPUT_ADAPTERS
+        and connection.adapter in SCATTER_METHODS
     }
 
 
@@ -828,7 +828,7 @@ def _output_record(workflow: ExecutableNextflowWorkflow, connection: NfWorkflowO
         for incoming in workflow.connections
         if isinstance(incoming, (NfWorkflowInputConnection, NfProcessConnection))
         and incoming.to_process == connection.from_process
-        and incoming.adapter in MULTI_INPUT_ADAPTERS
+        and incoming.adapter in SCATTER_METHODS
     ]
     depth = len(adapters) if "nested_crossproduct" in adapters else min(len(adapters), 1)
     value = f"{NF_OUTPUT_HELPER}(items, {depth})" if depth else f"{NF_OUTPUT_HELPER}(items[0], 0)"
