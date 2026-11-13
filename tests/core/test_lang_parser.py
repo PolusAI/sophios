@@ -39,7 +39,7 @@ from sophios.utils_yaml import Key
 from . import provocations
 from .budgets import budget
 from .cases import DATA, case_dirs, diagnostic as as_written
-from .wic_corpus import CORPUS
+from .test_setup import workflow_paths
 from .strategies import documents, identifiers, input_lines, pinned, scalar_spellings
 from .wic_reading import YamlWithSophiosTagsOpaque
 
@@ -473,9 +473,10 @@ def test_the_corpus_parses_validates_and_round_trips() -> None:
     """Every `.wic` the compiler's own discovery reaches parses without a diagnostic, its JSON projection is a document
     the exported schema accepts, and it reads the same once rendered: "the language accepts what exists today" is a
     falsifiable claim. Discovery reaching nothing is a failure, not a small corpus: discovery itself broke."""
-    assert CORPUS, 'get_yml_paths found no workflows; check search_paths_wic'
+    corpus = [path for paths in workflow_paths().values() for path in paths.values()]
+    assert corpus, 'get_yml_paths found no workflows; check search_paths_wic'
     failed = []
-    for path in CORPUS:
+    for path in corpus:
         first = parse(path.read_text(encoding='utf-8'), str(path))
         second = parse(render(first.document), str(path)) if first.document is not None else first
         if not (first.ok and second.ok and SCHEMA_VALIDATOR.is_valid(to_json(cast(Document, first.document)))

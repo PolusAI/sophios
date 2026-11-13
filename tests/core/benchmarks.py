@@ -15,8 +15,7 @@ if __package__ in (None, ''):
 
 from core.hermetic import compile_hermetic, nested_workflow
 from core.synthetic_tools import SYNTHETIC_TOOLS, insertion_registry
-from core.test_setup import load_test_registry
-from core.wic_corpus import CORPUS, corpus_id
+from core.test_setup import load_test_registry, workflow_paths
 
 from sophios.ir import frontdoor
 import sophios.cli
@@ -40,23 +39,24 @@ def _compile_corpus_file(path: Path) -> None:
     sophios.compiler.compile_source(bundle, settings, quiet=True)
 
 
+_CORPUS: Final = sorted(path for paths in workflow_paths().values() for path in paths.values())
 _SPECULATIVE_YML, _SPECULATIVE_TOOLS = insertion_registry()
 _DEEP_NESTING_YML: Final = nested_workflow(15)
 _WIDE_INFERENCE_YML: Final = {'steps': [{'id': 'mk_file'} for _ in range(100)]}
 
 
 def _parse_corpus() -> None:
-    for path in CORPUS:
+    for path in _CORPUS:
         parse(path.read_text(encoding='utf-8'), filename=path.name)
 
 
 CASES: Final[tuple[Case, ...]] = tuple(
-    Case(f'corpus/{corpus_id(path)}',
-         "One of wic_corpus.CORPUS's reachable workflows, compiled for real "
+    Case(f'corpus/{path.parent.name}/{path.name}',
+         "One of the corpus's reachable workflows, compiled for real "
          "against this environment's plugin registry — the trend everyone "
          "actually cares about.",
          run=partial(_compile_corpus_file, path))
-    for path in CORPUS
+    for path in _CORPUS
 ) + (
     Case('speculative_insertion',
          "A workflow with two branches, each needing one whitelisted-format-"

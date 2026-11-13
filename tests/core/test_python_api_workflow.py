@@ -25,7 +25,6 @@ import yaml
 import sophios.api.python._workflow_runtime as python_runtime
 import sophios.plugins
 import sophios.post_compile
-from sophios import input_output as io
 from sophios import preflight
 from sophios import run_local
 from sophios.backends import RunRequest
@@ -40,16 +39,11 @@ from sophios.wic_types import Json, Tools
 
 from .budgets import budget
 from .cases import DATA
+from .test_setup import corpus_config
 from .helpers import ADAPTERS, adapter_step, echo_workflow, no_preflight, python_process
 from .wic_reading import read_wic
 
 PYTHON_API: Final = DATA / 'python_api'
-
-
-def _load_global_config() -> Json:
-    """The config CI provisions, read from the user's home."""
-    config_file = Path().home() / "wic" / "global_config.json"
-    return io.read_config_from_disk(config_file)
 
 
 def _iter_python_workflow_paths(global_config: Json) -> list[tuple[str, Path]]:
@@ -87,7 +81,7 @@ def test_compile_python_workflows() -> None:
     """Import and compile all auto-discovered Python workflow scripts."""
     from sophios.api.python import workflow  # pylint: disable=C0415:import-outside-toplevel
 
-    global_config = _load_global_config()
+    global_config = corpus_config()
     tools_cwl = sophios.plugins.get_tools_cwl(global_config)
     paths_tuples = _iter_python_workflow_paths(global_config)
     import_errors: list[str] = []
