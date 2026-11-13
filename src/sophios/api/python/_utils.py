@@ -12,9 +12,8 @@ from typing import Any, Final
 import yaml
 
 from sophios import utils_cwl
+from sophios.lang.cwl import CWLAtomicType
 from sophios.lang.spans import SourceSpan
-
-from ._types import CWLAtomicType
 
 _PACKAGE_ROOT: Final = Path(__file__).resolve().parents[2]
 

@@ -2,11 +2,12 @@
 
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Final, Generic, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast
 
 from sophios.ir.declarations import layered
 from sophios.ir.types import PortType
 from sophios.lang import CwlRecord, EdgeRef, InlineLiteral, InputValue, UnresolvedName
+from sophios.lang.cwl import PICKS_ONE
 from sophios.lang.spans import SourceSpan
 
 from ._errors import InvalidLinkError
@@ -346,10 +347,6 @@ def _produced_type(source: Any) -> Any:
     return source.parameter_type
 
 
-# The `pickValue` methods that deliver one value, not a list.
-_PICKS_ONE: Final = ("first_non_null", "the_only_non_null")
-
-
 def _record_type(record: CwlRecord, sources: tuple[Any, ...]) -> Any:
     """The type a record delivers, from its first source: one source as it is, or,
     when sources are merged, the list CWL's `linkMerge` makes of them; a `pickValue`
@@ -368,7 +365,7 @@ def _record_type(record: CwlRecord, sources: tuple[Any, ...]) -> Any:
     else:
         merged = {"type": "array", "items": first}
     match merged:
-        case {"type": "array", "items": items} if fields.get("pickValue") in _PICKS_ONE:
+        case {"type": "array", "items": items} if fields.get("pickValue") in PICKS_ONE:
             return items
         case _:
             return merged
