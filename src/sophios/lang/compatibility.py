@@ -10,6 +10,7 @@ from collections.abc import Callable
 from enum import Enum
 from typing import Any, Final
 
+from .cwl import ATOMIC_TYPES
 from .versions import KNOWN_VERSIONS
 
 
@@ -19,11 +20,6 @@ class TypeRelation(Enum):
     OVERLAPS = 'overlaps'
     DISJOINT = 'disjoint'
     UNKNOWN = 'unknown'
-
-
-_ATOMS: Final = frozenset({
-    'null', 'boolean', 'int', 'long', 'float', 'double', 'string', 'File', 'Directory',
-})
 
 
 def _expand_shorthand(declared: Any) -> Any:
@@ -83,12 +79,12 @@ def _v0_0_1(source: Any, sink: Any,  # pylint: disable=too-many-return-statement
                            source_active | {id(source)}, sink_active | {id(sink)})
         scalar = sink if source_is_array else source
         return TypeRelation.DISJOINT \
-            if isinstance(scalar, str) and scalar in _ATOMS else TypeRelation.UNKNOWN
+            if isinstance(scalar, str) and scalar in ATOMIC_TYPES else TypeRelation.UNKNOWN
 
     if source == 'Any' or sink == 'Any':
         return TypeRelation.UNKNOWN
     if isinstance(source, str) and isinstance(sink, str):
-        if source not in _ATOMS or sink not in _ATOMS:
+        if source not in ATOMIC_TYPES or sink not in ATOMIC_TYPES:
             return TypeRelation.UNKNOWN
         return TypeRelation.OVERLAPS if source == sink else TypeRelation.DISJOINT
     return TypeRelation.UNKNOWN

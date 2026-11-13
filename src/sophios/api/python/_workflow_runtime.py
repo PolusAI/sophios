@@ -38,6 +38,7 @@ from sophios.ir.resolve import RegistrySnapshot
 from sophios.ir.resolved import NotLowered, ResolvedWorkflow
 from sophios.ir.types import AuthoredName, WorkflowGraph
 from sophios.lang import CwlRecord, Diagnostic, Diagnostics, Document, ParseResult, Severity, SophiosError, render
+from sophios.lang.cwl import SCATTER_METHODS
 from sophios.lang.diagnostics import report
 from sophios.lang import Step as LangStep
 from sophios.lang.error_codes import SophiosErrorCode
@@ -51,7 +52,6 @@ from ._inference import Inference
 from ._errors import InvalidCLTError, InvalidStepError
 from ._compiled import CompiledNextflowWorkflow, CompiledWorkflow
 from ._ports import InputParameter, OutputParameter, ParameterStore
-from ._types import ScatterMethod
 from ._utils import load_yaml as _load_yaml, serialize_value
 
 if TYPE_CHECKING:
@@ -169,11 +169,10 @@ def validate_step_assignment(name: str, value: Any, *, owner: Any | None = None)
         case "scatter", invalid if invalid:
             raise TypeError("scatter must be assigned a list of InputParameter values")
         case "scatterMethod", str() as scatter_method if scatter_method:
-            allowed = {member.value for member in ScatterMethod}
-            if scatter_method not in allowed:
+            if scatter_method not in SCATTER_METHODS:
                 raise ValueError(
                     "Invalid value for scatterMethod. "
-                    f"Valid values are: {', '.join(sorted(allowed))}"
+                    f"Valid values are: {', '.join(sorted(SCATTER_METHODS))}"
                 )
         case "when", condition if condition and not (
                 isinstance(condition, str) and condition.startswith("$(") and condition.endswith(")")):

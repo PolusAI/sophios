@@ -10,6 +10,7 @@ import re
 from types import MappingProxyType
 from typing import Any, ClassVar, Final, Generic, TypeVar, get_args
 
+from .lang.cwl import LINK_MERGES, PICK_VALUES, PICKS_ONE, SCATTER_METHODS
 from .lang.subset import Expr, canonical, check, references, validate
 from .nf_expr import NF_FINITE_HELPER, NF_ROUND_HELPER
 from .nf_symbols import NEXTFLOW_SCRIPT_DECLARED_NAMES, validate_nextflow_identifier
@@ -985,7 +986,6 @@ def _type_condition(name: str, condition: Expr, ports: Iterable[NfPort]) -> None
 
 # Adapters that combine two or more scattered whole arrays into invocations
 # (design §6, Topology, Multi-input scatter); each value names its method.
-MULTI_INPUT_ADAPTERS = frozenset({"dotproduct", "flat_crossproduct", "nested_crossproduct"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -1024,7 +1024,7 @@ class NfWorkflowInputConnection:
     other adaptation a topology might require is rejected before lowering.
     """
 
-    ALLOWED_ADAPTERS: ClassVar[frozenset[str]] = MULTI_INPUT_ADAPTERS
+    ALLOWED_ADAPTERS: ClassVar[frozenset[str]] = SCATTER_METHODS
 
     from_port: str
     to_process: str
@@ -1067,7 +1067,7 @@ class NfProcessConnection:
     whole-array source for the destination's scatter.
     """
 
-    ALLOWED_ADAPTERS: ClassVar[frozenset[str]] = frozenset({"gather", *MULTI_INPUT_ADAPTERS})
+    ALLOWED_ADAPTERS: ClassVar[frozenset[str]] = frozenset({"gather", *SCATTER_METHODS})
 
     from_process: str
     from_port: str
@@ -1129,10 +1129,6 @@ class NfWorkflowOutputConnection:
         }
 
 
-LINK_MERGES = frozenset({"merge_nested", "merge_flattened"})
-PICK_VALUES = frozenset({"first_non_null", "the_only_non_null", "all_non_null"})
-
-
 #: A connection that carries one source's values, a workflow input's or a process output's, into a process input:
 #: the connection a scatter adapter sits on, and each source of a step input.
 NfSourceConnection = NfWorkflowInputConnection | NfProcessConnection
@@ -1181,7 +1177,7 @@ class NfStepInputConnection:
     @property
     def gives_list(self) -> bool:
         """Whether the idioms give a list: every linkMerge does, unless a pickValue picks one value."""
-        return self.pick_value not in ("first_non_null", "the_only_non_null")
+        return self.pick_value not in PICKS_ONE
 
     def to_dict(self) -> dict[str, Any]:
         """Return a JSON-compatible representation.
@@ -1315,7 +1311,7 @@ def optional_output_problems(processes: Sequence[NfProcess], connections: Sequen
     problems: list[str] = []
     multi_scattered = sorted({connection.to_process for connection in connections
                               if isinstance(connection, (NfWorkflowInputConnection, NfProcessConnection))
-                              and connection.adapter in MULTI_INPUT_ADAPTERS})
+                              and connection.adapter in SCATTER_METHODS})
     for name in multi_scattered:
         if name in by_name and (optional := [port.name for port in by_name[name].outputs if port.optional]):
             problems.append(f"scattered process {name!r} cannot have the optional outputs {', '.join(optional)}")
@@ -1439,7 +1435,7 @@ class ExecutableNextflowWorkflow:
             connection.to_process: connection.adapter
             for connection in self.connections
             if isinstance(connection, (NfWorkflowInputConnection, NfProcessConnection))
-            and connection.adapter in MULTI_INPUT_ADAPTERS
+            and connection.adapter in SCATTER_METHODS
         }
         if optional := optional_output_problems(self.processes, self.connections):
             raise ValueError(optional[0])
@@ -1523,7 +1519,7 @@ class ExecutableNextflowWorkflow:
                                 f"connection {from_process}.{from_port} -> {to_process}.{to_port} gathers "
                                 "into a port that is not array-typed"
                             )
-                        if adapter in MULTI_INPUT_ADAPTERS:
+                        if adapter in SCATTER_METHODS:
                             if (to_process, to_port) in carried:
                                 raise ValueError(f"step-only input {to_process}.{to_port} cannot be scattered: no "
                                                  "input of the process receives the element")
@@ -1634,7 +1630,7 @@ class ExecutableNextflowWorkflow:
         scattered = {
             (connection.to_process, connection.to_port) for connection in self.connections
             if isinstance(connection, (NfWorkflowInputConnection, NfProcessConnection))
-            and connection.adapter in MULTI_INPUT_ADAPTERS
+            and connection.adapter in SCATTER_METHODS
         }
         processes = []
         for name in order:

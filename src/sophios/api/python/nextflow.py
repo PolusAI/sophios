@@ -58,13 +58,13 @@ from pathlib import Path
 from typing import Any, NoReturn
 
 from sophios.ir.resolved import Construct, NotLowered, Refusal
+from sophios.lang.cwl import SCATTER_METHODS
 from sophios.lang.diagnostics import SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
 from sophios.lang.spans import SourceSpan
 from sophios.lang.subset import Expr, references, source_text
 from sophios.nf_reader import read_nextflow
 from sophios.nf_types import (
-    MULTI_INPUT_ADAPTERS,
     ExecutableNextflowWorkflow,
     NfArrayBinding,
     NfBasenameReference,
@@ -341,7 +341,7 @@ def _bind(model: ExecutableNextflowWorkflow, workflow: Workflow, steps: dict[str
         step = steps[process.name]
         scattered = [edge for edge in model.connections
                      if isinstance(edge, NfSourceConnection)
-                     and edge.to_process == process.name and edge.adapter in MULTI_INPUT_ADAPTERS]
+                     and edge.to_process == process.name and edge.adapter in SCATTER_METHODS]
         if scattered:
             ports = (getattr(step.inputs, edge.to_port) for edge in scattered)
             step.scatter_on(*ports, method=str(scattered[0].adapter))
