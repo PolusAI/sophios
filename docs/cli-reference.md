@@ -123,7 +123,7 @@ and `no_provenance` are read by Sophios. Any other key becomes `--key value` on 
 that Sophios parses first, so a Sophios flag name is consumed there and has no
 effect on the run. Currently, for a switch such as `ignore_docker_install`,
 the value is left over and reaches the runner as a stray `yes`. For a flag that
-takes a value, such as `custom_net` or `graph_inline_depth`, the flag and its
+takes a value, such as `graph_inline_depth`, the flag and its
 value are both dropped without a message. For a flag with fixed choices, an
 invalid value such as `{'diagnostics': 'x'}` exits the process with status 2
 and `main: error: argument --diagnostics: invalid choice`, after the workflow

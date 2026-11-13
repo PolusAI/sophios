@@ -5,6 +5,7 @@ compile to, under the flags and the `compile()` arguments it names. The pairs ar
 import re
 import warnings
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -20,7 +21,7 @@ from sophios.ir.frontdoor import bundle_from_disk
 from sophios.post_compile import inline_artifact_runs
 from sophios.python_cwl_adapter import import_python_file
 from sophios.runtime_inputs import output_target_inputs, runner_job_inputs
-from sophios.wic_types import CompilerOptions, Json
+from sophios.wic_types import Json
 
 from .cases import DATA, diagnostic, match
 from .helpers import REPO_ROOT, shipped_tools
@@ -66,7 +67,7 @@ def _shipped_tools_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None
     use_home(monkeypatch, home_with_shipped_tools(tmp_path / 'home', REPO_ROOT))
 
 
-def _compile_wic(root: Path, settings: CompilerOptions) -> CompilationResult:
+def _compile_wic(root: Path, settings: sophios.compiler.CompileSettings) -> CompilationResult:
     """`root` compiled as the command line reads it, with the shipped tools and the `.wic` files beside it."""
     return sophios.compiler.compile_source(
         bundle_from_disk(root, {'global': {path.stem: path for path in root.parent.glob('*.wic')}}, shipped_tools()),
@@ -85,7 +86,7 @@ def _refusal(error: SophiosError) -> list[dict[str, Any]]:
             for item in error.diagnostics]
 
 
-def _through_the_file(root: Path, settings: CompilerOptions) -> Any:
+def _through_the_file(root: Path, settings: sophios.compiler.CompileSettings) -> Any:
     """CWL, job and notes of `root`, compiled as the command line does, the CWL's outputs narrowed to the named ones
     as `compile()` returns them (docs/connecting-steps.md); or how it is refused."""
     try:
@@ -131,12 +132,13 @@ def test_every_pair_compiles_alike_from_both_surfaces_and_as_stated(
     gives: the `notes`, every diagnostic as printed but for its place (none unless stated); as it applies, what
     steps `reads`, how it is `refused`, the `compiled` document in part, or the whole `document` in a file. The
     bundle the objects write compiles to what they do."""
-    defaults = cli.get_dicts_for_compilation(cli.get_args(''))[0]
+    defaults = cli.settings_from_args(cli.get_args(''))[0]
     for stem, build, wic, compiles in _pairs():
         for stated in compiles:
             from_python = _from_python(build, stated, capsys)
-            settings = cli.get_dicts_for_compilation(cli.get_args('', stated.get('flags', [])))[0]
-            assert _through_the_file(wic, settings | stated.get('settings', {})) == from_python, (stem, stated)
+            settings = cli.settings_from_args(cli.get_args('', stated.get('flags', [])))[0]
+            settings = replace(settings, inference=replace(settings.inference, **stated.get('settings', {})))
+            assert _through_the_file(wic, settings) == from_python, (stem, stated)
             if isinstance(from_python, list):
                 assert match(stated.get('refused', []), from_python), (stem, from_python)
                 continue

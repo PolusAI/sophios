@@ -9,8 +9,7 @@ import pytest
 import yaml
 
 from sophios.api.python.workflow import Step as ApiStep, Workflow as ApiWorkflow
-from sophios.cli import default_compilation_settings
-from sophios.compiler import compile_source
+from sophios.compiler import CompileSettings, compile_source
 from sophios.input_output import write_artifacts_to_disk
 from sophios.ir.artifacts import CompilationArtifact, CompilationResult
 from sophios.ir.frontdoor import SourceBundle, bundle_from_disk, bundle_from_source
@@ -47,7 +46,7 @@ def _line_of(text: str, needle: str) -> int:
 
 def _compile(bundle: SourceBundle) -> CompilationResult:
     """Compile a bundle the file door built, with default settings."""
-    return compile_source(bundle, default_compilation_settings(), quiet=True)
+    return compile_source(bundle, CompileSettings(), quiet=True)
 
 
 def _redump(text: str) -> str:

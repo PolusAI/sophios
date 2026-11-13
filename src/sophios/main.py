@@ -21,7 +21,7 @@ from . import post_compile as pc
 from . import backends, cli, compiler, drawing, plugins, preflight, realtime, run_local, run_setup, targets
 from .ir import frontdoor
 from .ir.frontdoor import SourceBundle
-from .wic_types import CompilerOptions, Json, Tools
+from .wic_types import Json, Tools
 
 
 def _write_schema(path: Path) -> None:
@@ -56,12 +56,12 @@ def _load_source_bundle(args: argparse.Namespace,
 
 def _compile_loaded_document(yaml_path: str, bundle: SourceBundle,
                              yml_paths: dict[str, dict[str, Path]], tools_cwl: Tools,
-                             compiler_options: CompilerOptions
+                             settings: compiler.CompileSettings
                              ) -> tuple[CompilationResult, tuple[realtime.Analysis, ...]]:
     """Compile to a graph-derived result, and each real-time analysis it declares."""
     try:
-        result = compiler.compile_source(bundle, compiler_options, quiet=False)
-        analyses = realtime.compile_analyses(result.realtime, yml_paths, tools_cwl, compiler_options)
+        result = compiler.compile_source(bundle, settings, quiet=False)
+        analyses = realtime.compile_analyses(result.realtime, yml_paths, tools_cwl, settings)
     except SophiosError:
         # The library reports; only this adapter is allowed to exit. The
         # banner has to stay: this arm intercepts failures that used to
@@ -317,9 +317,6 @@ def _main(args: argparse.Namespace, unknown_args: list[str]) -> None:
     # at import time — see the note in cli.py.
     if not args.yaml and not (args.generate_config or args.generate_schemas or args.explain):
         cli.parser.error('the following arguments are required: --yaml')
-    if args.ignore_validation_errors:
-        print('Warning: --ignore_validation_errors is deprecated and does nothing; '
-              'nothing validates a file against a schema any more.', file=sys.stderr)
 
     if args.explain:
         explanation = args.explain.explanation
@@ -363,10 +360,11 @@ def _main(args: argparse.Namespace, unknown_args: list[str]) -> None:
 
     # The one conversion from parsed arguments to settings, at the boundary.
     # Everything below this line takes values; no Namespace goes further.
-    compiler_options, graph_settings = cli.get_dicts_for_compilation(args)
-    compiler_options['inference_rules'] = global_config.get('inference_rules', {})
-    compiler_options['renaming_conventions'] = io.renamings_of(global_config)
-    compilation, analyses = _compile_loaded_document(yaml_path, bundle, yml_paths, tools_cwl, compiler_options)
+    settings, graph_settings = cli.settings_from_args(args)
+    settings = replace(settings, inference=replace(
+        settings.inference, format_rules=tuple(global_config.get('inference_rules', {}).items()),
+        renaming_conventions=tuple(io.renamings_of(global_config))))
+    compilation, analyses = _compile_loaded_document(yaml_path, bundle, yml_paths, tools_cwl, settings)
     report(compilation.diagnostics, args.diagnostics)
     target = targets.target(args.target)
     basepath, root_dir = Path(args.basepath), Path(args.yaml).parent.absolute()

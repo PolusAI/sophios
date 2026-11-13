@@ -10,9 +10,8 @@ import pytest
 import yaml
 from hypothesis import example, given, strategies as st
 
-from sophios.cli import default_compilation_settings
 from sophios import targets
-from sophios.compiler import compile_source, resolved_view
+from sophios.compiler import CompileSettings, compile_source, resolved_view
 from sophios.ir.frontdoor import bundle_from_disk
 from sophios.runtime_inputs import runner_job_inputs
 from sophios.wic_types import StepId, Tool
@@ -76,7 +75,7 @@ def _written(tmp_path: Path, source: str, inputs_file: str = '') -> Path:
     tool = DATA / 'write_dir.cwl'
     tools = {StepId('write_dir', 'global'): Tool(str(tool), yaml.safe_load(tool.read_text(encoding='utf-8')))}
     siblings = {'global': {p.stem: p for p in DATA.glob('*.wic')}}
-    result = compile_source(bundle_from_disk(DATA / source, siblings, tools), default_compilation_settings(),
+    result = compile_source(bundle_from_disk(DATA / source, siblings, tools), CompileSettings(),
                             quiet=True)
     if inputs_file:
         write_tree(tmp_path, {'job.yml': inputs_file})
