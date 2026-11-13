@@ -1,0 +1,52 @@
+# What each function of refused.py raises: the exception, its diagnostic's code where it carries one, and what its
+# message names. A misspelled port's AttributeError is Python's own.
+misspelled_port: {raises: AttributeError, names: ["'append'", "'misspelled'"]}
+undeclared_port: {raises: AttributeError, names: ["'echo'", "'go'"]}
+undeclared_port_a_record_bound: {raises: AttributeError, names: ["'go'", only a StepInput binds]}
+output_of_another_type: {raises: InvalidLinkError, code: INVALID_LINK, names: [append.str, "'string'", "'File'"]}
+workflow_input_of_another_type: {raises: InvalidLinkError, code: INVALID_LINK, names: [append.file, w.inputs.text]}
+merged_sources_of_another_type: {raises: InvalidLinkError, code: INVALID_LINK, names: [sink.x, "'int'"]}
+picked_sources_of_another_type: {raises: InvalidLinkError, code: INVALID_LINK, names: [sink.x, "'int'", "'File'"]}
+port_in_a_list: &literal {raises: InvalidInputValueError, code: INVALID_INPUT_VALUE, names: [cat.file, StepInput]}
+workflow_input_in_a_tuple: *literal
+port_in_a_nested_list: *literal
+port_in_a_mapping: *literal
+port_in_a_list_of_mappings: *literal
+step_input_in_a_list: *literal
+string_as_a_source: &string {raises: InvalidInputValueError, code: INVALID_INPUT_VALUE, names: [StepInput.source, str]}
+strings_as_sources: *string
+decimal_for_an_int: {raises: SophiosError, code: LITERAL_TYPE_MISMATCH, names: ["'x'", decimal.Decimal, Python int]}
+decimal_for_a_float: {raises: SophiosError, code: LITERAL_TYPE_MISMATCH, names: [decimal.Decimal, Python float]}
+decimal_for_a_boolean: {raises: SophiosError, code: LITERAL_TYPE_MISMATCH, names: [decimal.Decimal, Python bool]}
+decimal_for_a_string: {raises: SophiosError, code: LITERAL_TYPE_MISMATCH, names: [decimal.Decimal, Python str]}
+step_before_its_source: {raises: InvalidStepError, code: INVALID_STEP, names: [append.file, "'a'", earlier]}
+source_outside_the_workflow: {raises: InvalidStepError, code: INVALID_STEP, names: [append.file, "'a' is not a child"]}
+record_before_its_source: {raises: InvalidStepError, code: INVALID_STEP, names: [cat.file, "'a'", earlier]}
+reads_its_own_output: {raises: InvalidLinkError, code: INVALID_LINK, names: [cat.file, loop.outputs.made, own output]}
+merge_into_a_file: {raises: SophiosError, code: INCOMPATIBLE_INPUT_REFERENCE, names: ["'sink'", "'x'"]}
+two_tools_one_stem: &stem {raises: InvalidStepError, code: INVALID_STEP, names: ["'cat'", "'shipped_cat'", "stem 'cat'"]}
+two_tools_one_stem_written: *stem
+cwl_workflow_as_a_tool: {raises: SophiosError, code: SUBWORKFLOW_INVALID, names: [say.cwl, nested Workflow, --allow_raw_cwl]}
+absolute_output_directory: {raises: ValueError, names: [write_dir~outDir, absolute location]}
+step_named_with_a_tilde: {raises: ValueError, names: ["step name 'a~b'"]}
+step_named_hidden: {raises: ValueError, names: ["step name '.hidden'"]}
+workflow_named_for_the_directory_above: {raises: ValueError, names: ["workflow name '..'"]}
+scatter_over_an_unbound_port: {raises: ValueError, names: [bound before scattering]}
+scatter_over_a_scalar: &scalar {raises: ValueError, names: [array-valued data]}
+scatter_over_a_path: *scalar
+scatter_over_another_steps_port: {raises: ValueError, names: [same step]}
+scatter_over_a_picked_value: *scalar
+scatter_over_a_nested_workflows_output: *scalar
+unknown_target_to_compile: &target {raises: ValueError, names: ["unknown target 'wdl'", cwl, nextflow]}
+unknown_target_to_check: *target
+unknown_target_to_run: *target
+unknown_target_to_start: *target
+string_comparison_under_nextflow: {raises: NotLowered, code: NF_WHEN_SUBSET, names: [refused.py, "'echo'", '<']}
+real_time_analysis_under_run_async: {raises: SophiosError, code: REALTIME_NOT_ASYNC, names: [refused.py, "'touch'"]}
+wic_text_of_a_workflow: {raises: AttributeError, names: [Workflow.write_wic]}
+bundle_to_a_yaml_file: {raises: ValueError, names: [.wic file or a directory]}
+bundle_over_another_tool_of_its_stem: {raises: InvalidStepError, code: INVALID_STEP, names: [echo.cwl, "'echo'"]}
+step_inputs_file_for_a_built_tool: {raises: TypeError, names: [step_inputs_file]}
+raw_key_the_builder_manages: {raises: ValueError, names: [builder-managed, inputs]}
+loader_key_in_a_requirement: {raises: ValueError, names: [SALAD, $import]}
+port_named_by_text: {raises: TypeError, names: [named Input/Output object]}

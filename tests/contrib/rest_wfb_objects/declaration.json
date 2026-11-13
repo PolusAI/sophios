@@ -1,0 +1,32 @@
+{
+  "node": {
+    "id": 99,
+    "x": 0,
+    "y": 0,
+    "z": 9,
+    "name": "cwl_subinterpreter",
+    "pluginId": "cwl_subinterpreter",
+    "height": 50,
+    "width": 250,
+    "internal": false,
+    "settings": {
+      "inputs": {
+        "file_pattern": "empty.txt",
+        "cwl_tool": "touch",
+        "max_times": 2,
+        "config": {
+          "in": {
+            "filename": "again.txt"
+          }
+        }
+      }
+    }
+  },
+  "link": {
+    "sourceId": 7,
+    "outletIndex": 0,
+    "targetId": 99,
+    "inletIndex": 0,
+    "id": 6
+  }
+}

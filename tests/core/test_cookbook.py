@@ -1,19 +1,20 @@
-"""Every cookbook pair (`docs/cookbook/<stem>.wic` and `.py`) compiles to one CWL, job inputs and note codes from both
-surfaces, or a docs page tells one surface's reader something false."""
+"""Every pair, a `.py` and a `.wic` of one stem, compiles to one CWL, job and list of notes from both surfaces, and the
+bundle the `.py`'s objects write compiles to it too; each `expected.yaml` beside the pairs states what some of them
+compile to, under the flags and the `compile()` arguments it names. The pairs are the cookbook's
+(`docs/cookbook`), which the docs show, and tests/core/data/python_api_pairs; the docs show the files as they are."""
 import re
 import warnings
-from collections.abc import Iterable
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import pytest
-from hypothesis import example, given, strategies as st
+import yaml
 
 import sophios.compiler
 from sophios import cli
-from sophios.api.python.workflow import Inference, RunPolicy
-from sophios.lang import SophiosErrorCode
-from sophios.lang.diagnostics import Severity, SophiosError, lines, report
-from sophios.cli import default_compilation_settings
+from sophios.api.python.workflow import Inference, RunPolicy, Workflow
+from sophios.lang.diagnostics import Diagnostic, SophiosError, lines
 from sophios.ir.artifacts import CompilationResult
 from sophios.ir.frontdoor import bundle_from_disk
 from sophios.post_compile import inline_artifact_runs
@@ -21,7 +22,7 @@ from sophios.python_cwl_adapter import import_python_file
 from sophios.runtime_inputs import normalize_artifact_cwl, normalize_artifact_job_inputs
 from sophios.wic_types import CompilerOptions, Json
 
-from .budgets import budget
+from .cases import DATA, diagnostic, match
 from .helpers import REPO_ROOT, shipped_tools
 from .test_setup import home_with_shipped_tools, use_home
 from .wic_reading import read_wic
@@ -29,162 +30,132 @@ from .wic_reading import read_wic
 pytestmark = pytest.mark.package
 
 COOKBOOK = REPO_ROOT / 'docs' / 'cookbook'
-#: A pair is a `.py` beside a `.wic` of the same stem. A `.wic` without a `.py`
-#: is a subworkflow a pair calls; its Python lives in the caller's script.
-PAIRS = sorted(path.stem for path in COOKBOOK.glob('*.py'))
-#: The pair that stops with an error, which `test_the_inferred_graph_stops_at_the_join` pins on both surfaces.
-REFUSED = 'greeting_graph_inferred'
+PYTHON_PAIRS = DATA / 'python_api_pairs'
 
 
-@pytest.fixture(scope='module', name='shipped_tools_home')
-def _shipped_tools_home(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """A home whose `wic/cwl_adapters` holds this checkout's tools."""
-    return home_with_shipped_tools(tmp_path_factory.mktemp('home'), REPO_ROOT)
+#: What a stated compile may say.
+_STATED = {'why', 'under', 'flags', 'settings', 'inference', 'policy', 'notes', 'reads', 'refused', 'compiled',
+           'document'}
 
 
-@pytest.fixture(autouse=True)
-def _with_the_shipped_tools_at_home(monkeypatch: pytest.MonkeyPatch, shipped_tools_home: Path) -> None:
-    """The scripts name their tools under `Path.home() / 'wic' / 'cwl_adapters'`, as the docs tell a reader after
-    `sophios --generate_config`; here that home holds this checkout's tools, so an empty home and CI pass alike."""
-    use_home(monkeypatch, shipped_tools_home)
+def _pairs() -> list[tuple[str, Callable[[], Workflow], Path, list[dict[str, Any]]]]:
+    """Each pair: its name, what builds its objects, its `.wic`, and the compiles tests/core/data/pairs states of it:
+    the default compile, then each it lists `under:` other flags and `compile()` arguments. A cookbook `.py` builds
+    the objects with `workflow()`; tests/core/data/python_api_pairs/pairs.py holds one function per pair. A `.wic`
+    with no `.py` is a workflow a pair calls."""
+    paired = import_python_file('python_api_pairs', PYTHON_PAIRS / 'pairs.py')
+    found = []
+    for directory, builders in ((COOKBOOK, {path.stem: path for path in COOKBOOK.glob('*.py')}),
+                                (PYTHON_PAIRS, {name: getattr(paired, name) for name in dir(paired)
+                                                if (PYTHON_PAIRS / f'{name}.wic').is_file()})):
+        stated = yaml.safe_load((DATA / 'pairs' / f'{directory.name}.yaml').read_text(encoding='utf-8'))
+        for stem, build in sorted(builders.items()):
+            if isinstance(build, Path):
+                build = import_python_file(f'{directory.name}_{stem}', build).workflow
+            default = stated.pop(stem, {})
+            for each in (default, *default.get('under', [])):
+                assert set(each) <= _STATED, f'{directory.name}.yaml: {stem} states {sorted(set(each) - _STATED)}'
+            found.append((stem, build, directory / f'{stem}.wic', [default, *default.pop('under', [])]))
+        assert not stated, f'{directory.name}.yaml states pairs that are not there: {sorted(stated)}'
+    return found
 
 
-def _codes(diagnostics: Iterable[object]) -> list[str]:
-    """The `wic0NN` codes in rendered diagnostics, in order."""
-    return [code for text in map(str, diagnostics) for code in re.findall(r'\[(wic\d{3})\]', text)]
+@pytest.fixture(name='shipped_tools_home')
+def _shipped_tools_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The cookbook scripts name their tools under `Path.home() / 'wic' / 'cwl_adapters'`, as the docs tell a reader
+    after `sophios --generate_config`; here that home holds this checkout's tools, so an empty home and CI pass
+    alike."""
+    use_home(monkeypatch, home_with_shipped_tools(tmp_path / 'home', REPO_ROOT))
 
 
-def _as_compile_returns(cwl: Json, wic_path: Path) -> Json:
-    """`cwl` with the outputs `Workflow.compile()` returns: only the named ones, where the CLI also exposes every step
-    output (docs/connecting-steps.md)."""
-    named = read_wic(wic_path.read_text(encoding='utf-8'), wic_path.name).get('outputs')
-    if not named:
-        return cwl
-    return {**cwl, 'outputs': {name: cwl['outputs'][name] for name in named}}
-
-
-def _bodies(diagnostics: Iterable[object]) -> list[str]:
-    """Each diagnostic as it is printed, but for the place it points at."""
-    return [re.sub(r'^.+?:\d+:\d+: ', '', str(diagnostic)) for diagnostic in diagnostics]
-
-
-def _compile_wic(root: Path, settings: CompilerOptions | None = None) -> CompilationResult:
-    """`root` compiled as the CLI reads it, with the shipped tools and the `.wic` files beside it, a `run:` path read
-    from beside the document."""
+def _compile_wic(root: Path, settings: CompilerOptions) -> CompilationResult:
+    """`root` compiled as the command line reads it, with the shipped tools and the `.wic` files beside it."""
     return sophios.compiler.compile_source(
         bundle_from_disk(root, {'global': {path.stem: path for path in root.parent.glob('*.wic')}}, shipped_tools()),
-        settings or default_compilation_settings(), quiet=True)
+        settings, quiet=True)
 
 
-def _through_the_file(root: Path, settings: CompilerOptions | None = None) -> tuple[Json, Json, list[str]]:
-    """CWL (outputs narrowed as `compile()` returns them), job and diagnostics of `root`, compiled by `_compile_wic`."""
-    result = _compile_wic(root, settings)
+def _bodies(diagnostics: Any) -> list[str]:
+    """Each diagnostic as it is printed, but for the place it points at, which is the surface's own."""
+    return [re.sub(r'^.+?:\d+:\d+: ', '', str(item)) for item in diagnostics]
+
+
+def _refusal(error: SophiosError) -> list[dict[str, Any]]:
+    """The diagnostics of `error` as cases state them, but for the place each points at."""
+    return [{key: value for key, value in diagnostic(item).items() if key not in ('file', 'line', 'column',
+                                                                                  'end_line', 'end_column')}
+            for item in error.diagnostics]
+
+
+def _through_the_file(root: Path, settings: CompilerOptions) -> Any:
+    """CWL, job and notes of `root`, compiled as the command line does, the CWL's outputs narrowed to the named ones
+    as `compile()` returns them (docs/connecting-steps.md); or how it is refused."""
+    try:
+        result = _compile_wic(root, settings)
+    except SophiosError as error:
+        return _refusal(error)
     artifact = inline_artifact_runs(result.artifact)
-    return (_as_compile_returns(normalize_artifact_cwl(artifact), root),
-            normalize_artifact_job_inputs(artifact, artifact.job_inputs), _bodies(result.diagnostics))
+    cwl = normalize_artifact_cwl(artifact)
+    if named := read_wic(root.read_text(encoding='utf-8'), root.name).get('outputs'):
+        cwl['outputs'] = {name: cwl['outputs'][name] for name in named}
+    return cwl, normalize_artifact_job_inputs(artifact, artifact.job_inputs), _bodies(result.diagnostics)
 
 
-@pytest.mark.fast
-@pytest.mark.parametrize('stem', [stem for stem in PAIRS if stem != REFUSED])
-def test_both_surfaces_compile_to_the_same_cwl(stem: str) -> None:
-    """The `.py` and the `.wic` of a pair emit one workflow, one job and one set of notes."""
-    module = import_python_file(f'cookbook_{stem}', COOKBOOK / f'{stem}.py')
-    python_side = module.workflow().compile()
-    cwl, job, notes = _through_the_file(COOKBOOK / f'{stem}.wic')
-    assert (cwl, job) == (python_side.cwl_workflow, python_side.cwl_job_inputs)
-    assert _codes(notes) == _codes(python_side.diagnostics)
+def _reads(cwl: Json) -> dict[str, dict[str, Any]]:
+    """What each compiled step reads, by its input."""
+    return {step['id']: {port: source.get('source') if isinstance(source, dict) else source
+                         for port, source in step['in'].items()} for step in cwl['steps']}
 
 
-@pytest.mark.fast
-@given(st.sampled_from([stem for stem in PAIRS if stem != REFUSED]), st.booleans(),
-       st.lists(st.integers(0, 255), max_size=3), st.none() | st.tuples(st.integers(0, 9), st.integers(0, 9)))
-@example('when', True, [3], (2, 5))
-@example('greeting_if', True, [], None)
-@budget(10)
-def test_a_policy_writes_for_the_py_what_the_partial_failure_flags_write_for_the_wic(
-        stem: str, enabled: bool, codes: list[int], span: tuple[int, int] | None) -> None:
-    """`compile(policy=...)` on the `.py` of a pair writes the CWL the command line's partial-failure flags write for
-    its `.wic`: `RunPolicy(partial_failure=)` is `--partial_failure_enable`, and the codes it is given are those of
-    `--partial_failure_success_codes`, and of a `--partial_failure_success_codes_range`, lower bound included."""
-    low, high = sorted(span) if span is not None else (0, 0)
-    flags = [*(['--partial_failure_enable'] if enabled else []), '--partial_failure_success_codes', *map(str, codes),
-             *(['--partial_failure_success_codes_range', str(low), str(high)] if span is not None else [])]
-    settings = cli.get_dicts_for_compilation(cli.get_args('', flags))[0]
-    module = import_python_file(f'cookbook_{stem}', COOKBOOK / f'{stem}.py')
-    python_side = module.workflow().compile(policy=RunPolicy(enabled, (*codes, *range(low, high))))
-    cwl, job, notes = _through_the_file(COOKBOOK / f'{stem}.wic', settings)
-    assert (cwl, job) == (python_side.cwl_workflow, python_side.cwl_job_inputs)
-    assert _codes(notes) == _codes(python_side.diagnostics)
-
-
-@pytest.mark.fast
-def test_the_inferred_graph_stops_at_the_join() -> None:
-    """With every edge left out, `combine` would read the counts as its text and as its counts; both surfaces
-    stop there with `wic055`, naming the step, the inputs and the output."""
-    module = import_python_file(f'cookbook_{REFUSED}', COOKBOOK / f'{REFUSED}.py')
-    with pytest.raises(SophiosError) as from_python:
-        module.workflow().compile()
-    with pytest.raises(SophiosError) as from_wic:
-        _compile_wic(COOKBOOK / f'{REFUSED}.wic')
-    for caught in (from_python, from_wic):
-        (error,) = [d for d in caught.value.diagnostics if d.severity is Severity.ERROR]
-        assert error.code is SophiosErrorCode.INFERENCE_DUPLICATE
-        assert error.message == ('combine.text and combine.counts would both read word_count.counts; '
-                                 'write the edge each should read')
-
-
-@pytest.mark.fast
-def test_the_partial_graph_is_the_explicit_graph() -> None:
-    """Two written edges, at the branch and at the join, leave inference the other three; the compiled
-    workflow has every step reading what `greeting_graph.wic` writes out."""
-    def reads(stem: str) -> dict[str, dict[str, str]]:
-        return {step['id']: {port: source['source'] if isinstance(source, dict) else source
-                             for port, source in step['in'].items()}
-                for step in _through_the_file(COOKBOOK / f'{stem}.wic')[0]['steps']}
-
-    assert reads('greeting_graph_partial') == reads('greeting_graph')
-
-
-@pytest.mark.fast
-def test_both_surfaces_print_the_inference_note_alike(capsys: pytest.CaptureFixture[str]) -> None:
-    """The inference entry shows a note; a pair that stopped making one would show nothing. The Python compile prints
-    its notes on stderr, as the command line does, and returns the same objects; nothing is a warning. The two
-    surfaces print the same block, each row at its own file's line."""
-    module = import_python_file('cookbook_inference', COOKBOOK / 'inference.py')
+def _from_python(build: Callable[[], Workflow], stated: dict[str, Any], capsys: pytest.CaptureFixture[str]) -> Any:
+    """CWL, job and notes of the objects `build` makes, compiled with the stated `compile()` arguments, or how they
+    are refused; the compile prints its notes on stderr as the command line does, and warns of nothing."""
+    workflow = build()
     capsys.readouterr()
     with warnings.catch_warnings():
         warnings.simplefilter('error')
-        compiled = module.workflow().compile()
-    from_python = capsys.readouterr().err.splitlines()
-    report(_compile_wic(COOKBOOK / 'inference.wic').diagnostics)
-    from_wic = capsys.readouterr().err.splitlines()
-
-    (note,) = compiled.diagnostics
-    (from_the_file,) = tuple(_compile_wic(COOKBOOK / 'inference.wic').diagnostics)
-    assert from_python == lines(compiled.diagnostics) and from_wic == lines([from_the_file])
-    assert from_python[0] == from_wic[0] == ('note [wic043] 1 edge was guessed; draw the workflow to check it '
-                                             '(--graphviz, or Workflow.draw() in Python)')
-    assert note.message == from_the_file.message == 'cat.file <- echo.stdout (1 other fits)'
+        try:
+            compiled = workflow.compile(inference=Inference(**stated.get('inference', {})),
+                                        policy=RunPolicy(**stated.get('policy', {})))
+        except SophiosError as error:
+            return _refusal(error)
+    assert capsys.readouterr().err.splitlines() == lines(compiled.diagnostics)
+    return compiled.cwl_workflow, compiled.cwl_job_inputs, _bodies(compiled.diagnostics)
 
 
 @pytest.mark.fast
-def test_the_note_the_docs_quote_is_the_one_the_compiler_prints() -> None:
-    """`docs/edge-inference.md` quotes the note of the greeting with its edges left out, as Python prints it;
-    the quote must be the compiler's text."""
-    module = import_python_file('cookbook_greeting_inferred', COOKBOOK / 'greeting_inferred.py')
-    diagnostics = module.workflow().compile().diagnostics
-    (note,) = diagnostics
-    assert note.span is not None
-    header = lines(diagnostics)[0]
-    row = f'greeting_inferred.py:{note.span.start_line}:{note.span.start_column}  {note.message}\n'
-    page = (REPO_ROOT / 'docs' / 'edge-inference.md').read_text(encoding='utf-8')
-    assert f'{header}\n  /home/you/sophios-tutorial/{row}' in page
+@pytest.mark.usefixtures('shipped_tools_home')
+def test_every_pair_compiles_alike_from_both_surfaces_and_as_stated(
+        tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """Each compile of a pair gives the `.wic`, compiled with the stated `flags` and `settings`, and the `.py`, with
+    the stated `inference` and `policy`, one CWL, job and list of diagnostics, or one refusal. Each states what it
+    gives: the `notes`, every diagnostic as printed but for its place (none unless stated); as it applies, what
+    steps `reads`, how it is `refused`, the `compiled` document in part, or the whole `document` in a file. The
+    bundle the objects write compiles to what they do."""
+    defaults = cli.get_dicts_for_compilation(cli.get_args(''))[0]
+    for stem, build, wic, compiles in _pairs():
+        for stated in compiles:
+            from_python = _from_python(build, stated, capsys)
+            settings = cli.get_dicts_for_compilation(cli.get_args('', stated.get('flags', [])))[0]
+            assert _through_the_file(wic, settings | stated.get('settings', {})) == from_python, (stem, stated)
+            if isinstance(from_python, list):
+                assert match(stated.get('refused', []), from_python), (stem, from_python)
+                continue
+            cwl, _job, notes = from_python
+            assert notes == stated.get('notes', []), (stem, notes)
+            assert match(stated.get('reads', {}), _reads(cwl)), (stem, _reads(cwl))
+            assert match(stated.get('compiled', {}), cwl), (stem, cwl)
+            if 'document' in stated:
+                assert cwl == yaml.safe_load((DATA / 'pairs' / stated['document']).read_text(encoding='utf-8')), stem
+        if 'refused' not in compiles[0]:
+            assert _through_the_file(build().write_wic(tmp_path / stem), defaults) == _from_python(build, {}, capsys)
 
 
 @pytest.mark.fast
-def test_the_readme_shows_the_files_as_they_are() -> None:
-    """A README block headed `# <name>` is that file, byte for byte, so the README cannot drift from the pair
-    and the example the documentation runs."""
+@pytest.mark.usefixtures('shipped_tools_home')
+def test_the_docs_show_the_files_and_the_notes_as_they_are() -> None:
+    """A README block headed `# <name>` is that file, byte for byte; and `docs/edge-inference.md` quotes the note
+    Python prints for the greeting with its edges left out as the compiler prints it."""
     sources = {'greeting.wic': COOKBOOK / 'greeting.wic', 'greeting.py': COOKBOOK / 'greeting.py',
                'count_words.py': REPO_ROOT / 'examples' / 'scripts' / 'count_words.py'}
     readme = (REPO_ROOT / 'README.md').read_text(encoding='utf-8')
@@ -192,32 +163,10 @@ def test_the_readme_shows_the_files_as_they_are() -> None:
              for block in re.findall(r'```(?:yaml|python)\n(# \S+\n.*?)```', readme, re.DOTALL)}
     assert shown == {name: path.read_text(encoding='utf-8') for name, path in sources.items()}
 
-
-@pytest.mark.fast
-@pytest.mark.parametrize(('stem', 'consumer', 'port', 'renamings'), [
-    ('naming', 'report', 'input_summary', None),
-    ('naming_renamed', 'abstract', 'input_abstract', (('abstract', 'summary'),)),
-])
-def test_naming_conventions_give_the_summary_to_the_step_that_wants_it(
-        stem: str, consumer: str, port: str, renamings: tuple[tuple[str, str], ...] | None) -> None:
-    """With the naming conventions off the consumer takes `output_details`, the first of two files; by default, with the
-    renaming where names differ, docs/edge-inference.md says it takes `output_summary`, from the `.wic` and `.py`."""
-    module = import_python_file(f'cookbook_{stem}', COOKBOOK / f'{stem}.py')
-
-    def source(compiled: Json) -> str:
-        (step,) = [step for step in compiled['steps'] if step['id'] == consumer]
-        binding = step['in'][port]
-        return str(binding['source'] if isinstance(binding, dict) else binding)
-
-    def from_the_file(settings: CompilerOptions) -> str:
-        if renamings is not None:
-            settings['renaming_conventions'] = list(renamings)
-        return source(normalize_artifact_cwl(inline_artifact_runs(_compile_wic(COOKBOOK / f'{stem}.wic',
-                                                                               settings).artifact)))
-
-    off = default_compilation_settings()
-    off['inference_use_naming_conventions'] = False
-    assert from_the_file(off) == source(module.workflow().compile(
-        inference=Inference(naming_conventions=False)).cwl_workflow) == 'summarize/output_details'
-    assert from_the_file(default_compilation_settings()) == source(module.workflow().compile(
-        inference=Inference(renamings=renamings)).cwl_workflow) == 'summarize/output_summary'
+    module = import_python_file('cookbook_greeting_inferred', COOKBOOK / 'greeting_inferred.py')
+    notes = module.workflow().compile().diagnostics
+    (note,) = notes
+    assert isinstance(note, Diagnostic) and note.span is not None
+    row = f'greeting_inferred.py:{note.span.start_line}:{note.span.start_column}  {note.message}\n'
+    page = (REPO_ROOT / 'docs' / 'edge-inference.md').read_text(encoding='utf-8')
+    assert f'{lines(notes)[0]}\n  /home/you/sophios-tutorial/{row}' in page

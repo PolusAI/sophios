@@ -1,0 +1,69 @@
+# What the cookbook pairs (docs/cookbook/<stem>.py and .wic) compile to, as the default compile and `under:` other flags
+# and `compile()` arguments. A pair not named here compiles with no diagnostic.
+record:
+  document: record.cwl
+greeting_graph:
+  reads: &graph {append: {file: touch/file}, shout: {text: append/file}, word_count: {text: append/file},
+                 combine: {text: shout/shouted, counts: word_count/counts}}
+greeting_graph_partial:
+  why: two edges written, at the branch and at the join, leave inference the other three, and the graph above
+  reads: *graph
+  notes: ['note [wic043] shout.text <- append.file (1 other fits)',
+          'note [wic043] combine.counts <- word_count.counts (3 others fit)']
+greeting_graph_inferred:
+  why: with every edge left out, combine would read the counts as its text and as its counts
+  refused:
+  - {code: INFERENCE_DUPLICATE, severity: error, step: combine, port: text,
+     message: {contains: [combine.text, combine.counts, word_count.counts]}}
+  - {code: INFERENCE_GUESS, severity: note, step: shout, port: text}
+  - {code: INFERENCE_GUESS, severity: note, step: word_count, port: text}
+greeting_inferred:
+  notes: ['note [wic043] cat.file <- append.file (1 other fits)']
+inference:
+  notes: ['note [wic043] cat.file <- echo.stdout (1 other fits)']
+naming:
+  why: the conventions give report the summary; with them off it takes the first of summarize's two files
+  reads: {report: {input_summary: summarize/output_summary}}
+  notes: ['note [wic043] report.input_summary <- summarize.output_summary (1 other fits)']
+  under:
+  - flags: [--no_inference_naming_conventions]
+    inference: {naming_conventions: false}
+    reads: {report: {input_summary: summarize/output_details}}
+    notes: ['note [wic043] report.input_summary <- summarize.output_details (2 others fit)']
+naming_renamed:
+  why: abstract is no name summarize writes, until a renaming pairs it with summary
+  reads: {abstract: {input_abstract: summarize/output_details}}
+  notes: ['note [wic043] abstract.input_abstract <- summarize.output_details (2 others fit)']
+  under:
+  - settings: {renaming_conventions: [[abstract, summary]]}
+    inference: {renamings: [[abstract, summary]]}
+    reads: {abstract: {input_abstract: summarize/output_summary}}
+    notes: ['note [wic043] abstract.input_abstract <- summarize.output_summary (1 other fits)']
+two_lines:
+  notes: ['note [wic043] goodbye.file <- hello.file (1 other fits)',
+          'note [wic043] cat.file <- goodbye.file (2 others fit)']
+when:
+  under:
+  - why: a RunPolicy is the partial-failure flags; codes and a range, lower bound included, beside 0
+    flags: [--partial_failure_enable, --partial_failure_success_codes, '3', --partial_failure_success_codes_range,
+            '5', '7']
+    policy: {partial_failure: true, success_codes: [3, 5, 6]}
+    compiled:
+      steps:
+      - when: $(inputs["message"] != null && inputs["enabled"] != null && (inputs.enabled))
+        run: {successCodes: [0, 3, 5, 6], outputs: {stdout: {type: 'File?'}}}
+      requirements: {InlineJavascriptRequirement: {}}
+word_count:
+  notes: ['note [wic043] word_count.text <- append.file (1 other fits)']
+greet_many:
+  under:
+  - why: under a RunPolicy each step with a required input runs only when none is null, and its tool forgives the codes
+    flags: [--partial_failure_enable]
+    policy: {partial_failure: true}
+    compiled:
+      steps:
+      - when: $(inputs["filename"] != null)
+        run: {successCodes: [0, 1], outputs: {file: {type: 'File?'}}}
+      - when: $(inputs["str"] != null && inputs["file"] != null)
+      - when: $(inputs["file"] != null)
+        run: {successCodes: [0, 1], outputs: {output: {type: 'string?'}}}

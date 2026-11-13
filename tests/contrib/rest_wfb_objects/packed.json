@@ -1,0 +1,43 @@
+{
+  "state": {
+    "nodes": [
+      {
+        "id": 1,
+        "x": 0,
+        "y": 0,
+        "z": 1,
+        "name": "say",
+        "pluginId": "say",
+        "height": 50,
+        "width": 250,
+        "settings": {},
+        "run": {
+          "cwlVersion": "v1.2",
+          "class": "CommandLineTool",
+          "baseCommand": [
+            "sh",
+            "s.sh"
+          ],
+          "requirements": {
+            "InitialWorkDirRequirement": {
+              "listing": [
+                {
+                  "entryname": "s.sh",
+                  "entry": {
+                    "$include": "s.sh"
+                  }
+                }
+              ]
+            }
+          },
+          "inputs": {},
+          "outputs": {}
+        },
+        "internal": false
+      }
+    ],
+    "links": [],
+    "selection": []
+  },
+  "plugins": []
+}

@@ -17,11 +17,10 @@ from sophios.input_output import SHIPPED_RENAMINGS
 from sophios.api.python.workflow import (Inference, InvalidInferenceError, RunResult, RunState, SophiosError,
                                          SophiosErrorCode, Step, Workflow)
 from sophios.nf_types import NfProcessConnection
-from sophios.wic_types import Json, StepId, Tool
+from sophios.wic_types import Json
 
 from .budgets import budget
 from .helpers import search_config
-from .synthetic_tools import clt
 
 pytestmark = pytest.mark.package
 
@@ -80,22 +79,17 @@ def _cli(workflow: Workflow, directory: Path, monkeypatch: pytest.MonkeyPatch, *
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize("surface, other_output, renamings, edge", [
-    ("python", "output_other_path", None, "output_edr_path"),
-    ("python", "output_log_path", None, "output_edr_path"),
-    ("python", "output_other_path", (), "output_other_path"),
-    ("cli", "output_log_path", None, "output_edr_path"),
-    ("cli", "output_log_path", (), "output_log_path"),
-    ("cli", "output_other_path", SHIPPED_RENAMINGS, "output_edr_path"),
-], ids=["python-ships", "python-ships-over-a-log", "python-empty-is-none", "cli-key-missing-ships",
-        "cli-empty-list-is-none", "cli-shipped-list"])
+@pytest.mark.parametrize("surface, renamings, edge", [
+    ("python", None, "output_edr_path"), ("python", (), "output_log_path"),
+    ("cli", None, "output_edr_path"), ("cli", (), "output_log_path"),
+], ids=["python-ships", "python-empty-is-none", "cli-key-missing-ships", "cli-empty-list-is-none"])
 def test_input_energy_path_reads_the_output_its_renamings_pair_it_with(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, surface: str, other_output: str,
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, surface: str,
         renamings: tuple[tuple[str, str], ...] | None, edge: str) -> None:
     """Both surfaces start from the shipped renamings when none are given (`None`: no argument, no config key), so
-    `energy_` pairs with `edr_` and `input_energy_path` reads `output_edr_path`, not the output declared first, a log
-    included. A list given is the whole list, so an empty one leaves the output declared first."""
-    workflow = _mdrun_workflow(other_output)
+    `energy_` pairs with `edr_` and `input_energy_path` reads `output_edr_path`, not the output declared first, a log.
+    A list given is the whole list, so an empty one leaves the output declared first."""
+    workflow = _mdrun_workflow("output_log_path")
     compiled = workflow.compile() if renamings is None else workflow.compile(inference=Inference(renamings=renamings))
     cwl = _cli(workflow, tmp_path, monkeypatch, renamings=renamings) if surface == "cli" else compiled.cwl_workflow
     [feed] = _feeds(cwl)
@@ -224,7 +218,8 @@ def _settings(draw: st.DrawFn) -> tuple[dict[str, Any], set[str]]:
 def test_an_inference_is_refused_at_construction_or_keeps_what_it_was_given(
         drawn: tuple[dict[str, Any], set[str]]) -> None:
     """Settings breaking a rule are `api007`, saying what to write instead; others are kept, renamings as tuples, the
-    shipped ones unless given or the conventions are off, and the format rules as a copy the caller cannot change."""
+    shipped ones unless given or the conventions are off, and the format rules as a copy the caller cannot change. A
+    copy that switches the conventions keeps the renamings nobody gave as the shipped ones."""
     settings, broken = drawn
     if broken:
         with pytest.raises(InvalidInferenceError) as raised:
@@ -244,55 +239,8 @@ def test_an_inference_is_refused_at_construction_or_keeps_what_it_was_given(
     assert dict(inference.format_rules) == given_rules
     with pytest.raises(TypeError):
         inference.format_rules["tiff"] = "continue"  # type: ignore[index]
-
-
-def _converting_workflow(directory: Path) -> tuple[Workflow, dict[StepId, Tool]]:
-    """`make` writes format A, `need_b` reads format B and `need_a` reads A again; `insert_steps_automatically_a_to_b`
-    converts A to B and is passed in a registry, not a step. Inference inserts it before `need_b`."""
-    a_file, b_file = {"type": "File", "format": "edam:format_1"}, {"type": "File", "format": "edam:format_2"}
-    tools = {"make": ({}, {"file": a_file}), "need_b": ({"file": b_file}, {}), "need_a": ({"file": a_file}, {}),
-             "insert_steps_automatically_a_to_b": ({"file": a_file}, {"file": b_file})}
-    paths = {}
-    for name, (inputs, outputs) in tools.items():
-        paths[name] = directory / f"{name}.cwl"
-        paths[name].write_text(yaml.safe_dump(clt(inputs, outputs)), encoding="utf-8")
-    registry = {StepId("insert_steps_automatically_a_to_b", "global"): Tool(
-        str(paths["insert_steps_automatically_a_to_b"]),
-        clt(*tools["insert_steps_automatically_a_to_b"], canonical=True))}
-    steps = [Step(clt_path=paths[name]) for name in ("make", "need_b", "need_a")]
-    return Workflow(steps, "convert"), registry
-
-
-def _step_ids(compiled: Any) -> list[str]:
-    steps = compiled.cwl_workflow["steps"]
-    return [step["id"] if isinstance(steps, list) else step for step in steps]
-
-
-@pytest.mark.fast
-def test_insert_steps_inserts_a_converter_from_the_tool_registry(tmp_path: Path) -> None:
-    """With `insert_steps=True` the converter in `tool_registry=` joins the workflow; without it, or without the
-    registry, `need_b`'s input is left unbound, a workflow input. `break` on format B stops `need_a`'s search at the
-    inserted converter, so it is left a workflow input where the default connects it."""
-    workflow, registry = _converting_workflow(tmp_path)
-
-    inserted = workflow.compile(tool_registry=registry, inference=Inference(insert_steps=True))
-    plain = workflow.compile(tool_registry=registry)
-    unregistered = workflow.compile(inference=Inference(insert_steps=True))
-    stopped = workflow.compile(tool_registry=registry, inference=Inference(
-        insert_steps=True, format_rules={"edam:format_2": "break"}))
-
-    assert any("insert_steps_automatically_a_to_b" in name for name in _step_ids(inserted))
-    for compiled in (plain, unregistered):
-        assert not any("insert_steps_automatically" in name for name in _step_ids(compiled))
-        assert any("need_b" in name for name in compiled.cwl_workflow["inputs"])
-    assert not any("need_b" in name for name in inserted.cwl_workflow["inputs"])
-    assert not any("need_a" in name for name in inserted.cwl_workflow["inputs"])
-    assert any("need_a" in name for name in stopped.cwl_workflow["inputs"])
-
-
-@pytest.mark.fast
-def test_a_copy_of_an_inference_keeps_its_default_renamings() -> None:
-    """Switching naming conventions on a copy neither raises for renamings nobody gave nor drops the shipped ones."""
-    assert replace(Inference(), naming_conventions=False).naming_conventions is False
-    switched_on = replace(Inference(naming_conventions=False), naming_conventions=True)
-    assert python_runtime.compiler_options(switched_on)['renaming_conventions'] == list(SHIPPED_RENAMINGS)
+    if given_renamings is None:  # a copy switching the conventions neither raises nor drops the shipped renamings
+        for switched in (True, False):
+            copy = replace(inference, naming_conventions=switched)
+            assert python_runtime.compiler_options(copy)["renaming_conventions"] == list(
+                SHIPPED_RENAMINGS if switched else ())

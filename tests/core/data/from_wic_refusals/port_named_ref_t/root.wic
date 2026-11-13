@@ -1,2 +1,0 @@
-inputs: {ref-t: string}
-steps: [{id: mk_file, in: {name: ref-t}}]

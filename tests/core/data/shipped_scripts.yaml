@@ -1,0 +1,101 @@
+# What each shipped Python script makes, in part. `call` names the function the test calls, with `args`: `compiled`
+# states the CWL the workflow it returns compiles to, and `printed` the compute request it prints; `tools` states the
+# tool documents the functions it names build, each but for its doc.
+examples/workflows/when_pyapi.py:
+  why: Step.when reaches the step that declared it, and that step alone
+  call: workflow
+  compiled: {steps: [{keys: [id, in, run, out]}, {id: echo, when: $(inputs.message < "27")}]}
+examples/workflows/scatter_single_pyapi.py:
+  why: one scattered port and no method is a dotproduct over the array, not one run on the whole array
+  call: workflow
+  compiled: {steps: [{keys: [id, in, run, out]}, {id: echo, scatter: [message], scatterMethod: dotproduct}]}
+examples/scripts/tool_builder_workflow.py:
+  why: the string a built tool reads from its stdout file is carried through to the workflow output (docs/tool-builder.md)
+  call: build_workflow
+  args: [hello from test]
+  compiled:
+    steps:
+    - {id: emit_text}
+    - id: read_text
+      in: {text_file: {source: emit_text/text_file}}
+      run: {outputs: [{id: result, type: string,
+                       outputBinding: {glob: stdout.txt, loadContents: true, outputEval: '$(self[0].contents)'}}]}
+    outputs: {result: {type: string, outputSource: read_text/result}}
+examples/scripts/count_words.py:
+  why: the README, the landing page and docs/tool-builder.md show its third step running wc -w on the greeting
+  call: workflow
+  compiled:
+    steps:
+    - {id: touch}
+    - {id: append}
+    - {id: word_count, in: {exact: {text: {source: append/file}}}, run: {baseCommand: [wc, -w], stdout: counts.txt}}
+examples/scripts/ichnaea_compact.py:
+  why: with a basepath the compute service requires the outputs folder, relative to it; the output folder is a name
+  call: main
+  printed:
+    basepath: /projects/collabs/mock_common
+    workflowOutDir: results_compact
+    inputs: {autoseg~output: {class: Directory, location: segmentation_compact}}
+  tools:
+    # The image's ENTRYPOINT is its command, which the runner puts in front of the tool's command line, so the tool
+    # has no base command; the three ichnaea scripts build this one tool.
+    build_autoseg_CLT: &autoseg
+      exact:
+        class: CommandLineTool
+        id: ichnaea_segmentation
+        label: ichnaea segmentation
+        inputs:
+        - id: input
+          label: Input OME-Zarr
+          doc: 'The OME-Zarr volume: its root, which holds .zattrs'
+          type: Directory
+          inputBinding:
+            position: 1
+            prefix: --inpDir
+        - id: output
+          label: Output segmentation OME-Zarr
+          doc: An empty folder; filled with a copy of the input whose level 0 holds the labels
+          type: Directory
+          inputBinding:
+            position: 2
+            prefix: --outDir
+        - id: model
+          label: Models folder
+          doc: Staged as ./models, from which the plugin loads sam2.1_hiera_small.pt
+          type: Directory
+        outputs:
+        - id: output
+          label: Output segmentation OME-Zarr
+          type: Directory
+          outputBinding:
+            glob: $(inputs.output.basename)
+        requirements:
+        - class: DockerRequirement
+          dockerPull: vjaganat90/ichnaea-segmentation-plugin:devn
+        - class: InitialWorkDirRequirement
+          listing:
+          - entryname: $(inputs.output.basename)
+            entry: $(inputs.output)
+            writable: true
+          - entryname: models
+            entry: $(inputs.model)
+            writable: false
+        - class: ResourceRequirement
+          coresMin: 4
+          ramMin: 64000
+        - class: InlineJavascriptRequirement
+        hints:
+        - class: cwltool:CUDARequirement
+          cudaVersionMin: '12.6'
+          cudaComputeCapability: '3.0'
+          cudaDeviceCountMin: 1
+        cwlVersion: v1.2
+        $namespaces:
+          edam: https://edamontology.org/
+          cwltool: http://commonwl.org/cwltool#
+        $schemas:
+        - https://raw.githubusercontent.com/edamontology/edamontology/master/EDAM_dev.owl
+examples/scripts/ichnaea_integrated.py:
+  tools: {build_autoseg_CLT: *autoseg}
+examples/scripts/ichnaea_tool_builder.py:
+  tools: {build_tool: *autoseg}

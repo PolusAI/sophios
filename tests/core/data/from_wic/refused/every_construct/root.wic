@@ -1,0 +1,31 @@
+# Every construct a Python Workflow cannot hold, each refused, in one raise.
+hints: {ResourceRequirement: {coresMin: 1}}
+wic:
+  lang_version: '0.0.1'
+  steps:
+    (1, mk_file): {wic: {namespace: gpu}}
+inputs:
+  ref-t: string
+  d: {type: string, default: a}
+steps:
+- id: mk_file
+  label: makes
+  in: {name: ref-t}
+  out: [{file: !& f}]
+- id: mk_file
+  scatter: name
+  in: {name: !ii [a, b]}
+- id: xform
+  in: {file: !* f, name: !cwl a/b}
+- id: sub
+  run: child.wic
+  in: {n: d}
+- id: child.wic
+  scatter: [n]
+  scatterMethod: dotproduct
+  in: {n: !ii [a, b]}
+- id: reader.wic
+- id: left.wic
+- id: right.wic
+outputs:
+  o: {type: File, outputSource: root__step__3__xform/file}

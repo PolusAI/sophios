@@ -229,24 +229,15 @@ jobs:
 
   # NOTE: Do NOT add coverage to PYPY CI runs https://github.com/tox-dev/tox/issues/2252
 
-      - name: PyTest CWL Embedding Independence
+      # Every corpus workflow compiled once and checked in every form the inline
+      # flags give: no Sophios key or tool-only field in what is emitted, each
+      # subworkflow as it compiles alone (the isomorphism check MUST run in
+      # serial), and the flat and embedded forms meaning what the nested form
+      # does; on POSIX, cwltool validates every form. cwltool would find each
+      # defect only in run_workflows, behind a container pull.
+      - name: PyTest CWL Corpus Forms
         if: ${{ !cancelled() && steps.setup.outcome == 'success' && steps.corpus.outcome == 'success' }}
-        run: cd sophios/ && pytest -k test_cwl_embedding_independence # --cov --cov-config=.coveragerc_serial
-        # NOTE: This test MUST be run in serial! See is_isomorphic_with_timeout()
-        timeout-minutes: 20 # backup timeout for windows
-
-      # Two defect classes cwltool already catches -- a Sophios key written
-      # into `in:`, and a promoted port carrying a tool-only `inputBinding` --
-      # but only in run_workflows, behind a container pull. Measured at 21s
-      # over the full corpus here, against the minutes that round trip costs.
-      - name: PyTest Emitted CWL Residue
-        if: ${{ !cancelled() && steps.setup.outcome == 'success' && steps.corpus.outcome == 'success' }}
-        run: cd sophios/ && pytest -k test_emitted_cwl_says_nothing_cwl_cannot_read
-        timeout-minutes: 20 # backup timeout for windows
-
-      - name: PyTest Inline Flags
-        if: ${{ !cancelled() && steps.setup.outcome == 'success' && steps.corpus.outcome == 'success' }}
-        run: cd sophios/ && pytest tests/core/test_examples.py -k "test_embedding_keeps or test_flatten" # --cov --cov-config=.coveragerc_serial
+        run: cd sophios/ && pytest tests/core/test_examples.py -k "test_corpus_ and not weekly_corpus" # --cov --cov-config=.coveragerc_serial
         timeout-minutes: 20 # backup timeout for windows
 
       # Entry-point resolution and CI coverage. The core/contrib import boundary

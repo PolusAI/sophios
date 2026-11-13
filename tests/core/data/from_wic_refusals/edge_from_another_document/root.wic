@@ -1,1 +1,0 @@
-steps: [{id: mk_file, in: {name: !ii a}, out: [{file: !& f}]}, {id: child.wic}]

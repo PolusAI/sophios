@@ -1,0 +1,4 @@
+# A tool generated from a Python script has no Step: build it with tool_builder. The script's generator imports
+# workflow_types relative to the working directory, so the project, tests/core/data/frontdoor/script, is run in place.
+project: frontdoor/script/work/compile.wic
+refused: [{code: NO_PYTHON_SPELLING, message: {contains: [tool_builder]}}]

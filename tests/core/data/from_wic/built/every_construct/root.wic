@@ -1,0 +1,46 @@
+# Every construct a Python Workflow spells, read into objects that compile as this file does: a bare name is the
+# workflow input, `!*` the producing step's output object and `!ii` a literal; `count` binds nothing and is inferred, as
+# in the file; an inline tool's step holds that tool, its scatter, method and `when` with it; a `!cwl` record is a
+# StepInput over the output objects; `child.wic` is a nested Workflow built from its own file, its input bound by the
+# caller, and `left` and `right` call `same.wic` with one body; `pair_sink` reads `pair_src` through the shipped
+# renamings; a position in an outputSource is read as the step it names; and the declared analysis stays a
+# declaration, `max_times` a number.
+wic:
+  graphviz: {label: drawn}
+  inlineable: false
+inputs:
+  name: string
+  names: string[]
+steps:
+- id: mk_file
+  in: {name: name}
+  out: [{file: !& made}]
+- id: xform
+  in: {file: !* made, name: !ii renamed.txt}
+  out: [{file: !& again}]
+- id: count
+- id: sink
+  in: {file: !* made, n: !ii 1, extras: !cwl {source: [!* made, !* again], linkMerge: merge_flattened}}
+- id: shout
+  run:
+    class: CommandLineTool
+    baseCommand: echo
+    inputs: {message: {type: string, inputBinding: {position: 1}}}
+    outputs: {}
+  in: {message: !ii [a, b]}
+  scatter: [message]
+  scatterMethod: dotproduct
+  when: $(inputs.message != "c")
+- id: child.wic
+  in: {names: names}
+- id: left.wic
+- id: right.wic
+- id: pair_src
+  in: {name: !ii a.txt}
+- id: pair_sink
+- id: cwl_subinterpreter
+  in: {file_pattern: !ii '*.txt', cwl_tool: !ii count, max_times: !ii '20', config: !ii {in: {file: a.txt}}}
+outputs:
+  result:
+    type: File
+    outputSource: (2, xform)/file

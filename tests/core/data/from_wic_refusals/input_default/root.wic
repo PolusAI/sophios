@@ -1,2 +1,0 @@
-inputs: {n: {type: string, default: a}}
-steps: [{id: mk_file, in: {name: n}}]

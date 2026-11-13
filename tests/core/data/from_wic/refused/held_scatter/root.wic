@@ -1,0 +1,4 @@
+steps:
+- id: captured
+  scatter: [name]
+  scatterMethod: dotproduct

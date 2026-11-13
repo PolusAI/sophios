@@ -1,17 +1,16 @@
-"""`Workflow.from_wic`: a `.wic` file as Python objects. Examples say what a document becomes or why it is refused;
-properties: a file the file door compiles is refused with `api006` alone or compiles to equal output, and `write_wic`
-round-trips."""
+"""`Workflow.from_wic`: a `.wic` file as Python objects. A document of every construct Python spells, and documents of
+what it cannot hold, say what each becomes (tests/core/data/from_wic); over generated documents and the corpus, a file
+the file door compiles is refused with `api006` alone or compiles to equal output, and `write_wic` round-trips."""
 # pylint: disable=redefined-outer-name  # `corpus_registry` is a pytest fixture
 import shutil
 import tempfile
 from dataclasses import replace
-from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable, Final, cast
 
 import pytest
 import yaml
-from hypothesis import example, given, strategies as st
+from hypothesis import given
 
 import sophios.compiler
 from sophios.api.python import _workflow_runtime
@@ -98,9 +97,13 @@ def _objects(workflow: Workflow) -> tuple[Json, Json, list[str]]:
     return compiled.cwl_workflow, compiled.cwl_job_inputs, list(map(str, result.diagnostics))
 
 
-#: The synthetic tools, with `mk_file` also in a `gpu` plugin namespace, and `pair_sink`, whose `energy_x` and
-#: `energy_y` read `pair_src`'s `edr_x` and `edr_y` only through the shipped renamings.
+#: The real-time analysis declaration's adapter.
+_WATCHER: Final = ADAPTERS / 'file_watchers' / 'cwl_subinterpreter.cwl'
+
+#: The synthetic tools, with `mk_file` also in a `gpu` plugin namespace; `pair_sink`, whose `energy_x` and `energy_y`
+#: read `pair_src`'s `edr_x` and `edr_y` only through the shipped renamings; and the declaration's adapter.
 TOOLS: Final[Tools] = {
+    StepId(_WATCHER.stem, SYNTHETIC_NS): Tool(str(_WATCHER), yaml.safe_load(_WATCHER.read_text(encoding='utf-8'))),
     **SYNTHETIC_TOOLS, StepId('mk_file', 'gpu'): SYNTHETIC_TOOLS[StepId('mk_file', SYNTHETIC_NS)],
     StepId('pair_src', SYNTHETIC_NS): Tool('/synthetic/pair_src.cwl', clt(
         {'name': {'type': 'string', 'inputBinding': {'position': 1}}},
@@ -112,43 +115,10 @@ TOOLS: Final[Tools] = {
         {'out': {'type': 'File', 'outputBinding': {'glob': 'out.txt'}}}, canonical=True))}
 
 
-def _documents(directory: Path, **documents: str) -> WorkflowPaths:
-    """Write each document as `<name>.wic` in `directory`; the paths a step may call them by."""
-    for name, text in documents.items():
-        (directory / f'{name}.wic').write_text(text, encoding='utf-8')
-    return {'global': {path.stem: path for path in directory.glob('*.wic')}}
-
-
-def _from_wic(directory: Path, **documents: str) -> Workflow:
-    """`Workflow.from_wic` of `root.wic`, written with `documents` into `directory`."""
-    workflow_paths = _documents(directory, **documents)
-    return Workflow.from_wic(directory / 'root.wic', tool_registry=TOOLS, workflow_paths=workflow_paths)
-
-
-def _assert_compiles_alike(directory: Path, workflow: Workflow) -> None:
-    """Property 1 for `root.wic` in `directory` and the objects read from it."""
-    cwl, job_inputs, codes = _file_door(directory / 'root.wic', _documents(directory), TOOLS)
-    python_cwl, python_job_inputs, python_codes = _objects(workflow)
-    found = equivalent(_canonical_ports(cwl), _canonical_ports(python_cwl), Strength.UP_TO_ORDER)
-    assert found is None, str(found)
-    assert (python_job_inputs, python_codes) == (job_inputs, codes)
-
-
-CHAIN: Final = ('inputs:\n  name: string\n'
-                'steps:\n- id: mk_file\n  in:\n    name: name\n  out:\n  - file: !& made\n'
-                '- id: xform\n  in:\n    file: !* made\n    name: !ii renamed.txt\n'
-                'outputs:\n  result:\n    type: File\n    outputSource: xform/file\n')
-
-
-def _calling_child(name: str) -> str:
-    """A document that calls `child.wic` and binds its `mk_file` step's `name` to `!ii {name}`."""
-    return ('wic:\n  steps:\n    (1, child.wic):\n      wic:\n        steps:\n          (1, mk_file):\n'
-            f'            in:\n              name: !ii {name}\nsteps:\n- id: child.wic\n')
-
-
 def _held_today(document: Document) -> bool:
     """Not yet, though the file compiles: a `schemed` step, loaded as `api004`, and a scatter over an unbound port,
-    raised as a bare ValueError rather than `api006`; each is a strict xfail example below, so this expires."""
+    raised as a bare ValueError rather than `api006`; tests/core/data/from_wic/refused/held_* state each, so this
+    expires."""
     return not any(step.id == 'schemed'
                    or not set(cast(list[str], dict(step.interpreted).get('scatter') or [])) <= dict(step.inputs).keys()
                    for step in document.steps)
@@ -172,47 +142,12 @@ def _outcome(compile_it: Callable[[], tuple[Json, Json, list[str]]]) -> Any:
 
 
 @pytest.mark.fast
-@given(documents().filter(_held_today).map(_files), st.just(False))  # pylint: disable=no-member
-# A bare name is the workflow input, `!*` the producing step's output object and `!ii` a literal; the workflow output
-# is the step output it names.
-@example((CHAIN, {}), True)
-# `child.wic` becomes a nested `Workflow` named `child`, built from its own file, its input bound by the caller.
-@example(('steps:\n- id: child.wic\n  in:\n    n: !ii made.txt\n',
-          {'child.wic': 'inputs:\n  n: string\nsteps:\n- id: mk_file\n  in:\n    name: n\n'}), True)
-# `count` binds nothing; the objects leave its `file` unbound and the compile infers it as the file's does, naming
-# the `.wic` line the objects were read from, line 8, in its note.
-@example(('steps:\n- id: mk_file\n  in:\n    name: !ii a\n- id: xform\n  in:\n    name: !ii b\n- id: count\n', {}),
-         True)
-@example(('steps:\n- id: mk_file\n  in:\n    name: !ii a.txt\n- id: count\n', {}), True)
-# A step named apart from its inline tool holds that tool; `scatter`, its method and `when` carry over.
-@example(('steps:\n- id: shout\n  run:\n    class: CommandLineTool\n    baseCommand: echo\n'
-          '    inputs:\n      message:\n        type: string\n        inputBinding:\n          position: 1\n'
-          '    outputs: {}\n  in:\n    message: !ii [a, b]\n  scatter: [message]\n  scatterMethod: dotproduct\n'
-          '  when: $(inputs.message != "c")\n', {}), True)
-# A `string[]` workflow input feeds the `string` port its step scatters over, as in the file.
-@example(('inputs:\n  names: string[]\n'
-          'steps:\n- id: mk_file\n  scatter: name\n  scatterMethod: dotproduct\n  in:\n    name: names\n', {}), True)
-# The file's own compile pairs `energy_x` with `edr_x` and `energy_y` with `edr_y` through the shipped renamings;
-# loading it for Python must not refuse it (`wic055`) by starting from none.
-@example(('steps:\n- id: pair_src\n  in:\n    name: !ii a.txt\n- id: pair_sink\n', {}), True)
-# `left` and `right` both call `child.wic` with the same `wic: steps:` body, so both calls build it alike.
-@example(('steps:\n- id: left.wic\n- id: right.wic\n', {'left.wic': _calling_child('same.txt'),
-          'right.wic': _calling_child('same.txt'), 'child.wic': 'steps:\n- id: mk_file\n'}), True)
-# `!cwl {source: [...], linkMerge: ...}` is a `StepInput` over the two output objects; its `linkMerge` reaches the CWL.
-@example(('steps:\n- id: mk_file\n  in:\n    name: !ii a\n  out:\n  - file: !& f\n'
-          '- id: xform\n  in:\n    file: !* f\n    name: !ii b\n  out:\n  - file: !& g\n'
-          '- id: sink\n  in:\n    file: !* f\n    n: !ii 1\n'
-          '    extras: !cwl {source: [!* f, !* g], linkMerge: merge_flattened}\n', {}), True)
-# Held today: a scatter over an unbound port raises a bare ValueError, and a `schemed` step is refused as `api004`.
-@example(('steps:\n- id: captured\n  scatter: [name]\n  scatterMethod: dotproduct\n', {}), False).xfail(
-    raises=ValueError)
-@example(('steps:\n- id: schemed\n', {}), False).xfail(raises=AssertionError)
+@pytest.mark.filterwarnings('ignore:.*graphviz dropped:UserWarning')  # every_construct states it
+@given(documents().filter(_held_today).map(_files))  # pylint: disable=no-member
 @budget(25)
-def test_a_wic_file_and_the_objects_read_from_it_compile_alike(drawn: tuple[str, dict[str, str]],
-                                                               must_build: bool) -> None:
-    """Property 1 over generated documents, whose reading writes nothing: `api006` alone, or the file's own refusal,
-    or the same CWL, job inputs and diagnostics, at the `.wic` lines the objects were read from. A pinned document
-    must build."""
+def test_a_wic_file_and_the_objects_read_from_it_compile_alike(drawn: tuple[str, dict[str, str]]) -> None:
+    """Over generated documents, whose reading writes nothing: `api006` alone, or the file's own refusal, or the same
+    CWL, job inputs and diagnostics, at the `.wic` lines the objects were read from."""
     root, called = drawn
     with tempfile.TemporaryDirectory() as name, pytest.MonkeyPatch.context() as monkeypatch:
         directory = Path(name)
@@ -224,106 +159,11 @@ def test_a_wic_file_and_the_objects_read_from_it_compile_alike(drawn: tuple[str,
         try:
             workflow = Workflow.from_wic(directory / 'root.wic', tool_registry=TOOLS, workflow_paths=workflow_paths)
         except SophiosError as error:
-            assert not must_build and (isinstance(file_door, set) or {d.code for d in error.diagnostics} == {
-                SophiosErrorCode.NO_PYTHON_SPELLING}), str(error)
+            assert isinstance(file_door, set) or {d.code for d in error.diagnostics} == {
+                SophiosErrorCode.NO_PYTHON_SPELLING}, str(error)
             return
         assert sorted(path.name for path in directory.iterdir()) == sorted({'root.wic', *called})
         assert _outcome(lambda: _objects(workflow)) == file_door
-
-
-@pytest.mark.fast
-def test_an_input_declared_with_an_empty_mapping_is_left_untyped(tmp_path: Path) -> None:
-    """`name: {}` declares no type, as a null spec does: the call builds the workflow instead of raising."""
-    root = 'inputs:\n  name: {}\nsteps:\n- id: mk_file\n  in:\n    name: name\n'
-    workflow = _from_wic(tmp_path, root=root)
-    assert [port.name for port in workflow.inputs] == ['name']
-
-
-def _output_source_root(output_source: str) -> str:
-    return ('steps:\n- id: mk_file\n  in:\n    name: !ii a\n  out:\n  - file: !& f\n'
-            '- id: xform\n  in:\n    file: !* f\n    name: !ii b\n'
-            f'outputs:\n  o:\n    type: File\n    outputSource: {output_source}\n')
-
-
-@pytest.mark.fast
-def test_a_positional_output_source_becomes_an_object_reference(tmp_path: Path,
-                                                                capsys: pytest.CaptureFixture[str]) -> None:
-    """A position is read as Lower reads it; the objects say `xform/file`,
-    so the written bundle names the authored step and its compile warns about no spelling."""
-    workflow = _from_wic(tmp_path, root=_output_source_root('(2, xform)/file'))
-    written = workflow.write_wic(tmp_path / 'written')
-    document = read_wic(written.read_text(encoding='utf-8'))
-    assert document['outputs']['o']['outputSource'] == 'xform/file'
-    capsys.readouterr()
-    workflow.compile()
-    captured = capsys.readouterr()
-    assert 'Warning!' not in captured.out + captured.err
-
-
-@pytest.mark.fast
-def test_a_real_time_declaration_written_back_stays_a_declaration(tmp_path: Path) -> None:
-    """`write_wic` names the adapter as the registry does, so the bundle declares the same analysis
-    the objects do, `max_times: !ii '20'` included, and emits no step for it."""
-    adapter = ADAPTERS / 'file_watchers' / 'cwl_subinterpreter.cwl'
-    tools = {**TOOLS, StepId(adapter.stem, SYNTHETIC_NS): Tool(str(adapter), yaml.safe_load(adapter.read_text()))}
-    root = ("steps:\n- id: mk_file\n  in:\n    name: !ii a.txt\n"
-            "- id: cwl_subinterpreter\n  in:\n    file_pattern: !ii '*.txt'\n    cwl_tool: !ii count\n"
-            "    max_times: !ii '20'\n    config: !ii {in: {file: a.txt}}\n")
-    workflow = Workflow.from_wic(tmp_path / 'root.wic', tool_registry=tools,
-                                 workflow_paths=_documents(tmp_path, root=root))
-    direct = _workflow_runtime.compile_workflow_result(workflow, tool_registry=tools)
-
-    bundle = tmp_path / 'bundle'
-    written_root = workflow.write_wic(bundle)
-    written: WorkflowPaths = {'global': {path.stem: path for path in bundle.glob('*.wic')}}
-    via_file = _compile_file(written_root, written, tools)
-
-    (declared,) = direct.realtime
-    assert declared.max_times == 20
-    assert [replace(item, span=None) for item in via_file.realtime] == [replace(declared, span=None)]
-    direct_cwl = _workflow_runtime.compiled_workflow_from_result(workflow, direct).cwl_workflow
-    via_file_cwl = _workflow_runtime.compiled_workflow_from_result(workflow, via_file).cwl_workflow
-    assert [step['id'] for step in direct_cwl['steps']] == ['mk_file']
-    assert equivalent(direct_cwl, via_file_cwl, Strength.IDENTICAL) is None
-
-
-ONE_STEP: Final = 'steps:\n- id: mk_file\n  in:\n    name: !ii a\n'
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize('case, expected', case_dirs('from_wic_refusals', 'diagnostics'))
-def test_a_document_python_cannot_hold_is_refused_whole(case: Path, expected: dict[str, Any]) -> None:
-    """A document that compiles but holds what the Python API cannot is `api006`, once per construct, each where it
-    is written and saying what to write, in one raise; a document that does not compile raises its own error."""
-    with pytest.raises(SophiosError) as caught:
-        Workflow.from_wic(case / 'root.wic', tool_registry=TOOLS,
-                          workflow_paths={'global': {path.stem: path for path in case.glob('*.wic')}})
-    assert match(expected['diagnostics'], [diagnostic(found) for found in caught.value.diagnostics]), caught.value
-
-
-@pytest.mark.fast
-def test_a_python_script_step_is_api006(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A tool generated from a script has no `Step`: the message says to build it with `tool_builder`.
-
-    The script's generator imports `workflow_types` relative to the working directory, so the
-    project, tests/core/data/frontdoor/script, holds that sibling file.
-    """
-    shutil.copytree(DATA / 'frontdoor' / 'script', tmp_path / 'script')
-    work = tmp_path / 'script' / 'work'
-    monkeypatch.chdir(work)
-    with pytest.raises(SophiosError) as caught:
-        _from_wic(work, root=(work / 'compile.wic').read_text(encoding='utf-8'))
-    assert [(item.code, 'tool_builder' in item.message) for item in caught.value.diagnostics] == [
-        (SophiosErrorCode.NO_PYTHON_SPELLING, True)]
-
-
-@pytest.mark.fast
-def test_graphviz_and_inlineable_are_dropped_with_a_warning(tmp_path: Path) -> None:
-    """Neither changes what a Python workflow compiles; the warning names the file and both keys."""
-    root = 'wic:\n  graphviz:\n    label: drawn\n  inlineable: false\n' + ONE_STEP
-    with pytest.warns(UserWarning, match='root.wic: wic: graphviz, inlineable dropped'):
-        workflow = _from_wic(tmp_path, root=root)
-    _assert_compiles_alike(tmp_path, workflow)
 
 
 def _loaded(path: Path, workflow_paths: WorkflowPaths, tools: Tools) -> Workflow | None:
@@ -336,36 +176,33 @@ def _loaded(path: Path, workflow_paths: WorkflowPaths, tools: Tools) -> Workflow
         return None
 
 
+def _compiles_alike_and_writes_back(path: Path, workflow_paths: WorkflowPaths, tools: Tools, workflow: Workflow,
+                                    directory: Path) -> Path:
+    """The objects read from `path` compile as the file does, up to order and CWL's shorthand, with the same job inputs
+    and diagnostics; the bundle `write_wic` writes for them in `directory`, through the file door, is the objects' own
+    compilation, byte for byte, and so is that bundle read back. Returns the bundle's root."""
+    from_file, from_objects = _file_door(path, workflow_paths, tools), _objects(workflow)
+    found = equivalent(_canonical_ports(from_file[0]), _canonical_ports(from_objects[0]), Strength.UP_TO_ORDER)
+    assert found is None, f'{path.name}: the file and its Python objects compile apart\n{found}'
+    assert from_objects[1:] == from_file[1:]
+    direct = workflow.compile()
+    root = workflow.write_wic(directory)
+    written: WorkflowPaths = {'global': {each.stem: each for each in directory.glob('*.wic')}}
+    via_file = _workflow_runtime.compiled_workflow_from_result(workflow, _compile_file(root, written, tools))
+    reloaded = Workflow.from_wic(root, tool_registry=tools, workflow_paths=written).compile()
+    for other in (via_file, reloaded):
+        assert equivalent(direct.cwl_workflow, other.cwl_workflow, Strength.IDENTICAL) is None
+        assert equivalent(direct.cwl_job_inputs, other.cwl_job_inputs, Strength.IDENTICAL) is None
+    return root
+
+
 @pytest.mark.cwl_corpus
 @pytest.mark.fast
 @pytest.mark.parametrize('yml_path_str, yml_path', yml_paths_tuples_not_large)
-def test_a_wic_file_and_its_python_objects_compile_alike(yml_path_str: str, yml_path: Path,
+def test_a_wic_file_and_its_python_objects_compile_alike(yml_path_str: str, yml_path: Path, tmp_path: Path,
                                                          corpus_registry: CorpusRegistry) -> None:
-    """Property 1: refused with `api006` alone, or the same CWL, job inputs and diagnostic codes."""
-    try:
-        cwl, job_inputs, codes = _file_door(Path(yml_path), corpus_registry.workflows, corpus_registry.tools)
-    except SophiosError as error:
-        if _is_includer_fragment(error):
-            pytest.skip(f'{yml_path_str} consumes edges from an includer')
-        raise
-    workflow = _loaded(Path(yml_path), corpus_registry.workflows, corpus_registry.tools)
-    if workflow is None:
-        return
-    python_cwl, python_job_inputs, python_codes = _objects(workflow)
-    found = equivalent(_canonical_ports(cwl), _canonical_ports(python_cwl), Strength.UP_TO_ORDER)
-    assert found is None, f'{yml_path_str}: the file and its Python objects compile apart\n{found}'
-    assert python_job_inputs == job_inputs
-    assert python_codes == codes
-
-
-@pytest.mark.cwl_corpus
-@pytest.mark.fast
-@pytest.mark.parametrize('yml_path_str, yml_path', yml_paths_tuples_not_large)
-def test_write_wic_of_a_loaded_workflow_compiles_identically(yml_path_str: str, yml_path: Path,
-                                                             corpus_registry: CorpusRegistry,
-                                                             tmp_path: Path) -> None:
-    """Property 2: the bundle `write_wic` writes for the objects, through the file door, is the
-    objects' own compilation, byte for byte; and reading that bundle back compiles the same."""
+    """Over the corpus: refused with `api006` alone, or the objects compile as the file does and write a bundle that
+    compiles to them (`_compiles_alike_and_writes_back`)."""
     try:
         _compile_file(Path(yml_path), corpus_registry.workflows, corpus_registry.tools)
     except SophiosError as error:
@@ -373,25 +210,38 @@ def test_write_wic_of_a_loaded_workflow_compiles_identically(yml_path_str: str, 
             pytest.skip(f'{yml_path_str} consumes edges from an includer')
         raise
     workflow = _loaded(Path(yml_path), corpus_registry.workflows, corpus_registry.tools)
-    if workflow is None:
-        return
-    direct = workflow.compile()
-    root = workflow.write_wic(tmp_path)
-    written: WorkflowPaths = {'global': {path.stem: path for path in tmp_path.glob('*.wic')}}
-    via_file = _workflow_runtime.compiled_workflow_from_result(
-        workflow, _compile_file(root, written, corpus_registry.tools))
-    assert equivalent(direct.cwl_workflow, via_file.cwl_workflow, Strength.IDENTICAL) is None
-    assert equivalent(direct.cwl_job_inputs, via_file.cwl_job_inputs, Strength.IDENTICAL) is None
-
-    reloaded = Workflow.from_wic(root, tool_registry=corpus_registry.tools, workflow_paths=written).compile()
-    assert equivalent(direct.cwl_workflow, reloaded.cwl_workflow, Strength.IDENTICAL) is None
-    assert equivalent(direct.cwl_job_inputs, reloaded.cwl_job_inputs, Strength.IDENTICAL) is None
+    if workflow is not None:
+        _compiles_alike_and_writes_back(Path(yml_path), corpus_registry.workflows, corpus_registry.tools, workflow,
+                                        tmp_path)
 
 
-#: The in-repo workflows the Python API cannot hold, each refused with `api006`:
-#: four repeat a step id, `test_rand_fail` scatters a `.wic` call and reads an
-#: edge across documents, and `secrets_echo` declares `$namespaces`, `hints` and
-#: an input `default`.
+@pytest.mark.fast
+def test_a_document_of_every_construct_python_spells_is_read_as_stated(monkeypatch: pytest.MonkeyPatch,
+                                                                       tmp_path: Path) -> None:
+    """tests/core/data/from_wic/built/every_construct/root.wic is read into objects, warning of what is dropped, and
+    they compile as the file does and write back (`_compiles_alike_and_writes_back`); expected.yaml states the
+    inputs, the compiled steps, the declared analysis and what the bundle writes. Nothing is written beside it."""
+    case = DATA / 'from_wic' / 'built' / 'every_construct'
+    stated = yaml.safe_load((case / 'expected.yaml').read_text(encoding='utf-8'))
+    workflow_paths = {'global': {path.stem: path for path in case.glob('*.wic')}}
+    monkeypatch.chdir(tmp_path)
+    with pytest.warns(UserWarning) as warned:
+        workflow = Workflow.from_wic(case / 'root.wic', tool_registry=TOOLS, workflow_paths=workflow_paths)
+    assert [str(warning.message) for warning in warned if 'dropped' in str(warning.message)] == [
+        f'{text}: the Python API has no spelling for them, and it changes no CWL a Workflow compiles or runs'
+        for text in stated['warns']]
+    assert [port.name for port in workflow.inputs] == stated['inputs']
+    root = _compiles_alike_and_writes_back(case / 'root.wic', workflow_paths, TOOLS, workflow, tmp_path / 'bundle')
+    assert match(stated['written'], read_wic(root.read_text(encoding='utf-8')))
+    result = _workflow_runtime.compile_workflow_result(workflow)
+    assert [step['id'] for step in result.artifact.cwl['steps']] == stated['steps']
+    assert [{'analysis': item.analysis, 'max_times': item.max_times} for item in result.realtime] == stated['realtime']
+    assert not list(tmp_path.glob('*.wic'))
+
+
+#: The in-repo workflows the Python API cannot hold, each refused with `api006`: four repeat a step id,
+#: `test_rand_fail` scatters a `.wic` call and reads an edge across documents, and `secrets_echo` declares
+#: `$namespaces`, `hints` and an input `default`.
 REFUSED: Final = frozenset({'append_twice', 'multistep1', 'multistep2', 'multistep3', 'test_rand_fail',
                             'secrets_echo'})
 
@@ -399,17 +249,26 @@ REFUSED: Final = frozenset({'append_twice', 'multistep1', 'multistep2', 'multist
 IN_REPO: Final = (REPO_ROOT / 'docs' / 'tutorials', REPO_ROOT / 'examples')
 
 
-@lru_cache(maxsize=1)
-def _in_repo_registry() -> tuple[WorkflowPaths, Tools]:
-    """The `.wic` files this repository ships and the tools it ships, read from nothing else."""
-    workflow_paths = {'global': {path.stem: path for directory in IN_REPO for path in directory.glob('*.wic')}}
-    return workflow_paths, shipped_tools()
-
-
 @pytest.mark.fast
-def test_the_in_repo_workflows_that_python_cannot_hold_are_these() -> None:
-    """Every `.wic` this repository ships compiles; those in `REFUSED` are `api006`, every other one builds."""
-    workflow_paths, tools = _in_repo_registry()
-    refused = {stem for stem, path in workflow_paths['global'].items()
-               if _loaded(path, workflow_paths, tools) is None}
-    assert refused == REFUSED
+@pytest.mark.parametrize('case, expected', case_dirs('from_wic/refused', 'project', 'refused', 'raises'))
+def test_a_document_python_cannot_hold_is_refused_whole(case: Path, expected: dict[str, Any],
+                                                        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A document that compiles but holds what the Python API cannot is `api006`, once per construct, each saying
+    what to write instead, in one raise; a document that does not compile raises its own error. expected.yaml states
+    each diagnostic, or the exception a document held today raises. The in-repo workflows refused are `REFUSED`, and
+    every other one builds."""
+    root = case / 'root.wic'
+    if 'project' in expected:  # run in place, from a copy
+        shutil.copytree(DATA / Path(expected['project']).parts[0], tmp_path / 'project')
+        root = tmp_path / 'project' / Path(*Path(expected['project']).parts[1:])
+        monkeypatch.chdir(root.parent)
+    with pytest.raises(SophiosError if 'refused' in expected else ValueError) as caught:
+        Workflow.from_wic(root, tool_registry=TOOLS,
+                          workflow_paths={'global': {path.stem: path for path in root.parent.glob('*.wic')}})
+    if 'refused' in expected:
+        refused = cast(SophiosError, caught.value)
+        assert match(expected['refused'], [diagnostic(found) for found in refused.diagnostics]), refused
+    if case.name == 'every_construct':
+        workflow_paths = {'global': {path.stem: path for directory in IN_REPO for path in directory.glob('*.wic')}}
+        assert {stem for stem, path in workflow_paths['global'].items()
+                if _loaded(path, workflow_paths, shipped_tools()) is None} == REFUSED
