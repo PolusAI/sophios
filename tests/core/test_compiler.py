@@ -99,12 +99,13 @@ def test_an_output_source_names_the_spelling_the_compiler_generated_and_only_tha
     ('$(inputs.name-1 > 0)', False)],
     ids=['dot', 'bracket', 'declared', 'minus'])
 def test_a_when_that_reads_an_input_the_step_lacks_is_named_and_still_compiles(
-        capsys: pytest.CaptureFixture[str], expression: str, prints: bool) -> None:
+        expression: str, prints: bool) -> None:
     """`inputs.nope` has no value in a `when`, so the run stopped there or the step never ran, and nothing said
-    so."""
-    compiled = compile_production({'steps': [{**_mk_file(), 'when': expression}]}, 'oracle').artifact.cwl
-    assert compiled['steps'][0]['when'] == expression
-    assert ('in `when:`, which its process does not declare' in capsys.readouterr().err) is prints
+    so: the compile's diagnostics do, as a `wic056` note."""
+    result = compile_production({'steps': [{**_mk_file(), 'when': expression}]}, 'oracle')
+    assert result.artifact.cwl['steps'][0]['when'] == expression
+    assert any('which its process does not declare' in note.message and str(note.code) == 'wic056'
+               for note in result.diagnostics) is prints
 
 
 def _call_when(expression: str) -> Yaml:
@@ -117,17 +118,17 @@ def _call_when(expression: str) -> Yaml:
 @pytest.mark.parametrize(('expression', 'said'), [
     ('$(inputs["mk_file~name"] != null)', []),
     ('$(inputs.mk_file~name != null)',
-     ["Warning! oracle.wic: step 'child.wic' reads inputs.mk_file in `when:`, which its process does not declare; "
-      "it has no value there, and cwltool stops the run at a `when:` that gives anything but true or false. "
-      "Write inputs['mk_file~name'] to read one it declares."])], ids=['bracket', 'dotted'])
+     ["when reads inputs.mk_file, which its process does not declare; it has no value there, and cwltool stops "
+      "the run when it gives anything but true or false. Write inputs['mk_file~name'] to read one it declares."])],
+    ids=['bracket', 'dotted'])
 def test_a_when_on_a_call_that_reads_a_made_name_dotted_is_told_the_bracket_form(
-        capsys: pytest.CaptureFixture[str], expression: str, said: list[str]) -> None:
+        expression: str, said: list[str]) -> None:
     """A call declares the names its child exposes, `mk_file~name` among them, and the bracket form reads it, so it
     draws no note. `inputs.mk_file~name` is `inputs.mk_file`, then `~name`: the note names the input and how to
     read it."""
-    compiled = compile_production(_call_when(expression), 'oracle').artifact.cwl
-    assert 'mk_file~name' in compiled['steps'][0]['in']
-    assert capsys.readouterr().err.splitlines() == said
+    result = compile_production(_call_when(expression), 'oracle')
+    assert 'mk_file~name' in result.artifact.cwl['steps'][0]['in']
+    assert [note.message for note in result.diagnostics] == said
 
 
 @pytest.mark.fast
