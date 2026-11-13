@@ -6,6 +6,7 @@ and its real-time analyses, check the machine and pull the images, and name the
 images without entrypoints when asked.
 """
 from dataclasses import dataclass, replace
+from collections.abc import Collection
 from typing import Generic, TypeVar
 from pathlib import Path
 import tempfile
@@ -15,7 +16,7 @@ from sophios.ir.artifacts import CompilationArtifact
 from sophios.ir.locations import absolute_paths
 from sophios.ir.resolved import ResolvedWorkflow
 from sophios.lang.diagnostics import Diagnostic
-from sophios.runtime_inputs import normalize_artifact_job_inputs
+from sophios.runtime_inputs import runner_job_inputs
 from sophios.utils_nf import local_locations_as_paths
 
 ModelT = TypeVar('ModelT')
@@ -75,12 +76,13 @@ class Prepared:
 
 
 def prepare(artifact: CompilationArtifact, analyses: tuple[realtime.Analysis, ...], basepath: Path,
-            settings: Settings) -> Prepared:
+            settings: Settings, output_targets: Collection[str]) -> Prepared:
     """Write `artifact` and `analyses` under `basepath` as they are given, and make the machine ready to run them.
 
     `artifact` is written as it is: a tree from the command line, one document under
     `--cwl_inline_runtag` and from Python. Its job is the values bound in the workflow,
-    a relative path read against `settings.root_dir`, under the inputs file's.
+    a relative path read against `settings.root_dir`, under the inputs file's. Each of `output_targets`
+    (`runtime_inputs.output_target_inputs`) is a name for the run to create.
 
     A check (`settings.check`) writes them into a temporary directory instead, removed
     when the check ends, so it leaves `basepath` as it found it.
@@ -89,24 +91,24 @@ def prepare(artifact: CompilationArtifact, analyses: tuple[realtime.Analysis, ..
         SophiosError: What the pre-flight found in the way, before anything is pulled.
     """
     if not settings.check:
-        return _prepare(artifact, analyses, basepath, settings)
+        return _prepare(artifact, analyses, basepath, settings, output_targets)
     with tempfile.TemporaryDirectory(prefix='sophios-check-') as scratch:
-        return _prepare(artifact, analyses, Path(scratch), settings)
+        return _prepare(artifact, analyses, Path(scratch), settings, output_targets)
 
 
 def _prepare(artifact: CompilationArtifact, analyses: tuple[realtime.Analysis, ...], basepath: Path,
-             settings: Settings) -> Prepared:
+             settings: Settings, output_targets: Collection[str]) -> Prepared:
     """`prepare`, writing under `basepath`."""
     # As the runner gets them, in which an output-target Directory is a name for the run to create.
-    bound = normalize_artifact_job_inputs(artifact, artifact.job_inputs)
+    bound = runner_job_inputs(artifact.job_inputs, output_targets)
     # The runner reads the job from `basepath`, so a relative path is written absolute.
     artifact = replace(artifact, job_inputs=absolute_paths(bound, settings.root_dir))
-    input_output.write_artifacts_to_disk(artifact, basepath, settings.inputs_file)
+    input_output.write_artifacts_to_disk(artifact, basepath, settings.inputs_file, output_targets=output_targets)
     plans = realtime.write(analyses, basepath, artifact.name, settings.root_dir)
     # The pre-flight reads the CWL the runner will get, so it runs after the write.
     documents = (basepath / f'{artifact.name}.cwl', *realtime.documents(analyses, basepath))
     inputs_file = settings.inputs_file
-    extra = normalize_artifact_job_inputs(artifact, input_output.read_inputs_file(inputs_file)) if inputs_file else {}
+    extra = runner_job_inputs(input_output.read_inputs_file(inputs_file), output_targets) if inputs_file else {}
     # The inputs file wins over a value bound in the workflow for the same input when the job is written.
     jobs = (preflight.Job({key: value for key, value in bound.items() if key not in extra},
                           settings.root_dir, 'the workflow'),
@@ -123,6 +125,6 @@ def _prepare(artifact: CompilationArtifact, analyses: tuple[realtime.Analysis, .
     if settings.remove_entrypoints:
         artifact = post_compile.remove_artifact_entrypoints(settings.run.container_engine, artifact)
         # The images are built from the ones the pre-flight pulled, so the rewrite is written over the first write.
-        input_output.write_artifacts_to_disk(artifact, basepath, settings.inputs_file)
+        input_output.write_artifacts_to_disk(artifact, basepath, settings.inputs_file, output_targets=output_targets)
         plans = realtime.write(realtime.without_entrypoints(analyses), basepath, artifact.name, settings.root_dir)
     return Prepared(artifact.name, plans, documents)

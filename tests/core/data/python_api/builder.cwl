@@ -57,19 +57,19 @@ steps:
     requirements:
       InitialWorkDirRequirement:
         listing:
-        - {entry: "${\n  return {\"class\": \"Directory\", \"basename\": inputs['outDir'], \"listing\": []};\n}", writable: true}
+        - {entry: $(inputs.outDir), writable: true}
       InlineJavascriptRequirement: {}
     baseCommand: [bash, -lc]
     arguments:
-    - {valueFrom: touch $(inputs.outDir)/done.txt}
+    - {valueFrom: touch $(inputs.outDir.basename)/done.txt}
     inputs:
       outDir:
-        type: string
+        type: Directory
         inputBinding: {prefix: --outDir}
     outputs:
       outDir:
         type: Directory
-        outputBinding: {glob: $(inputs.outDir)}
+        outputBinding: {glob: $(inputs.outDir.basename)}
   out: [outDir]
 - id: cat
   in:
@@ -94,7 +94,7 @@ class: Workflow
 inputs:
   message: {type: string}
   child~count~scale: {type: float}
-  write_dir~outDir: {type: string}
+  write_dir~outDir: {type: Directory}
   cat~f: {type: File}
 outputs:
   said: {type: string, outputSource: message}

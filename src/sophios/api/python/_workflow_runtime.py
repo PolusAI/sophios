@@ -41,7 +41,7 @@ from sophios.lang.diagnostics import report
 from sophios.lang import Step as LangStep
 from sophios.lang.error_codes import SophiosErrorCode
 from sophios.cli import default_compilation_settings, get_args, get_known_and_unknown_args, target_options
-from sophios.runtime_inputs import normalize_artifact_cwl, normalize_artifact_job_inputs, resolve_file_formats
+from sophios.runtime_inputs import output_target_inputs, resolve_file_formats, runner_job_inputs
 from sophios.utils import convert_args_dict_to_args_list
 from sophios.utils_cwl import tool_process
 from sophios.wic_types import DEFAULT_BASEPATH, CompilerOptions, GraphSettings, Json, StepId, Tool, Tools
@@ -579,7 +579,7 @@ class ServiceDocument(NamedTuple):
 def service_document(workflow: "Workflow", *, tool_registry: Tools | None = None,
                      inference: Inference = Inference()) -> ServiceDocument:
     """Compile `workflow` for a service that runs it elsewhere: what `compile()` returns, without the local run's
-    rewrite of output directories to bare names, which only a local runner reads."""
+    Directory literals for output directories, which only a local runner reads."""
     result = compile_workflow_result(workflow, tool_registry=tool_registry, inference=inference)
     artifact = _one_document(workflow, result)
     return ServiceDocument(copy.deepcopy(artifact.cwl), resolve_file_formats(artifact.job_inputs), result.realtime)
@@ -592,13 +592,14 @@ def compiled_workflow_from_result(
     """Build the public boundary from the typed internal result, with the notes the compile and the CWL target
     made."""
     artifact = _one_document(workflow, result)
+    view = _view(workflow, result)
     return CompiledWorkflow(
         name=workflow.process_name,
-        cwl_workflow=normalize_artifact_cwl(artifact),
-        cwl_job_inputs=normalize_artifact_job_inputs(artifact, artifact.job_inputs),
+        cwl_workflow=copy.deepcopy(artifact.cwl),
+        cwl_job_inputs=runner_job_inputs(artifact.job_inputs, output_target_inputs(view)),
         lang_version=result.lang_version,
         diagnostics=tuple(Diagnostics([*result.diagnostics,
-                                       *targets.TARGETS["cwl"].lower(result, _view(workflow, result)).notes])),
+                                       *targets.TARGETS["cwl"].lower(result, view).notes])),
     )
 
 

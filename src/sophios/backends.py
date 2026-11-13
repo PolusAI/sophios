@@ -235,7 +235,7 @@ class _Cwl:
 
         The artifact written is the model, as the front door rewrote it.
         """
-        return run_setup.prepare(lowered.model, analyses, basepath, settings)
+        return run_setup.prepare(lowered.model, analyses, basepath, settings, output_target_inputs(lowered.view))
 
 
 class CwltoolBackend(_Cwl):

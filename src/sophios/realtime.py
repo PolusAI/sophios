@@ -32,6 +32,7 @@ from .ir.artifacts import CompilationArtifact
 from .ir.realtime import Declaration
 from .lang.diagnostics import Diagnostic, Severity, SophiosError
 from .lang.error_codes import SophiosErrorCode
+from .runtime_inputs import output_target_inputs
 from .utils_yaml import Key
 from .wic_types import CompilerOptions, Tools, Yaml
 
@@ -46,6 +47,7 @@ class Analysis:
     name: str
     declaration: Declaration
     artifact: CompilationArtifact
+    output_targets: frozenset[str]
 
 
 def compile_analyses(declarations: tuple[Declaration, ...],
@@ -74,7 +76,8 @@ def compile_analyses(declarations: tuple[Declaration, ...],
                 Severity.ERROR, SophiosErrorCode.REALTIME_DECLARATION,
                 f'real-time analysis {declaration.analysis!r} does not compile: {diagnostic}',
                 declaration.span) for diagnostic in e.diagnostics) from e
-        analyses.append(Analysis(name, declaration, result.artifact))
+        analyses.append(Analysis(name, declaration, result.artifact,
+                                 frozenset(output_target_inputs(compiler.resolved_view(result)))))
     return tuple(analyses)
 
 
@@ -147,7 +150,7 @@ def write(analyses: tuple[Analysis, ...], basepath: Path, workflow_name: str, ro
         return ()
     plans = []
     for analysis, cwl in zip(analyses, documents(analyses, basepath)):
-        io.write_artifacts_to_disk(analysis.artifact, cwl.parent)
+        io.write_artifacts_to_disk(analysis.artifact, cwl.parent, output_targets=analysis.output_targets)
         declaration = analysis.declaration
         plans.append(Plan(analysis.name, declaration.analysis, declaration.file_pattern, declaration.max_times,
                           declaration.interval, cwl.absolute(),

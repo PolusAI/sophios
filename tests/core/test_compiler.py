@@ -15,6 +15,7 @@ from sophios.input_output import write_artifacts_to_disk
 from sophios.ir.frontdoor import bundle_from_disk
 from sophios.ir.resolved import NotLowered
 from sophios.lang.diagnostics import SophiosError
+from sophios.runtime_inputs import output_target_inputs
 from sophios.utils_cwl import desugar_into_canonical_normal_form
 from sophios.utils_nf import NEXTFLOW
 from sophios.wic_types import CompilerOptions, StepId, Tool, Tools, Yaml
@@ -92,7 +93,7 @@ def _compiled_as_stated(folder: Path, root: str, expected: Yaml, out: Path,
     notes = [*result.diagnostics, *cwl_notes(resolved_view(result))]
     assert match(expected.get('notes', []), [diagnostic(found) for found in notes]), root
     assert match(expected.get('said', []), capsys.readouterr().err.splitlines()), root
-    write_artifacts_to_disk(result.artifact, out)
+    write_artifacts_to_disk(result.artifact, out, output_targets=output_target_inputs(resolved_view(result)))
     if 'nextflow' in expected:
         job = folder / 'job.yml'
         values = yaml.safe_load(job.read_text(encoding='utf-8')) if job.exists() else {}

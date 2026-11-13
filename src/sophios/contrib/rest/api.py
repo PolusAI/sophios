@@ -13,7 +13,7 @@ from sophios import input_output
 from sophios import utils_cwl
 from sophios.post_compile import inline_artifact_runs
 from sophios.cli import get_args, get_dicts_for_compilation
-from sophios.runtime_inputs import normalize_artifact_cwl, normalize_artifact_job_inputs
+from sophios.runtime_inputs import output_target_inputs, runner_job_inputs
 from sophios.wic_types import Json, Tools
 from sophios.contrib import converter
 from sophios import plugins
@@ -94,11 +94,10 @@ async def compile_wf(request: Request) -> Json:
     # ======== OUTPUT PROCESSING ================
     # ========= PROCESS COMPILED OBJECT =========
     yaml_stem = artifact.name
-    cwl_tree = normalize_artifact_cwl(artifact)
-    yaml_inputs = normalize_artifact_job_inputs(artifact, artifact.job_inputs)
+    yaml_inputs = runner_job_inputs(artifact.job_inputs, output_target_inputs(compiler.resolved_view(result)))
 
     # Convert the compiled yaml file to json for Compute API.
-    cwl_tree_run = copy.deepcopy(cwl_tree)
+    cwl_tree_run = copy.deepcopy(artifact.cwl)
     cwl_tree_run['steps_dict'] = {}
     for step in cwl_tree_run['steps']:
         node_name = step['id']

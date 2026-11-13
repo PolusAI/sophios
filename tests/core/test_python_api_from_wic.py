@@ -19,7 +19,7 @@ from sophios.cli import default_compilation_settings
 from sophios.ir.frontdoor import bundle_from_disk
 from sophios.ir.artifacts import CompilationResult
 from sophios.post_compile import inline_artifact_runs
-from sophios.runtime_inputs import normalize_artifact_cwl, normalize_artifact_job_inputs
+from sophios.runtime_inputs import output_target_inputs, runner_job_inputs
 from sophios.utils_cwl import canonicalize_type
 from sophios.lang import Document, render
 from sophios.wic_types import Json, StepId, Tool, Tools
@@ -77,11 +77,12 @@ def _file_door(path: Path, workflow_paths: WorkflowPaths, tools: Tools) -> tuple
     `Workflow.compile()` uses; outputs narrowed to the named ones as `compile()` returns them."""
     result = _compile_file(path, workflow_paths, tools)
     artifact = inline_artifact_runs(result.artifact)
-    cwl = normalize_artifact_cwl(artifact)
+    cwl = {**artifact.cwl}
     named = _named_outputs(path)
     if named and isinstance(cwl.get('outputs'), dict):
         cwl['outputs'] = {name: spec for name, spec in cwl['outputs'].items() if name in named}
-    return (cwl, normalize_artifact_job_inputs(artifact, artifact.job_inputs), list(map(str, result.diagnostics)))
+    job = runner_job_inputs(artifact.job_inputs, output_target_inputs(sophios.compiler.resolved_view(result)))
+    return (cwl, job, list(map(str, result.diagnostics)))
 
 
 def _named_outputs(path: Path) -> list[str]:

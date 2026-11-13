@@ -1,48 +1,50 @@
-"""Normalize generated CWL and job inputs for local runner execution."""
+"""Job inputs as a runner gets them."""
 
 from __future__ import annotations
 
 import copy
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from pathlib import PurePath
 import re
 from typing import Any
 
 from sophios.edam import resolve_file_format
-from sophios.ir.artifacts import CompilationArtifact
-from sophios.ir.resolved import InputRef, ResolvedTool, ResolvedWorkflow
+from sophios.ir.resolved import InputRef, ResolvedTool, ResolvedWorkflow, Through, tool_steps
 from sophios.wic_types import Json
 
 
 _INPUT_REFERENCE = re.compile(r"\binputs\.([A-Za-z_][A-Za-z0-9_-]*)")
 
 
-def normalize_artifact_job_inputs(artifact: CompilationArtifact,
-                                  job_inputs: Mapping[str, Any]) -> Json:
-    """Normalize job inputs from the graph-derived artifact tree."""
-    return _normalize_job_inputs(artifact.cwl, _runs_by_artifact_id(artifact), job_inputs)
+def runner_job_inputs(job_inputs: Mapping[str, Any], output_targets: Collection[str]) -> Json:
+    """`job_inputs` as a runner gets them: each File's format resolved, and each of `output_targets` (the root
+    job keys `output_target_inputs` names) a Directory literal the runner creates, empty, under the name it gave."""
+    job = resolve_file_formats(job_inputs)
+    for name in output_targets:
+        if name in job:
+            job[name] = _output_target_directory(job[name], name)
+    return job
 
 
-def output_target_inputs(workflow: ResolvedWorkflow) -> set[str]:
-    """The workflow inputs that name an output-target Directory: one a step's tool writes into through a
-    writable InitialWorkDirRequirement entry and captures as a Directory output."""
+def output_target_inputs(view: ResolvedWorkflow) -> set[str]:
+    """The root inputs of `view` that name an output-target Directory, at any depth of calls.
+
+    A tool's input is one when the tool writes into it through a writable InitialWorkDirRequirement entry and
+    captures it as a Directory output. A root input is named when a step's such input takes it as a plain value
+    through every call; a `Crossing` (a merge, pick, default or computed value) is not a plain root value, so it
+    is left alone.
+    """
     names: set[str] = set()
-    for step in workflow.steps:
-        if isinstance(step.run, ResolvedTool) and isinstance(step.run.document, Mapping):
-            targets = _output_target_inputs(step.run.document)
-            names.update(source.name for port in step.inputs if port.name in targets
-                         for source in port.sources if isinstance(source, InputRef))
+    for found in tool_steps(view):
+        run = found.step.run
+        if not isinstance(run, ResolvedTool) or not isinstance(run.document, Mapping):
+            continue
+        targets = _output_target_inputs(run.document)
+        for port, sources in zip(found.step.inputs, found.sources, strict=True):
+            if port.name in targets:
+                names.update(source.ref.name for source in sources
+                             if isinstance(source, Through) and isinstance(source.ref, InputRef))
     return names
-
-
-def normalize_artifact_cwl(artifact: CompilationArtifact) -> Json:
-    """Normalize generated CWL from the graph-derived artifact tree."""
-    return _normalize_cwl_document(artifact.cwl, _runs_by_artifact_id(artifact))
-
-
-def _runs_by_artifact_id(artifact: CompilationArtifact) -> dict[str, Mapping[str, Any]]:
-    return {child.namespace[-1]: child.cwl for child in artifact.children
-            if child.namespace}
 
 
 def resolve_file_formats(job_inputs: Mapping[str, Any]) -> Json:
@@ -51,18 +53,6 @@ def resolve_file_formats(job_inputs: Mapping[str, Any]) -> Json:
     resolved = copy.deepcopy(dict(job_inputs))
     _normalize_file_formats(resolved)
     return resolved
-
-
-def _normalize_job_inputs(
-    cwl_workflow: Mapping[str, Any],
-    run_by_step_id: Mapping[str, Mapping[str, Any]],
-    job_inputs: Mapping[str, Any],
-) -> Json:
-    normalized = resolve_file_formats(job_inputs)
-    for source_key in _output_target_source_keys(cwl_workflow, run_by_step_id):
-        if source_key in normalized:
-            normalized[source_key] = _normalize_output_target_name(normalized[source_key], source_key)
-    return normalized
 
 
 def _normalize_file_formats(value: Any) -> None:
@@ -81,133 +71,6 @@ def _normalize_file_formats(value: Any) -> None:
                 _normalize_file_formats(item)
 
 
-def _normalize_cwl_document(
-    cwl_document: Mapping[str, Any],
-    run_by_step_id: Mapping[str, Mapping[str, Any]],
-) -> Json:
-    normalized = copy.deepcopy(dict(cwl_document))
-    match normalized.get("class"):
-        case "CommandLineTool":
-            _normalize_command_line_tool(normalized, _output_target_inputs(normalized))
-        case "Workflow":
-            _normalize_workflow(normalized, run_by_step_id)
-    return normalized
-
-
-def _normalize_workflow(
-    cwl_workflow: Json,
-    run_by_step_id: Mapping[str, Mapping[str, Any]],
-) -> None:
-    for step in _as_list(cwl_workflow.get("steps")):
-        match step:
-            case dict() as step_dict:
-                match step_dict.get("run"):
-                    case Mapping() as run:
-                        target_inputs = _output_target_inputs(run)
-                        if target_inputs:
-                            step_dict["run"] = _normalize_command_line_tool(copy.deepcopy(dict(run)), target_inputs)
-                    case _:
-                        target_inputs = _output_target_inputs(run_by_step_id.get(str(step_dict.get("id", "")), {}))
-                for source_key in _target_source_keys_for_step(step_dict, target_inputs):
-                    _set_workflow_input_type(cwl_workflow, source_key, "string")
-
-
-def _target_source_keys_for_step(step: Mapping[str, Any], target_inputs: set[str]) -> set[str]:
-    source_keys: set[str] = set()
-    for input_name, sources in _step_input_sources(step.get("in")).items():
-        if input_name in target_inputs:
-            source_keys.update(source for source in sources if "/" not in source)
-    return source_keys
-
-
-def _normalize_command_line_tool(cwl_tool: Json, target_inputs: set[str]) -> Json:
-    if not target_inputs:
-        return cwl_tool
-    for input_name in target_inputs:
-        _set_parameter_type(cwl_tool.get("inputs"), input_name, "string")
-    _rewrite_initial_workdir(cwl_tool, target_inputs)
-    _rewrite_input_basename_refs(cwl_tool, target_inputs)
-    return cwl_tool
-
-
-def _rewrite_initial_workdir(cwl_tool: Json, target_inputs: set[str]) -> None:
-    for requirement in (cwl_tool.get("requirements"), cwl_tool.get("hints")):
-        match requirement:
-            case {"InitialWorkDirRequirement": {"listing": list() as listing}}:
-                for index, entry in enumerate(listing):
-                    match entry:
-                        case {"writable": True, "entry": entry_value}:
-                            referenced = _referenced_inputs(entry_value) & target_inputs
-                            if len(referenced) == 1:
-                                input_name = next(iter(referenced))
-                                listing[index] = {
-                                    "entry": _directory_expression(input_name),
-                                    "writable": True,
-                                }
-
-
-def _directory_expression(input_name: str) -> str:
-    return (
-        "${\n"
-        f"  return {{\"class\": \"Directory\", \"basename\": inputs[{input_name!r}], \"listing\": []}};\n"
-        "}"
-    )
-
-
-def _rewrite_input_basename_refs(value: Any, target_inputs: set[str]) -> Any:
-    match value:
-        case dict() as mapping:
-            for key, item in mapping.items():
-                mapping[key] = _rewrite_input_basename_refs(item, target_inputs)
-        case list() as items:
-            for index, item in enumerate(items):
-                items[index] = _rewrite_input_basename_refs(item, target_inputs)
-        case str() as text:
-            for input_name in target_inputs:
-                text = text.replace(f"inputs.{input_name}.basename", f"inputs.{input_name}")
-                text = text.replace(f"inputs[{input_name!r}].basename", f"inputs[{input_name!r}]")
-                text = text.replace(f'inputs["{input_name}"].basename', f'inputs["{input_name}"]')
-            return text
-    return value
-
-
-def _set_workflow_input_type(cwl_workflow: Json, source_key: str, cwl_type: Any) -> None:
-    _set_parameter_type(cwl_workflow.get("inputs"), source_key, cwl_type)
-
-
-def _set_parameter_type(parameters: Any, parameter_name: str, cwl_type: Any) -> None:
-    match parameters:
-        case dict() as parameter_map:
-            match parameter_map.get(parameter_name):
-                case dict() as parameter:
-                    parameter["type"] = cwl_type
-        case list() as parameter_list:
-            for parameter in parameter_list:
-                match parameter:
-                    case {"id": parameter_id} if _local_id(parameter_id) == parameter_name:
-                        parameter["type"] = cwl_type
-
-
-def _output_target_source_keys(
-    cwl_workflow: Mapping[str, Any],
-    run_by_step_id: Mapping[str, Mapping[str, Any]],
-) -> set[str]:
-    source_keys: set[str] = set()
-    for step in _as_list(cwl_workflow.get("steps")):
-        match step:
-            case Mapping() as step_mapping:
-                match step_mapping.get("run"):
-                    case Mapping() as run:
-                        target_inputs = _output_target_inputs(run)
-                    case _:
-                        target_inputs = _output_target_inputs(run_by_step_id.get(str(step_mapping.get("id", "")), {}))
-                if target_inputs:
-                    for input_name, source in _step_input_sources(step_mapping.get("in")).items():
-                        if input_name in target_inputs:
-                            source_keys.update(source_key for source_key in source if "/" not in source_key)
-    return source_keys
-
-
 def _output_target_inputs(run: Mapping[str, Any]) -> set[str]:
     inputs = _parameter_mapping(run.get("inputs"))
     outputs = _parameter_mapping(run.get("outputs"))
@@ -221,12 +84,11 @@ def _output_target_inputs(run: Mapping[str, Any]) -> set[str]:
             case Mapping() as output_mapping if _type_includes(output_mapping.get("type"), "Directory"):
                 glob_value = _output_glob(output_mapping)
                 for input_name in _referenced_inputs(glob_value):
-                    match inputs.get(input_name):
-                        case Mapping() as input_definition if (
-                            input_name in writable_inputs
-                            and _type_includes(input_definition.get("type"), "Directory")
-                        ):
-                            target_inputs.add(input_name)
+                    definition = inputs.get(input_name)
+                    # `outDir: Directory` is a type, not a mapping that has one.
+                    declared = definition.get("type") if isinstance(definition, Mapping) else definition
+                    if input_name in writable_inputs and _type_includes(declared, "Directory"):
+                        target_inputs.add(input_name)
     return target_inputs
 
 
@@ -265,41 +127,20 @@ def _output_glob(output: Mapping[str, Any]) -> Any:
             return None
 
 
-def _step_input_sources(step_inputs: Any) -> dict[str, list[str]]:
-    match step_inputs:
-        case list() as step_input_list:
-            bindings = {}
-            for item in step_input_list:
-                match item:
-                    case {"id": input_id}:
-                        bindings[input_id] = item
-        case Mapping() as bindings:
+def _output_target_directory(value: Any, source_key: str) -> Any:
+    """The literal for a name, or for a Directory read as one: its `location`, `path` or `basename`."""
+    match value:
+        case str() as name:
+            pass
+        case {"class": "Directory", "location": str() as name}:
+            pass
+        case {"class": "Directory", "path": str() as name}:
+            pass
+        case {"class": "Directory", "basename": str() as name}:
             pass
         case _:
-            return {}
-
-    sources: dict[str, list[str]] = {}
-    for input_name, binding in bindings.items():
-        match binding:
-            case str() as source:
-                sources[str(input_name)] = [source]
-            case {"source": str() as source}:
-                sources[str(input_name)] = [source]
-            case {"source": list() as source_list}:
-                sources[str(input_name)] = _strings(source_list)
-    return sources
-
-
-def _normalize_output_target_name(value: Any, source_key: str) -> Any:
-    match value:
-        case str() as location:
-            return _output_target_basename(location, source_key)
-        case {"class": "Directory", "location": str() as location}:
-            return _output_target_basename(location, source_key)
-        case {"class": "Directory", "basename": str() as location}:
-            return _output_target_basename(location, source_key)
-        case _:
             return value
+    return {"class": "Directory", "basename": _output_target_basename(name, source_key), "listing": []}
 
 
 def _output_target_basename(location: str, source_key: str) -> str:
@@ -342,15 +183,6 @@ def _type_includes(cwl_type: Any, type_name: str) -> bool:
 
 def _local_id(value: Any) -> str:
     return str(value).rsplit("/", 1)[-1].rsplit("#", 1)[-1]
-
-
-def _strings(values: list[Any]) -> list[str]:
-    strings = []
-    for value in values:
-        match value:
-            case str() as text:
-                strings.append(text)
-    return strings
 
 
 def _as_list(value: Any) -> list[Any]:

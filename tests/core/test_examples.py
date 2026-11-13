@@ -471,10 +471,11 @@ def test_corpus_validates_in_cwltool_in_every_form(yml_path_str: str, yml_path: 
     nested = _compile_corpus_workflow(yml_path_str, yml_path, corpus_registry).artifact
     flat = post_compile.flatten_subworkflows(nested)
     for form, artifact in (('flat', flat), ('flat_embedded', inline_artifact_runs(flat))):
-        sophios.input_output.write_artifacts_to_disk(artifact, tmp_path / form)
+        sophios.input_output.write_artifacts_to_disk(artifact, tmp_path / form, output_targets=())
         assert validate_cwl(str(tmp_path / form / f'{nested.name}.cwl')) == 0, form
     if yml_path_str not in large_workflows:
-        sophios.input_output.write_artifacts_to_disk(nested, tmp_path / 'nested')
-        sophios.input_output.write_artifacts_to_disk(inline_artifact_runs(nested), tmp_path / 'embedded')
+        sophios.input_output.write_artifacts_to_disk(nested, tmp_path / 'nested', output_targets=())
+        sophios.input_output.write_artifacts_to_disk(inline_artifact_runs(nested), tmp_path / 'embedded',
+                                                     output_targets=())
         root = f'{nested.name}.cwl'
         assert _tool_defaults(tmp_path / 'embedded' / root) == _tool_defaults(tmp_path / 'nested' / root)

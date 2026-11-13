@@ -158,7 +158,7 @@ def test_each_step_runs_the_tool_its_run_names(tmp_path: Path, monkeypatch: pyte
     drives."""
     for case, expected in (param.values for param in case_dirs('run_paths', 'steps')):
         result = _compile(bundle_from_disk(case / 'w.wic', {}, SYNTHETIC_TOOLS))
-        write_artifacts_to_disk(result.artifact, tmp_path / case.name)
+        write_artifacts_to_disk(result.artifact, tmp_path / case.name, output_targets=())
         _assert_runs(result.artifact, yaml.safe_load((tmp_path / case.name / 'w.cwl').read_text(encoding='utf-8')),
                      tmp_path / case.name, expected['steps'])
     paths = DOOR / 'paths'
@@ -210,7 +210,8 @@ def _write_packed_tool_step(tmp_path: Path, where: str, packed: Path) -> Path:
     shutil.copy(DOOR / 'cwl_workflow' / ('run_packed.wic' if where == 'beside' else 'packed_on_search_paths.wic'),
                 tmp_path / 'w.wic')
     tools = SYNTHETIC_TOOLS if where == 'beside' else get_tools_cwl({'search_paths_cwl': {'global': [str(directory)]}})
-    write_artifacts_to_disk(_compile(bundle_from_disk(tmp_path / 'w.wic', {}, tools)).artifact, tmp_path / 'out')
+    write_artifacts_to_disk(_compile(bundle_from_disk(tmp_path / 'w.wic', {}, tools)).artifact, tmp_path / 'out',
+                            output_targets=())
     return tmp_path / 'out'
 
 

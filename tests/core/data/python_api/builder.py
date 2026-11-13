@@ -22,7 +22,7 @@ def workflow() -> Workflow:
     child.inputs.file = emit.outputs.file
     child.outputs.counts = count.outputs.counts
     count.inputs.scale = 0.5
-    # An output directory the step creates: a string input the runner fills, which its glob reads back.
+    # An output directory the step creates: the job names an empty Directory the runner makes, which its glob reads.
     folder = Step(clt_path=HERE / 'write_dir.cwl')
     folder.inputs.outDir = Path('result.outDir')
     # A path is bound as written, read from no disk: it may name a file on a cluster.
