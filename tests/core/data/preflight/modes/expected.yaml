@@ -1,0 +1,25 @@
+# What each mode asks of this machine: --check asks the engine and stops, writing, pulling and running nothing, whether
+# it passes, fails or is refused; a run script needs an engine only for containers, and pulls their images.
+runs:
+- argv: [--yaml, touch.wic, --check, --basepath, earlier]
+  stdout: {contains: ['Checked touch: ']}
+  asked: true
+  unchanged: true
+- why: it finds every problem a run would hit, one diagnostic each, in one pass
+  machine: {engine: missing}
+  argv: [--yaml, absent.wic, --check, --basepath, earlier, --diagnostics, json]
+  exit: 1
+  diagnostics: [{code: MISSING_INPUT_FILE, severity: error}, {code: CONTAINER_ENGINE_UNAVAILABLE, severity: error}]
+  unchanged: true
+- why: a drawing would be written, so it is refused
+  argv: [--yaml, touch.wic, --check, --basepath, earlier, --graphviz]
+  exit: 2
+  unchanged: true
+- machine: {engine: missing}
+  argv: [--yaml, echo.wic, --generate_run_script]
+  written: {contains: [run.sh]}
+  asked: false
+- argv: [--yaml, touch.wic, --generate_run_script]
+  written: {contains: [run.sh]}
+  asked: true
+  pulled: true

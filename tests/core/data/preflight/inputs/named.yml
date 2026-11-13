@@ -1,0 +1,2 @@
+# Written as CWL writes a Directory, it still names the directory the step creates.
+write_dir~outDir: {class: Directory, location: result.outDir}

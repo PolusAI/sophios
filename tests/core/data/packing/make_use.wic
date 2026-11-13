@@ -1,0 +1,6 @@
+# make, packed, feeds use, as written, through the edge inference makes.
+steps:
+- id: make
+  run: tools/make.cwl
+- id: use
+  run: tools/use.cwl

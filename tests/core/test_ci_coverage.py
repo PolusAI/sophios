@@ -363,8 +363,7 @@ WINDOWS_EXCLUDED: Final = frozenset({
     # and twelve conformance workflows, each also run by cwltool directly, in
     # about four seconds. The file's other tests check what the runner is
     # given and run on Windows.
-    'tests/core/test_plain_cwl.py::test_a_plain_cwl_workflow_runs_as_it_is',
-    'tests/core/test_plain_cwl.py::test_a_conformance_workflow_runs_through_sophios_as_cwltool_runs_it',
+    'tests/core/test_plain_cwl.py::test_a_plain_cwl_workflow_runs_through_sophios_as_cwltool_runs_it',
     # One `Workflow.run()` of a one-step echo, by cwltool, from a script run by a new
     # interpreter, under a second.
     'tests/core/test_python_api_workflow.py::test_workflow_run_runs_a_workflow_from_a_users_script',
@@ -391,16 +390,13 @@ WINDOWS_EXCLUDED: Final = frozenset({
     # and that the compile reads no file it should not, is checked on every leg by the file's
     # other tests; only a runner shows that the written description runs.
     'tests/core/test_packing.py::test_a_packed_tool_runs_from_the_tree_and_embedded_twice',
-    'tests/core/test_packing.py::test_a_schemadef_tool_with_an_import_is_written_runnable',
-    'tests/core/test_packing.py::test_a_packed_tool_keeps_the_partial_failure_rewrite_written_and_embedded',
+    'tests/core/test_packing.py::test_a_packed_project_runs_under_cwltool_and_changes_nothing_beside_it',
     'tests/core/test_packing.py::test_a_packed_tool_and_one_as_written_run_wired_by_inference',
     'tests/core/test_packing.py::test_one_basepath_runs_two_echo_cwl_and_two_config_txt_with_provenance',
-    'tests/core/test_packing.py::test_nothing_outside_the_basepath_is_written_or_changed',
     # Two quiet runs through the command line by cwltool, a failing step in a call and a tool that names
     # the file it writes as its stdout, in a few seconds together. What a quiet run writes and gives the
     # runner is checked on every leg by the file's other tests.
-    'tests/core/test_quiet.py::test_a_failing_step_is_named_with_its_status_below_its_own_messages',
-    'tests/core/test_quiet.py::test_a_quiet_run_keeps_a_file_the_tool_names_as_its_stdout',
+    'tests/core/test_quiet.py::test_a_quiet_run_prints_each_steps_messages_and_keeps_the_files_it_names',
     # One six-step workflow run under Nextflow and under cwltool, and one one-step tool cwltool fails, in about six
     # seconds. Only Lint And Test's Linux Nextflow step collects it, so the Windows leg gives up nothing it ran; which
     # references the target refuses is checked on every leg by the staging family of test_capabilities.py.

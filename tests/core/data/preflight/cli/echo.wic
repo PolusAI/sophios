@@ -1,0 +1,5 @@
+# No container: nothing to ask of an engine.
+steps:
+- id: echo
+  in:
+    message: !ii hello

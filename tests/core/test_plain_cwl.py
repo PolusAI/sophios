@@ -1,12 +1,15 @@
 """A plain CWL workflow (top-level `cwlVersion` and `class: Workflow`, or a `$graph` `main`, no Sophios syntax) passes
-through `--allow_raw_cwl` to the runner as it is, with `--inputs_file` as its job; everything else compiles."""
+through `--allow_raw_cwl` to the runner as it is, with `--inputs_file` as its job; everything else compiles. The
+documents are tests/core/data/plain_cwl, copied into a directory whose name is not a URL: a '#' or a '+' in a path is a
+character of the name, as a drive letter is on Windows."""
 import io
 import json
 import shlex
+import shutil
 import sys
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Callable
+from typing import Any, Callable, Final
 
 import pytest
 import yaml
@@ -15,96 +18,12 @@ import sophios.main as cli
 from sophios import preflight
 from sophios.backends import RunRequest
 
-from .helpers import no_preflight, write_tree
+from .cases import DATA
+from .helpers import no_preflight
 
 #: Twelve plain Workflows of the CWL v1.2 conformance suite; see its README.md.
-CONFORMANCE = Path(__file__).resolve().parent / 'data' / 'cwl-v1.2'
-CASES = yaml.safe_load((CONFORMANCE / 'cases.yaml').read_text(encoding='utf-8'))
-
-PLAIN = '''cwlVersion: v1.2
-class: Workflow
-inputs:
-  message: string
-outputs:
-  copied:
-    type: File
-    outputSource: copy/copied
-steps:
-  say:
-    run: say.cwl
-    in:
-      message: message
-    out: [said]
-  copy:
-    run: copy.cwl
-    in:
-      text: say/said
-    out: [copied]
-'''
-
-SAY = '''cwlVersion: v1.2
-class: CommandLineTool
-baseCommand: echo
-inputs:
-  message:
-    type: string
-    inputBinding: {position: 1}
-stdout: said.txt
-outputs:
-  said: stdout
-'''
-
-COPY = '''cwlVersion: v1.2
-class: CommandLineTool
-baseCommand: cat
-inputs:
-  text:
-    type: File
-    inputBinding: {position: 1}
-stdout: copied.txt
-outputs:
-  copied: stdout
-'''
-
-PACKED = '''cwlVersion: v1.2
-$graph:
-- id: say
-  class: CommandLineTool
-  baseCommand: echo
-  inputs: {message: {type: string, inputBinding: {position: 1}}}
-  stdout: said.txt
-  outputs: {said: stdout}
-- id: {main}
-  class: Workflow
-  inputs: {message: string}
-  outputs: {said: {type: File, outputSource: say/said}}
-  steps:
-    say: {run: '#say', in: {message: message}, out: [said]}
-'''
-
-LIST_STEPS = PLAIN.replace('''steps:
-  say:
-    run: say.cwl
-    in:
-      message: message
-    out: [said]
-  copy:
-    run: copy.cwl
-''', '''steps:
-- id: say
-  run: say.cwl
-  in:
-    message: message
-  out: [said]
-- id: copy
-  run: copy.cwl
-''').replace('''    in:
-      text: say/said
-    out: [copied]
-''', '''  in:
-    text: say/said
-  out: [copied]
-''')
+CONFORMANCE: Final = DATA / 'cwl-v1.2'
+CASES: Final = yaml.safe_load((CONFORMANCE / 'cases.yaml').read_text(encoding='utf-8'))
 
 
 class _Compiled(BaseException):
@@ -112,29 +31,18 @@ class _Compiled(BaseException):
     arm lets it through."""
 
 
-@pytest.fixture(name='compile_path')
-def _compile_path(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The compile path raises `_Compiled` instead of compiling."""
-    def compiled(*_args: object, **_kwargs: object) -> None:
-        raise _Compiled
-    monkeypatch.setattr(cli.io, 'get_config', compiled)
-
-
 @pytest.fixture(name='sophios')
 def _sophios(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Callable[..., Path]:
-    """Run the CLI from `tmp_path/cwd` on a document written to `tmp_path/wf/<name>`, or on a path; container engines
-    are recorded, not reached."""
+    """Run the CLI from `tmp_path/cwd` on a document of tests/core/data/plain_cwl, copied into `tmp_path/run #1 c++`,
+    or on a path; container engines are recorded, not reached."""
     monkeypatch.setattr(preflight, 'PLATFORM_LACKS_RUNNERS', None)   # Windows has no runner; `--check` would stop there
     prepared = no_preflight(monkeypatch)
-    write_tree(tmp_path, {'wf/say.cwl': SAY, 'wf/copy.cwl': COPY, 'jobs/job.yml': 'message: hello\n'})
+    shutil.copytree(DATA / 'plain_cwl', tmp_path / 'run #1 c++')
     (tmp_path / 'cwd').mkdir()
     monkeypatch.chdir(tmp_path / 'cwd')
 
-    def run(text: str | Path, *flags: str, name: str = 'plain.cwl') -> Path:
-        if isinstance(text, Path):
-            workflow = text
-        else:
-            workflow = write_tree(tmp_path / 'wf', {name: text}) / name
+    def run(name: str | Path, *flags: str) -> Path:
+        workflow = name if isinstance(name, Path) else tmp_path / 'run #1 c++' / name
         monkeypatch.setattr('sys.argv', ['sophios', '--yaml', str(workflow), *flags])
         prepared.clear()
         cli.main()
@@ -144,159 +52,88 @@ def _sophios(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Callable[..., P
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize('text', [PLAIN, LIST_STEPS, PACKED.replace('{main}', 'main'),
-                                  PACKED.replace('{main}', "'#main'")],
-                         ids=['steps-map', 'steps-list', 'packed-main', 'packed-hash-main'])
-def test_a_plain_cwl_workflow_is_its_own_artifact(sophios: Callable[..., Path], text: str,
-                                                  capsys: pytest.CaptureFixture[str]) -> None:
-    """Nothing is compiled or written: the file itself is what a run would use."""
-    workflow = sophios(text, '--allow_raw_cwl', '--generate_cwl_workflow')
-    assert workflow.read_text(encoding='utf-8') == text
-    assert not Path('autogenerated').exists()
+@pytest.mark.parametrize('name', ['plain.cwl', 'list_steps.cwl', 'packed_main.cwl', 'packed_hash_main.cwl'])
+def test_a_plain_cwl_workflow_is_what_the_runner_is_given(sophios: Callable[..., Path], tmp_path: Path,
+                                                          monkeypatch: pytest.MonkeyPatch,
+                                                          capsys: pytest.CaptureFixture[str], name: str) -> None:
+    """Nothing is compiled or written: the file itself is what a run uses, and run.sh gives the runner it and the job
+    as they are, not copies under autogenerated/; without --inputs_file there is no job, and the workflow's own
+    defaults apply. --check stops after the pre-flight. cwltool draws the file itself, as there is no compiled graph
+    for Sophios to draw. A workflow of the same name compiled earlier left its real-time analyses beside its CWL;
+    this one is not that workflow, so they do not run."""
+    text = (DATA / 'plain_cwl' / name).read_text(encoding='utf-8')
+    workflow = sophios(name, '--allow_raw_cwl', '--generate_cwl_workflow')
+    assert workflow.read_text(encoding='utf-8') == text and not Path('autogenerated').exists()
     assert f'{workflow} is a CWL workflow' in capsys.readouterr().out
 
-
-@pytest.mark.fast
-@pytest.mark.parametrize(('text', 'name'), [
-    (PLAIN.replace('message: message', 'message: !ii hello'), 'plain.cwl'),
-    ('wic:\n  graphviz:\n    label: x\n' + PLAIN, 'plain.cwl'),
-    (PLAIN.replace('cwlVersion: v1.2\n', ''), 'plain.cwl'),
-    (SAY, 'say_root.cwl'),
-    (PACKED.replace('{main}', 'main').replace('class: Workflow', 'class: CommandLineTool'), 'plain.cwl'),
-    ('steps:\n- id: say\n', 'plain.wic'),
-], ids=['sophios-tag', 'wic-sidecar', 'no-cwlVersion', 'a-tool', 'packed-tool', 'a-wic-document'])
-@pytest.mark.usefixtures('compile_path')
-def test_anything_else_is_compiled_as_before(sophios: Callable[..., Path], text: str, name: str) -> None:
-    """Sophios syntax, a tool, a packed tool or a missing `cwlVersion` keeps the compile path."""
-    with pytest.raises(_Compiled):
-        sophios(text, '--allow_raw_cwl', '--generate_cwl_workflow', name=name)
-
-
-@pytest.mark.fast
-@pytest.mark.usefixtures('compile_path')
-def test_without_allow_raw_cwl_a_plain_cwl_workflow_is_compiled_as_before(sophios: Callable[..., Path]) -> None:
-    """Without the flag a plain CWL workflow is not a Sophios exception: it is compiled as today."""
-    with pytest.raises(_Compiled):
-        sophios(PLAIN, '--generate_cwl_workflow')
-
-
-@pytest.mark.fast
-@pytest.mark.usefixtures('compile_path')
-def test_a_target_that_takes_no_plain_cwl_says_it_compiles_the_workflow(sophios: Callable[..., Path],
-                                                                        capsys: pytest.CaptureFixture[str]) -> None:
-    """Only the CWL target takes a plain CWL workflow as it is: under another, `--allow_raw_cwl` says the file is
-    compiled as a Sophios document, then compiles it."""
-    with pytest.raises(_Compiled):
-        sophios(PLAIN, '--allow_raw_cwl', '--target', 'nextflow')
-    assert ('--allow_raw_cwl: --target nextflow does not take a plain CWL workflow as it is, so '
-            in capsys.readouterr().err)
-
-
-@pytest.mark.fast
-def test_run_sh_gives_the_runner_the_workflow_and_the_job_as_they_are(sophios: Callable[..., Path],
-                                                                      tmp_path: Path) -> None:
-    """Both paths are the files given, not copies under autogenerated/. Without --inputs_file there is no job:
-    the workflow's own defaults apply."""
-    job = tmp_path / 'jobs' / 'job.yml'
-    workflow = sophios(PLAIN, '--allow_raw_cwl', '--generate_run_script', '--inputs_file', str(job))
-    command = shlex.split(Path('run.sh').read_text(encoding='utf-8'))
-    assert command[-2:] == [str(workflow), str(job)]
-    assert not list(Path('autogenerated').glob('*.cwl'))
-    sophios(PLAIN, '--allow_raw_cwl', '--generate_run_script')
+    job = tmp_path / 'run #1 c++' / 'job.yml'
+    sophios(name, '--allow_raw_cwl', '--check', '--inputs_file', str(job))
+    assert 'Checked ' in capsys.readouterr().out and not Path('run.sh').exists()
+    sophios(name, '--allow_raw_cwl', '--generate_run_script', '--inputs_file', str(job))
+    assert shlex.split(Path('run.sh').read_text(encoding='utf-8'))[-2:] == [str(workflow), str(job)]
+    sophios(name, '--allow_raw_cwl', '--generate_run_script')
     assert shlex.split(Path('run.sh').read_text(encoding='utf-8'))[-1] == str(workflow)
+    assert not list(Path('autogenerated').glob('*.cwl'))
 
-
-@pytest.mark.fast
-def test_check_stops_after_the_pre_flight_of_a_plain_cwl_workflow(
-        sophios: Callable[..., Path], tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    sophios(PLAIN, '--allow_raw_cwl', '--check', '--inputs_file', str(tmp_path / 'jobs' / 'job.yml'))
-    assert 'Checked ' in capsys.readouterr().out
-    assert not Path('run.sh').exists()
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize('workflow', [PLAIN, PACKED.replace('{main}', 'main')], ids=['steps-in-files', 'packed'])
-def test_check_reads_a_plain_cwl_workflow_in_a_directory_whose_name_is_not_a_url(
-        sophios: Callable[..., Path], workflow: str, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    """A '#' or a '+' in a path is a character of the name, as a drive letter is on Windows."""
-    directory = tmp_path / 'run #1 c++'
-    directory.mkdir()
-    write_tree(directory, {'plain.cwl': workflow, 'say.cwl': SAY, 'copy.cwl': COPY})
-    sophios(directory / 'plain.cwl', '--allow_raw_cwl', '--check')
-    assert 'Checked ' in capsys.readouterr().out
-
-
-@pytest.mark.fast
-def test_check_names_a_missing_input_of_a_plain_cwl_workflow(
-        sophios: Callable[..., Path], tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    job = tmp_path / 'jobs' / 'missing.yml'
-    job.write_text('message: hello\nfile: {class: File, location: nope.txt}\n', encoding='utf-8')
-    with pytest.raises(SystemExit) as caught:
-        sophios(PLAIN, '--allow_raw_cwl', '--check', '--inputs_file', str(job))
-    assert caught.value.code == 1
-    assert (f"input 'file' (from --inputs_file, whose relative paths are read from {job.parent}) names 'nope.txt'"
-            in capsys.readouterr().err)
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize('flag', ['--cwl_inline_runtag', '--cwl_inline_subworkflows', '--partial_failure_enable',
-                                  '--docker_remove_entrypoints'])
-def test_a_flag_that_rewrites_compiled_cwl_is_an_error_for_a_plain_cwl_workflow(
-        sophios: Callable[..., Path], flag: str, capsys: pytest.CaptureFixture[str]) -> None:
-    """There is no compiled CWL to rewrite, so the flag is refused rather than ignored."""
-    with pytest.raises(SystemExit) as caught:
-        sophios(PLAIN, '--allow_raw_cwl', '--generate_run_script', flag)
-    assert caught.value.code == 2
-    assert flag in capsys.readouterr().err
-    assert not Path('run.sh').exists()
-
-
-@pytest.mark.fast
-def test_graphviz_draws_the_plain_cwl_workflow_with_cwltool(sophios: Callable[..., Path],
-                                                            monkeypatch: pytest.MonkeyPatch) -> None:
-    """cwltool draws the file itself; there is no compiled graph for Sophios to draw."""
     commands: list[list[str]] = []
-    monkeypatch.setattr(cli.shutil, 'which', lambda _name: '/usr/bin/dot')
 
-    def run(command: list[str], **_k: Any) -> SimpleNamespace:
+    def drawn(command: list[str], **_k: Any) -> SimpleNamespace:
         commands.append(command)
         return SimpleNamespace(stdout=b'')
-    monkeypatch.setattr(cli.sub, 'run', run)
-    workflow = sophios(PLAIN, '--allow_raw_cwl', '--generate_cwl_workflow', '--graphviz')
+    monkeypatch.setattr(cli.shutil, 'which', lambda _name: '/usr/bin/dot')
+    monkeypatch.setattr(cli.sub, 'run', drawn)
+    sophios(name, '--allow_raw_cwl', '--generate_cwl_workflow', '--graphviz')
     assert commands == [[sys.executable, '-m', 'cwltool', '--print-dot', str(workflow)],
-                        ['dot', '-Tsvg', '-o', str(Path('autogenerated') / 'plain.svg')]]
+                        ['dot', '-Tsvg', '-o', str(Path('autogenerated') / f'{workflow.stem}.svg')]]
 
-
-@pytest.mark.fast
-def test_a_plain_cwl_workflow_does_not_run_the_analyses_of_a_workflow_of_the_same_name(
-        sophios: Callable[..., Path], monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-    """A `plain.wic` compiled earlier left its real-time analyses beside its CWL; `plain.cwl` is not that workflow."""
-    Path('autogenerated').mkdir()
-    Path('autogenerated/plain.realtime.json').write_text(json.dumps([{
-        'name': 'plain', 'analysis': 'count', 'file_pattern': '*.txt', 'max_times': 2, 'interval': 60,
-        'cwl': 'realtime/plain/count_only.cwl', 'inputs': 'realtime/plain/count_only_inputs.yml',
-        'root_dir': str(Path.cwd()), 'declared_at': 'plain.wic:3:3'}]), encoding='utf-8')
+    Path(f'autogenerated/{workflow.stem}.realtime.json').write_text(json.dumps([{
+        'name': workflow.stem, 'analysis': 'count', 'file_pattern': '*.txt', 'max_times': 2, 'interval': 60,
+        'cwl': 'realtime/x/count_only.cwl', 'inputs': 'realtime/x/count_only_inputs.yml',
+        'root_dir': str(Path.cwd()), 'declared_at': f'{workflow.stem}.wic:3:3'}]), encoding='utf-8')
     given: list[tuple[Any, ...]] = []
 
     def run(request: RunRequest) -> int:
         given.append((request.cachedir, request.realtime_plans))
         return 0
     monkeypatch.setattr(cli.run_local, 'run', run)
-
-    sophios(PLAIN, '--allow_raw_cwl', '--run_local')
-
+    capsys.readouterr()
+    sophios(name, '--allow_raw_cwl', '--run_local')
     assert given == [('', ())]
     assert 'eal-time analysis' not in capsys.readouterr().out
 
 
-@pytest.mark.needs_cwltool
-def test_a_plain_cwl_workflow_runs_as_it_is(sophios: Callable[..., Path], tmp_path: Path) -> None:
-    """The run is cwltool's run of the file: `say/said` reaches `copy` because nothing renamed `say`."""
-    workflow = sophios(PLAIN, '--allow_raw_cwl', '--run_local', '--inputs_file', str(tmp_path / 'jobs' / 'job.yml'))
-    summary = json.loads(Path('autogenerated/output_plain.json').read_text(encoding='utf-8'))
-    assert Path(summary['copied']['path']).read_text(encoding='utf-8') == 'hello\n'
-    assert workflow.read_text(encoding='utf-8') == PLAIN
-    assert not Path('autogenerated/plain.cwl').exists()
+@pytest.mark.fast
+def test_anything_else_is_compiled_and_what_a_plain_workflow_cannot_take_stops_it(
+        sophios: Callable[..., Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str]) -> None:
+    """Sophios syntax, a `wic:` block, a missing `cwlVersion`, a tool, a packed tool or a `.wic` keeps the compile path,
+    and so does a plain CWL workflow without the flag. Only the CWL target takes one as it is: under another,
+    `--allow_raw_cwl` says the file is compiled as a Sophios document, then compiles it. A plain workflow has no
+    compiled CWL to rewrite, so a flag that would is refused rather than ignored, with nothing written; and --check
+    names an input its job names that is missing."""
+    def compiled(*_args: object, **_kwargs: object) -> None:
+        raise _Compiled
+    monkeypatch.setattr(cli.io, 'get_config', compiled)
+    for name, flags in [('tagged.cwl', ['--allow_raw_cwl']), ('sidecar.cwl', ['--allow_raw_cwl']),
+                        ('no_version.cwl', ['--allow_raw_cwl']), ('say.cwl', ['--allow_raw_cwl']),
+                        ('packed_tool.cwl', ['--allow_raw_cwl']), ('plain.wic', ['--allow_raw_cwl']),
+                        ('plain.cwl', []), ('plain.cwl', ['--allow_raw_cwl', '--target', 'nextflow'])]:
+        with pytest.raises(_Compiled):
+            sophios(name, *flags, *([] if 'nextflow' in flags else ['--generate_cwl_workflow']))
+    assert ('--allow_raw_cwl: --target nextflow does not take a plain CWL workflow as it is, so '
+            in capsys.readouterr().err)
+    for flag in ('--cwl_inline_runtag', '--cwl_inline_subworkflows', '--partial_failure_enable',
+                 '--docker_remove_entrypoints'):
+        with pytest.raises(SystemExit) as caught:
+            sophios('plain.cwl', '--allow_raw_cwl', '--generate_run_script', flag)
+        assert caught.value.code == 2 and flag in capsys.readouterr().err
+        assert not Path('run.sh').exists()
+    with pytest.raises(SystemExit) as caught:
+        sophios('plain.cwl', '--allow_raw_cwl', '--check', '--inputs_file',
+                str(tmp_path / 'run #1 c++' / 'missing.yml'))
+    assert caught.value.code == 1
+    assert (f"input 'file' (from --inputs_file, whose relative paths are read from {tmp_path / 'run #1 c++'}) "
+            "names 'nope.txt'") in capsys.readouterr().err
 
 
 def _portable(value: Any) -> Any:
@@ -309,15 +146,23 @@ def _portable(value: Any) -> Any:
 
 
 @pytest.mark.needs_cwltool
-@pytest.mark.parametrize('case', CASES, ids=[case['id'] for case in CASES])
-def test_a_conformance_workflow_runs_through_sophios_as_cwltool_runs_it(
-        sophios: Callable[..., Path], case: dict[str, str], tmp_path: Path) -> None:
-    """The output object is cwltool's own for the same file and job."""
+def test_a_plain_cwl_workflow_runs_through_sophios_as_cwltool_runs_it(sophios: Callable[..., Path],
+                                                                      tmp_path: Path) -> None:
+    """The run is cwltool's run of the file: `say/said` reaches `copy` because nothing renamed `say`, and the file is
+    left as it is. For each conformance workflow the output object is cwltool's own for the same file and job."""
     import cwltool.main  # pylint: disable=import-outside-toplevel
-    workflow, job = CONFORMANCE / case['tool'], CONFORMANCE / case['job']
-    direct = io.StringIO()
-    assert cwltool.main.main(['--quiet', '--outdir', str(tmp_path / 'direct'), str(workflow), str(job)],
-                             stdout=direct) == 0
-    sophios(workflow, '--allow_raw_cwl', '--run_local', '--inputs_file', str(job))
-    summary = json.loads(Path(f'autogenerated/output_{workflow.stem}.json').read_text(encoding='utf-8'))
-    assert _portable(summary) == _portable(json.loads(direct.getvalue()))
+    shutil.copytree(DATA / 'plain_cwl', tmp_path / 'plain')   # cwltool runs no file in a directory named like a URL
+    workflow = sophios(tmp_path / 'plain' / 'plain.cwl', '--allow_raw_cwl', '--run_local', '--inputs_file',
+                       str(tmp_path / 'plain' / 'job.yml'))
+    summary = json.loads(Path('autogenerated/output_plain.json').read_text(encoding='utf-8'))
+    assert Path(summary['copied']['path']).read_text(encoding='utf-8') == 'hello\n'
+    assert workflow.read_text(encoding='utf-8') == (DATA / 'plain_cwl' / 'plain.cwl').read_text(encoding='utf-8')
+    assert not Path('autogenerated/plain.cwl').exists()
+    for case in CASES:
+        workflow, job = CONFORMANCE / case['tool'], CONFORMANCE / case['job']
+        direct = io.StringIO()
+        assert cwltool.main.main(['--quiet', '--outdir', str(tmp_path / 'direct'), str(workflow), str(job)],
+                                 stdout=direct) == 0, case['id']
+        sophios(workflow, '--allow_raw_cwl', '--run_local', '--inputs_file', str(job))
+        summary = json.loads(Path(f'autogenerated/output_{workflow.stem}.json').read_text(encoding='utf-8'))
+        assert _portable(summary) == _portable(json.loads(direct.getvalue())), case['id']

@@ -1,0 +1,26 @@
+# Each root's job values as written, or its refusals by code, severity, line, step and port.
+accepted.wic:
+  written:
+    accepted_inputs.yml:
+      takes~text_quoted: '7'
+      takes~text_quoted_octal: '007'
+      takes~text_plain: '7'
+      takes~text_plain_octal: '7'
+      takes~flag_or_words: false
+      takes~count_or_counts: 3
+      takes~word_or_words: a
+      takes~file_or_files: {class: File, location: x}
+      takes~real_or_counts: [3]
+      takes~word_or_counts: [3]
+      takes~word_or_nested_counts: [[3]]
+      takes~letter_or_letters: [a]
+quoted.wic:
+  refused: [{code: LITERAL_TYPE_MISMATCH, severity: error, line: 5, step: scale, index: 1, port: n}]
+octal.wic:
+  refused: [{code: LITERAL_TYPE_MISMATCH, severity: error, line: 5, step: scale, index: 1, port: n}]
+null.wic:
+  refused: [{code: MISSING_REQUIRED_INPUT, severity: error, line: 5, step: scale, index: 1, port: n}]
+forgot.wic:
+  refused:
+  - {code: UNRESOLVED_INPUT, severity: error, line: 5, step: mk_file, index: 1, port: name,
+     message: 'Did you forget to use !ii before x?'}

@@ -1,0 +1,7 @@
+# A namespace a child declares for itself does not move where its caller looks for it.
+wic:
+  namespace: gpu
+steps:
+- id: mk_file
+  in:
+    name: c.txt

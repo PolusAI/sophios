@@ -1,0 +1,4 @@
+file:
+  class: File
+  location: absent.txt
+n: 3

@@ -1,0 +1,5 @@
+# A quoted `!ii` scalar is its text, and text is not an int: `!ii 7` binds `n`.
+steps:
+- id: scale
+  in:
+    n: !ii "7"

@@ -1,6 +1,9 @@
 """The file front door parses each file as written, so a reported span is a position a reader can open an editor at;
-the round-tripped spelling of the same document reports another line (test_span_names_the_line_in_the_authored_file)."""
+the round-tripped spelling of the same document reports another line. The documents are tests/core/data/frontdoor,
+tests/core/data/run_paths and tests/core/data/packed_tools."""
+import shutil
 from pathlib import Path
+from typing import Final
 
 import pytest
 import yaml
@@ -26,51 +29,16 @@ from sophios.lang import (
     parse,
     render,
 )
-from sophios.lang.diagnostics import SophiosError
+from sophios.lang.diagnostics import Diagnostic, SophiosError
 from sophios.plugins import get_tools_cwl
-from sophios.wic_types import Tools, Yaml
+from sophios.wic_types import Yaml
 
 from .cases import DATA, case_dirs, cases
-from .helpers import write_tree
 from .synthetic_tools import SYNTHETIC_TOOLS
 
 pytestmark = pytest.mark.package
 
-#: A root whose failing construct sits well below the top of the file, so a
-#: reported line that came from a re-dump cannot coincide with the real one.
-FORWARD_EDGE = '''# A workflow that references an edge before defining it.
-#
-# These comment lines are load-bearing: a YAML round trip drops them, which
-# is exactly what moves every construct below them onto a different line.
-#
-steps:
-- id: xform
-  in:
-    file: !* later
-    name: out.txt
-- id: mk_file
-  in:
-    name: made.txt
-  out:
-  - file: !& later
-'''
-
-PYTHON_SCRIPT = '''
-inputs = {'name': {'type': 'string', 'format': 'edam:format_2330'}}
-outputs = {'file': ('$(inputs.name)', {'type': 'File', 'format': 'edam:format_2330'})}
-
-
-def main(name: str) -> None:
-    """A script whose annotations are all the generator reads."""
-'''
-
-
-def _script_project(tmp_path: Path, wic: str) -> Path:
-    """The directory `root.wic` and `my_script.py` are written in, beside the `workflow_types` sibling the adapter
-    imports from a path relative to the working directory."""
-    return write_tree(tmp_path, {
-        'sophios/examples/scripts/workflow_types.py': "string = {'type': 'string', 'format': 'edam:format_2330'}\n",
-        'work/my_script.py': PYTHON_SCRIPT, 'work/root.wic': wic}) / 'work'
+DOOR: Final = DATA / 'frontdoor'
 
 
 def _line_of(text: str, needle: str) -> int:
@@ -91,172 +59,81 @@ def _redump(text: str) -> str:
     return render(document)
 
 
-@pytest.mark.fast
-def test_source_is_the_file_verbatim(tmp_path: Path) -> None:
-    """The root is parsed from its own bytes, comments and blank lines included."""
-    text = ('# a leading comment\n'
-            '\n'
-            'wic:\n'
-            '  graphviz:\n'
-            '    label: Root\n'
-            '\n'
-            'steps:\n'
-            '- id: mk_file\n'
-            '  in:\n'
-            '    name: made.txt\n')
-    root = write_tree(tmp_path, {'tutorial.wic': text}) / 'tutorial.wic'
-
-    bundle = bundle_from_disk(root, {'global': {}}, SYNTHETIC_TOOLS)
-
-    assert bundle.parsed.document == parse(text, 'tutorial.wic').document
-    assert bundle.name == 'tutorial'
+def _undefined(diagnostics: Diagnostics) -> list[Diagnostic]:
+    return [item for item in diagnostics if item.code is SophiosErrorCode.UNDEFINED_EDGE]
 
 
 @pytest.mark.fast
-def test_child_workflow_is_registered_as_its_own_parse(tmp_path: Path) -> None:
-    """A called `.wic` enters the registry parsed from the file, not from a re-dump."""
-    child_text = ('# the child keeps its comments too\n'
-                  'steps:\n'
-                  '- id: mk_file\n'
-                  '  in:\n'
-                  '    name: child.txt\n')
-    write_tree(tmp_path, {'child.wic': child_text, 'root.wic': 'steps:\n- id: child.wic\n'})
+# pylint: disable-next=too-many-locals
+def test_the_file_door_reads_each_file_as_written(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The root and each child it calls are parsed from their own bytes, comments and blank lines included, so a
+    diagnostic points at the line the construct occupies on disk; the same document through a YAML round trip, what the
+    legacy path did, reports a line that exists in the dump and means something else in the file. An in-memory
+    document has no span, so the locator is where the edge failed. A `wic:` key the language does not have is refused
+    as the file is read, at the key, by the parser, under the file's own name, whatever its extension, with no
+    environment involved. The caller's declaration files a child under each namespace a call site declares, and
+    nowhere else: a namespace the child declares for itself does not move where its caller looks. A Python script
+    step's tool is keyed as Resolve keys it and never reaches disk; it names the EDAM prefix its formats use and no
+    ontology, as a document depends only on what its author wrote, at the CWL version Sophios writes.
+    `python_cwl_adapter` imports `workflow_types` from a path relative to the working directory, so the project holds
+    both that directory and that sibling file; nothing here reads the repository's own examples."""
+    text = (DOOR / 'tutorial.wic').read_text(encoding='utf-8')
+    bundle = bundle_from_disk(DOOR / 'tutorial.wic', {'global': {}}, SYNTHETIC_TOOLS)
+    assert bundle.parsed.document == parse(text, 'tutorial.wic').document and bundle.name == 'tutorial'
 
-    bundle = bundle_from_disk(tmp_path / 'root.wic', {'global': {'child': tmp_path / 'child.wic'}}, SYNTHETIC_TOOLS)
-
-    entry = bundle.registry.workflow(RegistryKey('global', 'child'))
-    assert entry is not None
-    assert entry.parsed.document == parse(child_text, 'child.wic').document
-    assert entry.parsed.document != parse(_redump(child_text), 'child.wic').document
+    child = DOOR / 'calls' / 'child.wic'
+    paths = {space: {'child': child} for space in ('global', 'gpu')}
+    bundle = bundle_from_disk(DOOR / 'calls' / 'root.wic', paths, SYNTHETIC_TOOLS)
+    for space in ('global', 'gpu'):
+        entry = bundle.registry.workflow(RegistryKey(space, 'child'))
+        assert entry is not None and entry.parsed.document == parse(child.read_text(encoding='utf-8'),
+                                                                    'child.wic').document
+        assert entry.parsed.document != parse(_redump(child.read_text(encoding='utf-8')), 'child.wic').document
     assert front_end(bundle.parsed, bundle.registry, name=bundle.name).graph is not None
+    own = bundle_from_disk(DOOR / 'own' / 'root.wic', {'global': {'child': DOOR / 'own' / 'child.wic'}},
+                           SYNTHETIC_TOOLS).registry
+    assert [space for space in ('global', 'gpu') if own.workflow(RegistryKey(space, 'child'))] == ['global']
 
-
-@pytest.mark.fast
-@pytest.mark.parametrize('root, child, namespaces, registered', [
-    # `resolve._resolve_process` builds its `RegistryKey` from the *step's* sidecar namespace, so a child that declares
-    # a namespace of its own does not move where its caller looks, and filing it there files it where nothing reads.
-    ('steps:\n- id: child.wic\n', 'wic:\n  namespace: gpu\n', ['global'], {'global'}),
-    # The traversal skips a path it has already walked, which stops a cycle; a second call site under another
-    # namespace needs its own entry from the same text, and suppressing it left Resolve reporting a file as absent
-    # from the registry when the front door had read it moments before.
-    ('steps:\n- id: child.wic\n- id: child.wic\nwic:\n  steps:\n    (2, child.wic):\n      wic:\n'
-     '        namespace: gpu\n', '', ['global', 'gpu'], {'global', 'gpu'}),
-], ids=['declared-by-the-child', 'called-twice'])
-def test_a_called_file_is_registered_under_each_namespace_its_call_sites_declare(
-        tmp_path: Path, root: str, child: str, namespaces: list[str], registered: set[str]) -> None:
-    """The caller's declaration files the child, under each namespace a call site declares, and nowhere else."""
-    write_tree(tmp_path, {'child.wic': child + 'steps:\n- id: mk_file\n  in:\n    name: c.txt\n', 'root.wic': root})
-    paths = {namespace: {'child': tmp_path / 'child.wic'} for namespace in namespaces}
-    registry = bundle_from_disk(tmp_path / 'root.wic', paths, SYNTHETIC_TOOLS).registry
-    assert {space for space in ('global', 'gpu') if registry.workflow(RegistryKey(space, 'child'))} == registered
-
-
-@pytest.mark.fast
-def test_span_names_the_line_in_the_authored_file(tmp_path: Path) -> None:
-    """A diagnostic points at the line the construct occupies on disk.
-
-    The second assertion is the point of the first: feeding the same document
-    through a YAML round trip -- what the legacy path does -- reports a line
-    that exists in the dump and means something else in the file.
-    """
-    root = write_tree(tmp_path, {'forward.wic': FORWARD_EDGE}) / 'forward.wic'
-    bundle = bundle_from_disk(root, {'global': {}}, SYNTHETIC_TOOLS)
-
-    result = front_end(bundle.parsed, bundle.registry, name=bundle.name)
-
-    undefined = [item for item in result.diagnostics
-                 if item.code is SophiosErrorCode.UNDEFINED_EDGE]
-    assert len(undefined) == 1
-    assert undefined[0].span is not None
-    assert undefined[0].span.start_line == _line_of(FORWARD_EDGE, '!* later')
-
-    redumped = parse(_redump(FORWARD_EDGE), 'forward.wic')
-    dumped = [item for item in front_end(redumped, bundle.registry, name=bundle.name).diagnostics
-              if item.code is SophiosErrorCode.UNDEFINED_EDGE]
-    assert len(dumped) == 1
-    assert dumped[0].span is not None
-    assert dumped[0].span.start_line != undefined[0].span.start_line
-
-
-@pytest.mark.fast
-def test_a_spanless_forward_edge_names_its_consuming_step() -> None:
-    """An in-memory document has no span, so the locator is where the edge failed."""
+    forward = (DOOR / 'forward.wic').read_text(encoding='utf-8')
+    bundle = bundle_from_disk(DOOR / 'forward.wic', {'global': {}}, SYNTHETIC_TOOLS)
+    (undefined,) = _undefined(front_end(bundle.parsed, bundle.registry, name=bundle.name).diagnostics)
+    assert undefined.span is not None and undefined.span.start_line == _line_of(forward, '!* later')
+    (dumped,) = _undefined(front_end(parse(_redump(forward), 'forward.wic'), bundle.registry,
+                                     name=bundle.name).diagnostics)
+    assert dumped.span is not None and dumped.span.start_line != undefined.span.start_line
     document = Document(steps=(
         Step('xform', inputs=(('file', EdgeRef('later', None)),)),
         Step('mk_file', outputs=(OutputBinding('file', EdgeDef('later', None), None),)),
     ))
-    result = front_end(ParseResult(document, Diagnostics()),
-                       RegistrySnapshot.from_tools(SYNTHETIC_TOOLS), name='memory')
+    (spanless,) = _undefined(front_end(ParseResult(document, Diagnostics()),
+                                       RegistrySnapshot.from_tools(SYNTHETIC_TOOLS), name='memory').diagnostics)
+    assert spanless.span is None and spanless.locator is not None
+    assert (spanless.locator.step, spanless.locator.index, spanless.locator.port) == ('xform', 1, 'file')
 
-    undefined = [item for item in result.diagnostics
-                 if item.code is SophiosErrorCode.UNDEFINED_EDGE]
-    assert len(undefined) == 1
-    assert undefined[0].span is None
-    assert undefined[0].locator is not None
-    assert undefined[0].locator.step == 'xform'
-    assert undefined[0].locator.index == 1
-    assert undefined[0].locator.port == 'file'
+    for name in ('probe.wic', 'probe.cwl', 'probe.yml'):
+        diagnostics = bundle_from_disk(DOOR / 'gate' / name, {'global': {}}, {}).parsed.diagnostics
+        assert [(d.code, d.span and (d.span.file, d.span.start_line)) for d in diagnostics] == [
+            (SophiosErrorCode.UNKNOWN_WIC_KEY, (name, 2))]
 
-
-@pytest.mark.fast
-def test_python_script_resolves_without_writing_a_file(tmp_path: Path,
-                                                       monkeypatch: pytest.MonkeyPatch) -> None:
-    """A generated tool is keyed as Resolve keys it and never reaches disk.
-
-    `python_cwl_adapter` imports `workflow_types` from a path relative to the
-    working directory, so the fixture supplies both the directory and that
-    sibling file; nothing here reads the repository's own examples.
-    """
-    text = 'steps:\n- id: python_script\n  in:\n    script: my_script.py\n    name: made.txt\n'
-    work = _script_project(tmp_path, text)
-    root = work / 'root.wic'
+    shutil.copytree(DOOR / 'script', tmp_path / 'script')
+    work = tmp_path / 'script' / 'work'
     monkeypatch.chdir(work)
-
-    bundle = bundle_from_disk(root, {'global': {}}, SYNTHETIC_TOOLS)
-
-    document = parse(text, 'root.wic').document
-    assert document is not None
-    expected = RegistryKey('global', generated_process_id(document.steps[0]))
+    bundle = bundle_from_disk(work / 'resolve.wic', {'global': {}}, SYNTHETIC_TOOLS)
+    resolve = parse((work / 'resolve.wic').read_text(encoding='utf-8'), 'resolve.wic').document
+    assert resolve is not None
+    expected = RegistryKey('global', generated_process_id(resolve.steps[0]))
     assert bundle.registry.tool(expected) is not None
-
     result = front_end(bundle.parsed, bundle.registry, name=bundle.name)
     assert result.resolved is not None and result.resolved.document is not None
     process = result.resolved.document.steps[0].process
-    assert process.key == expected
-    assert process.generated
+    assert process.key == expected and process.generated
     assert not (work / 'autogenerated').exists()
 
-
-@pytest.mark.fast
-def test_a_python_script_tool_declares_no_schemas_of_sophios_own(tmp_path: Path,
-                                                                 monkeypatch: pytest.MonkeyPatch) -> None:
-    """The tool generated for a script names the EDAM prefix its formats use, and no ontology: a document
-    depends only on what its author wrote. It is at the CWL version Sophios writes."""
-    work = _script_project(tmp_path, 'steps:\n- id: python_script\n  in:\n    script: !ii my_script.py\n'
-                                     '    name: !ii made.txt\n')
-    monkeypatch.chdir(work)
-    artifact = _compile(bundle_from_disk(work / 'root.wic', {'global': {}}, SYNTHETIC_TOOLS)).artifact
+    artifact = _compile(bundle_from_disk(work / 'compile.wic', {'global': {}}, SYNTHETIC_TOOLS)).artifact
     (tool,) = artifact.children
     assert tool.cwl['cwlVersion'] == CWL_VERSION, 'the script tool generator once wrote v1.0'
     assert tool.cwl['$namespaces'] == {'edam': 'https://edamontology.org/'}
     assert '$schemas' not in tool.cwl and '$schemas' not in artifact.cwl
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize('name', ['probe.wic', 'probe.cwl', 'probe.yml'])
-def test_the_parser_is_the_gate_a_file_passes_as_it_is_read(tmp_path: Path, name: str) -> None:
-    """A document with a `wic:` key the language does not have is refused as it is read, at the key, by the parser,
-    under the file's own name, whatever its extension.
-
-    A generated jsonschema used to be applied here, and the parser let the key
-    through as opaque data. Nothing validates against a schema now, so the
-    refusal is the parser's -- positioned, and with no environment involved:
-    the registry is empty.
-    """
-    write_tree(tmp_path, {name: 'wic:\n  nonsense_key: 1\nsteps:\n- id: mk_file\n  in:\n    name: !ii a\n'})
-    diagnostics = bundle_from_disk(tmp_path / name, {'global': {}}, {}).parsed.diagnostics
-    assert [(d.code, d.span and (d.span.file, d.span.start_line)) for d in diagnostics] == [
-        (SophiosErrorCode.UNKNOWN_WIC_KEY, (name, 2))]
 
 
 def _assert_runs(artifact: CompilationArtifact, written: Yaml, directory: Path, expected: list[Yaml]) -> None:
@@ -275,72 +152,65 @@ def _assert_runs(artifact: CompilationArtifact, written: Yaml, directory: Path, 
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize('case, expected', case_dirs('run_paths', 'steps'))
-def test_each_step_runs_the_tool_its_run_names(tmp_path: Path, case: Path, expected: Yaml) -> None:
-    """A `run:` path is read from beside the document that names it, else from the registry by its stem; an inline
-    body is a tool of its own. Each tool is the one its step runs, compiled and written out."""
-    result = _compile(bundle_from_disk(case / 'w.wic', {}, SYNTHETIC_TOOLS))
-    write_artifacts_to_disk(result.artifact, tmp_path)
-    _assert_runs(result.artifact, yaml.safe_load((tmp_path / 'w.cwl').read_text(encoding='utf-8')), tmp_path,
-                 expected['steps'])
+def test_each_step_runs_the_tool_its_run_names(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """In each project of tests/core/data/run_paths, a `run:` path is read from beside the document that names it,
+    else from the registry by its stem; an inline body is a tool of its own. Each tool is the one its step runs,
+    compiled and written out. A root with no file of its own reads its `run:` paths from the working directory, and a
+    run path on another drive than the root is named by its absolute path, as `os.path.relpath` raises across Windows
+    drives."""
+    for case, expected in (param.values for param in case_dirs('run_paths', 'steps')):
+        result = _compile(bundle_from_disk(case / 'w.wic', {}, SYNTHETIC_TOOLS))
+        write_artifacts_to_disk(result.artifact, tmp_path / case.name)
+        _assert_runs(result.artifact, yaml.safe_load((tmp_path / case.name / 'w.cwl').read_text(encoding='utf-8')),
+                     tmp_path / case.name, expected['steps'])
+    paths = DOOR / 'paths'
+    monkeypatch.chdir(paths)
+    (child,) = _compile(bundle_from_source((paths / 'w.wic').read_text(encoding='utf-8'), 'w', {},
+                                           SYNTHETIC_TOOLS)).artifact.children
+    assert child.cwl['baseCommand'] == 'echo'
+
+    def across_drives(path: object, start: object = None) -> str:
+        raise ValueError("path is on mount 'C:', start on mount 'D:'")
+    monkeypatch.setattr('os.path.relpath', across_drives)
+    result = _compile(bundle_from_disk(paths / 'w.wic', {}, SYNTHETIC_TOOLS))
+    assert result.artifact.children[0].cwl['baseCommand'] == 'echo'
 
 
-#: A plain CWL Workflow whose one step runs a tool file beside it.
-_CWL_WORKFLOW = ('{class: Workflow, cwlVersion: v1.2, inputs: {text: string}, '
-                 'outputs: {said: {type: File, outputSource: echo/out}}, '
-                 'steps: {echo: {run: echo.cwl, in: {text: text}, out: [out]}}}')
-_ECHO_TOOL = ('cwlVersion: v1.2\nclass: CommandLineTool\nbaseCommand: echo\n'
-              'inputs: {text: {type: string, inputBinding: {position: 1}}}\noutputs: {out: stdout}\n')
-_AS_WIC = ('Sophios cannot embed a CWL Workflow as a step: write it as a .wic subworkflow '
-           '(on search_paths_wic, or beside this document as run: <name>.wic)')
+_AS_WIC: Final = ('Sophios cannot embed a CWL Workflow as a step: write it as a .wic subworkflow '
+                  '(on search_paths_wic, or beside this document as run: <name>.wic)')
 #: The advice for a CWL Workflow in a file, which --allow_raw_cwl can run on its own.
-_ADVICE = _AS_WIC + ', or run the CWL Workflow on its own with --allow_raw_cwl'
-
-
-def _cwl_workflow_step_diagnostic(tmp_path: Path, step: str, tools: Tools) -> str:
-    """Compile a root with `step` as its one step and return the error it is refused with."""
-    write_tree(tmp_path, {'w.wic': 'steps:\n' + step + '    in: {text: !ii hi}\n'})
-    with pytest.raises(SophiosError) as caught:
-        _compile(bundle_from_disk(tmp_path / 'w.wic', {}, tools))
-    diagnostic, = caught.value.diagnostics
-    assert diagnostic.code is SophiosErrorCode.SUBWORKFLOW_INVALID
-    return diagnostic.message
+_ADVICE: Final = _AS_WIC + ', or run the CWL Workflow on its own with --allow_raw_cwl'
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize('step, refusal', [
-    ('  - id: say\n', "step 'say' runs {say}, a CWL Workflow from the tool search paths "
-                      f'(search_paths_cwl). {_ADVICE}'),
-    ('  - id: packed\n', "step 'packed' runs {packed}, a CWL Workflow from the tool search paths "
+@pytest.mark.parametrize('root, refusal', [
+    ('search_paths.wic', "step 'say' runs {adapters}/say.cwl, a CWL Workflow from the tool search paths "
                          f'(search_paths_cwl). {_ADVICE}'),
-    ('  - id: s\n    run: say.cwl\n', f"step 's' runs run: say.cwl, a CWL Workflow. {_ADVICE}"),
-    (f'  - id: s\n    run: {_CWL_WORKFLOW}\n', f"step 's' runs an inline run: body that is a CWL Workflow. {_AS_WIC}"),
-], ids=['search-paths', 'packed-on-search-paths', 'run-path', 'inline-body'])
-def test_a_cwl_workflow_as_a_step_is_refused_with_advice_for_where_it_came_from(tmp_path: Path, step: str,
-                                                                                refusal: str) -> None:
+    ('packed_on_search_paths.wic', "step 'packed' runs {adapters}/packed.cwl, a CWL Workflow from the tool search "
+                                   f'paths (search_paths_cwl). {_ADVICE}'),
+    ('run_path.wic', f"step 's' runs run: say.cwl, a CWL Workflow. {_ADVICE}"),
+    ('inline_body.wic', f"step 's' runs an inline run: body that is a CWL Workflow. {_AS_WIC}"),
+])
+def test_a_cwl_workflow_as_a_step_is_refused_with_advice_for_where_it_came_from(root: str, refusal: str) -> None:
     """Its copy would lose the tool file beside it, so the step is refused instead of emitted broken. A `$graph`
     whose `main` is a Workflow is one too; an inline body is no file --allow_raw_cwl could run on its own."""
-    adapters = tmp_path / 'adapters'
-    packed = (
-        'cwlVersion: v1.2\n$graph:\n'
-        '  - {id: main, class: Workflow, inputs: {text: string},\n'
-        '     outputs: {said: {type: File, outputSource: echo/out}},\n'
-        '     steps: {echo: {run: "#echo", in: {text: text}, out: [out]}}}\n'
-        '  - {id: echo, class: CommandLineTool, baseCommand: echo, inputs: {text: string}, outputs: {out: stdout}}\n')
-    write_tree(tmp_path, {'say.cwl': _CWL_WORKFLOW, 'echo.cwl': _ECHO_TOOL, 'adapters/say.cwl': _CWL_WORKFLOW,
-                          'adapters/echo.cwl': _ECHO_TOOL, 'adapters/packed.cwl': packed})
+    adapters = DOOR / 'cwl_workflow' / 'adapters'
     tools = get_tools_cwl({'search_paths_cwl': {'global': [str(adapters)]}})
-    assert _cwl_workflow_step_diagnostic(tmp_path, step, tools) == refusal.format(
-        say=adapters / 'say.cwl', packed=adapters / 'packed.cwl')
+    with pytest.raises(SophiosError) as caught:
+        _compile(bundle_from_disk(DOOR / 'cwl_workflow' / root, {}, tools))
+    diagnostic, = caught.value.diagnostics
+    assert (diagnostic.code, diagnostic.message) == (SophiosErrorCode.SUBWORKFLOW_INVALID,
+                                                     refusal.format(adapters=adapters))
 
 
 def _write_packed_tool_step(tmp_path: Path, where: str, packed: Path) -> Path:
     """Compile a root whose one step runs `packed`, copied `where` (beside the root, or on the tool search paths),
     and write it out; the directory written."""
     directory = tmp_path if where == 'beside' else tmp_path / 'adapters'
-    step = '  - id: s\n    run: packed.cwl\n' if where == 'beside' else '  - id: packed\n'
-    write_tree(directory, {'packed.cwl': packed.read_text(encoding='utf-8')})
-    write_tree(tmp_path, {'w.wic': 'steps:\n' + step + '    in: {text: !ii hi}\n'})
+    directory.mkdir(parents=True, exist_ok=True)
+    shutil.copy(packed, directory / 'packed.cwl')
+    shutil.copy(DOOR / 'cwl_workflow' / ('run_packed.wic' if where == 'beside' else 'packed_on_search_paths.wic'),
+                tmp_path / 'w.wic')
     tools = SYNTHETIC_TOOLS if where == 'beside' else get_tools_cwl({'search_paths_cwl': {'global': [str(directory)]}})
     write_artifacts_to_disk(_compile(bundle_from_disk(tmp_path / 'w.wic', {}, tools)).artifact, tmp_path / 'out')
     return tmp_path / 'out'
@@ -365,28 +235,29 @@ def _packed_step(door: str, packed: Path, tmp_path: Path) -> tuple[list[list[lis
 
 @pytest.mark.fast
 @pytest.mark.parametrize('door', ['clt_path', 'cwl_document', 'beside', 'search-paths'])
-@pytest.mark.parametrize('case', cases('packed_tools', 'ports', 'refused'))
-def test_a_packed_document_as_a_step_runs_its_main(tmp_path: Path, case: Yaml, door: str) -> None:
-    """A packed CommandLineTool, a `$graph`'s `main` or the one tool `cwltool --pack` writes, is that tool through each
-    door a step has, Python's and the file's: main's ports, and main alone as the step's CWL, with the document's
-    `$namespaces` and its `cwlVersion`, or written out, the one we emit. With no `main`, the document, as the door
-    names it, is refused with its processes and the fix."""
-    packed = DATA / 'packed_tools' / f"{case['id']}.cwl"
-    if 'refused' in case:
-        with pytest.raises(SophiosError) as caught:
-            _packed_step(door, packed, tmp_path)
-        named = {'clt_path': packed, 'cwl_document': 'packed.cwl', 'beside': tmp_path / 'packed.cwl',
-                 'search-paths': tmp_path / 'adapters' / 'packed.cwl'}[door]
-        diagnostic, = caught.value.diagnostics
-        assert (diagnostic.code, diagnostic.message) == (SophiosErrorCode.SUBWORKFLOW_INVALID,
-                                                         f"{named} {case['refused']}")
-        return
-    ports, tool = _packed_step(door, packed, tmp_path)
-    document = yaml.safe_load(packed.read_text(encoding='utf-8'))
-    assert ports == [case['ports']] * len(ports)
-    assert tool['class'] == 'CommandLineTool' and '$graph' not in tool and 'id' not in tool
-    assert (tool['cwlVersion'], tool['$namespaces']) == (
-        document['cwlVersion'] if door in ('clt_path', 'cwl_document') else CWL_VERSION, document['$namespaces'])
+def test_a_packed_document_as_a_step_runs_its_main(tmp_path: Path, door: str) -> None:
+    """Each packed CommandLineTool of tests/core/data/packed_tools, a `$graph`'s `main` or the one tool `cwltool --pack`
+    writes, is that tool through each door a step has, Python's and the file's: main's ports, and main alone as the
+    step's CWL, with the document's `$namespaces` and its `cwlVersion`, or written out, the one we emit. With no
+    `main`, the document, as the door names it, is refused with its processes and the fix."""
+    for case in (param.values[0] for param in cases('packed_tools', 'ports', 'refused')):
+        packed, where = DATA / 'packed_tools' / f"{case['id']}.cwl", tmp_path / case['id']
+        if 'refused' in case:
+            with pytest.raises(SophiosError) as caught:
+                _packed_step(door, packed, where)
+            named = {'clt_path': packed, 'cwl_document': 'packed.cwl', 'beside': where / 'packed.cwl',
+                     'search-paths': where / 'adapters' / 'packed.cwl'}[door]
+            diagnostic, = caught.value.diagnostics
+            assert (diagnostic.code, diagnostic.message) == (SophiosErrorCode.SUBWORKFLOW_INVALID,
+                                                             f"{named} {case['refused']}"), case['id']
+            continue
+        ports, tool = _packed_step(door, packed, where)
+        document = yaml.safe_load(packed.read_text(encoding='utf-8'))
+        assert ports == [case['ports']] * len(ports), case['id']
+        assert tool['class'] == 'CommandLineTool' and '$graph' not in tool and 'id' not in tool, case['id']
+        assert (tool['cwlVersion'], tool['$namespaces']) == (
+            document['cwlVersion'] if door in ('clt_path', 'cwl_document') else CWL_VERSION,
+            document['$namespaces']), case['id']
 
 
 @pytest.mark.needs_cwltool
@@ -396,34 +267,3 @@ def test_a_packed_tool_step_validates_in_cwltool(tmp_path: Path) -> None:
     from .cwl_validation import validate_cwl  # pylint: disable=import-outside-toplevel  # no cwltool on Windows
     out = _write_packed_tool_step(tmp_path, 'beside', DATA / 'packed_tools' / 'single-tool.cwl')
     assert validate_cwl(str(out / 'w.cwl'), str(out / 'w_inputs.yml')) == 0
-
-
-_ECHO_FILE = ('{class: CommandLineTool, cwlVersion: v1.2, baseCommand: %s, '
-              'inputs: {a: string}, outputs: {}}')
-
-
-@pytest.mark.fast
-def test_a_run_path_on_another_drive_than_the_root_still_compiles(tmp_path: Path,
-                                                                  monkeypatch: pytest.MonkeyPatch) -> None:
-    """`os.path.relpath` raises across Windows drives; the tool is then named by its absolute path."""
-    write_tree(tmp_path, {'t.cwl': _ECHO_FILE % 'echo',
-                          'w.wic': 'steps:\n  - id: s\n    run: t.cwl\n    in: {a: !ii x}\n'})
-
-    def across_drives(path: object, start: object = None) -> str:
-        raise ValueError("path is on mount 'C:', start on mount 'D:'")
-
-    monkeypatch.setattr('os.path.relpath', across_drives)
-    result = _compile(bundle_from_disk(tmp_path / 'w.wic', {}, SYNTHETIC_TOOLS))
-    assert result.artifact.children[0].cwl['baseCommand'] == 'echo'
-
-
-@pytest.mark.fast
-def test_a_run_path_in_a_source_root_resolves_beside_the_working_directory(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A root with no file of its own reads its `run:` paths from the working directory."""
-    write_tree(tmp_path, {'t.cwl': _ECHO_FILE % 'echo'})
-    monkeypatch.chdir(tmp_path)
-    result = _compile(bundle_from_source('steps:\n  - id: s\n    run: t.cwl\n    in: {a: !ii x}\n',
-                                         'w', {}, SYNTHETIC_TOOLS))
-    child, = result.artifact.children
-    assert child.cwl['baseCommand'] == 'echo'

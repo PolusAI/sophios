@@ -1,0 +1,5 @@
+steps:
+- id: python_script
+  in:
+    script: my_script.py
+    name: made.txt

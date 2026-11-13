@@ -1,0 +1,6 @@
+# Declares EDAM from edamontology's default branch: a URL Sophios never wrote, with the basename of the one it did.
+$schemas: ['https://raw.githubusercontent.com/edamontology/edamontology/main/EDAM_dev.owl']
+steps:
+- id: hi
+  run: say.cwl
+  in: {message: !ii hi}

@@ -1,0 +1,15 @@
+# A workflow that references an edge before defining it.
+#
+# These comment lines are load-bearing: a YAML round trip drops them, which
+# is exactly what moves every construct below them onto a different line.
+#
+steps:
+- id: xform
+  in:
+    file: !* later
+    name: out.txt
+- id: mk_file
+  in:
+    name: made.txt
+  out:
+  - file: !& later

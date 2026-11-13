@@ -1,0 +1,5 @@
+# No container: the only program the run calls is its runner.
+steps:
+- id: echo
+  in:
+    message: !ii hello

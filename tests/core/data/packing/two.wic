@@ -1,0 +1,6 @@
+# Two steps run relcat by its path.
+steps:
+- id: one
+  run: tools/relcat.cwl
+- id: two
+  run: tools/relcat.cwl

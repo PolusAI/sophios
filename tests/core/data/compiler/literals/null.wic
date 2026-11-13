@@ -1,0 +1,5 @@
+# A required input bound to null has no value, refused at the line of the literal.
+steps:
+- id: scale
+  in:
+    n: !ii null

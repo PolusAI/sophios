@@ -1,0 +1,7 @@
+# cat reads the workflow input `file`, whose value an inputs file gives.
+inputs:
+  file: File
+steps:
+- id: cat
+  in:
+    file: file

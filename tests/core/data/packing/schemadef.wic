@@ -1,0 +1,4 @@
+# The conformance tool whose record type is `$import`ed from a file beside it.
+steps:
+- id: sd
+  run: ../cwl-v1.2/tests/schemadef_types_with_import-tool.cwl

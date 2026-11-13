@@ -1,0 +1,5 @@
+# One step writing into the output-target Directory `made`.
+steps:
+- id: write_into
+  in:
+    outDir: !ii made

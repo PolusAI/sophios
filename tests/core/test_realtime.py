@@ -1,6 +1,9 @@
-"""Real-time analysis: a `cwl_subinterpreter` step declares an analysis Sophios runs beside the workflow."""
+"""Real-time analysis: a `cwl_subinterpreter` step declares an analysis Sophios runs beside the workflow. The analyses
+of tests/core/data/realtime compile, are written and run as stated there; the watcher is driven over a stand-in for
+cwltool's cachedir and a stand-in analysis."""
 import json
 import os
+import shutil
 import string
 import sys
 import time
@@ -16,18 +19,17 @@ from hypothesis import example, given, strategies as st
 
 from sophios import realtime, run_local
 from sophios.backends import RunRequest
-from sophios.cli import default_compilation_settings
 from sophios.input_output import NoAliasDumper
 from sophios.ir.realtime import Declaration
 from sophios.lang.diagnostics import SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
-from sophios.realtime import Analysis
 from sophios.wic_types import StepId, Tool, Tools, Yaml
 
 from .budgets import budget
+from .cases import DATA, match, printed
 from .fake_runner import POSIX_ONLY, install
-from .helpers import ADAPTERS, live_workflow, no_preflight, run_cli, search_config, write_tree
-from .hermetic import compile_hermetic, subworkflow_step
+from .helpers import ADAPTERS, live_workflow, no_preflight, run_cli, search_config
+from .hermetic import compile_hermetic
 from .synthetic_tools import SYNTHETIC_NS, SYNTHETIC_TOOLS
 
 pytestmark = pytest.mark.package
@@ -42,14 +44,6 @@ TOOLS: Final[Tools] = {
 
 def _ii(value: Any) -> Yaml:
     return {'wic_inline_input': value}
-
-
-def _declaration_step(**overrides: Any) -> Yaml:
-    """A well-formed declaration: count lines of `a.txt` whenever a `*.txt` changes."""
-    bindings: Yaml = {'file_pattern': _ii('*.txt'), 'cwl_tool': _ii('count'), 'max_times': _ii('3'),
-                      'config': _ii({'in': {'file': 'a.txt'}})}
-    bindings.update(overrides)
-    return {'id': 'cwl_subinterpreter', 'in': {key: value for key, value in bindings.items() if value is not None}}
 
 
 def _declaration_lines(document: Yaml) -> list[int]:
@@ -133,100 +127,73 @@ def test_a_declaration_is_returned_instead_of_emitted_or_is_wic044_at_each_port(
         for line, held in zip(lines, declarations)]
 
 
-@pytest.mark.fast
-def test_a_declaration_in_a_subworkflow_is_taken_out_and_its_workflow_may_be_left_empty() -> None:
-    """A subworkflow whose only step is a declaration is emitted with no steps; the declaration names it."""
-    producer = {'id': 'mk_file', 'in': {'name': _ii('a.txt')}}
-    analysis = subworkflow_step('watch.wic', {'steps': [_declaration_step(interval=_ii(5))]})
-    result = compile_hermetic({'steps': [producer, analysis]}, tools=TOOLS)
-
-    (child,) = [child for child in result.artifact.children if child.namespace == ('watch',)]
-    assert child.cwl['steps'] == []
-    assert [(d.document, d.interval) for d in result.realtime] == [('watch', 5)]
+REALTIME: Final = DATA / 'realtime'
 
 
-def _analyses(document: Yaml, yml_paths: dict[str, dict[str, Path]] | None = None) -> tuple[Analysis, ...]:
-    """Compile `document` and then the analyses it declares, as the CLI does."""
-    return realtime.compile_analyses(compile_hermetic(document, tools=TOOLS).realtime, yml_paths or {}, TOOLS,
-                                     default_compilation_settings())
-
-
-def _only_analysis(document: Yaml, yml_paths: dict[str, dict[str, Path]] | None = None) -> Analysis:
-    """The one analysis `document` declares."""
-    analyses = _analyses(document, yml_paths)
-    assert len(analyses) == 1
-    return analyses[0]
-
-
-def _file_inputs(job: Yaml) -> list[str]:
-    """The location of each job input that is a File, sorted."""
-    return sorted(value['location'] for value in job.values()
-                  if isinstance(value, dict) and value.get('class') == 'File')
+def _project(tmp_path: Path) -> Path:
+    """A copy of tests/core/data/realtime, and a config that finds its tools, its workflows and the adapter."""
+    root = tmp_path / 'project'
+    shutil.copytree(REALTIME, root, ignore=shutil.ignore_patterns('expected.yaml'))
+    search_config(root / 'config.json', [root / 'tools', ADAPTER_PATH.parent], [root])
+    return root
 
 
 @pytest.mark.fast
-def test_a_tool_analysis_compiles_with_every_config_input_a_literal() -> None:
-    """A plain file name and a nested `!ii` in `config: in:` are both literals of the analysis step.
+# pylint: disable-next=too-many-locals
+def test_declared_analyses_are_taken_out_compiled_and_written_on_their_own_from_either_door(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """The analyses of declared.wic, as tests/core/data/realtime/expected.yaml states them: a tool's `config: in:`
+    values are literals of the analysis, a .wic analysis is configured per step, a subworkflow whose only step is a
+    declaration is emitted with no steps, and a relative `dockerFile` `$include` is the file beside the tool, wherever
+    the analysis is written. With no analyses, no manifest is left. In Python, a `Step` built from the adapter is a
+    declaration: never emitted, compiled and pulled by `run`, the analysis written as the workflow is, one document
+    with every process embedded, and its job; a `.wic` named by `cwl_tool` is found through `run(workflow_paths=...)`,
+    as `from_wic` finds a nested one, and without them is wic044 naming the wic013 it met."""
+    root = _project(tmp_path)
+    expected = yaml.safe_load((REALTIME / 'expected.yaml').read_text(encoding='utf-8').replace('{tmp}', str(root)))
+    monkeypatch.chdir(root)
+    assert run_cli(monkeypatch, '--yaml', 'declared.wic', '--config_file', 'config.json',
+                   '--generate_cwl_workflow') is None
+    written = root / 'autogenerated'
+    for directory, names in expected['files'].items():
+        assert sorted(path.name for path in (written / directory).iterdir()) == names, directory
+    for name, holds in expected['written'].items():
+        assert match(holds, yaml.safe_load((written / name).read_text(encoding='utf-8'))), name
+    assert not realtime.write((), written, 'declared', root)
+    assert not realtime.manifest_path(written, 'declared').exists()
+    capsys.readouterr()
+    assert run_cli(monkeypatch, '--yaml', 'refused.wic', '--config_file', 'config.json', '--generate_cwl_workflow',
+                   '--diagnostics', 'json') == 1
+    assert match(expected['refused'], printed(capsys.readouterr().err))
 
-    The shape of the corpus `npt_amber.wic` declaration: read as written, `a.txt` in an
-    `in:` would be an edge reference and fail with wic011.
-    """
-    config = _ii({'in': {'file': 'a.txt', 'name': _ii('b.txt')}})
-    analysis = _only_analysis({'steps': [_declaration_step(cwl_tool=_ii('xform'), config=config)]})
+    prepared = no_preflight(monkeypatch)
+    (tmp_path / 'python').mkdir()
+    monkeypatch.chdir(tmp_path / 'python')
+    workflow = live_workflow('py_live')
+    assert [step['id'] for step in workflow.compile().cwl_workflow['steps']] == ['touch']
+    workflow.run(run_args_dict={'generate_run_script': 'yes'})
 
-    assert analysis.name == 'oracle'
-    assert _file_inputs(analysis.artifact.job_inputs) == ['a.txt']
-    assert 'b.txt' in analysis.artifact.job_inputs.values()
+    (entry,) = json.loads(realtime.manifest_path(Path('autogenerated'), 'py_live').read_text(encoding='utf-8'))
+    assert (entry['analysis'], entry['max_times']) == ('touch', 2)
+    assert list(chain.from_iterable(prepared)) == [Path('autogenerated/py_live.cwl'),
+                                                   Path('autogenerated/realtime/py_live/touch_only.cwl')]
+    assert 'Real-time analysis runs only with --run_local' in capsys.readouterr().err
+    written = Path('autogenerated/realtime/py_live')
+    assert sorted(path.name for path in written.iterdir()) == ['touch_only.cwl', 'touch_only_inputs.yml']
+    (step,) = yaml.safe_load((written / 'touch_only.cwl').read_text(encoding='utf-8'))['steps']
+    assert step['run']['class'] == 'CommandLineTool'
 
-
-@pytest.mark.fast
-def test_a_wic_analysis_compiles_with_its_config_as_the_sidecar_of_its_steps(tmp_path: Path) -> None:
-    """A `.wic` analysis is configured per step, as `wic: steps:`; the shape of `cwl_subinterpreter_protein.wic`."""
-    (tmp_path / 'measure.wic').write_text(yaml.safe_dump({'steps': [{'id': 'count'}, {'id': 'count'}]}),
-                                          encoding='utf-8')
-    config = _ii({'(1, count)': {'in': {'file': 'a.txt'}}, '(2, count)': {'in': {'file': 'b.txt'}}})
-    declaration = _declaration_step(cwl_tool=_ii('measure.wic'), config=config)
-    analysis = _only_analysis({'steps': [declaration]}, {'global': {'measure': tmp_path / 'measure.wic'}})
-
-    assert _file_inputs(analysis.artifact.job_inputs) == ['a.txt', 'b.txt']
-
-
-@pytest.mark.fast
-def test_two_declarations_in_one_workflow_get_distinct_names() -> None:
-    """Each analysis keeps its files under its own name; a repeated document name gets a suffix."""
-    analyses = _analyses({'steps': [_declaration_step(), _declaration_step()]})
-    assert [analysis.name for analysis in analyses] == ['oracle', 'oracle_2']
-
-
-@pytest.mark.fast
-def test_an_analysis_that_does_not_compile_is_wic044_at_the_declaration() -> None:
-    """An unknown analysis fails the compile at the declaration, before anything runs."""
-    document = {'steps': [{'id': 'mk_file', 'in': {'name': _ii('a.txt')}}, _declaration_step(cwl_tool=_ii('nope'))]}
+    workflow = live_workflow('py_wic', 'touched.wic', {'(1, touch)': {'in': {'filename': 'again.txt'}}})
     with pytest.raises(SophiosError) as raised:
-        _analyses(document)
-
-    assert {diagnostic.code for diagnostic in raised.value.diagnostics} == {SophiosErrorCode.REALTIME_DECLARATION}
-    assert {diagnostic.span.start_line if diagnostic.span else None
-            for diagnostic in raised.value.diagnostics} == set(_declaration_lines(document))
-    assert "'nope'" in str(raised.value)
-
-
-@pytest.mark.fast
-def test_the_manifest_lists_each_analysis_and_goes_when_there_are_none(tmp_path: Path) -> None:
-    """`write` writes each analysis and a manifest naming it, and returns its plan; with none, no manifest is left."""
-    analysis = _only_analysis({'steps': [_declaration_step(interval=_ii('5'))]})
-    (plan,) = realtime.write((analysis,), tmp_path, 'wf', tmp_path / 'project')
-
-    (entry,) = json.loads(realtime.manifest_path(tmp_path, 'wf').read_text(encoding='utf-8'))
-    assert {key: entry[key] for key in ('name', 'analysis', 'file_pattern', 'max_times', 'interval')} == {
-        'name': 'oracle', 'analysis': 'count', 'file_pattern': '*.txt', 'max_times': 3, 'interval': 5}
-    assert (tmp_path / entry['cwl']).is_file() and (tmp_path / entry['inputs']).is_file()
-    assert entry['root_dir'] == str(tmp_path / 'project')
-    assert (plan.name, plan.max_times, plan.interval) == ('oracle', 3, 5)
-    assert (plan.cwl, plan.inputs) == (tmp_path / entry['cwl'], tmp_path / entry['inputs'])
-
-    assert not realtime.write((), tmp_path, 'wf', tmp_path)
-    assert not realtime.manifest_path(tmp_path, 'wf').exists()
+        workflow.run(run_args_dict={'generate_run_script': 'yes'})
+    (diagnostic,) = raised.value.diagnostics
+    assert diagnostic.code is SophiosErrorCode.REALTIME_DECLARATION
+    assert 'touched.wic' in diagnostic.message and 'wic013' in diagnostic.message
+    workflow.run(run_args_dict={'generate_run_script': 'yes'},
+                 workflow_paths={'global': {'touched': REALTIME / 'touched.wic'}})
+    (entry,) = json.loads(realtime.manifest_path(Path('autogenerated'), 'py_wic').read_text(encoding='utf-8'))
+    assert entry['analysis'] == 'touched.wic'
+    assert Path('autogenerated/realtime/py_wic/touched_only.cwl').is_file()
 
 
 #: An analysis stand-in: copies its job file into its output directory, so a test can read what it was given.
@@ -245,6 +212,7 @@ def _command(seconds: float = 0.0, exit_code: int = 0) -> realtime.Command:
 def _plan(tmp_path: Path, *, max_times: int = 5, interval: float = 0.0, pattern: str = '*.log',
           reference: bool = True) -> realtime.Plan:
     """A plan whose analysis reads `out.log` and `ref.pdb`, and takes a string; `ref.pdb` is in the project."""
+    tmp_path.mkdir(parents=True, exist_ok=True)
     inputs = tmp_path / 'analysis_inputs.yml'
     inputs.write_text(yaml.safe_dump({'log': {'class': 'File', 'location': 'out.log', 'format': 'edam:format_2330'},
                                       'ref': {'class': 'File', 'location': 'ref.pdb'},
@@ -261,7 +229,7 @@ class _Cache:
 
     def __init__(self, root: Path) -> None:
         self.root = root
-        root.mkdir(exist_ok=True)
+        root.mkdir(parents=True, exist_ok=True)
         self.count = 0
 
     def start(self, files: dict[str, str]) -> str:
@@ -316,77 +284,39 @@ def _watch(tmp_path: Path, command: realtime.Command | None = None, **plan: Any)
 
 
 @pytest.mark.fast
-def test_a_job_that_starts_long_after_the_watcher_is_still_analysed(tmp_path: Path) -> None:
-    """Polling has no budget: `max_times` counts runs, not polls."""
-    cache, watcher = _watch(tmp_path, max_times=2)
+# pylint: disable-next=too-many-statements
+def test_an_analysis_runs_while_its_job_writes_and_once_more_at_its_end_unless_it_failed(
+        capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:
+    """Polling has no budget: `max_times` counts runs, not polls, so a job that starts long after the watcher is still
+    analysed. A file that keeps changing is analysed once per `interval`, and its last state at the end; the step
+    finishing is the moment its outputs are complete, so no `interval` delays that run. Changes while an analysis runs
+    make one follow-up run, not one each, and runs while the workflow runs leave room for the final one. The outputs of
+    a failed step are no result to analyse, so there is no final run, and a line says why; a failed analysis is a line
+    naming its log, counted in the summary; and Ctrl-C does not wait for an analysis to finish."""
+    cache, watcher = _watch(tmp_path / 'late', max_times=2)
     time.sleep(0.5)                                            # 25 polls with nothing to see
     key = cache.start({'sub/out.log': '1\n'})
     _until(lambda: watcher.runs == 1)
     watcher.finish()
-
     (job,) = _jobs(cache)
     assert job['log'] == {'class': 'File', 'location': str(cache.root / key / 'sub' / 'out.log'),
                           'format': 'edam:format_2330'}
-    assert job['ref']['location'] == str(tmp_path / 'project' / 'ref.pdb')
-    assert job['name'] == 'out.log'
+    assert job['ref']['location'] == str(tmp_path / 'late' / 'project' / 'ref.pdb') and job['name'] == 'out.log'
 
-
-@pytest.mark.fast
-def test_a_later_workflow_run_numbers_its_analysis_runs_after_the_earlier_ones(
-        capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:
-    """Two runs of the workflow share the cachedir; the second keeps the first's outputs and logs."""
-    cache = _Cache(tmp_path / 'cachedir')
-    plan = _plan(tmp_path, max_times=1)
-    first = _started(plan, cache)
-    cache.end(cache.start({'out.log': 'first\n'}))
-    first.finish()
-    second = _started(plan, cache)
-    key = cache.start({'out.log': 'second\n'})
-    cache.end(key)
-    second.finish()
-
-    first_job, second_job = _jobs(cache)
-    assert first_job['log']['location'] == str(cache.root / f'{1:032x}' / 'out.log')
-    assert second_job['log']['location'] == str(cache.root / key / 'out.log')
-    assert sorted(path.name for path in (cache.root / 'realtime' / 'wf').glob('run-*.log')) == [
-        'run-001.log', 'run-002.log']
-    assert 'run 2 (the workflow finished) finished' in capsys.readouterr().out
-
-
-@pytest.mark.fast
-def test_a_growing_file_triggers_once_per_interval_and_once_more_at_the_end(tmp_path: Path) -> None:
-    """A file that keeps changing is analysed once per `interval`, and its last state at the end."""
-    cache, watcher = _watch(tmp_path, interval=60)
+    cache, watcher = _watch(tmp_path / 'growing', interval=60)
     key = cache.start({'out.log': '1\n'})
     _until(lambda: watcher.runs == 1)
     for line in range(2, 6):
         cache.write(key, 'out.log', f'{line}\n')
         time.sleep(0.05)
     assert watcher.runs == 1
-    watcher.finish()
-    assert watcher.runs == 2
-
-
-@pytest.mark.fast
-def test_a_job_that_succeeds_triggers_at_once_and_its_run_is_the_last(capsys: pytest.CaptureFixture[str],
-                                                                      tmp_path: Path) -> None:
-    """The step finishing is the moment its outputs are complete: no `interval` delays that run."""
-    cache, watcher = _watch(tmp_path, interval=60)
-    key = cache.start({'out.log': '1\n'})
-    _until(lambda: watcher.runs == 1)
-    cache.write(key, 'out.log', '2\n')
     cache.end(key)
     _until(lambda: watcher.runs == 2)
     watcher.finish()
-
-    assert watcher.runs == 2 and watcher.succeeded == 2
+    assert watcher.runs == watcher.succeeded == 2
     assert 'the job that wrote out.log finished' in capsys.readouterr().out
 
-
-@pytest.mark.fast
-def test_changes_during_a_run_make_one_follow_up_run(tmp_path: Path) -> None:
-    """Three changes while an analysis runs make one more run, not three."""
-    cache, watcher = _watch(tmp_path, _command(seconds=0.6))
+    cache, watcher = _watch(tmp_path / 'busy', _command(seconds=0.6))
     key = cache.start({'out.log': '1\n'})
     _until((cache.root / 'realtime' / 'wf' / 'run-001.log').exists)
     for line in range(2, 5):
@@ -398,11 +328,7 @@ def test_changes_during_a_run_make_one_follow_up_run(tmp_path: Path) -> None:
     watcher.finish()
     assert watcher.runs == 2
 
-
-@pytest.mark.fast
-def test_runs_while_the_workflow_runs_leave_room_for_the_final_run(tmp_path: Path) -> None:
-    """With `max_times` 3, two runs happen while the workflow runs, however much changes; the third is the end's."""
-    cache, watcher = _watch(tmp_path, max_times=3)
+    cache, watcher = _watch(tmp_path / 'room', max_times=3)
     key = cache.start({'out.log': '1\n'})
     deadline = time.monotonic() + 2.0                          # changes all along, far more than three runs' worth
     while time.monotonic() < deadline:
@@ -410,143 +336,91 @@ def test_runs_while_the_workflow_runs_leave_room_for_the_final_run(tmp_path: Pat
         time.sleep(0.05)
     assert watcher.runs == 2
     watcher.finish()
-    assert watcher.runs == 3
-    assert len(_jobs(cache)) == 3
+    assert watcher.runs == 3 and len(_jobs(cache)) == 3
 
-
-@pytest.mark.fast
-def test_a_job_from_an_earlier_run_is_not_a_trigger_but_its_files_are_used(tmp_path: Path) -> None:
-    """A cache hit leaves its job alone, so it never triggers; this run reused it, so its files resolve."""
-    cache = _Cache(tmp_path / 'cachedir')
-    old = cache.start({'out.log': 'old\n', 'ref.pdb': 'ref'})
-    cache.end(old)
-    past = time.time() - 3600
-    for path in (cache.root / old, cache.root / f'{old}.status'):
-        os.utime(path, (past, past))
-    watcher = _started(_plan(tmp_path, pattern='*.txt', reference=False), cache)
-    time.sleep(0.3)
-    assert watcher.runs == 0
-    new = cache.start({'out.txt': 'x', 'out.log': 'new\n'})
-    _until(lambda: watcher.runs == 1)
-    watcher.finish()
-
-    (job,) = _jobs(cache)
-    assert job['log']['location'] == str(cache.root / new / 'out.log')
-    assert job['ref']['location'] == str(cache.root / old / 'ref.pdb')
-
-
-@pytest.mark.fast
-def test_a_failed_job_means_no_final_run(capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:
-    """The outputs of a failed step are not a result to analyse; a line says why there is no final run."""
-    cache, watcher = _watch(tmp_path, interval=60)
+    cache, watcher = _watch(tmp_path / 'failed', interval=60)
     key = cache.start({'out.log': '1\n'})
     _until(lambda: watcher.runs == 1)
     cache.write(key, 'out.log', '2\n')
     cache.end(key, 'permanentFail')
     watcher.finish()
-
     assert watcher.runs == 1
     assert 'no final run: the job that wrote out.log failed' in capsys.readouterr().out
 
-
-@pytest.mark.fast
-def test_a_failed_analysis_is_a_line(capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:
-    """A failed run names its log; the summary counts it."""
-    cache, watcher = _watch(tmp_path, _command(exit_code=3), interval=60)
+    cache, watcher = _watch(tmp_path / 'failing', _command(exit_code=3), interval=60)
     cache.start({'out.log': '1\n'})
     _until(lambda: watcher.runs == 1)
     watcher.finish()
-
     out = capsys.readouterr().out
-    assert 'run 1 (out.log changed) failed with exit code 3; log: ' in out
-    assert '1 runs, 0 succeeded' in out
+    assert 'run 1 (out.log changed) failed with exit code 3; log: ' in out and '1 runs, 0 succeeded' in out
 
-
-@pytest.mark.fast
-def test_cancel_terminates_a_running_analysis(tmp_path: Path) -> None:
-    """Ctrl-C does not wait for an analysis to finish."""
-    cache, watcher = _watch(tmp_path, _command(seconds=60))
+    cache, watcher = _watch(tmp_path / 'cancelled', _command(seconds=60))
     cache.start({'out.log': '1\n'})
     _until((cache.root / 'realtime' / 'wf' / 'run-001' / 'job.json').exists)
     began = time.monotonic()
     watcher.cancel()
-    assert time.monotonic() - began < 10
-    assert watcher.succeeded == 0
+    assert time.monotonic() - began < 10 and watcher.succeeded == 0
 
 
 @pytest.mark.fast
-def test_a_file_written_by_two_jobs_is_named_and_the_newest_used(capsys: pytest.CaptureFixture[str],
-                                                                 tmp_path: Path) -> None:
-    """Two steps of this run wrote `out.log`: the analysis gets the newer, and a line names both."""
-    cache, watcher = _watch(tmp_path, pattern='*.trr', interval=60)
+# pylint: disable-next=too-many-locals
+def test_an_analysis_reads_the_newest_file_this_run_wrote(capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:
+    """Two steps of this run wrote `out.log`: the analysis gets the newer, and a line names both. A cache hit leaves
+    its job alone, so it never triggers, but this run reused it, so its files resolve. A file no job of this run wrote,
+    as the corpus `cwl_subinterpreter_complex.wic` reads one its own analysis writes, skips the run with one line. A
+    later run of the workflow shares the cachedir, keeps the earlier one's outputs and logs, and numbers its own runs
+    after them."""
+    cache, watcher = _watch(tmp_path / 'two', pattern='*.trr', interval=60)
     first = cache.start({'out.log': 'first\n'})
     time.sleep(0.05)
     second = cache.start({'out.log': 'second\n', 'prod.trr': 'x'})
     _until(lambda: watcher.runs == 1)
     watcher.finish()
-
     (job,) = _jobs(cache)
     assert job['log']['location'] == str(cache.root / second / 'out.log')
     assert f'out.log was written by 2 jobs of this run ({first}, {second}); using the newest' in capsys.readouterr().out
 
+    cache = _Cache(tmp_path / 'hit' / 'cachedir')
+    old = cache.start({'out.log': 'old\n', 'ref.pdb': 'ref'})
+    cache.end(old)
+    past = time.time() - 3600
+    for path in (cache.root / old, cache.root / f'{old}.status'):
+        os.utime(path, (past, past))
+    watcher = _started(_plan(tmp_path / 'hit', pattern='*.txt', reference=False), cache)
+    time.sleep(0.3)
+    assert watcher.runs == 0
+    new = cache.start({'out.txt': 'x', 'out.log': 'new\n'})
+    _until(lambda: watcher.runs == 1)
+    watcher.finish()
+    (job,) = _jobs(cache)
+    assert job['log']['location'] == str(cache.root / new / 'out.log')
+    assert job['ref']['location'] == str(cache.root / old / 'ref.pdb')
 
-@pytest.mark.fast
-def test_a_file_found_nowhere_skips_the_run_with_one_line(capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:
-    """The corpus `cwl_subinterpreter_complex.wic` reads, as a literal, a file its own analysis writes."""
-    cache, watcher = _watch(tmp_path, reference=False)
+    cache, watcher = _watch(tmp_path / 'nowhere', reference=False)
     key = cache.start({'out.log': '1\n'})
     for line in range(2, 5):
         time.sleep(0.05)
         cache.write(key, 'out.log', f'{line}\n')
     watcher.finish()
-
     assert watcher.runs == 0
     out = capsys.readouterr().out
-    assert out.count('skipped a run: no job of this run wrote ref.pdb') == 1
-    assert 'declared at wf.wic:3:3' in out
+    assert out.count('skipped a run: no job of this run wrote ref.pdb') == 1 and 'declared at wf.wic:3:3' in out
 
-
-#: Writes `out.log` one line a second for six seconds: long enough to be watched while it grows.
-SLOW_LOG: Final = '''cwlVersion: v1.2
-class: CommandLineTool
-baseCommand: [bash, -c, 'for i in 1 2 3 4 5 6; do echo $i >> out.log; sleep 1; done']
-inputs: {}
-outputs:
-  log: {type: File, outputBinding: {glob: out.log}}
-'''
-
-#: Counts the lines of a log, or, with `false` as its command, fails.
-COUNT_LINES: Final = '''cwlVersion: v1.2
-class: CommandLineTool
-baseCommand: [{command}]
-inputs:
-  log: {{type: File, inputBinding: {{position: 1}}}}
-stdout: count.txt
-outputs:
-  count: {{type: stdout}}
-'''
-
-#: A `cwl_subinterpreter` step declaring `analysis`, watching the log `slow_log` writes.
-ANALYSIS: Final = '''  - id: cwl_subinterpreter
-    in:
-      file_pattern: !ii out.log
-      cwl_tool: !ii {analysis}
-      max_times: !ii '5'
-      interval: !ii 1
-      config: !ii
-        in:
-          log: out.log
-'''
-
-
-def _live_project(tmp_path: Path, *analyses: str, count_hints: str = '') -> Path:
-    """Write `slow_log`, the analyses named (`count_lines`, `fail_lines`) and a `live.wic` declaring each; return
-    the config file that finds them."""
-    tools = {'slow_log': SLOW_LOG, 'count_lines': COUNT_LINES.format(command='wc, -l') + count_hints,
-             'fail_lines': COUNT_LINES.format(command="'false'")}
-    write_tree(tmp_path, {f'tools/{tool}.cwl': tools[tool] for tool in ('slow_log', *analyses)} | {
-        'live.wic': 'steps:\n  - id: slow_log\n' + ''.join(ANALYSIS.format(analysis=name) for name in analyses)})
-    return search_config(tmp_path / 'config.json', [tmp_path / 'tools', ADAPTER_PATH.parent], [tmp_path])
+    cache = _Cache(tmp_path / 'again' / 'cachedir')
+    plan = _plan(tmp_path / 'again', max_times=1)
+    earlier = _started(plan, cache)
+    cache.end(cache.start({'out.log': 'first\n'}))
+    earlier.finish()
+    later = _started(plan, cache)
+    key = cache.start({'out.log': 'second\n'})
+    cache.end(key)
+    later.finish()
+    first_job, second_job = _jobs(cache)
+    assert first_job['log']['location'] == str(cache.root / f'{1:032x}' / 'out.log')
+    assert second_job['log']['location'] == str(cache.root / key / 'out.log')
+    assert sorted(path.name for path in (cache.root / 'realtime' / 'wf').glob('run-*.log')) == [
+        'run-001.log', 'run-002.log']
+    assert 'run 2 (the workflow finished) finished' in capsys.readouterr().out
 
 
 @pytest.mark.needs_cwltool
@@ -560,21 +434,21 @@ def test_the_analysis_runs_beside_the_workflow_and_never_changes_its_outcome(
     workflow ran: the end adds at most one. Each analysis's CWL is handed to image
     extraction with the workflow's.
     """
-    config = _live_project(tmp_path, 'count_lines', 'fail_lines')
+    root = _project(tmp_path)
     prepared = no_preflight(monkeypatch)
-    monkeypatch.chdir(tmp_path)
+    monkeypatch.chdir(root)
 
-    assert run_cli(monkeypatch, '--yaml', 'live.wic', '--run_local', '--config_file', config) is None  # succeeded
+    assert run_cli(monkeypatch, '--yaml', 'live.wic', '--run_local', '--config_file', 'config.json') is None
 
     out = capfd.readouterr().out
     lines = out.splitlines()
     for name, analysis in (('live', 'count_lines'), ('live_2', 'fail_lines')):
         said = f'real-time analysis {name} ({analysis}): '
-        runs = sorted((tmp_path / 'cachedir' / 'realtime' / name).glob('run-*.log'))
+        runs = sorted((root / 'cachedir' / 'realtime' / name).glob('run-*.log'))
         assert len(runs) >= 2, out
         assert Path(f'autogenerated/realtime/{name}/{analysis}_only.cwl') in chain.from_iterable(prepared)
         if analysis == 'count_lines':
-            last = sorted((tmp_path / 'cachedir' / 'realtime' / name).glob('run-*/count.txt'))[-1]
+            last = sorted((root / 'cachedir' / 'realtime' / name).glob('run-*/count.txt'))[-1]
             assert last.read_text(encoding='utf-8').split()[0] == '6'
             assert f'{said}{len(runs)} runs, {len(runs)} succeeded' in lines
         else:
@@ -582,114 +456,30 @@ def test_the_analysis_runs_beside_the_workflow_and_never_changes_its_outcome(
             assert f'{said}{len(runs)} runs, 0 succeeded' in lines
 
 
-@pytest.mark.fast
-def test_an_analysis_tool_builds_its_image_from_the_dockerfile_beside_it(monkeypatch: pytest.MonkeyPatch,
-                                                                         tmp_path: Path) -> None:
-    """An analysis is a root under `realtime/<name>/`: its document, its job and `<root>~<step>.cwl` beside them.
-    A relative `dockerFile` `$include` is the file beside the tool, wherever the analysis CWL is written."""
-    config = _live_project(tmp_path, 'count_lines', count_hints='''hints:
-  DockerRequirement:
-    dockerPull: count_lines
-    dockerFile: {$include: Dockerfile_count}
-''')
-    (tmp_path / 'tools' / 'Dockerfile_count').write_text('FROM alpine:3.20\n', encoding='utf-8')
-    monkeypatch.chdir(tmp_path)
-
-    assert run_cli(monkeypatch, '--yaml', 'live.wic', '--generate_cwl_workflow', '--config_file', config) is None
-
-    written = Path('autogenerated/realtime/live')
-    assert sorted(path.name for path in written.iterdir()) == [
-        'count_lines_only.cwl', 'count_lines_only_inputs.yml', 'count_lines_only~count_lines.cwl']
-    (step,) = yaml.safe_load((written / 'count_lines_only.cwl').read_text(encoding='utf-8'))['steps']
-    assert step['run'] == 'count_lines_only~count_lines.cwl'
-    hints = yaml.safe_load((written / step['run']).read_text(encoding='utf-8'))['hints']
-    assert hints == [{'class': 'DockerRequirement', 'dockerPull': 'count_lines', 'dockerFile': 'FROM alpine:3.20\n'}]
-
-
-@POSIX_ONLY
-@pytest.mark.fast
-def test_a_run_with_real_time_analysis_gives_cwltool_a_cachedir(monkeypatch: pytest.MonkeyPatch,
-                                                                capsys: pytest.CaptureFixture[str],
-                                                                tmp_path: Path) -> None:
-    """The watcher reads cwltool's job directories, so a run that has analyses caches, and says so."""
-    monkeypatch.chdir(tmp_path)
-    fake = install(monkeypatch, tmp_path)
-
-    assert run_local.run(RunRequest('wf', Path('autogenerated'), realtime_plans=(_plan(tmp_path),))) == 0
-
-    args = fake.record()['argv']
-    assert args[args.index('--cachedir') + 1] == str(tmp_path / 'cachedir')
-    out = capsys.readouterr().out
-    assert "Real-time analysis watches the runner's cache, so cwltool caches in cachedir/" in out
-    assert 'real-time analysis wf (measure.wic): 0 runs, 0 succeeded' in out
-
-
 @POSIX_ONLY
 @pytest.mark.fast
 @pytest.mark.parametrize(('request_fields', 'line'), [
+    ({}, "Real-time analysis watches the runner's cache, so cwltool caches in cachedir/"),
     ({'generate_run_script': True},
      'Real-time analysis runs only with --run_local; run.sh runs the workflow without it.'),
     ({'runner': 'toil-cwl-runner'},
      'Real-time analysis needs cwltool; toil-cwl-runner runs the workflow without it.'),
-])
-def test_a_run_that_cannot_watch_says_so_and_runs_the_workflow(monkeypatch: pytest.MonkeyPatch,
-                                                               capsys: pytest.CaptureFixture[str], tmp_path: Path,
-                                                               request_fields: dict[str, Any], line: str) -> None:
-    """A run script or another runner cannot run the analyses: the workflow runs, and a line says so."""
+], ids=['cwltool', 'run-script', 'toil'])
+def test_a_run_watches_its_analyses_only_where_cwltool_runs_and_says_so(
+        monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path,
+        request_fields: dict[str, Any], line: str) -> None:
+    """The watcher reads cwltool's job directories, so a run that has analyses caches, and says so. A run script or
+    another runner cannot run the analyses: the workflow runs, and a line on stderr says so."""
     monkeypatch.chdir(tmp_path)
-    install(monkeypatch, tmp_path)
+    fake = install(monkeypatch, tmp_path)
 
     assert run_local.run(RunRequest('wf', Path('autogenerated'), realtime_plans=(_plan(tmp_path),),
                                     **request_fields)) == 0
 
     captured = capsys.readouterr()
-    assert line in captured.err
-    assert line not in captured.out
-    assert 'real-time analysis wf' not in captured.out + captured.err
-
-
-@pytest.mark.fast
-def test_the_python_api_declares_an_analysis_and_run_prepares_it(monkeypatch: pytest.MonkeyPatch,
-                                                                 capsys: pytest.CaptureFixture[str],
-                                                                 tmp_path: Path) -> None:
-    """A `Step` built from the adapter is a declaration: never emitted, compiled and pulled by `run`. The analysis is
-    written as the workflow is: one document, every process embedded, and its job."""
-    workflow = live_workflow('py_live')
-    prepared = no_preflight(monkeypatch)
-    monkeypatch.chdir(tmp_path)
-
-    assert [step['id'] for step in workflow.compile().cwl_workflow['steps']] == ['touch']
-    workflow.run(run_args_dict={'generate_run_script': 'yes'})
-
-    (entry,) = json.loads(realtime.manifest_path(Path('autogenerated'), 'py_live').read_text(encoding='utf-8'))
-    assert (entry['analysis'], entry['max_times']) == ('touch', 2)
-    assert list(chain.from_iterable(prepared)) == [Path('autogenerated/py_live.cwl'),
-                                                   Path('autogenerated/realtime/py_live/touch_only.cwl')]
-    assert 'Real-time analysis runs only with --run_local' in capsys.readouterr().err
-    written = Path('autogenerated/realtime/py_live')
-    assert sorted(path.name for path in written.iterdir()) == ['touch_only.cwl', 'touch_only_inputs.yml']
-    (step,) = yaml.safe_load((written / 'touch_only.cwl').read_text(encoding='utf-8'))['steps']
-    assert step['run']['class'] == 'CommandLineTool'
-
-
-@pytest.mark.fast
-def test_the_python_api_finds_a_wic_analysis_through_workflow_paths(monkeypatch: pytest.MonkeyPatch,
-                                                                    tmp_path: Path) -> None:
-    """A `.wic` named by `cwl_tool` is found through `run(workflow_paths=...)`, as `from_wic` finds a nested one."""
-    (tmp_path / 'measure.wic').write_text(yaml.safe_dump({'steps': [{'id': 'touch'}]}), encoding='utf-8')
-    workflow = live_workflow('py_wic', 'measure.wic', {'(1, touch)': {'in': {'filename': 'again.txt'}}})
-    no_preflight(monkeypatch)
-    monkeypatch.chdir(tmp_path)
-
-    with pytest.raises(SophiosError) as raised:
-        workflow.run(run_args_dict={'generate_run_script': 'yes'})
-    (diagnostic,) = raised.value.diagnostics
-    assert diagnostic.code is SophiosErrorCode.REALTIME_DECLARATION
-    assert 'measure.wic' in diagnostic.message and 'wic013' in diagnostic.message
-
-    workflow.run(run_args_dict={'generate_run_script': 'yes'},
-                 workflow_paths={'global': {'measure': tmp_path / 'measure.wic'}})
-
-    (entry,) = json.loads(realtime.manifest_path(Path('autogenerated'), 'py_wic').read_text(encoding='utf-8'))
-    assert entry['analysis'] == 'measure.wic'
-    assert Path('autogenerated/realtime/py_wic/measure_only.cwl').is_file()
+    watched = not request_fields
+    assert line in captured.out if watched else line in captured.err and line not in captured.out
+    assert ('real-time analysis wf (measure.wic): 0 runs, 0 succeeded' in captured.out) is watched
+    if watched:
+        args = fake.record()['argv']
+        assert args[args.index('--cachedir') + 1] == str(tmp_path / 'cachedir')

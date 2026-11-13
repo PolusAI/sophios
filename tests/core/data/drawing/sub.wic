@@ -1,0 +1,11 @@
+# Titled by its own label unless its call gives one; its ranks are drawn in its own cluster.
+wic:
+  graphviz:
+    label: Own
+    ranksame: ['(1, cat)', '(2, inner.wic)']
+steps:
+- id: cat
+  in:
+    file: !* made
+- id: inner.wic
+  run: inner.wic

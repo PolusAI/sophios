@@ -1,0 +1,9 @@
+# Calls pair.wic directly and through outer.wic.
+steps:
+- id: hello
+  run: say.cwl
+  in: {message: !ii hi}
+- id: pair
+  run: pair.wic
+- id: outer
+  run: outer.wic

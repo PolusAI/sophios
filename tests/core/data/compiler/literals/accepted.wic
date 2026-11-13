@@ -1,0 +1,21 @@
+# Each literal as the author wrote it, in the job: quoted, a number on a text input is its text as written, and plain,
+# the number YAML read, as text. A scalar given to a union with an array takes the scalar member whose type it already
+# is, and is wrapped into the array otherwise: biobb's pdb takes `filter` as `boolean | string[]`, and `!ii False`
+# reached it as ['false'], so it kept only the lines starting with "false".
+steps:
+- id: takes
+  in:
+    text_quoted: !ii '7'
+    text_quoted_octal: !ii '007'
+    text_plain: !ii 7
+    text_plain_octal: !ii 007
+    flag_or_words: !ii False
+    count_or_counts: !ii 3
+    word_or_words: !ii a
+    file_or_files: !ii
+      class: File
+      location: x
+    real_or_counts: !ii 3
+    word_or_counts: !ii 3
+    word_or_nested_counts: !ii 3
+    letter_or_letters: !ii a

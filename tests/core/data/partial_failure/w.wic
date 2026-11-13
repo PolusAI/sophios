@@ -1,0 +1,39 @@
+# Every form a tool's outputs and a step's `when` take, and a real-time analysis, as --partial_failure_enable writes
+# them (docs/partial-failures.md).
+steps:
+- id: make
+- id: say
+  in:
+    message: !ii a
+- id: err
+- id: pair
+  in:
+    left: !ii a
+    right: !ii b
+- id: say_skip
+  run: say.cwl
+  when: '$(inputs.message != "skip")'
+  in:
+    message: !ii skip
+- id: tell_skip
+  run: tell.cwl
+  when: '${ return inputs.message != "skip"; }'
+  in:
+    message: !ii skip
+- id: say_on
+  run: say.cwl
+  when: 'on $(inputs.message)'
+  in:
+    message: !ii a
+- id: tell_true
+  run: tell.cwl
+  when: true
+  in:
+    message: !ii b
+- id: cwl_subinterpreter
+  in:
+    file_pattern: !ii made.txt
+    cwl_tool: !ii look
+    max_times: !ii 1
+    config: !ii {in: {file: made.txt}}
+- id: pull

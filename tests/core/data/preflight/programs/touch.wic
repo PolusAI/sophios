@@ -1,0 +1,5 @@
+# touch runs in docker.io/library/debian:bookworm-slim, so its image is pulled.
+steps:
+- id: touch
+  in:
+    filename: !ii a.txt

@@ -1,0 +1,9 @@
+# An analysis that does not compile fails the compile at its declaration, before anything runs.
+steps:
+- id: slow_log
+- id: cwl_subinterpreter
+  in:
+    file_pattern: !ii '*.log'
+    cwl_tool: !ii nope
+    max_times: !ii 1
+    config: !ii {in: {}}

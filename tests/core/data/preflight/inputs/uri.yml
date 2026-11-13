@@ -1,0 +1,4 @@
+# A file: location in this platform's own spelling: on Windows a drive path, not /C:/...
+file:
+  class: File
+  location: '{tmp_uri}/in%20x.txt'

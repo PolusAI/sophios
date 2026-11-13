@@ -1,0 +1,9 @@
+# No look of its own: its cluster is titled with the id of the step that calls it. A rank of fewer than two steps
+# that exist is not drawn, and an entry that addresses no step is named on stderr.
+wic:
+  graphviz:
+    ranksame: ['(1, echo)', '(2, echo)']
+steps:
+- id: echo
+  in:
+    message: !ii there

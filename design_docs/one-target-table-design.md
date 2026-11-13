@@ -194,7 +194,7 @@ the reading port must declare (`nf-s048`) or Link refuses (`wic023`), and one sc
 which lowers (`tests/core/data/nextflow/refused/scatter`, step `reads_pairs`).
 Each stays its own code: the scatter is its own construct, and a target that learns nested arrays still refuses it.
 
-**The list** is `docs/error_codes.md`; `test_the_error_codes_page_says_what_the_code_says` keeps it equal to the
+**The list** is `docs/error_codes.md`; `tests/core/test_diagnostics.py` keeps it equal to the
 catalog. A source written as text has two codes: `nf-s027`, a nested call's output, valid CWL as
 `tests/core/data/python_api_pairs/re_export.wic` shows; `nf-s028`, a step that is not there, the document's mistake.
 
@@ -254,7 +254,7 @@ Literal["cwl", "nextflow"]`; `--target` and every other flag; `NotLowered` a `Va
    value is not the text it stands for) and `nf-s055` (CWL cwltool would not run) are the workflow's problems, which
    under `--target cwl` the compile writes and the runner meets. Kept as nf-s codes of kind `document`: only the
    Nextflow target reads those fields closely enough to find them. `SophiosErrorCode.is_language` counts them with
-   the `wic` codes, as describing the document, which `test_every_code_is_explained` holds kind `document` to.
+   the `wic` codes, as describing the document, which `tests/core/test_diagnostics.py` holds kind `document` to.
    Moving them to `wic` codes for both targets would make CWL compiles that succeed today fail, and for `nf-s028` it
    would stop `re_export.wic`'s valid shape too.
 2. **`nf-s011`**, a `when` reading an input its step does not bind, stays kind `target`: cwltool reads `undefined`,

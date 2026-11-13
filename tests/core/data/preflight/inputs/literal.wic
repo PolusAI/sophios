@@ -1,0 +1,5 @@
+# The directory the step creates, by name: no such directory exists yet.
+steps:
+- id: write_dir
+  in:
+    outDir: !ii result.outDir

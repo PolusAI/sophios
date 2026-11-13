@@ -1,0 +1,3 @@
+steps:
+  - id: packed
+    in: {text: !ii hi}

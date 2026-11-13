@@ -1,0 +1,7 @@
+# cat reads a file that is not there.
+steps:
+- id: cat
+  in:
+    file: !ii
+      class: File
+      location: absent.txt

@@ -2,7 +2,6 @@
 import json
 import os
 import signal
-import subprocess
 import tempfile
 from dataclasses import replace
 from pathlib import Path
@@ -23,6 +22,7 @@ from sophios.lang.diagnostics import Diagnostic, Severity, SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
 
 from .budgets import budget
+from .cases import DATA
 from .helpers import adapter_step, write_tree
 from .nextflow.testkit import runtime_workflow
 
@@ -44,7 +44,9 @@ _PASSTHROUGH: dict[str, list[tuple[tuple[str, ...], str, Any]]] = {
     'cwltool': [(('--parallel',), 'parallel', True), (('--timestamps',), 'timestamps', True),
                 (('--no-read-only',), 'no_read_only', True)],
     'toil-cwl-runner': [(('--maxCores', '2'), 'maxCores', 2), (('--retryCount', '3'), 'retryCount', 3),
-                        (('--logLevel', 'DEBUG'), 'logLevel', 'DEBUG')]}
+                        (('--logLevel', 'DEBUG'), 'logLevel', 'DEBUG'),
+                        (('--batchSystem', 'slurm'), 'batchSystem', 'slurm'),
+                        (('--batchSystem=slurm',), 'batchSystem', 'slurm')]}
 #: What a request leaves out, as RunRequest's docstring says.
 _DEFAULTS: dict[str, Any] = {'outdir': '', 'cachedir': '', 'quiet': True, 'provenance': True,
                              'container_engine': 'docker', 'documents': None}
@@ -58,7 +60,9 @@ _REQUESTS = st.tuples(
         'outdir': st.one_of(st.just(''), _PATHS), 'cachedir': st.one_of(st.just(''), _PATHS), 'quiet': st.booleans(),
         'provenance': st.booleans(),
         'container_engine': st.sampled_from(['docker', 'singularity', 'podman', 'udocker']),
-        'documents': st.lists(_PATHS, min_size=1, max_size=2).map(tuple)}))
+        'documents': st.lists(_PATHS, min_size=1, max_size=2).map(tuple),
+        'env': st.dictionaries(st.sampled_from(['SOPHIOS_TEST_KEPT', 'SOPHIOS_TEST_ADDED']),
+                               st.text('ab', max_size=2))}))
 
 
 @pytest.mark.fast
@@ -72,17 +76,27 @@ _REQUESTS = st.tuples(
 @example(('bbbc', 'base', ('toil-cwl-runner', []), {}))
 @example(('python_script_demo', 'base', ('toil-cwl-runner', []), {}))
 @example(('wf', 'base', ('cwltool', []), {'quiet': False, 'cachedir': 'cache'}))
+@example(('wf', 'base', ('toil-cwl-runner', [(('--batchSystem', 'slurm'), 'batchSystem', 'slurm')]), {}))
+@example(('wf', 'base', ('toil-cwl-runner', [(('--batchSystem=slurm',), 'batchSystem', 'slurm')]), {}))
+@example(('wf', 'base', ('cwltool', []), {'env': {'SOPHIOS_TEST_KEPT': 'new'}, 'container_engine': 'podman'}))
+@example(('wf', 'base', ('toil-cwl-runner', []), {'container_engine': 'singularity'}))
+# pylint: disable-next=too-many-locals
 def test_each_cwl_runner_reads_its_command_line_as_the_request_says(
         drawn: tuple[str, str, tuple[str, list[Any]], dict[str, Any]]) -> None:
     """As each runner's own parser reads it. The default outdir is named after the workflow, as provenance, the
     summary and the job store are, so two workflows started in the same second from one basepath never share it.
     `--quiet` is on for callers that say nothing and off when `quiet=False`, so `--debug` can be heard; Toil is never
-    quiet. The passthrough arguments come before the documents."""
+    quiet, and writes no provenance under Slurm, which an argument that is exactly `slurm` asks for. The passthrough
+    arguments come before the documents. The runner gets this process's environment with the request's on top."""
     name, basepath, (runner, passthrough), fields = drawn
     asked = _DEFAULTS | fields
-    with mock.patch.object(backends, 'datetime', _Frozen):
-        argv = _argv(RunRequest(name, Path(basepath), runner=runner, passthrough_args=tuple(
-            argument for arguments, _, _ in passthrough for argument in arguments), **fields))
+    arguments = tuple(argument for given, _, _ in passthrough for argument in given)
+    with mock.patch.object(backends, 'datetime', _Frozen), \
+            mock.patch.dict(os.environ, {'SOPHIOS_TEST_KEPT': 'kept', 'SOPHIOS_TEST_ELSE': 'else'}):
+        request = RunRequest(name, Path(basepath), runner=runner, passthrough_args=arguments, **fields)
+        launch = targets.backend('cwl', runner).launch(request)
+        assert launch.env == {**os.environ, **fields.get('env', {})}
+    argv = list(launch.argv)
     import cwltool.argparser  # pylint: disable=import-outside-toplevel  # it and Toil import `pwd`
     from toil.cwl.cwltoil import get_options  # pylint: disable=import-outside-toplevel
     read = {'cwltool': cwltool.argparser.arg_parser().parse_args, 'toil-cwl-runner': get_options}[runner](
@@ -93,7 +107,8 @@ def test_each_cwl_runner_reads_its_command_line_as_the_request_says(
                            f"{base}/outdir_{'cwltool' if cwl else 'toil'}_{name}_2026_10_09_12.02.16")
     assert read.quiet is (cwl and asked['quiet'])
     assert (read.cachedir or None) == (os.path.abspath(asked['cachedir']) if cwl and asked['cachedir'] else None)
-    assert read.provenance == (f'{base}/provenance/{name}' if asked['provenance'] else None)
+    assert read.provenance == (f'{base}/provenance/{name}' if asked['provenance'] and 'slurm' not in arguments
+                               else None)
     docker = read.user_space_docker_cmd or ('podman' if read.podman else 'docker')
     assert (read.singularity, 'singularity' if read.singularity else docker) == (
         asked['container_engine'] == 'singularity', asked['container_engine'])
@@ -102,26 +117,6 @@ def test_each_cwl_runner_reads_its_command_line_as_the_request_says(
     assert [getattr(read, option) for _, option, _ in passthrough] == [value for _, _, value in passthrough]
     assert ((read.write_summary,) if cwl else (read.jobStore, read.clean)) == (
         (f'{base}/output_{name}.json',) if cwl else (f'file:{base}/jobStore_{name}', 'always'))
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize(('passthrough', 'provenance'), [
-    ((), True), (('--batchSystem', 'slurm'), False), (('--batchSystem=slurm',), True)])
-def test_toil_keeps_no_provenance_when_an_argument_is_slurm(tmp_path: Path, passthrough: tuple[str, ...],
-                                                            provenance: bool) -> None:
-    """Toil writes no provenance under Slurm: an argument that is exactly `slurm` drops the flag."""
-    cmd = _argv(RunRequest('wf', tmp_path, runner='toil-cwl-runner', passthrough_args=passthrough))
-    assert ('--provenance' in cmd) is provenance
-
-
-@pytest.mark.fast
-def test_the_runner_gets_this_processs_environment_with_the_users_on_top(
-        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setenv('SOPHIOS_TEST_KEPT', 'kept')
-    monkeypatch.setenv('SOPHIOS_TEST_REPLACED', 'old')
-    launch = targets.backend('cwl', 'cwltool').launch(
-        RunRequest('wf', tmp_path, env={'SOPHIOS_TEST_REPLACED': 'new'}))
-    assert launch.env['SOPHIOS_TEST_KEPT'] == 'kept' and launch.env['SOPHIOS_TEST_REPLACED'] == 'new'
 
 
 #: Lines that end no run: any text with no `[` (cwltool's lines start with one) and no line break.
@@ -222,7 +217,7 @@ _NEXTFLOW_FAILED_LOG = [
 
 def _nextflow_request(tmp_path: Path, **fields: Any) -> RunRequest:
     """A Nextflow run of `wf` from `tmp_path`, whose names file `prepare` would have written."""
-    (tmp_path / 'nextflow_wf').mkdir()
+    (tmp_path / 'nextflow_wf').mkdir(parents=True, exist_ok=True)
     (tmp_path / 'nextflow_wf' / 'nextflow_names.json').write_text(json.dumps({
         'processes': {'bad_step': 'bad-step', 'copy': 'child~copy'},
         'outputs': {'copy_result': 'copy~result', 'grid': 'grid', 'text': 'text', 'skipped': 'skipped'},
@@ -260,72 +255,13 @@ def test_failed_nextflow_processes_are_read_from_its_log_lines(log: tuple[list[s
     assert list(backends.nextflow_failed_steps(lines).items()) == list(failed.items())
 
 
-@pytest.mark.fast
-def test_a_nextflow_run_reports_the_outputs_its_pipeline_recorded_by_their_sophios_names(tmp_path: Path) -> None:
-    """Each recorded path becomes a CWL object, the summary holds the output object, and only a run that
-    succeeded has one."""
-    file = tmp_path / 'nextflow_wf' / 'work' / 'ab' / 'copy.txt'
-    cells = [[{'class': 'File', 'path': f'/w/{a}{b}/cell.txt'} for b in 'xy'] for a in 'ab']
-    stdout = ''.join(f'{line}\n' for line in [
-        '[PROCESS ab/cdef12] wf:copy',
-        'sophios-output ' + json.dumps(['copy_result', {'class': 'File', 'path': str(file)}]),
-        'sophios-output ' + json.dumps(['grid', cells]),
-        'sophios-output ' + json.dumps(['text', 'a "line"\n']),
-        'sophios-output ' + json.dumps(['skipped', None]),
-    ])
-    backend = targets.backend('nextflow', 'nextflow')
-    outcome = backend.outcome(_nextflow_request(tmp_path), 0, stdout, tmp_path / 'absent.log')
-    assert outcome.outputs == {
-        'copy~result': {'class': 'File', 'location': file.as_uri(), 'path': str(file), 'basename': 'copy.txt'},
-        'grid': [[{'class': 'File', 'location': f'file:///w/{a}{b}/cell.txt', 'path': f'/w/{a}{b}/cell.txt',
-                   'basename': 'cell.txt'} for b in 'xy'] for a in 'ab'],
-        'text': 'a "line"\n',
-        'skipped': None,
-    }
-    assert outcome.summary == tmp_path.resolve() / 'output_wf.json'
-    assert json.loads(outcome.summary.read_text(encoding='utf-8')) == outcome.outputs
-    assert outcome.failed == {}
-
-
-@pytest.mark.fast
-def test_a_failed_nextflow_run_names_each_failed_step_and_no_outputs(tmp_path: Path) -> None:
-    log = tmp_path / 'run_wf.log'
-    log.write_text('\n'.join(_NEXTFLOW_FAILED_LOG) + '\n', encoding='utf-8')
-    stdout = 'sophios-output ' + json.dumps(['grid', []]) + '\n'
-    outcome = targets.backend('nextflow', 'nextflow').outcome(_nextflow_request(tmp_path), 1, stdout, log)
-    assert (outcome.outputs, outcome.summary) == (None, None)
-    assert outcome.failed == {'bad-step': 7, 'child~copy': None}
-    assert not (tmp_path / 'output_wf.json').exists()
-
-
 #: A tool that writes into an output-target Directory: an entry it may write, captured as its output.
-_WRITE_INTO = '''cwlVersion: v1.2
-class: CommandLineTool
-baseCommand: touch
-requirements:
-  InitialWorkDirRequirement:
-    listing:
-    - entry: $(inputs.outDir)
-      writable: true
-inputs:
-  outDir:
-    type: Directory
-  source:
-    type: File
-outputs:
-  outDir:
-    type: Directory
-    outputBinding:
-      glob: $(inputs.outDir.basename)
-arguments:
-- $(inputs.outDir.basename)/result.txt
-'''
+_WRITE_INTO = DATA / 'backends' / 'write_into.cwl'
 
 
-def _write_into(tmp_path: Path) -> Any:
+def _write_into() -> Any:
     """The compilation of a one-step workflow `wf` whose step `write-into` writes into `made`, beside `source.txt`."""
-    write_tree(tmp_path, {'write_into.cwl': _WRITE_INTO})
-    step = Step(clt_path=tmp_path / 'write_into.cwl', step_name='write-into')
+    step = Step(clt_path=_WRITE_INTO, step_name='write-into')
     step.inputs.outDir = Path('made')
     step.inputs.source = Path('source.txt')
     return compile_workflow_result(Workflow([step], 'wf'))
@@ -341,22 +277,36 @@ _NEXTFLOW_SETTINGS = preflight.RunSettings('docker', '', runner='nextflow')
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize('check', [False, True])
-def test_nextflow_prepare_writes_the_pipeline_from_absolute_paths_and_makes_each_output_directory(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, check: bool) -> None:
-    """A relative path is read from the root directory; an output-target Directory that names nothing yet is
-    made; and each Nextflow name maps back to its Sophios one. A check writes none of it under the base path,
-    and makes no directory, as a CWL check does."""
+# pylint: disable-next=too-many-locals,too-many-statements
+def test_a_nextflow_run_is_checked_prepared_and_read_back_by_its_sophios_names(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """As the CWL pre-flight does, a check reports a missing input before Nextflow starts, and makes and writes
+    nothing; an output-target Directory is made, not looked for. Prepared, a relative path is read from the root
+    directory, an output-target Directory that names nothing yet is made, and each Nextflow name maps back to its
+    Sophios one, in each workflow's own names file, as its summary is. The engine is asked about only when a process
+    has a container, its image read from the pipeline Nextflow runs, not from `nextflow_workflow.json`. Read back,
+    each recorded path becomes a CWL object, the first record read even on the line the standalone launcher printed
+    its download notice on, with no newline; the summary holds the output object, and only a run that succeeded has
+    one. A failed run names each failed step from Nextflow's log by its Sophios name, and has no outputs."""
     monkeypatch.setattr(preflight, 'nextflow_problems', lambda _settings: [])
     root = tmp_path / 'root'
     root.mkdir()
+    backend = targets.backend('nextflow', 'nextflow')
+    check = run_setup.Settings(_NEXTFLOW_SETTINGS, root, check=True)
+    with pytest.raises(SophiosError) as raised:
+        backend.prepare(_lowered(_write_into(), root), (), tmp_path / 'base', check)
+    (missing,) = raised.value.diagnostics
+    assert missing.code is SophiosErrorCode.MISSING_INPUT_FILE
+    assert f"input 'write-into~source' (from the workflow, whose relative paths are read from {root}) names " \
+        f"'{root / 'source.txt'}', which does not exist" in missing.message
     write_tree(root, {'source.txt': ''})
-    settings = run_setup.Settings(_NEXTFLOW_SETTINGS, root, check=check)
-    prepared = targets.backend('nextflow', 'nextflow').prepare(_lowered(_write_into(root), root), (),
-                                                               tmp_path / 'base', settings)
-    if check:
-        assert not (tmp_path / 'base').exists() and not (root / 'made').exists()
-        return
+    backend.prepare(_lowered(_write_into(), root), (), tmp_path / 'base', check)
+    assert not (tmp_path / 'base').exists() and not (root / 'made').exists()
+
+    settings = run_setup.Settings(_NEXTFLOW_SETTINGS, root)
+    prepared = backend.prepare(_lowered(_write_into(), root), (), tmp_path / 'base', settings)
+    backend.prepare(_lowered(compile_workflow_result(Workflow([adapter_step('echo', message='hello')], 'other')),
+                             root), (), tmp_path / 'base', settings)
     base = tmp_path / 'base' / 'nextflow_wf'
     assert prepared.documents == tuple(base / name for name in (
         'nextflow_workflow.json', 'workflow.nf', 'nextflow.config', 'nextflow_params.json'))
@@ -364,55 +314,17 @@ def test_nextflow_prepare_writes_the_pipeline_from_absolute_paths_and_makes_each
     assert params == {'write_into_outDir': {'class': 'Directory', 'path': str(root / 'made')},
                       'write_into_source': {'class': 'File', 'path': str(root / 'source.txt')}}
     assert (root / 'made').is_dir()
-    assert json.loads((base / 'nextflow_names.json').read_text(encoding='utf-8')) == {
-        'processes': {'write_into': 'write-into'}, 'outputs': {'write_into_outDir': 'write-into~outDir'}}
-
-
-@pytest.mark.fast
-def test_the_nextflow_check_reports_a_missing_input_and_not_an_output_directory_it_makes(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """As the CWL pre-flight does, before Nextflow starts; an output-target Directory is made, not looked for."""
-    monkeypatch.setattr(preflight, 'nextflow_problems', lambda _settings: [])
-    settings = run_setup.Settings(_NEXTFLOW_SETTINGS, tmp_path, check=True)
-    with pytest.raises(SophiosError) as raised:
-        targets.backend('nextflow', 'nextflow').prepare(_lowered(_write_into(tmp_path), tmp_path), (),
-                                                        tmp_path / 'base', settings)
-    (missing,) = raised.value.diagnostics
-    assert missing.code is SophiosErrorCode.MISSING_INPUT_FILE
-    assert f"input 'write-into~source' (from the workflow, whose relative paths are read from {tmp_path}) names " \
-        f"'{tmp_path / 'source.txt'}', which does not exist" in missing.message
-
-
-@pytest.mark.fast
-def test_a_nextflow_run_reads_its_own_names_after_another_workflow_is_prepared_in_its_base_path(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Each workflow's names are its own file, as its summary is."""
-    monkeypatch.setattr(preflight, 'nextflow_problems', lambda _settings: [])
-    write_tree(tmp_path, {'source.txt': ''})
-    settings = run_setup.Settings(_NEXTFLOW_SETTINGS, tmp_path)
-    backend = targets.backend('nextflow', 'nextflow')
-    backend.prepare(_lowered(_write_into(tmp_path), tmp_path), (), tmp_path / 'base', settings)
-    echo = adapter_step('echo', message='hello')
-    backend.prepare(_lowered(compile_workflow_result(Workflow([echo], 'other')), tmp_path), (), tmp_path / 'base',
-                    settings)
     stdout = 'sophios-output ' + json.dumps(['write_into_outDir', 'made']) + '\n'
     request = RunRequest('wf', tmp_path / 'base', runner='nextflow', target='nextflow')
     assert backend.outcome(request, 0, stdout, tmp_path / 'absent.log').outputs == {'write-into~outDir': 'made'}
 
-
-@pytest.mark.fast
-def test_the_nextflow_check_asks_for_the_engine_only_when_a_process_has_a_container(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Each process's image is read from the pipeline Nextflow runs, not from `nextflow_workflow.json`."""
     asked: list[list[str]] = []
     engine_down = Diagnostic(Severity.ERROR, SophiosErrorCode.CONTAINER_ENGINE_UNAVAILABLE, 'docker is down.')
 
     def engine_problems(images: list[str], _settings: preflight.RunSettings) -> list[Diagnostic]:
         asked.append(images)
         return [engine_down]
-    monkeypatch.setattr(preflight, 'nextflow_problems', lambda _settings: [])
     monkeypatch.setattr(preflight, 'engine_problems', engine_problems)
-    backend = targets.backend('nextflow', 'nextflow')
     host = runtime_workflow()
     contained = replace(host, processes=[replace(process, container='docker.io/bash:4.4')
                         for process in host.processes])
@@ -424,58 +336,31 @@ def test_the_nextflow_check_asks_for_the_engine_only_when_a_process_has_a_contai
     assert asked == [['docker.io/bash:4.4', 'docker.io/bash:4.4']]
     assert list(raised.value.diagnostics) == [engine_down]
 
-
-@pytest.mark.fast
-@pytest.mark.parametrize(('platform', 'script', 'run_script', 'expected'), [
-    (None, None, False, 'error [wic029] the run calls nextflow, which is neither in this Python environment nor on '
-     'PATH: install Nextflow (https://www.nextflow.io/docs/latest/install.html).'),
-    (None, 'printf "\\033[31mERROR: Cannot find Java or it\'s a wrong version\\033(B\\033[m\\n"; exit 1', False,
-     "error [wic029] nextflow -version exited with status 1 (ERROR: Cannot find Java or it's a wrong version): "
-     'Nextflow needs a Java it can run; install one and point JAVA_HOME at it.'),
-    (None, 'echo "nextflow version 26.04.2"', False, None),
-    (None, 'echo "nextflow version 26.04.2"', True, 'error [wic029] run.sh calls nextflow, which is not on PATH: '
-     'install Nextflow (https://www.nextflow.io/docs/latest/install.html).'),
-    ('Windows', 'echo "nextflow version 26.04.2"', False, 'error [wic029] nextflow cannot run here (Nextflow needs a '
-     'POSIX system, which Windows is not): run Sophios inside WSL (https://learn.microsoft.com/windows/wsl/install).'),
-], ids=['missing', 'no-java', 'starts', 'run-script-not-on-path', 'windows'])
-# pylint: disable-next=too-many-arguments,too-many-positional-arguments
-def test_nextflow_must_start_for_a_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, platform: str | None,
-                                       script: str | None, run_script: bool, expected: str | None) -> None:
-    """A run looks where `runner_program` looks; `run.sh` calls the `nextflow` on PATH; and, as for a CWL run,
-    Sophios runs a runner on POSIX only, so a Nextflow that starts is no help on Windows."""
-    program = tmp_path / 'nextflow'
-    program.write_text(f'#!/bin/sh\n{script}\n', encoding='utf-8')
-    program.chmod(0o755)
-    monkeypatch.setattr(preflight, 'runner_program', lambda _name: None if script is None else str(program))
-    monkeypatch.setattr(preflight, 'PLATFORM_LACKS_RUNNERS', platform)
-    monkeypatch.setenv('PATH', str(tmp_path / 'empty'))
-    settings = replace(_NEXTFLOW_SETTINGS, run_script=run_script)
-    assert [str(problem) for problem in preflight.nextflow_problems(settings)] == ([expected] if expected else [])
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize('runner', ['cwltool', 'nextflow'])
-def test_the_engine_remedies_name_only_the_options_the_runs_target_takes(
-        monkeypatch: pytest.MonkeyPatch, runner: str) -> None:
-    """`--container_engine` and `--ignore_docker_processes` are a CWL run's: a Nextflow run is not told to pass
-    them."""
-    def absent(*_args: Any, **_kwargs: Any) -> Any:
-        raise FileNotFoundError('docker')
-    settings = preflight.RunSettings('docker', '', runner=runner)
-    monkeypatch.setattr(preflight.sub, 'run', absent)
-    (missing,) = preflight.engine_problems(['docker.io/bash:4.4'], settings)
-    monkeypatch.setattr(preflight.sub, 'run', lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, b'', b''))
-    monkeypatch.setattr(preflight, '_docker_processes', lambda: preflight.MAX_DOCKER_PROCESSES + 1)
-    (busy,) = preflight.engine_problems(['docker.io/bash:4.4'], settings)
-    cwl = runner != 'nextflow'
-    assert str(missing).endswith('install docker, or name an installed engine with --container_engine.' if cwl
-                                 else 'install docker.')
-    assert str(busy).endswith('or pass --ignore_docker_processes.' if cwl else '(sudo pkill com.docker && sudo '
-                              'pkill Docker).')
-
-
-def test_a_recorded_output_is_read_after_the_launchers_download_notice() -> None:
-    """The standalone launcher prints its notice with no newline, so the first record shares its line."""
-    stdout = ('Downloading nextflow dependencies. It may require a few seconds, please wait .. \r\x1b[K'
-              'sophios-output ["a", 1]\nsophios-output ["b", {"class": "File", "path": "/x"}]\nnot a record\n')
-    assert list(backends.recorded_outputs(stdout)) == [("a", 1), ("b", {"class": "File", "path": "/x"})]
+    file = tmp_path / 'read' / 'nextflow_wf' / 'work' / 'ab' / 'copy.txt'
+    cells = [[{'class': 'File', 'path': f'/w/{a}{b}/cell.txt'} for b in 'xy'] for a in 'ab']
+    stdout = ''.join(f'{line}\n' for line in [
+        '[PROCESS ab/cdef12] wf:copy',
+        'Downloading nextflow dependencies. It may require a few seconds, please wait .. \r\x1b[K'
+        'sophios-output ' + json.dumps(['copy_result', {'class': 'File', 'path': str(file)}]),
+        'sophios-output ' + json.dumps(['grid', cells]),
+        'not a record',
+        'sophios-output ' + json.dumps(['text', 'a "line"\n']),
+        'sophios-output ' + json.dumps(['skipped', None]),
+    ])
+    outcome = backend.outcome(_nextflow_request(tmp_path / 'read'), 0, stdout, tmp_path / 'read' / 'absent.log')
+    assert outcome.outputs == {
+        'copy~result': {'class': 'File', 'location': file.as_uri(), 'path': str(file), 'basename': 'copy.txt'},
+        'grid': [[{'class': 'File', 'location': f'file:///w/{a}{b}/cell.txt', 'path': f'/w/{a}{b}/cell.txt',
+                   'basename': 'cell.txt'} for b in 'xy'] for a in 'ab'],
+        'text': 'a "line"\n',
+        'skipped': None,
+    }
+    assert outcome.summary == (tmp_path / 'read').resolve() / 'output_wf.json'
+    assert json.loads(outcome.summary.read_text(encoding='utf-8')) == outcome.outputs
+    assert outcome.failed == {}
+    outcome.summary.unlink()
+    log = tmp_path / 'read' / 'run_wf.log'
+    log.write_text('\n'.join(_NEXTFLOW_FAILED_LOG) + '\n', encoding='utf-8')
+    failed = backend.outcome(_nextflow_request(tmp_path / 'read'), 1, stdout, log)
+    assert (failed.outputs, failed.summary, failed.failed) == (None, None, {'bad-step': 7, 'child~copy': None})
+    assert not (tmp_path / 'read' / 'output_wf.json').exists()

@@ -1,0 +1,13 @@
+# The same inline body in two `.wic` files in two directories: each includes its own directory's `s.sh`.
+steps:
+- id: say
+  run:
+    class: CommandLineTool
+    requirements:
+      InitialWorkDirRequirement:
+        listing: [{entryname: s.sh, entry: {$include: s.sh}}]
+    baseCommand: [sh, s.sh]
+    inputs: {}
+    outputs: {}
+- id: inner
+  run: ../b/inner.wic

@@ -1,0 +1,15 @@
+# A search-path tool (`say`, `own`), a tool named by a `run:` path, an inline body and a call.
+steps:
+- id: say
+- id: local
+  run: local/local.cwl
+- id: inline
+  run:
+    cwlVersion: v1.2
+    class: CommandLineTool
+    baseCommand: echo
+    inputs: {}
+    outputs: {}
+- id: pair
+  run: pair.wic
+- id: own

@@ -1,0 +1,55 @@
+# A step that runs in a container needs a usable engine: one wic015 says why this one is not, and nothing is pulled.
+# The flag that waives the check skips it, and the images are pulled.
+runs:
+- machine: {engine: missing}
+  argv: [--yaml, touch.wic, --generate_run_script, --diagnostics, json]
+  exit: 1
+  diagnostics: [{code: CONTAINER_ENGINE_UNAVAILABLE, severity: error, message: {contains: [
+    'docker is not installed (it is not on PATH), and this workflow runs tools in containers
+    (docker.io/library/debian:bookworm-slim): install docker, or name an installed engine with --container_engine']}}]
+- why: a socket DOCKER_HOST names that is not there is named, and the engine quoted
+  machine: {engine: fails, said: "failed to connect to the docker API\nsecond line", docker_host: 'unix:///nonexistent/sophios.sock'}
+  argv: [--yaml, touch.wic, --generate_run_script, --diagnostics, json]
+  exit: 1
+  diagnostics: [{code: CONTAINER_ENGINE_UNAVAILABLE, severity: error, message: {contains: [
+    'the socket /nonexistent/sophios.sock does not exist (failed to connect to the docker API): start the engine']}}]
+- why: a stopped engine with no socket of its own is not blamed on permissions
+  machine: {engine: fails, said: 'Is the docker daemon running?'}
+  argv: [--yaml, touch.wic, --generate_run_script, --diagnostics, json]
+  exit: 1
+  diagnostics: [{code: CONTAINER_ENGINE_UNAVAILABLE, severity: error, message: {contains: [
+    '`docker info` exited with status 1 (Is the docker daemon running?): run `docker info` to see why']}}]
+- why: a socket that is not yours is
+  machine: {engine: fails, said: denied, docker_host: 'unix://{tmp}/docker.sock', unreadable: [docker.sock]}
+  posix_user: true
+  argv: [--yaml, touch.wic, --generate_run_script, --diagnostics, json]
+  exit: 1
+  diagnostics: [{code: CONTAINER_ENGINE_UNAVAILABLE, severity: error, message: {contains: [
+    'you may not use its socket {tmp}/docker.sock (denied): add your user to the docker group']}}]
+- why: an engine that fails for another reason is quoted with its status
+  machine: {engine: fails, said: "  whatever the engine said\n", docker_host: 'tcp://engine.invalid:2375'}
+  argv: [--yaml, touch.wic, --generate_run_script, --diagnostics, json]
+  exit: 1
+  diagnostics: [{code: CONTAINER_ENGINE_UNAVAILABLE, severity: error, message: {contains: [
+    '`docker info` exited with status 1 (whatever the engine said)']}}]
+- machine: {engine: fails, said: whatever the engine said, docker_host: 'tcp://engine.invalid:2375'}
+  argv: [--yaml, touch.wic, --generate_run_script, --ignore_docker_install]
+  pulled: true
+- why: too many docker processes is one line, unless ignored
+  machine: {processes: 1001}
+  argv: [--yaml, touch.wic, --generate_run_script, --diagnostics, json]
+  exit: 1
+  diagnostics: [{code: CONTAINER_ENGINE_UNAVAILABLE, severity: error, message: {contains: [
+    1001 docker processes are running, ', or pass --ignore_docker_processes.']}}]
+- machine: {processes: 1001}
+  argv: [--yaml, touch.wic, --generate_run_script, --ignore_docker_processes]
+  pulled: true
+- why: a Nextflow run is not told of options only a CWL run takes
+  machine: {engine: missing}
+  argv: [--yaml, touch.wic, --target, nextflow, --check, --diagnostics, json]
+  exit: 1
+  diagnostics: [{code: CONTAINER_ENGINE_UNAVAILABLE, severity: error, message: {re: 'install docker\.$'}}]
+- machine: {processes: 1001}
+  argv: [--yaml, touch.wic, --target, nextflow, --check, --diagnostics, json]
+  exit: 1
+  diagnostics: [{code: CONTAINER_ENGINE_UNAVAILABLE, severity: error, message: {re: 'pkill Docker\)\.$'}}]

@@ -1,0 +1,4 @@
+# An analysis written as a workflow: each step is configured by the declaration, as `wic: steps:` would.
+steps:
+- id: count_lines
+- id: count_lines

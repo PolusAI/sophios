@@ -1,0 +1,7 @@
+steps:
+- id: hello
+  run: say.cwl
+  in: {message: !ii a}
+- id: shout
+  run: say.cwl
+  in: {message: !ii b}

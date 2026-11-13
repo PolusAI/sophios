@@ -1,0 +1,8 @@
+steps:
+- id: touch
+  in:
+    filename: !ii a.txt
+- id: touch
+  in:
+    filename: !ii b.txt
+- id: cat

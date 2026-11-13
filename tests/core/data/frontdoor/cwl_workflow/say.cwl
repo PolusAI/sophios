@@ -1,0 +1,1 @@
+{class: Workflow, cwlVersion: v1.2, inputs: {text: string}, outputs: {said: {type: File, outputSource: echo/out}}, steps: {echo: {run: echo.cwl, in: {text: text}, out: [out]}}}

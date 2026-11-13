@@ -1,0 +1,3 @@
+# An analysis written as a workflow of the shipped touch, for the Python API to find.
+steps:
+- id: touch
