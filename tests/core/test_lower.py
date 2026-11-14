@@ -7,11 +7,10 @@ from dataclasses import replace
 import pytest
 from hypothesis import example, given
 
-from sophios.ir import (Direction, PortId, RegistryKey, ResolvedDocument, ResolvedPort, ResolvedProcess,
-                        ResolvedStep, StepId, WorkflowGraph)
 from sophios.ir.declarations import port_declaration
 from sophios.ir.lower import lower
-from sophios.ir.types import AuthoredName
+from sophios.ir.resolve import ResolvedDocument, ResolvedPort, ResolvedProcess, ResolvedStep
+from sophios.ir.types import AuthoredName, Direction, PortId, RegistryKey, StepId, WorkflowGraph
 from sophios.lang.nodes import Document, Step
 from sophios.lang.parser import parse
 
@@ -87,8 +86,7 @@ def test_a_well_formed_document_lowers_whole(document: Document) -> None:
         assert port_id in known, f'{where} names {port_id}'
     assert {port for edge in graph.edges for port in (edge.source, edge.sink)} <= known
     ghost = PortId(StepId(graph.namespace, len(graph.steps) + 1, 'ghost'), Direction.INPUT, AuthoredName('p'))
-    for held in ({'explicit_edge_defs': (('e', ghost),)}, {'explicit_edge_calls': (('e', ghost),)},
-                 {'output_mapping': ((AuthoredName('o'), ghost),)},
+    for held in ({'explicit_edge_defs': (('e', ghost),)}, {'output_mapping': ((AuthoredName('o'), ghost),)},
                  {'input_mapping': ((AuthoredName('i'), (ghost,)),)}):
         with pytest.raises(ValueError, match='names a port no step declares'):
             replace(graph, **held)

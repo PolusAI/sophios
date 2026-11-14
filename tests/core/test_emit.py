@@ -17,35 +17,18 @@ from schema_salad.utils import yaml_no_ts  # pylint: disable=no-name-in-module
 
 from sophios import compute, post_compile
 from sophios.input_output import dump_wic_yaml
-from sophios.ir import (
-    BoundaryDeclaration,
-    Direction,
-    JobBinding,
-    Namespace,
-    Port,
-    PortDeclaration,
-    PortId,
-    PortType,
-    ProcessRun,
-    RegistryKey,
-    RegistrySnapshot,
-    StepId,
-    StepNode,
-    WorkflowGraph,
-    WorkflowPort,
-    emit,
-    emit_job_inputs,
-    surface,
-)
 from sophios.ir.artifacts import CompilationArtifact
 from sophios.ir.complete import coerce_job_value, complete
 from sophios.ir.declarations import port_declaration
+from sophios.ir.emit import emit, emit_job_inputs, surface
 from sophios.ir.infer import infer
 from sophios.ir.link import link
 from sophios.ir.names import Names
 from sophios.ir.pipeline import front_end
-from sophios.ir.resolve import resolve
-from sophios.ir.types import AuthoredName, EdgeOrigin, StepOutputRef
+from sophios.ir.resolve import RegistrySnapshot, resolve
+from sophios.ir.types import (AuthoredName, BoundaryDeclaration, Direction, EdgeOrigin, JobBinding, Namespace, Port,
+                              PortDeclaration, PortId, PortType, RegistryKey, StepId, StepNode, StepOutputRef,
+                              WorkflowGraph, WorkflowPort)
 from sophios.lang.cwl import CWL_VERSION
 from sophios.lang.diagnostics import SophiosError
 from sophios.wic_types import StepId as LegacyStepId, Yaml
@@ -111,8 +94,6 @@ def test_a_drawn_workflow_compiles_by_every_law(workflow: Yaml) -> None:  # pyli
     """The laws one compile keeps, each over the same drawn workflow:
 
     - resolution reads the registry and nothing else, the filesystem refused, and its order changes nothing;
-    - `complete` is idempotent: `_compile_front` calls it three times on that promise, and an arm reading its own
-      previous output, as the `run:` target once did, compounds silently;
     - every edge inference adds is the independent model's choice (reference_model.inference_choice);
     - the phases composed directly emit what the live compiler does, up to embedding;
     - a graph, not its mutable source, determines every byte: the source is emptied between two emissions;
@@ -136,11 +117,9 @@ def test_a_drawn_workflow_compiles_by_every_law(workflow: Yaml) -> None:  # pyli
 
     front = front_end(model.parsed, model.registry, name='oracle')
     assert front.graph is not None, list(front.diagnostics)
-    once = complete(front.graph)
-    assert _render(complete(once)) == _render(once)
-    linked = link(once)
+    linked = link(complete(front.graph))
     assert linked.graph is not None, list(linked.diagnostics)
-    inferred = infer(complete(linked.graph))
+    inferred = infer(linked.graph)
     assert inferred.graph is not None, list(inferred.diagnostics)
     for graph in _graphs(inferred.graph):
         original = next(item for item in _graphs(linked.graph) if item.namespace == graph.namespace)
@@ -152,7 +131,7 @@ def test_a_drawn_workflow_compiles_by_every_law(workflow: Yaml) -> None:  # pyli
     source = copy.deepcopy(workflow)
     compiled = compile_hermetic(source)
     nested = compiled.artifact
-    assert equivalent(_render(complete(inferred.graph)), nested.cwl, Strength.UP_TO_EMBEDDING) is None
+    assert equivalent(_render(inferred.graph), nested.cwl, Strength.UP_TO_EMBEDDING) is None
     names = Names.of(compiled.graph)
     document = surface(compiled.graph, names)
     first = emit(document, names)
@@ -193,10 +172,10 @@ def test_a_hand_built_graph_emits_without_a_compiler_adapter() -> None:
         step_id,
         inputs=(Port(input_id, in_decl.type, in_decl),),
         outputs=(Port(output_id, out_decl.type, out_decl),),
-        run=ProcessRun('write.cwl', RegistryKey('global', 'write')),
+        run=RegistryKey('global', 'write'),
     )
     graph = WorkflowGraph(
-        namespace, (step,), name='handmade', lang_version='0.0.1', cwl_version=CWL_VERSION,
+        namespace, (step,), name='handmade', lang_version='0.0.1',
         workflow_inputs=(WorkflowPort(AuthoredName('message'), BoundaryDeclaration(in_decl)),),
         workflow_outputs=(
             WorkflowPort(AuthoredName('file'), BoundaryDeclaration(out_decl),

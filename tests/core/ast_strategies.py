@@ -301,7 +301,7 @@ def to_yml(document: Document) -> Yaml:
     """The compiler's input for a generated document: rendered and parsed as a user's file is, then desugared as
     read_ast_from_disk does (mapping-form steps fail without it), and subworkflow bodies attached as files would be."""
     reread = parse(render(document), 'generated.wic')
-    assert reread.ok and reread.document is not None, [str(d) for d in reread.diagnostics]
+    assert not reread.diagnostics.has_errors and reread.document is not None, [str(d) for d in reread.diagnostics]
     loaded: Yaml = utils_cwl.desugar_into_canonical_normal_form(to_json(reread.document))
     for step in loaded.get('steps', []):
         if isinstance(step, dict) and str(step.get('id', '')).endswith('.wic'):

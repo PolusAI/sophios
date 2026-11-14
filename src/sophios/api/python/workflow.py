@@ -19,7 +19,6 @@ from sophios.lang.diagnostics import Diagnostic, SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
 from sophios.lang.names import check_written_name
 from sophios.lang.spans import SourceSpan
-from sophios.lang.versions import KNOWN_VERSIONS
 from sophios.run_status import RunResult, RunState, RunStatus, StepStatus, WorkflowRunError
 from sophios.wic_types import DEFAULT_BASEPATH, Tools
 
@@ -123,13 +122,9 @@ def _tool_builder_source_name(value: Any) -> str | None:
 
 
 def _python_api_types_match(parameter_type: Any, candidate_type: Any) -> bool:
-    """Whether an eager API binding is not disjoint in every known version.
+    """Whether an eager API binding is not provably disjoint.
 
-    A ``Workflow`` object has no resolved language version yet.  Rejecting only
-    when every supported version proves disjoint keeps this convenience check
-    from preempting the authoritative, resolved-version compiler judgment.
-
-    It also has no *scatter* yet: ``scatter_on()`` runs after the binding, and
+    A ``Workflow`` object has no *scatter* yet: ``scatter_on()`` runs after the binding, and
     lifts the sink to an array.  So the sink's declared type is not necessarily
     its effective one, and a pair disjoint as written may be exactly right once
     scattered.  Disjointness is only proven here when it holds for the sink as
@@ -138,11 +133,7 @@ def _python_api_types_match(parameter_type: Any, candidate_type: Any) -> bool:
     the compiler, which knows the scatter.
     """
     def proven_disjoint(sink_type: Any) -> bool:
-        return all(
-            reference_relation(candidate_type, sink_type, lang_version=lang_version)
-            is TypeRelation.DISJOINT
-            for lang_version in KNOWN_VERSIONS
-        )
+        return reference_relation(candidate_type, sink_type) is TypeRelation.DISJOINT
 
     return not (proven_disjoint(parameter_type)
                 and proven_disjoint({'type': 'array', 'items': parameter_type}))
@@ -515,24 +506,14 @@ class Step(_ProcessBase):
                 if step_inputs_file is not None:
                     raise TypeError("step_inputs_file is only supported when Step is created from a CWL file path")
                 assert source is not None
-                resolved_name = step_name or tool_name
-                run_path = Path(f"{resolved_name}.cwl")
                 match source.to_cwl_document():
                     case Mapping() as document:
-                        clt, yaml_file = _load_clt_document(document, run_path=run_path)
+                        name = step_name or tool_name
+                        self._initialize_document(document, name, f"{name}.cwl", None, resolved_registry)
                     case _:
                         raise TypeError(
                             "CommandLineTool-like Step source must return a mapping from to_cwl_document()"
                         )
-
-                self._initialize_loaded_tool(
-                    clt=clt,
-                    yaml_file=yaml_file,
-                    clt_path=run_path,
-                    cfg_yaml={},
-                    tool_registry=resolved_registry,
-                    process_name=resolved_name,
-                )
             case _:
                 raise TypeError("Step requires clt_path or a CommandLineTool-like source")
 
@@ -566,23 +547,31 @@ class Step(_ProcessBase):
         Returns:
             Step: A fully initialized step backed by the in-memory tool.
         """
-        default_name = process_name or str(document.get("id") or "in_memory_tool")
-        run_path_value = run_path or f"{default_name}.cwl"
-        clt_path = _coerce_path(run_path_value, field_name="run_path")
-        assert clt_path is not None
-        resolved_registry = {} if tool_registry is None else tool_registry
-        clt, yaml_file = _load_clt_document(document, run_path=clt_path)
-
         step = cls.__new__(cls)
-        step._initialize_loaded_tool(
+        step._initialize_document(document, process_name, run_path, step_inputs, tool_registry)
+        return step
+
+    def _initialize_document(
+        self,
+        document: Mapping[str, Any],
+        process_name: str | None,
+        run_path: StrPath | None,
+        step_inputs: Mapping[str, Any] | None,
+        tool_registry: Tools | None,
+    ) -> None:
+        """Populate a step from an in-memory tool document: the one door a document or a built tool comes through."""
+        clt_path = _coerce_path(run_path or f"{process_name or document.get('id') or 'in_memory_tool'}.cwl",
+                                field_name="run_path")
+        assert clt_path is not None
+        clt, yaml_file = _load_clt_document(document, run_path=clt_path)
+        self._initialize_loaded_tool(
             clt=clt,
             yaml_file=yaml_file,
             clt_path=clt_path,
-            cfg_yaml=dict(step_inputs or {}),
-            tool_registry=resolved_registry,
+            cfg_yaml=step_inputs or {},
+            tool_registry={} if tool_registry is None else tool_registry,
             process_name=process_name,
         )
-        return step
 
     def _initialize_loaded_tool(
         self,

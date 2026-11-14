@@ -176,7 +176,7 @@ def test_parsing_is_total(text: str) -> None:
         assert 1 <= span.start_line <= max(len(text.splitlines()), 1) + 1 and span.start_column >= 1, found
         positions.append((span.start_line, span.start_column))
     assert positions == sorted(positions), reports
-    if result.ok and result.document is not None:
+    if not result.diagnostics.has_errors and result.document is not None:
         yaml.load(text, Loader=YamlWithSophiosTagsOpaque)  # must not raise
 
 
@@ -212,7 +212,7 @@ def test_a_well_formed_document_is_read_whole(source: str) -> None:
     forms; written in the other step form, it reads back in that form and is otherwise the same document, so the writer
     keeps the form it is given; and its JSON projection is JSON, which the exported schema accepts."""
     result = parse(source, 'gen.wic')
-    assert result.ok and result.document is not None, [str(d) for d in result.diagnostics]
+    assert not result.diagnostics.has_errors and result.document is not None, [str(d) for d in result.diagnostics]
     document = result.document
     lines = source.splitlines()
     spans = _spans(document)
@@ -224,7 +224,7 @@ def test_a_well_formed_document_is_read_whole(source: str) -> None:
         assert all(isinstance(value, get_args(InputValue)) for _, value in step.inputs), step
     other = replace(document, steps_as_mapping=not document.steps_as_mapping)
     again = parse(render(other), 'b.wic')
-    assert again.ok and again.document is not None, [str(d) for d in again.diagnostics]
+    assert not again.diagnostics.has_errors and again.document is not None, [str(d) for d in again.diagnostics]
     assert again.document.steps_as_mapping is other.steps_as_mapping
     assert to_json(replace(again.document, steps_as_mapping=document.steps_as_mapping)) == to_json(document)
     projection = json.loads(json.dumps(to_json(document)))
@@ -248,7 +248,8 @@ def test_a_construct_reads_alike_in_either_spelling_and_position(tag: str, paylo
     place = '  out:\n  - f:' if tag == '!&' else '  in:\n    f:'
     tagged, desugared = (parse(f'steps:\n- id: s\n{place} {spelled}\n', 'spelled.wic')
                          for spelled in (f'{tag} {payload}', f'{{{SPELLINGS[tag]}: {payload}}}'))
-    assert tagged.ok and desugared.ok, [str(d) for d in (*tagged.diagnostics, *desugared.diagnostics)]
+    assert not (tagged.diagnostics.has_errors or desugared.diagnostics.has_errors), [
+        str(d) for d in (*tagged.diagnostics, *desugared.diagnostics)]
     assert reading(tagged.document) == reading(desugared.document)
     in_position = parse(f'steps:\n- id: s\n  in:\n    a: {other}{value}\n', 'position.wic')
     passthrough = parse(f'top: {other}{value}\n', 'position.wic')
@@ -365,7 +366,8 @@ def test_a_scalar_is_read_as_yaml_reads_it(spelled: tuple[str, str | None]) -> N
                 (SophiosErrorCode.UNKNOWN_TAG, f'YAML cannot read this value as {tag}', line)], above
         return
     top, inline = (parse(f'{above} {text}\n', 'x') for above in ('top:\n  k:', 'steps:\n  s:\n    in:\n      f: !ii'))
-    assert top.ok and inline.ok and top.document is not None and inline.document is not None, text
+    assert not (top.diagnostics.has_errors or inline.diagnostics.has_errors), text
+    assert top.document is not None and inline.document is not None, text
     read, held = yaml.safe_load(text), dict(top.document.passthrough)['top']
     for value in (held['k'] if isinstance(held, dict) else held, _payload(inline.document.steps[0].inputs[0][1])):
         assert (repr(value), type(value)) == (repr(read), type(read)), text
@@ -428,7 +430,7 @@ def test_a_merge_builds_what_yaml_builds(merged: tuple[str, str]) -> None:
     assert SophiosErrorCode.UNKNOWN_TAG not in [d.code for d in result.diagnostics], source
     if position == 'cwl':
         return
-    assert result.ok and result.document is not None, [str(d) for d in result.diagnostics]
+    assert not result.diagnostics.has_errors and result.document is not None, [str(d) for d in result.diagnostics]
     if position == 'passthrough':
         built, read = cast(dict, dict(result.document.passthrough)['a']), loaded['a']
     elif position == 'steps':
@@ -479,8 +481,9 @@ def test_the_corpus_parses_validates_and_round_trips() -> None:
     for path in corpus:
         first = parse(path.read_text(encoding='utf-8'), str(path))
         second = parse(render(first.document), str(path)) if first.document is not None else first
-        if not (first.ok and second.ok and SCHEMA_VALIDATOR.is_valid(to_json(cast(Document, first.document)))
-                and reading(second.document) == reading(first.document)):
+        if (first.diagnostics.has_errors or second.diagnostics.has_errors
+                or not SCHEMA_VALIDATOR.is_valid(to_json(cast(Document, first.document)))
+                or reading(second.document) != reading(first.document)):
             failed.append((str(path), [str(d) for d in (*first.diagnostics, *second.diagnostics)]))
     assert not failed, failed
 
@@ -492,7 +495,7 @@ def test_reading_writing_and_the_schema_share_no_state() -> None:
     source parsed and rendered from many threads at once gives every thread the same answer. And editing an exported
     schema three levels down, where a shallow copy once shared its interior, leaves the next export as it was."""
     source = (DATA / 'parse' / 'records' / 'inputs.wic').read_text(encoding='utf-8')
-    assert parse(source, 'tags.wic').ok
+    assert not parse(source, 'tags.wic').diagnostics.has_errors
     with pytest.raises(yaml.YAMLError):
         yaml.safe_load(source)
 

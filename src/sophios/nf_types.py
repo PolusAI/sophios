@@ -1,7 +1,7 @@
 """Validated executable intermediate-representation types for Nextflow DSL2."""
 
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field, fields, replace
 from graphlib import CycleError, TopologicalSorter
 import json
 import math
@@ -30,13 +30,13 @@ NF_INTERNAL_IDENTIFIERS = frozenset({
     NF_SCATTER_INDEX_NAME, NF_NEST_HELPER, NF_INPUT_HELPER, NF_STEP_INPUT_HELPER, NF_FLOAT_TEXT_HELPER,
     NF_OUTPUT_HELPER,
 })
-_PATH_KINDS = {"File": "file", "Directory": "directory"}
+PATH_KINDS = {"File": "file", "Directory": "directory"}
 # A workflow parameter's declared type, which the generated pipeline checks
 # its value against when it starts: an item type, `[]` for an array of it,
 # and `?` when the parameter is optional.
 PARAM_TYPES = frozenset(
     f"{item}{array}{optional}"
-    for item in ("boolean", "int", "float", "string", *_PATH_KINDS)
+    for item in ("boolean", "int", "float", "string", *PATH_KINDS)
     for array in ("", "[]")
     for optional in ("", "?")
 )
@@ -128,12 +128,31 @@ def json_value_problem(value: Any) -> str | None:
 
 def _thaw_json(value: Any) -> Any:
     match value:
+        case _Model() | Expr():
+            return value.to_dict()
         case Mapping() as mapping:
             return {str(key): _thaw_json(item) for key, item in mapping.items()}
         case list() | tuple() as items:
             return [_thaw_json(item) for item in items]
         case _:
             return value
+
+
+@dataclass(frozen=True, slots=True)
+class _Model:
+    """A value of the model, whose JSON form is its fields by name."""
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a JSON-compatible representation.
+
+        Returns:
+            dict[str, Any]: Each field by name. A segment, a command token and a connection state their ``kind``;
+                a process's condition and step-only inputs and a process connection's adapter are left out when
+                it has none.
+        """
+        item = {each.name: _thaw_json(getattr(self, each.name)) for each in fields(self)
+                if getattr(self, each.name) or (type(self), each.name) not in _LEFT_OUT}
+        return {"kind": _KINDS[type(self)], **item} if type(self) in _KINDS else item
 
 
 def _validate_string_mapping(value: Mapping[str, str], *, field_name: str) -> None:
@@ -153,7 +172,7 @@ def literal_problem(text: str) -> str | None:
 
 
 @dataclass(frozen=True, slots=True)
-class NfLiteral:
+class NfLiteral(_Model):
     """Literal data inside a command or path template."""
 
     value: str
@@ -164,17 +183,9 @@ class NfLiteral:
         if (problem := literal_problem(self.value)) is not None:
             raise ValueError(problem)
 
-    def to_dict(self) -> dict[str, str]:
-        """Return a JSON-compatible representation.
-
-        Returns:
-            dict[str, str]: The segment as ``{"kind": "literal", "value": ...}``.
-        """
-        return {"kind": "literal", "value": self.value}
-
 
 @dataclass(frozen=True, slots=True)
-class NfInputReference:
+class NfInputReference(_Model):
     """Reference to one process input inside a template."""
 
     name: str
@@ -182,17 +193,9 @@ class NfInputReference:
     def __post_init__(self) -> None:
         _validate_ir_identifier(self.name, field_name="template input reference")
 
-    def to_dict(self) -> dict[str, str]:
-        """Return a JSON-compatible representation.
-
-        Returns:
-            dict[str, str]: The segment as ``{"kind": "input", "name": ...}``.
-        """
-        return {"kind": "input", "name": self.name}
-
 
 @dataclass(frozen=True, slots=True)
-class NfBasenameReference:
+class NfBasenameReference(_Model):
     """Reference to the staged file name of one path input.
 
     Nextflow stages an input under its original file name, alone or under a
@@ -207,20 +210,12 @@ class NfBasenameReference:
     def __post_init__(self) -> None:
         _validate_ir_identifier(self.name, field_name="template basename reference")
 
-    def to_dict(self) -> dict[str, str]:
-        """Return a JSON-compatible representation.
-
-        Returns:
-            dict[str, str]: The segment as ``{"kind": "basename", "name": ...}``.
-        """
-        return {"kind": "basename", "name": self.name}
-
 
 NfTemplateSegment = NfLiteral | NfInputReference | NfBasenameReference
 
 
 @dataclass(frozen=True, slots=True)
-class NfTemplate:
+class NfTemplate(_Model):
     """Canonical immutable sequence of literal and input-reference segments."""
 
     segments: Sequence[NfTemplateSegment]
@@ -239,17 +234,9 @@ class NfTemplate:
             canonical.append(NfLiteral(""))
         object.__setattr__(self, "segments", tuple(canonical))
 
-    def to_dict(self) -> dict[str, Any]:
-        """Return a JSON-compatible representation.
-
-        Returns:
-            dict[str, Any]: The canonical segment list under ``"segments"``.
-        """
-        return {"segments": [segment.to_dict() for segment in self.segments]}
-
 
 @dataclass(frozen=True, slots=True)
-class NfFlag:
+class NfFlag(_Model):
     """Conditional command-line flag contributed by a boolean input.
 
     Renders the prefix as exactly one argv word when the referenced input is
@@ -264,18 +251,9 @@ class NfFlag:
         if not isinstance(self.prefix, str) or not self.prefix.strip():
             raise ValueError("flag prefix must be a non-empty string")
 
-    def to_dict(self) -> dict[str, str]:
-        """Return a JSON-compatible representation.
-
-        Returns:
-            dict[str, str]: The token as
-                ``{"kind": "flag", "name": ..., "prefix": ...}``.
-        """
-        return {"kind": "flag", "name": self.name, "prefix": self.prefix}
-
 
 @dataclass(frozen=True, slots=True)
-class NfArrayBinding:
+class NfArrayBinding(_Model):
     """Command-line binding for a CWL array-typed input with no itemSeparator.
 
     Renders nothing at all when the referenced array is empty. Otherwise
@@ -293,18 +271,9 @@ class NfArrayBinding:
         if self.prefix is not None and (not isinstance(self.prefix, str) or not self.prefix.strip()):
             raise ValueError("array binding prefix must be a non-empty string or None")
 
-    def to_dict(self) -> dict[str, Any]:
-        """Return a JSON-compatible representation.
-
-        Returns:
-            dict[str, Any]: The token as
-                ``{"kind": "array", "name": ..., "prefix": ...}``.
-        """
-        return {"kind": "array", "name": self.name, "prefix": self.prefix}
-
 
 @dataclass(frozen=True, slots=True)
-class NfOptionalBinding:
+class NfOptionalBinding(_Model):
     """Command-line binding of an optional string, int or float input.
 
     Renders nothing at all when the input holds the ``[]`` sentinel of an
@@ -327,18 +296,9 @@ class NfOptionalBinding:
         if not self.separate and self.prefix is None:
             raise ValueError("an optional binding with separate false needs a prefix")
 
-    def to_dict(self) -> dict[str, Any]:
-        """Return a JSON-compatible representation.
-
-        Returns:
-            dict[str, Any]: The token as
-                ``{"kind": "optional_binding", "name": ..., "prefix": ..., "separate": ...}``.
-        """
-        return {"kind": "optional_binding", "name": self.name, "prefix": self.prefix, "separate": self.separate}
-
 
 @dataclass(frozen=True, slots=True)
-class NfShellLiteral:
+class NfShellLiteral(_Model):
     """Raw, unquoted shell text from an approved ``shellQuote: false`` binding.
 
     Renders exactly as written, bypassing the generated shell-quoting
@@ -356,14 +316,6 @@ class NfShellLiteral:
         if "\x00" in self.text:
             raise ValueError("shell literal text cannot contain NUL bytes")
 
-    def to_dict(self) -> dict[str, str]:
-        """Return a JSON-compatible representation.
-
-        Returns:
-            dict[str, str]: The token as ``{"kind": "shell_literal", "text": ...}``.
-        """
-        return {"kind": "shell_literal", "text": self.text}
-
 
 NfCommandToken = NfTemplate | NfFlag | NfArrayBinding | NfOptionalBinding | NfShellLiteral
 
@@ -379,7 +331,7 @@ def environment_name_problem(name: Any) -> str | None:
 
 
 @dataclass(frozen=True, slots=True)
-class NfEnvVar:
+class NfEnvVar(_Model):
     """One environment variable the task exports before its command.
 
     The value is literal text or one input's value, as an
@@ -398,17 +350,9 @@ class NfEnvVar:
             case _:
                 raise ValueError(f"environment variable {self.name!r} must be literal text or one input reference")
 
-    def to_dict(self) -> dict[str, Any]:
-        """Return a JSON-compatible representation.
-
-        Returns:
-            dict[str, Any]: The variable's name and value template.
-        """
-        return {"name": self.name, "value": self.value.to_dict()}
-
 
 @dataclass(frozen=True, slots=True)
-class NfCommand:
+class NfCommand(_Model):
     """Typed argv, approved stream redirections, and the variables exported before it, for one process."""
 
     tokens: Sequence[NfCommandToken]
@@ -452,23 +396,9 @@ class NfCommand:
             *(variable.value for variable in self.env),
         )
 
-    def to_dict(self) -> dict[str, Any]:
-        """Return a JSON-compatible representation.
-
-        Returns:
-            dict[str, Any]: Serialized argv tokens, stream redirections and exported variables.
-        """
-        return {
-            "tokens": [token.to_dict() for token in self.tokens],
-            "stdin": self.stdin.to_dict() if self.stdin else None,
-            "stdout": self.stdout.to_dict() if self.stdout else None,
-            "stderr": self.stderr.to_dict() if self.stderr else None,
-            "env": [variable.to_dict() for variable in self.env],
-        }
-
 
 @dataclass(frozen=True, slots=True)
-class NfResources:
+class NfResources(_Model):
     """Typed supported process resources; ``accelerator`` is a GPU count.
 
     ``cuda_version_min`` and ``cuda_compute_capability`` are a
@@ -503,20 +433,6 @@ class NfResources:
                 object.__setattr__(self, "cuda_compute_capability", tuple(items))
             case _:
                 raise ValueError("cuda_compute_capability must be a string, a list of strings, or None")
-
-    def to_dict(self) -> dict[str, Any]:
-        """Return a JSON-compatible representation.
-
-        Returns:
-            dict[str, Any]: The ``cpus``, ``memory_mb``, ``accelerator``, ``cuda_version_min`` and
-                ``cuda_compute_capability`` values.
-        """
-        capability = self.cuda_compute_capability
-        return {
-            "cpus": self.cpus, "memory_mb": self.memory_mb, "accelerator": self.accelerator,
-            "cuda_version_min": self.cuda_version_min,
-            "cuda_compute_capability": list(capability) if isinstance(capability, tuple) else capability,
-        }
 
 
 GLOB_WILDCARDS = frozenset("*?[")
@@ -569,7 +485,7 @@ def entryname_problem(name: Any) -> str | None:
 
 
 @dataclass(frozen=True, slots=True)
-class NfEntry:
+class NfEntry(_Model):
     """An ``InitialWorkDirRequirement`` entry the task makes from its input before the command runs.
 
     The input is staged under a hidden name. ``name`` is the entry's literal
@@ -586,14 +502,6 @@ class NfEntry:
             raise ValueError(problem)
         if not isinstance(self.copy, bool):
             raise TypeError("entry copy must be a bool")
-
-    def to_dict(self) -> dict[str, Any]:
-        """Return a JSON-compatible representation.
-
-        Returns:
-            dict[str, Any]: The entry's literal name, or None, and whether it is a copy.
-        """
-        return {"name": self.name, "copy": self.copy}
 
 
 def linked_reference(template: NfTemplate | None) -> str | None:
@@ -646,7 +554,7 @@ def link_refusal(entry: NfEntry | None, *, writes: bool) -> str | None:
 
 
 @dataclass(frozen=True, slots=True)
-class NfPort:  # pylint: disable=too-many-instance-attributes
+class NfPort(_Model):  # pylint: disable=too-many-instance-attributes
     """A typed Nextflow process port.
 
     ``entry`` marks a path input made an ``InitialWorkDirRequirement`` entry.
@@ -760,35 +668,22 @@ class NfPort:  # pylint: disable=too-many-instance-attributes
             for segment in self.glob.segments
         ))
 
-    def to_dict(self) -> dict[str, Any]:
-        """Return a JSON-compatible representation.
 
-        Returns:
-            dict[str, Any]: The port's name, qualifier, emit, glob, path
-                kind, array marker, entry marker, capture marker, optional
-                marker, and scalar type.
-        """
-        return {
-            "name": self.name,
-            "qualifier": self.qualifier,
-            "emit": self.emit,
-            "glob": self.glob.to_dict() if self.glob else None,
-            "path_kind": self.path_kind,
-            "is_array": self.is_array,
-            "entry": self.entry.to_dict() if self.entry else None,
-            "capture": self.capture,
-            "optional": self.optional,
-            "scalar_type": self.scalar_type,
-        }
+def template_segments(command: "NfCommand", outputs: Sequence["NfPort"]) -> list[NfTemplateSegment]:
+    """Every segment of a process's command templates and its output globs."""
+    templates = [*command.templates, *(port.glob for port in outputs if port.glob)]
+    return [segment for template in templates for segment in template.segments]
+
+
+def inputs_read(items: Iterable[Any], *kinds: type[Any]) -> set[str]:
+    """The inputs that the segments or tokens of ``kinds`` among ``items`` reference."""
+    return {item.name for item in items if isinstance(item, kinds)}
 
 
 def _referenced_names(command: "NfCommand", outputs: Sequence["NfPort"]) -> set[str]:
     """Every input a process's command tokens, its templates and its output globs reference."""
-    templates = [*command.templates, *(port.glob for port in outputs if port.glob)]
-    segments = [segment for template in templates for segment in template.segments]
-    tokens = {token.name for token in command.tokens if isinstance(token, (NfFlag, NfArrayBinding, NfOptionalBinding))}
-    return tokens | {
-        segment.name for segment in segments if isinstance(segment, (NfBasenameReference, NfInputReference))}
+    return inputs_read(command.tokens, NfFlag, NfArrayBinding, NfOptionalBinding) | inputs_read(
+        template_segments(command, outputs), NfBasenameReference, NfInputReference)
 
 
 #: What `reference_problems` names a broken rule, so a caller can tell an array referenced as one value apart.
@@ -803,27 +698,23 @@ def reference_problems(process: str, inputs: Sequence["NfPort"], step_only: Sequ
     an array binding, since a plain or basename reference renders it as a Groovy list and a flag lets list
     truthiness decide."""
     problems: list[tuple[str, str]] = []
-    input_names = {port.name for port in inputs}
-    flag_names = {token.name for token in command.tokens if isinstance(token, NfFlag)}
-    array_binding_names = {token.name for token in command.tokens if isinstance(token, NfArrayBinding)}
-    optional_binding_names = {token.name for token in command.tokens if isinstance(token, NfOptionalBinding)}
-    templates = [*command.templates, *(port.glob for port in outputs if port.glob)]
-    segments = [segment for template in templates for segment in template.segments]
-    basename_names = {segment.name for segment in segments if isinstance(segment, NfBasenameReference)}
-    plain_reference_names = {segment.name for segment in segments if isinstance(segment, NfInputReference)}
+    segments = template_segments(command, outputs)
+    flag_names, optional_binding_names, array_binding_names = (
+        inputs_read(command.tokens, kind) for kind in (NfFlag, NfOptionalBinding, NfArrayBinding))
+    basename_names = inputs_read(segments, NfBasenameReference)
+    plain_reference_names = inputs_read(segments, NfInputReference)
+    # An environment variable's value is one of the command's templates, so the plain references hold its input.
+    env_names = inputs_read((segment for variable in command.env for segment in variable.value.segments),
+                            NfInputReference)
     referenced_names = _referenced_names(command, outputs)
-    env_names = {
-        segment.name for variable in command.env for segment in variable.value.segments
-        if isinstance(segment, NfInputReference)
-    }
-    if carried := (referenced_names | env_names) & {port.name for port in step_only}:
+    input_ports = {port.name: port for port in inputs}
+    if carried := referenced_names & {port.name for port in step_only}:
         problems.append(("step-only", f"process {process!r} command reads the step-only inputs "
                          f"{', '.join(sorted(carried))}, which its tool does not declare"))
-    if unknown := (referenced_names | env_names) - input_names:
+    if unknown := referenced_names - input_ports.keys():
         problems.append(("unknown", f"process {process!r} templates reference unknown inputs: "
                          f"{', '.join(sorted(unknown))}"))
         return problems
-    input_ports = {port.name: port for port in inputs}
     rules: tuple[tuple[set[str], Callable[[NfPort], bool], str], ...] = (
         (flag_names, lambda port: port.qualifier == "val", "flag tokens must reference val inputs"),
         (optional_binding_names, lambda port: port.qualifier == "val", "optional bindings must reference val inputs"),
@@ -840,7 +731,7 @@ def reference_problems(process: str, inputs: Sequence["NfPort"], step_only: Sequ
 
 
 @dataclass(frozen=True, slots=True)
-class NfProcess:
+class NfProcess(_Model):
     """An immutable executable Nextflow process.
 
     ``step_only_inputs`` are the step inputs its tool does not declare that
@@ -942,28 +833,6 @@ class NfProcess:
         if all(ports[name].scalar_type is not None for name in references(condition)):
             _type_condition(self.name, condition, ports.values())
 
-    def to_dict(self) -> dict[str, Any]:
-        """Return a JSON-compatible representation.
-
-        Returns:
-            dict[str, Any]: The process name, ports, command, container,
-                resources, and the condition and step-only inputs of a
-                process that has them.
-        """
-        item: dict[str, Any] = {
-            "name": self.name,
-            "inputs": [port.to_dict() for port in self.inputs],
-            "outputs": [port.to_dict() for port in self.outputs],
-            "command": self.command.to_dict(),
-            "container": self.container,
-            "resources": self.resources.to_dict(),
-        }
-        if self.condition is not None:
-            item["condition"] = self.condition.to_dict()
-        if self.step_only_inputs:
-            item["step_only_inputs"] = [port.to_dict() for port in self.step_only_inputs]
-        return item
-
 
 def condition_without_inputs(process: str, inputs: Sequence[NfPort]) -> str | None:
     """Why a process with `inputs` cannot carry a condition, or None: it is decided once per invocation of its
@@ -1008,11 +877,11 @@ def param_channel(param_type: str) -> NfChannel:
     """The channel a workflow parameter of ``param_type`` is built as."""
     base = param_type.removesuffix("?")
     item = base.removesuffix("[]")
-    return NfChannel(_PATH_KINDS.get(item), base != item)
+    return NfChannel(PATH_KINDS.get(item), base != item)
 
 
 @dataclass(frozen=True, slots=True)
-class NfWorkflowInputConnection:
+class NfWorkflowInputConnection(_Model):
     """Connect one workflow parameter to one process input.
 
     ``adapter`` marks a scattered input: ``"dotproduct"``,
@@ -1041,23 +910,9 @@ class NfWorkflowInputConnection:
                 f"channel adapter must be one of {allowed}, got {self.adapter!r}"
             )
 
-    def to_dict(self) -> dict[str, Any]:
-        """Return a JSON-compatible representation.
-
-        Returns:
-            dict[str, Any]: The connection with kind ``"workflow_input"``.
-        """
-        return {
-            "kind": "workflow_input",
-            "from_port": self.from_port,
-            "to_process": self.to_process,
-            "to_port": self.to_port,
-            "adapter": self.adapter,
-        }
-
 
 @dataclass(frozen=True, slots=True)
-class NfProcessConnection:
+class NfProcessConnection(_Model):
     """Connect one process output to one process input.
 
     ``adapter`` is set exactly when the source is a multi-input-scattered
@@ -1086,24 +941,9 @@ class NfProcessConnection:
                 f"got {self.adapter!r}"
             )
 
-    def to_dict(self) -> dict[str, Any]:
-        """Return a JSON-compatible representation.
-
-        Returns:
-            dict[str, Any]: The connection with kind ``"process"``.
-        """
-        return {
-            "kind": "process",
-            "from_process": self.from_process,
-            "from_port": self.from_port,
-            "to_process": self.to_process,
-            "to_port": self.to_port,
-            **({"adapter": self.adapter} if self.adapter is not None else {}),
-        }
-
 
 @dataclass(frozen=True, slots=True)
-class NfWorkflowOutputConnection:
+class NfWorkflowOutputConnection(_Model):
     """Connect one process output to one workflow output."""
 
     from_process: str
@@ -1115,19 +955,6 @@ class NfWorkflowOutputConnection:
         _validate_ir_identifier(self.from_port, field_name="connection source port")
         _validate_ir_identifier(self.to_port, field_name="workflow output")
 
-    def to_dict(self) -> dict[str, Any]:
-        """Return a JSON-compatible representation.
-
-        Returns:
-            dict[str, Any]: The connection with kind ``"workflow_output"``.
-        """
-        return {
-            "kind": "workflow_output",
-            "from_process": self.from_process,
-            "from_port": self.from_port,
-            "to_port": self.to_port,
-        }
-
 
 #: A connection that carries one source's values, a workflow input's or a process output's, into a process input:
 #: the connection a scatter adapter sits on, and each source of a step input.
@@ -1135,7 +962,7 @@ NfSourceConnection = NfWorkflowInputConnection | NfProcessConnection
 
 
 @dataclass(frozen=True, slots=True)
-class NfStepInputConnection:
+class NfStepInputConnection(_Model):
     """Connect one step input's bound values to one process input through the step-input idioms.
 
     ``sources`` are the values the step input binds, in the order it names
@@ -1179,24 +1006,42 @@ class NfStepInputConnection:
         """Whether the idioms give a list: every linkMerge does, unless a pickValue picks one value."""
         return self.pick_value not in PICKS_ONE
 
-    def to_dict(self) -> dict[str, Any]:
-        """Return a JSON-compatible representation.
 
-        Returns:
-            dict[str, Any]: The connection with kind ``"step_input"``.
-        """
-        return {
-            "kind": "step_input",
-            "sources": [source.to_dict() for source in self.sources],
-            "link_merge": self.link_merge,
-            "pick_value": self.pick_value,
-        }
+#: A connection into a process input.
+NfIncomingConnection = NfSourceConnection | NfStepInputConnection
+NfConnection = NfIncomingConnection | NfWorkflowOutputConnection
+#: The ``kind`` each variant of a union is written with.
+_KINDS: Final = {
+    NfLiteral: "literal", NfInputReference: "input", NfBasenameReference: "basename", NfFlag: "flag",
+    NfArrayBinding: "array", NfOptionalBinding: "optional_binding", NfShellLiteral: "shell_literal",
+    NfWorkflowInputConnection: "workflow_input", NfProcessConnection: "process",
+    NfWorkflowOutputConnection: "workflow_output", NfStepInputConnection: "step_input",
+}
+#: The fields the JSON form leaves out when they hold nothing.
+_LEFT_OUT: Final = frozenset({(NfProcess, "condition"), (NfProcess, "step_only_inputs"),
+                             (NfProcessConnection, "adapter")})
 
 
-NfConnection = NfWorkflowInputConnection | NfProcessConnection | NfWorkflowOutputConnection | NfStepInputConnection
+def incoming_connections(connections: Iterable[NfConnection]) -> dict[tuple[str, str], NfIncomingConnection]:
+    """The connection into each process input, by process and port: the model admits one."""
+    return {(connection.to_process, connection.to_port): connection for connection in connections
+            if not isinstance(connection, NfWorkflowOutputConnection)}
 
 
-def scalar_type(connection: NfSourceConnection | NfStepInputConnection, param_types: Mapping[str, str],
+def edges(connections: Iterable[NfConnection]) -> Iterator[NfSourceConnection | NfWorkflowOutputConnection]:
+    """Each connection that carries one source's values: every source of a step input, and every other as it is."""
+    for connection in connections:
+        yield from connection.sources if isinstance(connection, NfStepInputConnection) else (connection,)
+
+
+def scatter_edges(connections: Iterable[NfConnection]) -> list[NfSourceConnection]:
+    """The connections into scattered inputs, each of which carries its process's scatter method."""
+    return [connection for connection in connections
+            if isinstance(connection, (NfWorkflowInputConnection, NfProcessConnection))
+            and connection.adapter in SCATTER_METHODS]
+
+
+def scalar_type(connection: NfIncomingConnection, param_types: Mapping[str, str],
                 processes: Mapping[str, NfProcess]) -> str | None:
     """The type of the one scalar a ``val`` input receives over ``connection``, or None for a path or a list.
 
@@ -1207,7 +1052,7 @@ def scalar_type(connection: NfSourceConnection | NfStepInputConnection, param_ty
     type its sources share.
 
     Args:
-        connection (NfSourceConnection | NfStepInputConnection): The connection into the input.
+        connection (NfIncomingConnection): The connection into the input.
         param_types (Mapping[str, str]): Each parameter's declared type.
         processes (Mapping[str, NfProcess]): The processes a connection may come from, by name.
 
@@ -1235,6 +1080,23 @@ def scalar_type(connection: NfSourceConnection | NfStepInputConnection, param_ty
             return "string?" if producer.condition is not None and adapter is None else "string"
 
 
+def with_scalar_types(process: NfProcess, incoming: Mapping[tuple[str, str], NfIncomingConnection],
+                      param_types: Mapping[str, str], processes: Mapping[str, NfProcess]) -> NfProcess:
+    """``process`` with each val input given the scalar type its connection gives (design §9); a type the input
+    was given that disagrees is refused."""
+    def filled(port: NfPort) -> NfPort:
+        if port.qualifier != "val":
+            return port
+        received = scalar_type(incoming[(process.name, port.name)], param_types, processes)
+        if port.scalar_type not in (None, received):
+            raise ValueError(f"process input {process.name}.{port.name} receives "
+                             f"{'no one scalar' if received is None else repr(received)}, but its scalar type is "
+                             f"{port.scalar_type!r}")
+        return replace(port, scalar_type=received)
+    return replace(process, inputs=[filled(port) for port in process.inputs],
+                   step_only_inputs=[filled(port) for port in process.step_only_inputs])
+
+
 def process_dependencies(
     names: Iterable[str],
     connections: Iterable[NfConnection],
@@ -1250,10 +1112,9 @@ def process_dependencies(
         dict[str, set[str]]: Dependency sets keyed by process name.
     """
     dependencies: dict[str, set[str]] = {name: set() for name in names}
-    for connection in connections:
-        for edge in connection.sources if isinstance(connection, NfStepInputConnection) else (connection,):
-            if isinstance(edge, NfProcessConnection):
-                dependencies[edge.to_process].add(edge.from_process)
+    for edge in edges(connections):
+        if isinstance(edge, NfProcessConnection):
+            dependencies[edge.to_process].add(edge.from_process)
     return dependencies
 
 
@@ -1309,10 +1170,7 @@ def optional_output_problems(processes: Sequence[NfProcess], connections: Sequen
     representation, the [] sentinel, and no input has an approved lowering of it."""
     by_name = {process.name: process for process in processes}
     problems: list[str] = []
-    multi_scattered = sorted({connection.to_process for connection in connections
-                              if isinstance(connection, (NfWorkflowInputConnection, NfProcessConnection))
-                              and connection.adapter in SCATTER_METHODS})
-    for name in multi_scattered:
+    for name in sorted({edge.to_process for edge in scatter_edges(connections)}):
         if name in by_name and (optional := [port.name for port in by_name[name].outputs if port.optional]):
             problems.append(f"scattered process {name!r} cannot have the optional outputs {', '.join(optional)}")
     checked = {(connection.from_process, connection.from_port)
@@ -1322,15 +1180,14 @@ def optional_output_problems(processes: Sequence[NfProcess], connections: Sequen
                          if port.optional and port.one_file and (process.name, port.name) not in checked]:
             problems.append(f"process {process.name!r} optional outputs {', '.join(unchecked)} must match at most one "
                             "file and must reach a workflow output, where that is checked")
-    for connection in connections:
-        for source in connection.sources if isinstance(connection, NfStepInputConnection) else (connection,):
-            if not isinstance(source, NfProcessConnection) or source.from_process not in by_name:
-                continue
-            port = next((port for port in by_name[source.from_process].outputs if port.name == source.from_port), None)
-            if port is not None and port.optional:
-                problems.append(f"connection {source.from_process}.{source.from_port} -> {source.to_process}."
-                                f"{source.to_port} consumes an optional output, which may be null; only a workflow "
-                                "output can take it")
+    for source in edges(connections):
+        if not isinstance(source, NfProcessConnection) or source.from_process not in by_name:
+            continue
+        port = next((port for port in by_name[source.from_process].outputs if port.name == source.from_port), None)
+        if port is not None and port.optional:
+            problems.append(f"connection {source.from_process}.{source.from_port} -> {source.to_process}."
+                            f"{source.to_port} consumes an optional output, which may be null; only a workflow "
+                            "output can take it")
     return problems
 
 
@@ -1339,19 +1196,18 @@ def endpoint_problems(processes: Sequence[NfProcess], connections: Sequence["NfC
     destination names."""
     by_name = {process.name: process for process in processes}
     problems: list[str] = []
-    for connection in connections:
-        for each in connection.sources if isinstance(connection, NfStepInputConnection) else (connection,):
-            if isinstance(each, (NfProcessConnection, NfWorkflowOutputConnection)):
-                source = by_name.get(each.from_process)
-                if source is None:
-                    problems.append(f"connection references unknown source process {each.from_process!r}")
-                elif each.from_port not in {port.name for port in source.outputs}:
-                    problems.append(f"connection references unknown output port {each.from_process}.{each.from_port}")
+    for each in edges(connections):
+        if isinstance(each, (NfProcessConnection, NfWorkflowOutputConnection)):
+            source = by_name.get(each.from_process)
+            if source is None:
+                problems.append(f"connection references unknown source process {each.from_process!r}")
+            elif each.from_port not in {port.name for port in source.outputs}:
+                problems.append(f"connection references unknown output port {each.from_process}.{each.from_port}")
     return problems
 
 
 @dataclass(frozen=True, slots=True)
-class ExecutableNextflowWorkflow:
+class ExecutableNextflowWorkflow(_Model):
     """Closed, immutable, versioned executable representation of a DSL2 workflow.
 
     ``param_types`` gives every parameter in ``params`` its declared type,
@@ -1431,12 +1287,7 @@ class ExecutableNextflowWorkflow:
         incoming: set[tuple[str, str]] = set()
         workflow_outputs: set[str] = set()
         adapters_by_process: dict[str, set[str]] = {}
-        multi_scattered = {
-            connection.to_process: connection.adapter
-            for connection in self.connections
-            if isinstance(connection, (NfWorkflowInputConnection, NfProcessConnection))
-            and connection.adapter in SCATTER_METHODS
-        }
+        multi_scattered = {edge.to_process: edge.adapter for edge in scatter_edges(self.connections)}
         if optional := optional_output_problems(self.processes, self.connections):
             raise ValueError(optional[0])
         # A val input takes a path's value and stages nothing, so a step-only input takes any source.
@@ -1490,35 +1341,27 @@ class ExecutableNextflowWorkflow:
                             adapters_by_process.setdefault(to_process, set()).add(adapter)
                         self._record_incoming(incoming, to_process, to_port)
                     case NfProcessConnection(from_process, from_port, to_process, to_port, adapter):
-                        source = self._source_port(process_by_name, from_process, from_port)
+                        # Every source names an output of a process: `endpoint_problems` found none that does not.
+                        source = next(port for port in process_by_name[from_process].outputs if port.name == from_port)
                         destination = self._destination_port(process_by_name, to_process, to_port)
+                        where = f"connection {from_process}.{from_port} -> {to_process}.{to_port}"
                         # Only a multi-input-scattered source carries the hidden
                         # invocation index a gather sorts by, so the adapter is
                         # present exactly when the source is one.
                         if (adapter is not None) != (from_process in multi_scattered):
-                            raise ValueError(
-                                f"connection {from_process}.{from_port} -> {to_process}.{to_port} must carry "
-                                "a gather adapter exactly when its source is a multi-input scatter"
-                            )
+                            raise ValueError(f"{where} must carry a gather adapter exactly when its source is a "
+                                             "multi-input scatter")
                         if adapter is not None and process_by_name[from_process].condition is not None:
                             # A skipped invocation gathers as the [] null sentinel.
                             # A workflow output reports it as null; a step's input
                             # cannot hold it (a path array fails inside Nextflow).
-                            raise ValueError(
-                                f"connection {from_process}.{from_port} -> {to_process}.{to_port} gathers "
-                                f"the skipped positions of conditional process {from_process!r}; its outputs "
-                                "can only reach a workflow output"
-                            )
+                            raise ValueError(f"{where} gathers the skipped positions of conditional process "
+                                             f"{from_process!r}; its outputs can only reach a workflow output")
                         if adapter is not None and multi_scattered.get(from_process) == "nested_crossproduct":
-                            raise ValueError(
-                                f"connection {from_process}.{from_port} -> {to_process}.{to_port} consumes a "
-                                "nested_crossproduct result, which reaches workflow outputs only"
-                            )
+                            raise ValueError(f"{where} consumes a nested_crossproduct result, which reaches workflow "
+                                             "outputs only")
                         if adapter == "gather" and merge is None and not destination.is_array:
-                            raise ValueError(
-                                f"connection {from_process}.{from_port} -> {to_process}.{to_port} gathers "
-                                "into a port that is not array-typed"
-                            )
+                            raise ValueError(f"{where} gathers into a port that is not array-typed")
                         if adapter in SCATTER_METHODS:
                             if (to_process, to_port) in carried:
                                 raise ValueError(f"step-only input {to_process}.{to_port} cannot be scattered: no "
@@ -1535,16 +1378,11 @@ class ExecutableNextflowWorkflow:
                         # single value, failing inside Nextflow rather than here.
                         # A gather is the one approved scalar-to-array edge.
                         if adapter is None and merge is None and source.is_array != destination.is_array:
-                            raise ValueError(
-                                f"connection {from_process}.{from_port} -> {to_process}.{to_port} "
-                                "joins incompatible channel cardinalities"
-                            )
+                            raise ValueError(f"{where} joins incompatible channel cardinalities")
                         if merge is None and source.path_kind != destination.path_kind \
                                 and (to_process, to_port) not in carried:
-                            raise ValueError(
-                                f"connection {from_process}.{from_port} -> {to_process}.{to_port} joins a "
-                                f"{source.path_kind or 'value'} output to a {destination.path_kind or 'value'} input"
-                            )
+                            raise ValueError(f"{where} joins a {source.path_kind or 'value'} output to a "
+                                             f"{destination.path_kind or 'value'} input")
                         if source.capture == "text" and process_by_name[from_process].condition is None:
                             # The qualifier axis still has no general agreement
                             # check for process edges, because every process
@@ -1567,8 +1405,7 @@ class ExecutableNextflowWorkflow:
                             )
                         else:
                             self._record_incoming(incoming, to_process, to_port)
-                    case NfWorkflowOutputConnection(from_process, from_port, to_port):
-                        self._source_port(process_by_name, from_process, from_port)
+                    case NfWorkflowOutputConnection(to_port=to_port):
                         if to_port in workflow_outputs:
                             raise ValueError(f"workflow contains duplicate output emit name {to_port!r}")
                         workflow_outputs.add(to_port)
@@ -1593,22 +1430,10 @@ class ExecutableNextflowWorkflow:
         """Give each val input the scalar type its connection gives (design §9), refusing one given that disagrees,
         and type each condition over the filled inputs."""
         process_by_name = {process.name: process for process in self.processes}
-        incoming = {(connection.to_process, connection.to_port): connection for connection in self.connections
-                    if not isinstance(connection, NfWorkflowOutputConnection)}
-
-        def filled(process: NfProcess, port: NfPort) -> NfPort:
-            if port.qualifier != "val":
-                return port
-            received = scalar_type(incoming[(process.name, port.name)], self.param_types, process_by_name)
-            if port.scalar_type not in (None, received):
-                raise ValueError(f"process input {process.name}.{port.name} receives "
-                                 f"{'no one scalar' if received is None else repr(received)}, but its scalar type is "
-                                 f"{port.scalar_type!r}")
-            return replace(port, scalar_type=received)
+        incoming = incoming_connections(self.connections)
         processes = []
         for process in self.processes:
-            process = replace(process, inputs=[filled(process, port) for port in process.inputs],
-                              step_only_inputs=[filled(process, port) for port in process.step_only_inputs])
+            process = with_scalar_types(process, incoming, self.param_types, process_by_name)
             if process.condition is not None:
                 _type_condition(process.name, process.condition, process.all_inputs)
             processes.append(process)
@@ -1627,11 +1452,7 @@ class ExecutableNextflowWorkflow:
             process_dependencies(position, self.connections), error="workflow connections contain a cycle",
             key=position.__getitem__,
         )
-        scattered = {
-            (connection.to_process, connection.to_port) for connection in self.connections
-            if isinstance(connection, (NfWorkflowInputConnection, NfProcessConnection))
-            and connection.adapter in SCATTER_METHODS
-        }
+        scattered = {(edge.to_process, edge.to_port) for edge in scatter_edges(self.connections)}
         processes = []
         for name in order:
             process = self.processes[position[name]]
@@ -1643,12 +1464,10 @@ class ExecutableNextflowWorkflow:
             for index, process in enumerate(processes) for port_index, port in enumerate(process.all_inputs)
         }
         outputs = [connection for connection in self.connections if isinstance(connection, NfWorkflowOutputConnection)]
-        incoming = sorted(
-            (connection for connection in self.connections if not isinstance(connection, NfWorkflowOutputConnection)),
-            key=lambda connection: destinations[(connection.to_process, connection.to_port)],
-        )
+        incoming = incoming_connections(self.connections)
         object.__setattr__(self, "processes", tuple(processes))
-        object.__setattr__(self, "connections", (*incoming, *outputs))
+        object.__setattr__(self, "connections", (
+            *(incoming[key] for key in sorted(incoming, key=destinations.__getitem__)), *outputs))
 
     @staticmethod
     def _check_merged(merge: NfStepInputConnection, source: str, channel: NfChannel, destination: NfPort,
@@ -1677,20 +1496,6 @@ class ExecutableNextflowWorkflow:
         raise ValueError(f"connection references unknown input port {process_name}.{port_name}")
 
     @staticmethod
-    def _source_port(
-        process_by_name: Mapping[str, NfProcess],
-        process_name: str,
-        port_name: str,
-    ) -> NfPort:
-        process = process_by_name.get(process_name)
-        if process is None:
-            raise ValueError(f"connection references unknown source process {process_name!r}")
-        for port in process.outputs:
-            if port.name == port_name:
-                return port
-        raise ValueError(f"connection references unknown output port {process_name}.{port_name}")
-
-    @staticmethod
     def _record_incoming(incoming: set[tuple[str, str]], process_name: str, port_name: str) -> None:
         endpoint = (process_name, port_name)
         if endpoint in incoming:
@@ -1704,15 +1509,8 @@ class ExecutableNextflowWorkflow:
             dict[str, Any]: Schema version, representation kind, name,
                 processes, connections, params, and param types.
         """
-        return {
-            "schema_version": self.SCHEMA_VERSION,
-            "representation_kind": self.REPRESENTATION_KIND,
-            "name": self.name,
-            "processes": [process.to_dict() for process in self.processes],
-            "connections": [connection.to_dict() for connection in self.connections],
-            "params": _thaw_json(self.params),
-            "param_types": dict(self.param_types),
-        }
+        return {"schema_version": self.SCHEMA_VERSION, "representation_kind": self.REPRESENTATION_KIND,
+                **_Model.to_dict(self)}
 
     def to_json(self) -> str:
         """Serialize this executable workflow deterministically.

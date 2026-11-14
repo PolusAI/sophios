@@ -96,7 +96,8 @@ def _provoke_literal_type_mismatch() -> None:
 
 def _never_converges() -> None:
     """Drive the typed Infer fixed-point guard to its explicit limit."""
-    from sophios.ir import InferencePolicy, Namespace, WorkflowGraph, infer
+    from sophios.ir.infer import InferencePolicy, infer
+    from sophios.ir.types import Namespace, WorkflowGraph
     result = infer(WorkflowGraph(Namespace()), InferencePolicy(iteration_limit=0))
     if result.graph is None:
         raise SophiosError(result.diagnostics)

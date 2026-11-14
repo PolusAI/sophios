@@ -12,7 +12,7 @@ def read_wic(text: str, filename: str = 'written.wic') -> dict[str, Any]:
     """`text` as `parse` reads it, in the desugared spelling `to_json` writes; it must parse cleanly, or a claim about a
     valid document is vacuous."""
     result = parse(text, filename)
-    assert result.ok and result.document is not None, [str(d) for d in result.diagnostics]
+    assert not result.diagnostics.has_errors and result.document is not None, [str(d) for d in result.diagnostics]
     return to_json(result.document)
 
 

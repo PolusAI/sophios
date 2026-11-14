@@ -67,7 +67,7 @@ def _sidecars(graph: WorkflowGraph, sidecar: WicSidecar | None, registry: Regist
     for child in graph.children:
         step = calls[child.namespace.parts[-1]]
         assert step.run is not None  # a compiled step runs something
-        workflow = registry.workflow(step.run.process_id)
+        workflow = registry.workflow(step.run)
         assert workflow is not None and workflow.parsed.document is not None  # Resolve read it
         called = called_document(workflow.parsed.document, _entry(graph, sidecar, step), registry)
         found |= _sidecars(child, called.sidecar if called else None, registry)
@@ -118,7 +118,7 @@ def _box(graph: WorkflowGraph, step: StepNode, sidecars: _Sidecars, names: Names
     the background's colour, and its outline and label take the foreground's."""
     label = names.step(step.id) if settings['graph_label_stepname'] else step.id.name
     style = 'rounded'
-    if step.run is not None and step.run.child is not None:
+    if graph.child(step.id) is not None:
         called = graphviz_entry(sidecars[graph.namespace.child(step.id)])
         style += ', invis' if 'invis' in called.get('style', '') else ''
     else:

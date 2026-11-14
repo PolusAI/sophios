@@ -58,7 +58,6 @@ from pathlib import Path
 from typing import Any, NoReturn
 
 from sophios.ir.resolved import Construct, NotLowered, Refusal
-from sophios.lang.cwl import SCATTER_METHODS
 from sophios.lang.diagnostics import SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
 from sophios.lang.spans import SourceSpan
@@ -74,6 +73,7 @@ from sophios.nf_types import (
     NfEntry,
     NfEnvVar,
     NfFlag,
+    NfIncomingConnection,
     NfInputReference,
     NfLiteral,
     NfOptionalBinding,
@@ -87,6 +87,8 @@ from sophios.nf_types import (
     NfTemplate,
     NfWorkflowInputConnection,
     NfWorkflowOutputConnection,
+    incoming_connections,
+    scatter_edges,
 )
 
 from ._ports import _validate_namespace_name
@@ -123,8 +125,6 @@ __all__ = [
 ]
 
 _KINDS = {"file": cwl.file, "directory": cwl.directory}
-#: A connection into a process input.
-_Incoming = NfSourceConnection | NfStepInputConnection
 
 
 def import_nextflow(directory: str | Path) -> Workflow:
@@ -148,9 +148,7 @@ def import_nextflow(directory: str | Path) -> Workflow:
         Workflow: The workflow, its steps in the order the pipeline calls them.
     """
     model, heads = read_nextflow(directory)
-    incoming: dict[tuple[str, str], _Incoming] = {
-        (edge.to_process, edge.to_port): edge for edge in model.connections
-        if not isinstance(edge, NfWorkflowOutputConnection)}
+    incoming = incoming_connections(model.connections)
     steps: dict[str, Step] = {}
     for process in model.processes:
         try:
@@ -201,7 +199,7 @@ def _argument(template: NfTemplate, position: int, paths: frozenset[str]) -> dic
     return {"value": _text(template, paths), "position": position}
 
 
-def _item(model: ExecutableNextflowWorkflow, edge: _Incoming) -> str:
+def _item(model: ExecutableNextflowWorkflow, edge: NfIncomingConnection) -> str:
     """The CWL type of each value an edge delivers."""
     if isinstance(edge, NfStepInputConnection):
         return _item(model, edge.sources[0])
@@ -219,7 +217,7 @@ def _null_compared(node: Expr) -> set[str]:
     return found.union(*(_null_compared(arg) for arg in node.args))
 
 
-def _optional(model: ExecutableNextflowWorkflow, process: NfProcess, port: NfPort, edge: _Incoming) -> bool:
+def _optional(model: ExecutableNextflowWorkflow, process: NfProcess, port: NfPort, edge: NfIncomingConnection) -> bool:
     """Whether the tool input is optional: as its binding or the condition needs, else as its source may be absent."""
     if any(isinstance(token, NfOptionalBinding) and token.name == port.name for token in process.command.tokens):
         return True
@@ -235,7 +233,7 @@ def _optional(model: ExecutableNextflowWorkflow, process: NfProcess, port: NfPor
     return False
 
 
-def _input(model: ExecutableNextflowWorkflow, process: NfProcess, port: NfPort, edge: _Incoming,
+def _input(model: ExecutableNextflowWorkflow, process: NfProcess, port: NfPort, edge: NfIncomingConnection,
            binding: dict[str, Any]) -> Input:
     item = _item(model, edge)
     return Input(cwl.array(item) if port.is_array else item, required=not _optional(model, process, port, edge),
@@ -251,7 +249,7 @@ def _output(port: NfPort, paths: frozenset[str]) -> Output:
 
 
 def _tool(model: ExecutableNextflowWorkflow, process: NfProcess,
-          incoming: dict[tuple[str, str], _Incoming]) -> CommandLineTool:
+          incoming: dict[tuple[str, str], NfIncomingConnection]) -> CommandLineTool:
     """The tool that lowers to ``process``: leading literal words are its base command, and every other token
     has its index among the rest as its position."""
     command = process.command
@@ -339,9 +337,7 @@ def _bind(model: ExecutableNextflowWorkflow, workflow: Workflow, steps: dict[str
                         StepInput(source=source) if (edge.to_process, edge.to_port) in step_only else source)
     for process in model.processes:
         step = steps[process.name]
-        scattered = [edge for edge in model.connections
-                     if isinstance(edge, NfSourceConnection)
-                     and edge.to_process == process.name and edge.adapter in SCATTER_METHODS]
+        scattered = [edge for edge in scatter_edges(model.connections) if edge.to_process == process.name]
         if scattered:
             ports = (getattr(step.inputs, edge.to_port) for edge in scattered)
             step.scatter_on(*ports, method=str(scattered[0].adapter))

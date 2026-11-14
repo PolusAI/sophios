@@ -2,8 +2,8 @@
 
 Every class here is a thin, order-preserving wrapper around a `cwl_utils`
 generated class: constructors accept the builder's public (snake_case)
-argument names, and `to_dict()`/`to_fields()` build the matching
-`cwl_utils.parser.cwl_v1_2` object and render it with `.save()`. CWL
+argument names, and `to_dict()` builds the matching
+`cwl_utils.parser.cwl_v1_2` object and renders it with `.save()`. CWL
 semantics (what fields exist, what they mean, how they serialize) come
 from `cwl_utils`; this module only adapts the calling convention.
 """
@@ -13,46 +13,120 @@ from `cwl_utils`; this module only adapts the calling convention.
 # pylint: disable=too-many-locals,redefined-builtin,too-many-lines
 
 from collections.abc import Mapping
+import copy
 from dataclasses import dataclass, field, fields as dataclass_fields
-from typing import Any, ClassVar, TypeVar, cast
+from typing import Any, ClassVar, Final, Self
 
 from cwl_utils.parser import cwl_v1_2 as _cwl_v12
 
-from ._tool_builder_support import (
-    _SUPPORT,
-    _apply_required,
-    _basename_expression,
-    _canonicalize_type,
-    _input_expression,
-    _merge_if_set,
-    _named_parameter,
-    _optional_binding,
-    _record_type_payload,
-    _render,
-    _render_doc,
-    _validate_api_name,
-)
+from ._tool_builder_support import _merge_if_set, _render, _render_doc
+from ._utils import validate_python_identifier_name
+
+#: No `default` given: `None` is a default a tool can state.
+_UNSET: Final = object()
 
 
-FrozenSpecT = TypeVar("FrozenSpecT")
+def _canonicalize_type(type_: Any) -> Any:
+    rendered = _render(type_)
+    match rendered:
+        case str() as text if text.endswith("?"):
+            return ["null", _canonicalize_type(text[:-1])]
+        case str() as text if text.endswith("[]"):
+            return {"type": "array", "items": _canonicalize_type(text[:-2])}
+        case dict() as mapping if mapping.get("type") == "array" and "items" in mapping:
+            return {**mapping, "items": _canonicalize_type(mapping["items"])}
+        case _:
+            return rendered
 
 
-def _replace_frozen(obj: FrozenSpecT, **changes: Any) -> FrozenSpecT:
-    """Copy a frozen dataclass-like object while overriding selected fields."""
-    clone = object.__new__(obj.__class__)
-    values = {
-        item.name: getattr(obj, item.name)
-        for item in dataclass_fields(cast(Any, obj))
-    }
-    values.update(changes)
-    for name, value in values.items():
-        object.__setattr__(clone, name, value)
-    return clone
+class _CWLNamespace:
+    """The CWL type vocabulary, as `cwl`: the types an `Input`, `Output` or `Field` takes.
+
+    The attributes are the CWL atomic types, written as their CWL names:
+    `cwl.null`, `cwl.boolean`, `cwl.int`, `cwl.long`, `cwl.float`, `cwl.double`,
+    `cwl.string`, `cwl.file` (`File`) and `cwl.directory` (`Directory`). The
+    methods build the composite types. A CWL type string such as `"File?"`,
+    `"string[]"` or `"Any"` is accepted wherever a type is.
+    """
+
+    __slots__ = ()
+
+    null = "null"
+    boolean = "boolean"
+    int = "int"
+    long = "long"
+    float = "float"
+    double = "double"
+    string = "string"
+    file = "File"
+    directory = "Directory"
+
+    def optional(self, type_: Any) -> list[Any]:
+        """Make a type optional: the union `["null", type_]`.
+
+        Args:
+            type_ (Any): The type; a type that is already optional is returned as it is.
+
+        Returns:
+            list[Any]: The union, as CWL writes it.
+        """
+        canonical = _canonicalize_type(type_)
+        if isinstance(canonical, list) and self.null in canonical:
+            return canonical
+        return [self.null, canonical]
+
+    def array(self, items: Any) -> dict[str, Any]:
+        """Make an array type: `{type: array, items: ...}`, which `"<items>[]"` also spells.
+
+        Args:
+            items (Any): The type of each element.
+
+        Returns:
+            dict[str, Any]: The array type.
+        """
+        return {"type": "array", "items": _canonicalize_type(items)}
+
+    def enum(self, *symbols: str, name: str | None = None) -> dict[str, Any]:
+        """Make an enum type: `{type: enum, symbols: [...]}`, a string from a fixed set.
+
+        Args:
+            symbols (str): The allowed values.
+            name (str | None): The type's `name`; a type given to `schema_definitions()`
+                needs one.
+
+        Returns:
+            dict[str, Any]: The enum type.
+        """
+        payload: dict[str, Any] = {"type": "enum", "symbols": list(symbols)}
+        _merge_if_set(payload, "name", name)
+        return payload
+
+    def record(
+        self,
+        fields: Mapping[str, "FieldSpec"] | list["FieldSpec | dict[str, Any]"],
+        *,
+        name: str | None = None,
+    ) -> dict[str, Any]:
+        """Make a record type: `{type: record, fields: [...]}`, a mapping with typed fields.
+
+        Args:
+            fields (Mapping[str, FieldSpec] | list[FieldSpec | dict[str, Any]]): The
+                `fields`: a `Fields(...)` collection or a mapping of names to `Field`
+                objects; or a list of named `Field` objects or field mappings.
+            name (str | None): The type's `name`; a type given to `schema_definitions()`
+                needs one.
+
+        Returns:
+            dict[str, Any]: The record type.
+        """
+        if isinstance(fields, Mapping):
+            fields = [spec.named(field_name) for field_name, spec in fields.items()]
+        payload: dict[str, Any] = {"type": "record", "fields": _render([*fields])}
+        _merge_if_set(payload, "name", name)
+        return payload
 
 
-def _set_frozen_attrs(obj: Any, **values: Any) -> None:
-    for name, value in values.items():
-        object.__setattr__(obj, name, value)
+cwl = _CWLNamespace()
 
 
 def _camel(name: str) -> str:
@@ -117,7 +191,7 @@ def secondary_file(pattern: Any, *, required: bool | str | None = None, **extra:
     Returns:
         SecondaryFile: The entry.
     """
-    return SecondaryFile(pattern=pattern, required=required, extra=dict(extra))
+    return SecondaryFile(pattern=pattern, required=required, extra=extra)
 
 
 @dataclass(eq=False)
@@ -160,8 +234,10 @@ class Dirent(_CWLObject):
         Raises:
             TypeError: If `reference` is not a named input.
         """
-        name = _named_parameter(reference, kind="input")
-        return cls(_input_expression(name), entryname or _basename_expression(name), writable, extra=extra or {})
+        name = getattr(reference, "name", None)
+        if not (isinstance(name, str) and name):
+            raise TypeError("input reference must be a named Input/Output object")
+        return cls(f"$(inputs.{name})", entryname or f"$(inputs.{name}.basename)", writable, extra=extra or {})
 
 
 @dataclass(eq=False)
@@ -243,26 +319,22 @@ class CommandArgument:
             str | dict[str, Any]: The bare word when only a string `value` is set,
             otherwise the binding mapping.
         """
-        binding_dict = {} if self.binding is None else self.binding.to_dict()
-        if self.value is None and not binding_dict and not self.extra:
-            return ""
-        match self.value, binding_dict, self.extra:
-            case str() as value, binding, extra if not binding and not extra:
-                return value
-        payload = dict(binding_dict)
+        payload = {} if self.binding is None else dict(self.binding.to_dict())
+        if not payload and not self.extra and isinstance(self.value, str | None):
+            return self.value or ""
         _merge_if_set(payload, "valueFrom", self.value)
         payload.update(_render(self.extra))
         return payload
 
 
 class _RequirementSpec(_CWLObject):
-    """A requirement or hint: rendered as `to_fields()` under its `class_name`."""
+    """A requirement or hint: `to_fields()` under its `class_name`, saved by the `cwl_utils` class `_cwl`."""
 
     class_name: ClassVar[str]
 
     def __init_subclass__(cls) -> None:
-        super().__init_subclass__()
         cls.class_name = cls.__name__
+        cls._cwl = getattr(_cwl_v12, cls.__name__)
 
     def to_fields(self) -> dict[str, Any]:
         """Render the requirement's fields, without its `class`.
@@ -288,7 +360,6 @@ class DockerRequirement(_RequirementSpec):
         extra (dict[str, Any]): Further fields, written as given.
     """
 
-    _cwl = _cwl_v12.DockerRequirement
     docker_pull: Any = None
     docker_load: Any = None
     docker_file: Any = None
@@ -306,7 +377,6 @@ class InlineJavascriptRequirement(_RequirementSpec):
         extra (dict[str, Any]): Further fields, written as given.
     """
 
-    _cwl = _cwl_v12.InlineJavascriptRequirement
     expression_lib: Any = None
 
 
@@ -319,7 +389,6 @@ class SchemaDefRequirement(_RequirementSpec):
         extra (dict[str, Any]): Further fields, written as given.
     """
 
-    _cwl = _cwl_v12.SchemaDefRequirement
     types: Any = field(metadata={"render": lambda values: [_canonicalize_type(value) for value in values]})
 
 
@@ -332,7 +401,6 @@ class LoadListingRequirement(_RequirementSpec):
         extra (dict[str, Any]): Further fields, written as given.
     """
 
-    _cwl = _cwl_v12.LoadListingRequirement
     load_listing: Any
 
 
@@ -343,8 +411,6 @@ class ShellCommandRequirement(_RequirementSpec):
     Args:
         extra (dict[str, Any]): Further fields, written as given.
     """
-
-    _cwl = _cwl_v12.ShellCommandRequirement
 
 
 @dataclass(eq=False)
@@ -374,7 +440,6 @@ class SoftwareRequirement(_RequirementSpec):
         extra (dict[str, Any]): Further fields, written as given.
     """
 
-    _cwl = _cwl_v12.SoftwareRequirement
     packages: Any
 
 
@@ -390,7 +455,6 @@ class InitialWorkDirRequirement(_RequirementSpec):
         extra (dict[str, Any]): Further fields, written as given.
     """
 
-    _cwl = _cwl_v12.InitialWorkDirRequirement
     listing: Any
 
 
@@ -403,7 +467,6 @@ class EnvVarRequirement(_RequirementSpec):
         extra (dict[str, Any]): Further fields, written as given.
     """
 
-    _cwl = _cwl_v12.EnvVarRequirement
     env_def: Any
 
 
@@ -423,7 +486,6 @@ class ResourceRequirement(_RequirementSpec):
         extra (dict[str, Any]): Further fields, written as given.
     """
 
-    _cwl = _cwl_v12.ResourceRequirement
     cores_min: Any = None
     cores_max: Any = None
     ram_min: Any = None
@@ -443,7 +505,6 @@ class NetworkAccess(_RequirementSpec):
         extra (dict[str, Any]): Further fields, written as given.
     """
 
-    _cwl = _cwl_v12.NetworkAccess
     network_access: Any
 
 
@@ -456,7 +517,6 @@ class WorkReuse(_RequirementSpec):
         extra (dict[str, Any]): Further fields, written as given.
     """
 
-    _cwl = _cwl_v12.WorkReuse
     enable_reuse: Any
 
 
@@ -471,7 +531,6 @@ class InplaceUpdateRequirement(_RequirementSpec):
         extra (dict[str, Any]): Further fields, written as given.
     """
 
-    _cwl = _cwl_v12.InplaceUpdateRequirement
     inplace_update: Any = True
 
 
@@ -484,12 +543,45 @@ class ToolTimeLimit(_RequirementSpec):
         extra (dict[str, Any]): Further fields, written as given.
     """
 
-    _cwl = _cwl_v12.ToolTimeLimit
     timelimit: Any
 
 
-class _CommonSpecMixin:
+class _ParameterSpec:
+    """A CWL parameter under construction: what `Field`, `Input` and `Output` share.
+
+    The subclasses are frozen dataclasses. A facet such as `label` is given to the constructor by keyword or set
+    by the method of the same name, which returns a changed copy.
+    """
+
     _name_context: ClassVar[str]
+    _plural: ClassVar[str]
+    type_: Any
+    name: str | None
+    extra: dict[str, Any]
+
+    def _assign(self, type_: Any, name: str | None, extra: dict[str, Any] | None, **attributes: Any) -> None:
+        """Set the attributes of a new parameter: the arguments the subclasses share, checked, then theirs."""
+        attributes |= {
+            "type_": type_,
+            "name": name if name is None else validate_python_identifier_name(name, context=self._name_context),
+            "extra": dict(extra or {}),
+        }
+        for attribute, value in attributes.items():
+            object.__setattr__(self, attribute, value)
+
+    def _replace(self, **attributes: Any) -> Self:
+        clone = copy.copy(self)
+        for attribute, value in attributes.items():
+            object.__setattr__(clone, attribute, value)
+        return clone
+
+    def _saved(self, cwl_class: type, after: dict[str, Any], **fields: Any) -> dict[str, Any]:
+        """The parameter as `cwl_class` saves these fields, then the fields `after` as given and `extra` rendered."""
+        if self.name is None:
+            raise ValueError(f"{self._plural} must have a name before serialization")
+        saved: dict[str, Any] = cwl_class(**fields | {"doc": _render_doc(fields["doc"])}).save()
+        saved.update(after | _render(self.extra))
+        return saved
 
     @classmethod
     def array(cls: Any, items: Any, **kwargs: Any) -> Any:
@@ -502,7 +594,7 @@ class _CommonSpecMixin:
         Returns:
             Any: The new object, of this class.
         """
-        return cls({"type": "array", "items": _canonicalize_type(items)}, **kwargs)
+        return cls(cwl.array(items), **kwargs)
 
     @classmethod
     def enum(cls: Any, *symbols: str, name: str | None = None, **kwargs: Any) -> Any:
@@ -516,9 +608,7 @@ class _CommonSpecMixin:
         Returns:
             Any: The new object, of this class.
         """
-        payload: dict[str, Any] = {"type": "enum", "symbols": list(symbols)}
-        _merge_if_set(payload, "name", name)
-        return cls(payload, **kwargs)
+        return cls(cwl.enum(*symbols, name=name), **kwargs)
 
     @classmethod
     def record(
@@ -539,47 +629,49 @@ class _CommonSpecMixin:
         Returns:
             Any: The new object, of this class.
         """
-        return cls(_record_type_payload(fields, name=name), **kwargs)
+        return cls(cwl.record(fields, name=name), **kwargs)
 
-    def named(self, name: str) -> Any:
+    def named(self, name: str) -> Self:
         """Return a copy with its name set; `Inputs`, `Outputs` and `Fields` call it.
 
         Args:
             name (str): The `id` (or a field's `name`), a Python identifier.
 
         Returns:
-            Any: The copy.
+            Self: The copy.
 
         Raises:
             ValueError: If `name` is not a Python identifier.
         """
-        return _replace_frozen(self, name=_validate_api_name(name, context=self._name_context))
+        return self._replace(name=validate_python_identifier_name(name, context=self._name_context))
 
-    def label(self, text: str) -> Any:
+    def label(self, text: str) -> Self:
         """Return a copy with its `label` set, a short title.
 
         Args:
             text (str): The `label`.
 
         Returns:
-            Any: The copy.
+            Self: The copy.
         """
-        return _replace_frozen(self, label_text=text)
+        return self._replace(label_text=text)
 
-    def doc(self, text: str | list[str]) -> Any:
+    def doc(self, text: str | list[str]) -> Self:
         """Return a copy with its `doc` set, a longer description.
 
         Args:
             text (str | list[str]): The `doc`; a list is written as a list of lines.
 
         Returns:
-            Any: The copy.
+            Self: The copy.
         """
-        return _replace_frozen(self, doc_text=text)
+        return self._replace(doc_text=text)
 
 
-class _DefaultSpecMixin:
-    def default(self, value: Any) -> Any:
+class _DefaultSpecMixin(_ParameterSpec):
+    default_value: Any
+
+    def default(self, value: Any) -> Self:
         """Return a copy with its `default` set, the value used when none is given.
 
         Args:
@@ -587,13 +679,39 @@ class _DefaultSpecMixin:
                 `{"class": "File", "location": "reads.fastq"}`.
 
         Returns:
-            Any: The copy.
+            Self: The copy.
         """
-        return _replace_frozen(self, default_value=value)
+        return self._replace(default_value=value)
+
+    def _default_entry(self) -> dict[str, Any]:
+        return {} if self.default_value is _UNSET else {"default": _render(self.default_value)}
 
 
-class _IOFacetMixin:
-    def format(self, value: Any) -> Any:
+class _IOFacetMixin(_ParameterSpec):
+    required: bool
+    label_text: str | None
+    doc_text: str | list[str] | None
+    format_value: Any
+    secondary_files_value: Any
+    streamable_value: bool | None
+    load_contents_value: bool | None
+    load_listing_value: str | None
+
+    def _facets(self) -> dict[str, Any]:
+        """The facets both an input and an output hold, as `cwl_utils` takes them."""
+        return {
+            "label": self.label_text,
+            "doc": self.doc_text,
+            "format": _render(self.format_value),
+            "secondaryFiles": _render(self.secondary_files_value),
+            "streamable": self.streamable_value,
+        }
+
+    def _type(self) -> Any:
+        """The declared type, made optional unless the parameter is required."""
+        return _canonicalize_type(self.type_) if self.required else cwl.optional(self.type_)
+
+    def format(self, value: Any) -> Self:
         """Return a copy with its `format` set, the file format as an ontology term.
 
         Args:
@@ -601,11 +719,11 @@ class _IOFacetMixin:
                 declared, for EDAM with `CommandLineTool.edam()`.
 
         Returns:
-            Any: The copy.
+            Self: The copy.
         """
-        return _replace_frozen(self, format_value=value)
+        return self._replace(format_value=value)
 
-    def secondary_files(self, *values: Any) -> Any:
+    def secondary_files(self, *values: Any) -> Self:
         """Return a copy with its `secondaryFiles` set, the files that travel with it.
 
         Args:
@@ -613,22 +731,22 @@ class _IOFacetMixin:
                 `.bai`, or mappings.
 
         Returns:
-            Any: The copy.
+            Self: The copy.
         """
-        return _replace_frozen(self, secondary_files_value=list(values))
+        return self._replace(secondary_files_value=list(values))
 
-    def streamable(self, value: bool) -> Any:
+    def streamable(self, value: bool) -> Self:
         """Return a copy with `streamable` set: the file may be read or written as a stream.
 
         Args:
             value (bool): `streamable`.
 
         Returns:
-            Any: The copy.
+            Self: The copy.
         """
-        return _replace_frozen(self, streamable_value=value)
+        return self._replace(streamable_value=value)
 
-    def load_contents(self, value: bool) -> Any:
+    def load_contents(self, value: bool) -> Self:
         """Return a copy with `loadContents` set: read the first 64 KiB of the file into `contents`.
 
         On an output it is written under `outputBinding`, for `output_eval`.
@@ -637,11 +755,11 @@ class _IOFacetMixin:
             value (bool): `loadContents`.
 
         Returns:
-            Any: The copy.
+            Self: The copy.
         """
-        return _replace_frozen(self, load_contents_value=value)
+        return self._replace(load_contents_value=value)
 
-    def load_listing(self, value: str) -> Any:
+    def load_listing(self, value: str) -> Self:
         """Return a copy with `loadListing` set, how deep a `Directory` is listed.
 
         On an output it is written on the output parameter, where CWL v1.2 does not
@@ -651,13 +769,13 @@ class _IOFacetMixin:
             value (str): `no_listing`, `shallow_listing` or `deep_listing`.
 
         Returns:
-            Any: The copy.
+            Self: The copy.
         """
-        return _replace_frozen(self, load_listing_value=value)
+        return self._replace(load_listing_value=value)
 
 
 @dataclass(frozen=True, slots=True, init=False)
-class FieldSpec(_CommonSpecMixin, _DefaultSpecMixin):
+class FieldSpec(_DefaultSpecMixin):
     """A field of a record type, written as one entry of its `fields`. `Field` is this class.
 
     `Field(cwl.int)` makes a field; the keyword it is given to in `Fields(...)`
@@ -665,12 +783,12 @@ class FieldSpec(_CommonSpecMixin, _DefaultSpecMixin):
     """
 
     _name_context: ClassVar[str] = "record field name"
-
+    _plural: ClassVar[str] = "Record fields"
     type_: Any
     name: str | None = None
     label_text: str | None = None
     doc_text: str | list[str] | None = None
-    default_value: Any = _SUPPORT.unset
+    default_value: Any = _UNSET
     extra: dict[str, Any] = field(default_factory=dict)
 
     def __init__(
@@ -680,7 +798,7 @@ class FieldSpec(_CommonSpecMixin, _DefaultSpecMixin):
         name: str | None = None,
         label: str | None = None,
         doc: str | list[str] | None = None,
-        default: Any = _SUPPORT.unset,
+        default: Any = _UNSET,
         extra: dict[str, Any] | None = None,
     ) -> None:
         """Make a record field.
@@ -696,15 +814,7 @@ class FieldSpec(_CommonSpecMixin, _DefaultSpecMixin):
         Raises:
             ValueError: If `name` is not a Python identifier.
         """
-        _set_frozen_attrs(
-            self,
-            type_=type_,
-            name=None if name is None else _validate_api_name(name, context="record field name"),
-            label_text=label,
-            doc_text=doc,
-            default_value=default,
-            extra=dict(extra or {}),
-        )
+        self._assign(type_, name, extra, label_text=label, doc_text=doc, default_value=default)
 
     def to_dict(self) -> dict[str, Any]:
         """Render the field as one entry of a record's `fields`.
@@ -715,22 +825,18 @@ class FieldSpec(_CommonSpecMixin, _DefaultSpecMixin):
         Raises:
             ValueError: If the field has no name.
         """
-        if self.name is None:
-            raise ValueError("Record fields must have a name before serialization")
-        payload: dict[str, Any] = _cwl_v12.CommandInputRecordField(
+        return self._saved(
+            _cwl_v12.CommandInputRecordField,
+            self._default_entry(),
             name=self.name,
             type_=_canonicalize_type(self.type_),
             label=self.label_text,
-            doc=_render_doc(self.doc_text),
-        ).save()
-        if self.default_value is not _SUPPORT.unset:
-            payload["default"] = _render(self.default_value)
-        payload.update(_render(self.extra))
-        return payload
+            doc=self.doc_text,
+        )
 
 
 @dataclass(frozen=True, slots=True, init=False)
-class InputSpec(_CommonSpecMixin, _DefaultSpecMixin, _IOFacetMixin):
+class InputSpec(_DefaultSpecMixin, _IOFacetMixin):
     """A tool input, written as one entry of the tool's `inputs`. `Input` is this class.
 
     `Input(cwl.file, position=1)` is a file given as the first positional
@@ -740,7 +846,7 @@ class InputSpec(_CommonSpecMixin, _DefaultSpecMixin, _IOFacetMixin):
     """
 
     _name_context: ClassVar[str] = "input name"
-
+    _plural: ClassVar[str] = "Inputs"
     type_: Any
     position: int | float | None = None
     flag: str | None = None
@@ -756,7 +862,7 @@ class InputSpec(_CommonSpecMixin, _DefaultSpecMixin, _IOFacetMixin):
     streamable_value: bool | None = None
     load_contents_value: bool | None = None
     load_listing_value: str | None = None
-    default_value: Any = _SUPPORT.unset
+    default_value: Any = _UNSET
     binding_extra: dict[str, Any] = field(default_factory=dict)
     extra: dict[str, Any] = field(default_factory=dict)
     name: str | None = None
@@ -779,7 +885,7 @@ class InputSpec(_CommonSpecMixin, _DefaultSpecMixin, _IOFacetMixin):
         streamable: bool | None = None,
         load_contents: bool | None = None,
         load_listing: str | None = None,
-        default: Any = _SUPPORT.unset,
+        default: Any = _UNSET,
         binding_extra: dict[str, Any] | None = None,
         extra: dict[str, Any] | None = None,
         name: str | None = None,
@@ -823,9 +929,10 @@ class InputSpec(_CommonSpecMixin, _DefaultSpecMixin, _IOFacetMixin):
         Raises:
             ValueError: If `name` is not a Python identifier.
         """
-        _set_frozen_attrs(
-            self,
-            type_=type_,
+        self._assign(
+            type_,
+            name,
+            extra,
             position=position,
             flag=flag,
             required=required,
@@ -842,8 +949,6 @@ class InputSpec(_CommonSpecMixin, _DefaultSpecMixin, _IOFacetMixin):
             load_listing_value=load_listing,
             default_value=default,
             binding_extra=dict(binding_extra or {}),
-            extra=dict(extra or {}),
-            name=None if name is None else _validate_api_name(name, context="input name"),
         )
 
     def value_from(self, expression: Any) -> "InputSpec":
@@ -856,7 +961,7 @@ class InputSpec(_CommonSpecMixin, _DefaultSpecMixin, _IOFacetMixin):
         Returns:
             InputSpec: The copy.
         """
-        return _replace_frozen(self, binding_value_from=expression)
+        return self._replace(binding_value_from=expression)
 
     def to_dict(self) -> dict[str, Any]:
         """Render the input as one entry of the tool's `inputs`.
@@ -867,39 +972,29 @@ class InputSpec(_CommonSpecMixin, _DefaultSpecMixin, _IOFacetMixin):
         Raises:
             ValueError: If the input has no name.
         """
-        if self.name is None:
-            raise ValueError("Inputs must have a name before serialization")
-        binding = _optional_binding(
-            CommandLineBinding(
-                position=self.position,
-                prefix=self.flag,
-                separate=self.separate,
-                item_separator=self.item_separator,
-                value_from=self.binding_value_from,
-                shell_quote=self.shell_quote,
-                extra=dict(self.binding_extra),
-            )
+        binding = CommandLineBinding(
+            position=self.position,
+            prefix=self.flag,
+            separate=self.separate,
+            item_separator=self.item_separator,
+            value_from=self.binding_value_from,
+            shell_quote=self.shell_quote,
+            extra=dict(self.binding_extra),
         )
-        payload: dict[str, Any] = _cwl_v12.CommandInputParameter(
+        return self._saved(
+            _cwl_v12.CommandInputParameter,
+            self._default_entry(),
             id=self.name,
-            type_=_apply_required(self.type_, self.required),
-            label=self.label_text,
-            doc=_render_doc(self.doc_text),
-            format=_render(self.format_value),
-            secondaryFiles=_render(self.secondary_files_value),
-            streamable=self.streamable_value,
+            type_=self._type(),
             loadContents=self.load_contents_value,
             loadListing=self.load_listing_value,
-            inputBinding=None if binding is None else binding.to_dict(),
-        ).save()
-        if self.default_value is not _SUPPORT.unset:
-            payload["default"] = _render(self.default_value)
-        payload.update(_render(self.extra))
-        return payload
+            inputBinding=binding.to_dict() or None,
+            **self._facets(),
+        )
 
 
 @dataclass(frozen=True, slots=True, init=False)
-class OutputSpec(_CommonSpecMixin, _IOFacetMixin):
+class OutputSpec(_IOFacetMixin):
     """A tool output, written as one entry of the tool's `outputs`. `Output` is this class.
 
     `Output(cwl.file, glob="*.csv")` is the file the tool writes;
@@ -909,7 +1004,7 @@ class OutputSpec(_CommonSpecMixin, _IOFacetMixin):
     """
 
     _name_context: ClassVar[str] = "output name"
-
+    _plural: ClassVar[str] = "Outputs"
     type_: Any
     required: bool = True
     glob: Any = None
@@ -973,11 +1068,12 @@ class OutputSpec(_CommonSpecMixin, _IOFacetMixin):
         Raises:
             ValueError: If `name` is not a Python identifier.
         """
-        _set_frozen_attrs(
-            self,
-            type_=type_,
-            required=required,
+        self._assign(
+            type_,
+            name,
+            extra,
             glob=glob,
+            required=required,
             load_contents_value=load_contents,
             output_eval=output_eval,
             label_text=label,
@@ -987,8 +1083,6 @@ class OutputSpec(_CommonSpecMixin, _IOFacetMixin):
             streamable_value=streamable,
             load_listing_value=load_listing,
             binding_extra=dict(binding_extra or {}),
-            extra=dict(extra or {}),
-            name=None if name is None else _validate_api_name(name, context="output name"),
         )
 
     @classmethod
@@ -1028,29 +1122,19 @@ class OutputSpec(_CommonSpecMixin, _IOFacetMixin):
         Raises:
             ValueError: If the output has no name.
         """
-        if self.name is None:
-            raise ValueError("Outputs must have a name before serialization")
-        binding = _optional_binding(
-            CommandOutputBinding(
-                glob=self.glob,
-                load_contents=self.load_contents_value,
-                output_eval=self.output_eval,
-                extra=dict(self.binding_extra),
-            )
+        binding = CommandOutputBinding(
+            glob=self.glob,
+            load_contents=self.load_contents_value,
+            output_eval=self.output_eval,
+            extra=dict(self.binding_extra),
         )
-        payload: dict[str, Any] = _cwl_v12.CommandOutputParameter(
+        # loadListing is not part of CommandOutputParameter in the CWL v1.2 schema; kept as a builder extension for
+        # symmetry with InputSpec.
+        return self._saved(
+            _cwl_v12.CommandOutputParameter,
+            {} if self.load_listing_value is None else {"loadListing": self.load_listing_value},
             id=self.name,
-            type_=_apply_required(self.type_, self.required),
-            label=self.label_text,
-            doc=_render_doc(self.doc_text),
-            format=_render(self.format_value),
-            secondaryFiles=_render(self.secondary_files_value),
-            streamable=self.streamable_value,
-            outputBinding=None if binding is None else binding.to_dict(),
-        ).save()
-        # loadListing is not part of CommandOutputParameter in the CWL v1.2
-        # schema; kept as a builder extension for symmetry with InputSpec.
-        if self.load_listing_value is not None:
-            payload["loadListing"] = self.load_listing_value
-        payload.update(_render(self.extra))
-        return payload
+            type_=self._type(),
+            outputBinding=binding.to_dict() or None,
+            **self._facets(),
+        )

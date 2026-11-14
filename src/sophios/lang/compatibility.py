@@ -1,4 +1,4 @@
-"""Version-owned judgments over raw CWL port type declarations.
+"""The judgment over raw CWL port type declarations.
 
 Answers one narrow question: may Sophios reject a user-authored reference
 before handing the emitted document to CWL? It does not normalize
@@ -6,12 +6,10 @@ declarations into a larger CWL type system, and does not replace the
 separate edge-inference candidate heuristic.
 """
 
-from collections.abc import Callable
 from enum import Enum
-from typing import Any, Final
+from typing import Any
 
 from .cwl import ATOMIC_TYPES
-from .versions import KNOWN_VERSIONS
 
 
 class TypeRelation(Enum):
@@ -33,80 +31,41 @@ def _expand_shorthand(declared: Any) -> Any:
     return declared
 
 
-# A flat decision table is clearer here than merging semantically distinct exits.
-def _v0_0_1(source: Any, sink: Any,  # pylint: disable=too-many-return-statements
-            source_active: frozenset[int] = frozenset(),
-            sink_active: frozenset[int] = frozenset()) -> TypeRelation:
-    """Judge one pair according to the raw-type rules of language 0.0.1."""
-    source = _expand_shorthand(source)
-    sink = _expand_shorthand(sink)
-
-    if (isinstance(source, dict) and id(source) in source_active) or \
-            (isinstance(sink, dict) and id(sink) in sink_active):
-        return TypeRelation.UNKNOWN
-
-    source_members = source if isinstance(source, list) else [source]
-    sink_members = sink if isinstance(sink, list) else [sink]
-    if isinstance(source, list) or isinstance(sink, list):
-        if not source_members or not sink_members:
-            return TypeRelation.UNKNOWN
-        if (isinstance(source, list) and id(source) in source_active) or \
-                (isinstance(sink, list) and id(sink) in sink_active):
-            return TypeRelation.UNKNOWN
-        nested_source = source_active | {id(source)} if isinstance(source, list) else source_active
-        nested_sink = sink_active | {id(sink)} if isinstance(sink, list) else sink_active
-        relations = [
-            _v0_0_1(source_member, sink_member, nested_source, nested_sink)
-            for source_member in source_members
-            for sink_member in sink_members
-        ]
-        if TypeRelation.OVERLAPS in relations:
-            return TypeRelation.OVERLAPS
-        if all(relation is TypeRelation.DISJOINT for relation in relations):
-            return TypeRelation.DISJOINT
-        return TypeRelation.UNKNOWN
-
-    # An `items`-less array is malformed, not an array; treating it as one
-    # would falsely answer `disjoint` for CWL to reject instead.
-    def _is_array(declared: Any) -> bool:
-        return isinstance(declared, dict) and declared.get('type') == 'array' and 'items' in declared
-
-    source_is_array = _is_array(source)
-    sink_is_array = _is_array(sink)
-    if source_is_array or sink_is_array:
-        if source_is_array and sink_is_array:
-            return _v0_0_1(source['items'], sink['items'],
-                           source_active | {id(source)}, sink_active | {id(sink)})
-        scalar = sink if source_is_array else source
-        return TypeRelation.DISJOINT \
-            if isinstance(scalar, str) and scalar in ATOMIC_TYPES else TypeRelation.UNKNOWN
-
-    if source == 'Any' or sink == 'Any':
-        return TypeRelation.UNKNOWN
-    if isinstance(source, str) and isinstance(sink, str):
-        if source not in ATOMIC_TYPES or sink not in ATOMIC_TYPES:
-            return TypeRelation.UNKNOWN
-        return TypeRelation.OVERLAPS if source == sink else TypeRelation.DISJOINT
-    return TypeRelation.UNKNOWN
+def _kind(declared: Any) -> str | None:
+    """An atom's own name, `array` for an array, and None for what Sophios does not judge: `Any`, a record, an enum,
+    a named schema. An array with no `items` is malformed, not an array: calling it one would answer `disjoint` for
+    what is CWL's to reject."""
+    if isinstance(declared, dict) and declared.get('type') == 'array' and 'items' in declared:
+        return 'array'
+    return declared if isinstance(declared, str) and declared in ATOMIC_TYPES else None
 
 
-_JUDGES: Final[dict[str, Callable[[Any, Any], TypeRelation]]] = {
-    '0.0.1': _v0_0_1,
-}
+def _of_union(relations: list[TypeRelation]) -> TypeRelation:
+    """What the members of a union prove together: overlapping if any does, disjoint only if every one is."""
+    if TypeRelation.OVERLAPS in relations:
+        return TypeRelation.OVERLAPS
+    return TypeRelation.DISJOINT if relations and set(relations) == {TypeRelation.DISJOINT} else TypeRelation.UNKNOWN
 
-if tuple(_JUDGES) != KNOWN_VERSIONS:
-    raise RuntimeError('Every Sophios language version must own a reference-type judgment')
 
-
-def reference_relation(source: Any, sink: Any, *, lang_version: str) -> TypeRelation:
+def reference_relation(source: Any, sink: Any, _in_source: frozenset[int] = frozenset(),
+                       _in_sink: frozenset[int] = frozenset()) -> TypeRelation:
     """Return the relation Sophios can prove between raw endpoint declarations.
 
     Non-mutating and conservative: a caller may reject a reference only for
     :attr:`TypeRelation.DISJOINT`; ``UNKNOWN`` leaves the final decision to
-    validation of the emitted CWL document.
+    validation of the emitted CWL document. A declaration that holds itself
+    is unknown where it comes round again.
     """
-    try:
-        judge = _JUDGES[lang_version]
-    except KeyError as exc:
-        raise ValueError(f'No reference judgment for lang_version {lang_version!r}') from exc
-    return judge(source, sink)
+    source, sink = _expand_shorthand(source), _expand_shorthand(sink)
+    if id(source) in _in_source or id(sink) in _in_sink:
+        return TypeRelation.UNKNOWN
+    if isinstance(source, list):
+        return _of_union([reference_relation(member, sink, _in_source | {id(source)}, _in_sink) for member in source])
+    if isinstance(sink, list):
+        return _of_union([reference_relation(source, member, _in_source, _in_sink | {id(sink)}) for member in sink])
+    kinds = _kind(source), _kind(sink)
+    if kinds == ('array', 'array'):
+        return reference_relation(source['items'], sink['items'], _in_source | {id(source)}, _in_sink | {id(sink)})
+    if None in kinds:
+        return TypeRelation.UNKNOWN
+    return TypeRelation.OVERLAPS if kinds[0] == kinds[1] else TypeRelation.DISJOINT

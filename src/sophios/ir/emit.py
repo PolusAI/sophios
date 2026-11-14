@@ -22,13 +22,13 @@ from copy import deepcopy
 from dataclasses import replace
 from typing import Any
 
-from ..lang import CwlRecord
+from ..lang import CWL_VERSION, CwlRecord
 from ..lang.nodes import OpaqueCwl
 from ..wic_types import Cwl
 from .declarations import written_order
 from .names import Names
 from .policy import RunPolicy, effective_when
-from .stepin import step_inputs, step_out
+from .stepin import step_inputs
 from .types import (EmissionDocument, EmittedValue, Expression, PortName, Record,
                     Source, StepNode, StepOutputRef, WorkflowGraph, WorkflowPort)
 
@@ -36,16 +36,11 @@ EDAM_NAMESPACE = ('edam', 'https://edamontology.org/')
 
 
 def _step_spelling(step: StepNode, names: Names, policy: RunPolicy) -> StepNode:
-    """`step` with its `run:` path written: the file its process is written to,
-    beside every other document of the tree, and the `when` `policy` gives it.
-    """
-    run = step.run
-    assert run is not None, 'surface refuses a graph with an unrun step'
+    """`step` with the `when` `policy` gives it."""
     interpreted = dict(step.interpreted)
     if (when := effective_when(step, names, policy)) is not None:
         interpreted['when'] = when
-    target = f'{names.file(step.id)}.cwl'
-    return replace(step, interpreted=tuple(interpreted.items()), run=replace(run, target=target))
+    return replace(step, interpreted=tuple(interpreted.items()))
 
 
 def surface(graph: WorkflowGraph, names: Names, *, policy: RunPolicy = RunPolicy()) -> EmissionDocument:
@@ -54,9 +49,7 @@ def surface(graph: WorkflowGraph, names: Names, *, policy: RunPolicy = RunPolicy
     Requirements implied by the steps, the EDAM namespace (only for a
     document that spells a format `edam:`), a step's `run:` path and the
     order fields appear in: none is a fact about the workflow, and none is
-    read by any phase. They are computed here, once per
-    emitted document, rather than in `complete`, which runs whenever a phase
-    needs the facts current.
+    read by any phase. They are computed here, once per emitted document.
 
     Args:
         graph (WorkflowGraph): One completed document, without its children.
@@ -66,19 +59,7 @@ def surface(graph: WorkflowGraph, names: Names, *, policy: RunPolicy = RunPolicy
 
     Returns:
         EmissionDocument: The same graph, carrying the spelling Emit renders.
-
-    Raises:
-        ValueError: If the graph states no document -- a missing version, or a
-            step with no run. Emit asks for the type this returns, so this
-            is the only place the question is asked.
     """
-    if not graph.cwl_version:
-        raise ValueError('an emission graph must declare its CWL version')
-    if not graph.lang_version:
-        raise ValueError('an emission graph must declare its Sophios language version')
-    if any(step.run is None for step in graph.steps):
-        raise ValueError('every step in an emission graph needs a run')
-
     steps = [_step_spelling(step, names, policy) for step in graph.steps]
 
     requirements = dict(graph.requirements)
@@ -157,7 +138,7 @@ def emit(graph: EmissionDocument, names: Names) -> Cwl:
     ins = step_inputs(graph)
     known: dict[str, Any] = {
         'steps': [_emit_step(step, ins[step.id], names) for step in graph.steps],
-        'cwlVersion': graph.cwl_version,
+        'cwlVersion': CWL_VERSION,
         'class': 'Workflow',
     }
     if graph.namespaces:
@@ -180,35 +161,24 @@ def emit_job_inputs(graph: EmissionDocument, names: Names) -> Cwl:
 
 def _emit_step(node: StepNode, ins: tuple[tuple[PortName, EmittedValue], ...],
                names: Names) -> dict[str, Any]:
-    """Render one structured step descriptor in canonical order."""
-    run = node.run
-    assert run is not None, 'an EmissionDocument has no unrun step'
+    """Render one structured step descriptor in canonical order. A call's ports are its child's boundary,
+    in the child's order, so `out:` is the step's outputs whatever it runs."""
     interpreted = dict(node.interpreted)
     known: dict[str, Any] = {
         'id': names.step(node.id),
         'in': {names.port(name): _emit_binding(value, names) for name, value in ins},
-        'run': deepcopy(run.target),
-        'out': [names.port(name) for name in step_out(node)],
+        # The file the step's process is written to, beside every other document of the tree.
+        'run': f'{names.file(node.id)}.cwl',
+        'out': [names.port(port.id.port) for port in node.outputs],
     }
-    scatter = interpreted.get('scatter')
-    if scatter is not None:
-        known['scatter'] = _emit_scatter(scatter, node.scatter_ports, names)
-    scatter_method = interpreted.get('scatterMethod')
-    if scatter_method is not None:
-        known['scatterMethod'] = deepcopy(scatter_method)
-    when = interpreted.get('when')
-    if when is not None:
-        known['when'] = deepcopy(when)
+    if interpreted.get('scatter') is not None:
+        # Spelled from the ports Lower resolved it to, always as a list.
+        known['scatter'] = [names.port(port) for port in node.scatter_ports]
+    for key in ('scatterMethod', 'when'):
+        if interpreted.get(key) is not None:
+            known[key] = deepcopy(interpreted[key])
     known.update({name: deepcopy(value) for name, value in node.passthrough})
     return known
-
-
-def _emit_scatter(scatter: Any, ports: tuple[PortName, ...], names: Names) -> Any:
-    """`scatter:` spelled from its resolved `ports`, always as a list."""
-    match scatter:
-        case list() | str():
-            return [names.port(port) for port in ports]
-    return deepcopy(scatter)
 
 
 def _emit_binding(value: EmittedValue, names: Names) -> str | dict[str, Any]:

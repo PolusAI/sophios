@@ -1,9 +1,10 @@
-"""A step's `in:` and `out:`, derived from the finished graph at Emit."""
+"""A step's `in:`, derived from the finished graph at Emit."""
 from ..lang.nodes import CwlRecord, EdgeRef, InlineLiteral, RawCwlRef, UnresolvedName
 from .types import (
     AuthoredName,
     DeferredObligation,
     DerivedName,
+    Direction,
     Edge,
     EdgeOrigin,
     EmittedValue,
@@ -12,9 +13,7 @@ from .types import (
     PortName,
     Record,
     Source,
-    SourceList,
     StepId,
-    StepNode,
     StepOutputRef,
     WorkflowGraph,
 )
@@ -36,9 +35,8 @@ def step_inputs(graph: WorkflowGraph) -> dict[StepId, tuple[tuple[PortName, Emit
                     ins[step.id][binding.sink.port] = Source(AuthoredName(text), shorthand=True)
 
     def bind(edge: Edge, *, explicit: bool) -> None:
-        target_step, target_port = direct_sink(graph, edge.sink)
-        if target_step in ins:
-            ins[target_step][target_port] = Source(direct_source(graph, edge.source), shorthand=not explicit)
+        sink = direct_sink(graph, edge.sink)
+        ins[sink.step][sink.port] = Source(direct_source(graph, edge.source), shorthand=not explicit)
 
     for step in graph.steps:
         for binding in step.bindings:
@@ -50,9 +48,8 @@ def step_inputs(graph: WorkflowGraph) -> dict[StepId, tuple[tuple[PortName, Emit
     shorthand_relays = set(graph.shorthand_relays)
     for name, sinks in graph.input_mapping:
         for sink in sinks:
-            target_step, target_port = direct_sink(graph, sink)
-            if target_step in ins:
-                ins[target_step].setdefault(target_port, Source(name, shorthand=name in shorthand_relays))
+            local = direct_sink(graph, sink)
+            ins[local.step].setdefault(local.port, Source(name, shorthand=name in shorthand_relays))
 
     _spell_records(graph, ins)
     return {step_id: tuple(values.items()) for step_id, values in ins.items()}
@@ -62,11 +59,11 @@ def _spell_records(graph: WorkflowGraph, ins: dict[StepId, dict[PortName, Emitte
     """Replace each record-bound entry of `ins` by the record, spelled from its own sources."""
     for step in graph.steps:
         for binding in step.bindings:
-            if isinstance(binding.value, CwlRecord) and isinstance(binding.resolution, SourceList):
+            if isinstance(binding.value, CwlRecord) and isinstance(binding.resolution, tuple):
                 relayed = ins[step.id].get(binding.sink.port)
                 ins[step.id][binding.sink.port] = Record(
                     tuple(_record_source(graph, source, item, relayed)
-                          for source, item in zip(binding.value.sources, binding.resolution.items, strict=True)),
+                          for source, item in zip(binding.value.sources, binding.resolution, strict=True)),
                     binding.value.fields)
 
 
@@ -82,31 +79,23 @@ def _record_source(graph: WorkflowGraph, source: EdgeRef | UnresolvedName,
     return relayed.ref
 
 
-def step_out(step: StepNode) -> tuple[PortName, ...]:
-    """`step`'s `out:`: a subworkflow call's is its child's `workflow_outputs`, in their order."""
-    if step.run is not None and step.run.child is not None:
-        return tuple(port.name for port in step.run.child.workflow_outputs)
-    return tuple(port.id.port for port in step.outputs)
-
-
-def _call_of(graph: WorkflowGraph, step: StepId) -> tuple[WorkflowGraph, StepNode]:
-    """The child graph holding `step`, and the step of `graph` that calls it."""
-    child = next(child for child in graph.children
-                 if step.namespace.parts[:len(child.namespace.parts)] == child.namespace.parts)
-    return child, next(node for node in graph.steps if node.run is not None and node.run.child == child)
+def _call_of(graph: WorkflowGraph, step: StepId) -> tuple[StepId, WorkflowGraph]:
+    """The step of `graph` whose call holds `step`, and the graph it calls."""
+    call = step.namespace.parts[len(graph.namespace.parts)]
+    return call, next(child for child in graph.children if child.namespace.parts[-1] == call)
 
 
 def direct_source(graph: WorkflowGraph, source: PortId) -> StepOutputRef:
     """The `step/port` reference `source` resolves to, one hop into `graph`."""
     if source.step.namespace == graph.namespace:
         return StepOutputRef(source.step, source.port)
-    child, call = _call_of(graph, source.step)
-    return StepOutputRef(call.id, next(name for name, port in child.output_mapping if port == source))
+    call, child = _call_of(graph, source.step)
+    return StepOutputRef(call, next(name for name, port in child.output_mapping if port == source))
 
 
-def direct_sink(graph: WorkflowGraph, sink: PortId) -> tuple[StepId, PortName]:
-    """The step and port `sink` is reached through, one hop into `graph`."""
+def direct_sink(graph: WorkflowGraph, sink: PortId) -> PortId:
+    """The input of a step of `graph` that `sink` is reached through, one hop into `graph`."""
     if sink.step.namespace == graph.namespace:
-        return sink.step, sink.port
-    child, call = _call_of(graph, sink.step)
-    return call.id, next(name for name, sinks in child.input_mapping if sink in sinks)
+        return sink
+    call, child = _call_of(graph, sink.step)
+    return PortId(call, Direction.INPUT, next(name for name, sinks in child.input_mapping if sink in sinks))

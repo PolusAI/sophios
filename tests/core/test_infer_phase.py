@@ -9,9 +9,11 @@ import pytest
 import yaml
 
 from sophios.compiler import CompileSettings, compile_source
-from sophios.ir import InferencePolicy, InsertionCatalog, front_end, infer, link
 from sophios.ir.frontdoor import bundle_from_disk
+from sophios.ir.infer import InferencePolicy, InsertionCatalog, infer
+from sophios.ir.link import link
 from sophios.ir.names import Names
+from sophios.ir.pipeline import front_end
 from sophios.ir.types import EdgeOrigin, WorkflowGraph
 from sophios.lang.diagnostics import Diagnostics, SophiosError
 from sophios.utils_cwl import desugar_into_canonical_normal_form

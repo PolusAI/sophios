@@ -162,11 +162,6 @@ class Resolved:
     document: ResolvedDocument | None
     diagnostics: Diagnostics
 
-    @property
-    def ok(self) -> bool:
-        """Whether resolution produced a document without errors."""
-        return self.document is not None and not self.diagnostics.has_errors
-
 
 def resolve(document: Document, registry: RegistrySnapshot, *, name: str = 'workflow',
             lang_version: str | None = None) -> Resolved:
@@ -177,7 +172,7 @@ def resolve(document: Document, registry: RegistrySnapshot, *, name: str = 'work
     document = selected
     reported: set[str] = set()
     _report_stale_keys(document.sidecar, document, name, reported)
-    version = resolve_lang_version(lang_version, _version_pins(document))
+    version = resolve_lang_version(lang_version, version_pins(document))
     resolved, diagnostics = _resolve_document(document, registry, name, version, (), reported,
                                               registry.root_directory)
     _copy_diagnostics(diagnostics, selection_diagnostics)
@@ -190,16 +185,20 @@ def _resolve_document(document: Document, registry: RegistrySnapshot, name: str,
                       directory: Path | None) \
         -> tuple[ResolvedDocument, Diagnostics]:
     diagnostics = Diagnostics()
-    document = _apply_parameters(document)
+    contributed: list[Step] = []
     steps: list[ResolvedStep] = []
     counts = Counter(step.id for step in document.steps)
     for index, step in enumerate(document.steps, start=1):
         sidecar = step_sidecar(document.sidecar, index, step.id, counts[step.id])
+        # Its `wic: steps: (N, name):` body contributes to the step before its process is resolved.
+        step = _contributed_step(step, sidecar)
+        contributed.append(step)
         process = _resolve_process(step, sidecar, registry, version, trail, diagnostics, reported,
                                    directory)
         if process is not None:
             steps.append(ResolvedStep(step, process, sidecar))
-    return ResolvedDocument(name, document, tuple(steps), version, directory), diagnostics
+    return ResolvedDocument(name, replace(document, steps=tuple(contributed)), tuple(steps), version,
+                            directory), diagnostics
 
 
 # pylint: disable-next=too-many-arguments,too-many-positional-arguments,too-many-locals
@@ -207,7 +206,7 @@ def _resolve_process(step: Step, sidecar: WicSidecar | None, registry: RegistryS
                      version: str, trail: tuple[RegistryKey, ...],
                      diagnostics: Diagnostics, reported: set[str],
                      directory: Path | None) -> ResolvedProcess | None:
-    namespace = str(dict(sidecar.entries).get('namespace', 'global')) if sidecar is not None else 'global'
+    namespace = namespace_of(sidecar)
     run = dict(step.interpreted).get('run')
     generated = step.id == 'python_script'
     name = generated_process_id(step) if generated else _stem(run if isinstance(run, str) else step.id)
@@ -248,8 +247,8 @@ def _resolve_process(step: Step, sidecar: WicSidecar | None, registry: RegistryS
     return ResolvedProcess(
         tool.key,
         tool.run_path,
-        _ports(cwl.get('inputs', {}), output=False),
-        _ports(cwl.get('outputs', {}), output=True),
+        process_ports(cwl.get('inputs', {}), output=False),
+        process_ports(cwl.get('outputs', {}), output=True),
         deepcopy(cwl),
         generated=generated,
     )
@@ -315,7 +314,7 @@ def _own_run_name(step: Step, registry: RegistrySnapshot, directory: Path | None
     run = dict(step.interpreted).get('run')
     if isinstance(run, dict):
         assert directory is not None and registry.root_directory is not None, 'an inline body was read from a document'
-        return inline_run_name(step, path_from_root(directory, registry.root_directory))
+        return inline_run_name(step.id, run, path_from_root(directory, registry.root_directory))
     return registry.run_name(directory, run) if isinstance(run, str) else None
 
 
@@ -327,8 +326,8 @@ def path_from_root(path: Path, root: Path) -> str:
         return path.as_posix()
 
 
-def inline_run_name(step: Step, document_dir: str) -> str | None:
-    """The registry name of an inline ``run:`` body, or None for any other step.
+def inline_run_name(step_id: str, run: Mapping[str, OpaqueCwl], document_dir: str) -> str:
+    """The registry name of the inline ``run:`` body of the step ``step_id``.
 
     A body is identified by its content and by the directory of the document
     that writes it (``document_dir``, from the root document's), so two steps
@@ -337,16 +336,8 @@ def inline_run_name(step: Step, document_dir: str) -> str | None:
     different files. It is identified as it is registered, in ``CWL_VERSION``:
     a ``cwlVersion`` inside it is ignored.
     """
-    run = dict(step.interpreted).get('run')
-    if not isinstance(run, dict):
-        return None
     identity = json.dumps([document_dir, {**run, 'cwlVersion': CWL_VERSION}], sort_keys=True, default=str)
-    return _hashed(_stem(step.id), identity)
-
-
-def is_run_path(run: str) -> bool:
-    """Whether a ``run:`` string names a ``.cwl`` or ``.wic`` file rather than a registry entry."""
-    return run.endswith(('.cwl', '.wic'))
+    return _hashed(_stem(step_id), identity)
 
 
 def run_path_name(run: str, root_relative: str) -> str:
@@ -389,7 +380,7 @@ def _select_implementation(document: Document,
     selected = dict(document.sidecar.implementations).get(chosen)
     if selected is not None:
         return selected, diagnostics
-    namespace = str(entries.get('namespace', 'global'))
+    namespace = namespace_of(document.sidecar)
     source = registry.workflow(RegistryKey(namespace, chosen))
     if source is None:
         diagnostics.error(SophiosErrorCode.SUBWORKFLOW_INVALID,
@@ -414,7 +405,8 @@ def _input_identity(value: InputValue) -> Any:
             return ('record', [_input_identity(source) for source in sources], fields)
 
 
-def _ports(raw: Any, *, output: bool) -> tuple[ResolvedPort, ...]:
+def process_ports(raw: Any, *, output: bool) -> tuple[ResolvedPort, ...]:
+    """The ports a process declares under its `inputs:` or its `outputs:`, in CWL's map or list form."""
     return tuple(ResolvedPort(name, port_declaration(declaration, output=output))
                  for name, declaration in _named_entries(raw))
 
@@ -449,8 +441,8 @@ def _workflow_interface(document: Document, key: RegistryKey, diagnostics: Diagn
                           document.span)
     if listed:
         return None
-    return (_ports(passthrough.get('inputs', {}), output=False),
-            _ports(passthrough.get('outputs', {}), output=True))
+    return (process_ports(passthrough.get('inputs', {}), output=False),
+            process_ports(passthrough.get('outputs', {}), output=True))
 
 
 #: The two keys a `(N, name)` body contributes to the step it names; every
@@ -461,16 +453,6 @@ _CONTRIBUTED_KEYS = ('in', 'out')
 #: none. The parser gives every `wic:` block a span, so this stands only for a
 #: sidecar built in memory, where there is no source position to name.
 _CONTRIBUTION_SPAN = SourceSpan('<wic parameter passing>', 1, 1, 1, 1)
-
-
-def _apply_parameters(document: Document) -> Document:
-    """Contribute each `wic: steps: (N, name):` body to the step it names."""
-    if document.sidecar is None:
-        return document
-    counts = Counter(step.id for step in document.steps)
-    steps = tuple(_contributed_step(step, step_sidecar(document.sidecar, index, step.id, counts[step.id]))
-                  for index, step in enumerate(document.steps, start=1))
-    return document if steps == document.steps else replace(document, steps=steps)
 
 
 def _contributed_step(step: Step, sidecar: WicSidecar | None) -> Step:
@@ -678,16 +660,20 @@ def _report_stale_keys(sidecar: WicSidecar | None, document: Document, name: str
             print(line, file=sys.stderr)
 
 
-def _version_pins(document: Document) -> tuple[str, ...]:
-    if document.sidecar is None:
-        return ()
-    value = dict(document.sidecar.entries).get('lang_version')
+def namespace_of(sidecar: WicSidecar | None) -> str:
+    """The plugin namespace a ``wic:`` block declares, defaulting to global."""
+    return str(dict(sidecar.entries).get('namespace', 'global')) if sidecar is not None else 'global'
+
+
+def version_pins(document: Document) -> tuple[str, ...]:
+    """The `wic: lang_version:` `document` pins, if it pins one."""
+    value = dict(document.sidecar.entries).get('lang_version') if document.sidecar is not None else None
     return () if value is None else (str(value),)
 
 
 def _stem(value: str) -> str:
     leaf = value.replace('\\', '/').rsplit('/', 1)[-1]
-    return leaf[:-4] if leaf.endswith('.wic') else leaf[:-4] if leaf.endswith('.cwl') else leaf
+    return leaf[:-4] if leaf.endswith(('.wic', '.cwl')) else leaf
 
 
 def _copy_diagnostics(target: Diagnostics, source: Iterable[Diagnostic]) -> None:

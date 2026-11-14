@@ -62,7 +62,7 @@ def compile_source(bundle: SourceBundle,
     selected_version = versions.resolve(settings.lang_version, bundle.lang_version_pins)
     front = front_end(bundle.parsed, bundle.registry, name=bundle.name,
                       lang_version=selected_version)
-    if front.graph is None or front.resolved is None or front.resolved.document is None:
+    if front.graph is None:
         raise SophiosError(front.diagnostics)
     if not front.graph.steps:
         raise SophiosError.error(SophiosErrorCode.SUBWORKFLOW_INVALID,
@@ -80,7 +80,7 @@ def compile_source(bundle: SourceBundle,
     inferred = infer(linked.graph, settings.inference, InsertionCatalog.from_registry(bundle.registry))
     if inferred.graph is None:
         raise SophiosError(inferred.diagnostics)
-    graph = declare_namespaces(complete(inferred.graph), bundle.registry)
+    graph = declare_namespaces(inferred.graph, bundle.registry)
     names = Names.of(graph)
     diagnostics = Diagnostics([*inferred.diagnostics, *dict.fromkeys(_when_notes(graph, names))])
     artifact = _artifact_tree(graph, graph.name, names, _Descriptions(bundle.registry), policy=settings.policy)
@@ -115,11 +115,11 @@ def cwl_notes(view: ResolvedWorkflow) -> tuple[Diagnostic, ...]:
 def _tools(graph: WorkflowGraph, artifact: CompilationArtifact) -> Iterator[tuple[StepId, ResolvedTool]]:
     """Every tool step at any depth, with the tool its child artifact writes for it."""
     for step, child in zip(graph.steps, artifact.children, strict=True):
-        assert step.run is not None, 'a finished graph has no unrun step'
-        if step.run.child is None:
+        called = graph.child(step.id)
+        if called is None:
             yield step.id, ResolvedTool(child.run_path, child.cwl)
         else:
-            yield from _tools(step.run.child, child)
+            yield from _tools(called, child)
 
 
 #: `inputs.name` and `inputs["name"]` inside a `when:` expression.
@@ -220,7 +220,7 @@ def _artifact_tree(graph: WorkflowGraph, name: str, names: Names, descriptions: 
     children: list[CompilationArtifact] = []
     for step in document.steps:
         assert step.run is not None
-        child = step.run.child
+        child = graph.child(step.id)
         if child is not None:
             children.append(_artifact_tree(child, names.file(step.id), names, descriptions, policy=policy))
             continue
@@ -258,7 +258,7 @@ class _Descriptions:
     def tool(self, step: StepNode) -> ToolDefinition:
         """The registry's definition of the tool `step` runs."""
         assert step.run is not None
-        key = step.run.process_id
+        key = step.run
         definition = self._registry.tool(key)
         if definition is None:
             raise SophiosError.error(
