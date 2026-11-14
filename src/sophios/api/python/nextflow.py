@@ -57,7 +57,7 @@ text is theirs.
 from pathlib import Path
 from typing import Any, NoReturn
 
-from sophios.ir.resolved import Construct, NotLowered, Refusal
+from sophios.ir.refusals import Construct, NotLowered, Refusal
 from sophios.lang.diagnostics import SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
 from sophios.lang.spans import SourceSpan

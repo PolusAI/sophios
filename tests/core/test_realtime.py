@@ -30,7 +30,7 @@ from .budgets import budget
 from .cases import DATA, match, printed
 from .fake_runner import POSIX_ONLY, install
 from .helpers import ADAPTERS, live_workflow, no_preflight, run_cli, search_config
-from .hermetic import compile_hermetic
+from .hermetic import compile_hermetic, cwl_tree
 from .synthetic_tools import SYNTHETIC_NS, SYNTHETIC_TOOLS
 
 ADAPTER_PATH: Final = ADAPTERS / 'file_watchers' / 'cwl_subinterpreter.cwl'
@@ -118,8 +118,8 @@ def test_a_declaration_is_returned_instead_of_emitted_or_is_wic044_at_each_port(
             (line, port) for line, ports in zip(lines, wrong) for port in ports)
         return
     result, alone = compile_hermetic(document, tools=TOOLS), compile_hermetic({'steps': [_PRODUCER]}, tools=TOOLS)
-    assert (result.artifact.cwl, result.artifact.job_inputs, list(map(str, result.diagnostics))) == (
-        alone.artifact.cwl, alone.artifact.job_inputs, list(map(str, alone.diagnostics)))
+    assert (cwl_tree(result).cwl, cwl_tree(result).job_inputs, list(map(str, result.diagnostics))) == (
+        cwl_tree(alone).cwl, cwl_tree(alone).job_inputs, list(map(str, alone.diagnostics)))
     assert [(declaration.span.start_line if declaration.span else None, replace(declaration, span=None))
             for declaration in result.realtime] == [(line, Declaration('oracle', *(
                 held[port][1] for port in ('cwl_tool', 'file_pattern', 'max_times', 'interval', 'config'))))

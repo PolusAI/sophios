@@ -56,3 +56,13 @@ def test_a_dollar_starting_no_expression_is_text_as_cwltool_reads_it(texts: list
 def test_a_call_of_an_empty_workflow_lowers_to_no_process() -> None:
     """A call is inlined, so a call of a workflow with no step leaves nothing to run, and nothing to note."""
     assert Workflow([Workflow([], "child")], "root").compile(target="nextflow").nextflow_workflow.processes == ()
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("field", ["linkMerge", "pickValue"])
+def test_a_default_beside_a_null_merge_field_is_the_default(field: str) -> None:
+    """`{default: hello, <field>: null}` says only its default: a null merge field is no field."""
+    echo = tool("ECHO", inputs={"message": {"type": "string"}}, baseCommand="echo")
+    step = {"id": "say", "in": {"message": {"wic_raw_cwl": {"default": "hello", field: None}}}}
+    data = {"workflow": {"inputs": {}, "outputs": {}, "steps": [step]}, "tools": [{**echo, "id": "say"}]}
+    assert lowered_case(data)[0].processes[0].name

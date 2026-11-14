@@ -28,6 +28,7 @@ from .budgets import budget
 from .cases import DATA, case_dirs, diagnostic, match
 from .equivalence import Strength, equivalent
 from .helpers import ADAPTERS, REPO_ROOT, shipped_tools
+from .hermetic import cwl_tree
 from .synthetic_tools import SYNTHETIC_NS, SYNTHETIC_TOOLS, clt
 from .test_examples import _is_includer_fragment, yml_paths_tuples_not_large
 # pylint: disable-next=unused-import  # `corpus_registry` is a pytest fixture
@@ -75,7 +76,7 @@ def _file_door(path: Path, workflow_paths: WorkflowPaths, tools: Tools) -> tuple
     """CWL, job inputs and diagnostics of `path` compiled as the CLI reads it, with the settings
     `Workflow.compile()` uses; outputs narrowed to the named ones as `compile()` returns them."""
     result = _compile_file(path, workflow_paths, tools)
-    artifact = inline_artifact_runs(result.artifact)
+    artifact = inline_artifact_runs(cwl_tree(result))
     cwl = {**artifact.cwl}
     named = _named_outputs(path)
     if named and isinstance(cwl.get('outputs'), dict):
@@ -234,7 +235,7 @@ def test_a_document_of_every_construct_python_spells_is_read_as_stated(monkeypat
     root = _compiles_alike_and_writes_back(case / 'root.wic', workflow_paths, TOOLS, workflow, tmp_path / 'bundle')
     assert match(stated['written'], read_wic(root.read_text(encoding='utf-8')))
     result = _workflow_runtime.compile_workflow_result(workflow)
-    assert [step['id'] for step in result.artifact.cwl['steps']] == stated['steps']
+    assert [step['id'] for step in cwl_tree(result).cwl['steps']] == stated['steps']
     assert [{'analysis': item.analysis, 'max_times': item.max_times} for item in result.realtime] == stated['realtime']
     assert not list(tmp_path.glob('*.wic'))
 

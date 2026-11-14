@@ -138,7 +138,8 @@ def test_the_two_front_ends_compile_to_the_same_cwl(spec: _BundleSpec) -> None:
         f'{found}\n\n--- written .wic ---\n{written_text}')
 
     inputs_file = {'name': spec.join_name} if spec.bound else {}
-    assert all(name not in via_file.cwl_job_inputs for name in inputs_file), (
+    assert not any(port.has_value for port in sophios.compiler.resolved_view(info).inputs
+                   if port.name in inputs_file), (
         "the bundle gives a value to an input bound in Python, which is the job's.\n"
         f'--- written .wic ---\n{written_text}')
     inputs_found = equivalent(direct.cwl_job_inputs, {**via_file.cwl_job_inputs, **inputs_file}, Strength.IDENTICAL)

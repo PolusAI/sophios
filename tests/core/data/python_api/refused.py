@@ -250,6 +250,14 @@ def unknown_target_to_start() -> None:
     Workflow([_step('touch')], 'elsewhere').start(target='wdl')  # type: ignore[arg-type]
 
 
+def drawing_with_a_required_value_missing() -> None:
+    touch = _step('touch')
+    flow = Workflow([touch], 'wf')
+    touch.inputs.filename = flow.inputs.name
+    flow.inputs.name = None
+    flow.draw()
+
+
 def string_comparison_under_nextflow() -> None:
     echo = _step('echo', message='hi')
     echo.when = '$(inputs.message < "27")'

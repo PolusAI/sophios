@@ -15,7 +15,7 @@ from sophios.post_compile import inline_artifact_runs
 from sophios.runtime_inputs import output_target_inputs, runner_job_inputs
 from sophios.wic_types import Json, Tools
 from sophios.contrib import converter
-from sophios import plugins
+from sophios import plugins, targets
 from sophios.ir import frontdoor
 
 
@@ -82,11 +82,12 @@ async def compile_wf(request: Request) -> Json:
               file=sys.stderr)
     # generating cwl inline within the 'run' tag is post compile
     # and always on when compiling and preparing REST return payload
-    artifact = inline_artifact_runs(result.artifact)
+    view = compiler.resolved_view(result)
+    artifact = inline_artifact_runs(targets.TARGETS['cwl'].lower(view).model)
     # ======== OUTPUT PROCESSING ================
     # ========= PROCESS COMPILED OBJECT =========
     yaml_stem = artifact.name
-    yaml_inputs = runner_job_inputs(artifact.job_inputs, output_target_inputs(compiler.resolved_view(result)))
+    yaml_inputs = runner_job_inputs(artifact.job_inputs, output_target_inputs(view))
 
     # Convert the compiled yaml file to json for Compute API.
     cwl_tree_run = copy.deepcopy(artifact.cwl)

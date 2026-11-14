@@ -27,7 +27,7 @@ from sophios.lang.spans import SourceSpan
 from .budgets import budget
 from .cases import case_dirs, match, printed
 from .helpers import run_cli
-from .hermetic import compile_hermetic, compile_hermetic_source
+from .hermetic import compile_hermetic, compile_hermetic_source, cwl_tree
 from .strategies import author_names, pinned
 from .synthetic_tools import clt, registered
 from .test_lang_parser import FAST
@@ -65,7 +65,7 @@ def _job_value(declared: object, literal: object) -> object:
     tool = clt({'x': {'type': declared, 'inputBinding': {'position': 1}}}, {})
     compiled = compile_hermetic({'steps': [{'id': 'probe', 'in': {'x': {'wic_inline_input': literal}}}]},
                                 tools=registered({'probe': tool}, {}))
-    (value,) = compiled.artifact.job_inputs.values()
+    (value,) = cwl_tree(compiled).job_inputs.values()
     return value
 
 
@@ -201,7 +201,7 @@ def test_a_step_id_outside_the_allowed_characters_is_refused_at_its_line(case: t
         return
     assert name[0] != '.' and not set(name) - set(string.ascii_letters + string.digits + '_.-'), name
     assert where not in ('step id', 'mapping step id') or [
-        step['id'] for step in compiled.artifact.cwl['steps']] == ['mk_file', name]
+        step['id'] for step in cwl_tree(compiled).cwl['steps']] == ['mk_file', name]
 
 
 @pytest.mark.fast

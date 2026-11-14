@@ -479,8 +479,3 @@ def resolved_items(resolution: Resolution) -> tuple[Edge | DeferredObligation, .
     """The edges and obligations one binding resolved to: none, one, or a record's several."""
     items = resolution if isinstance(resolution, tuple) else (resolution,)
     return tuple(item for item in items if item is not None)
-
-
-#: A `WorkflowGraph` that states a whole CWL document. Distinct from
-#: `WorkflowGraph` so `emit` can ask for one. Only `emit.surface` produces one.
-EmissionDocument = NewType('EmissionDocument', WorkflowGraph)

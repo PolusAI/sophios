@@ -10,12 +10,12 @@ from sophios.ir.artifacts import CompilationArtifact
 from sophios.ir.frontdoor import bundle_from_disk
 
 from .cases import DATA
+from .hermetic import cwl_tree
 from .synthetic_tools import SYNTHETIC_TOOLS
 
 
 def _compile_wic(wic: Path) -> CompilationArtifact:
-    return compile_source(bundle_from_disk(wic, {}, SYNTHETIC_TOOLS), CompileSettings(),
-                          quiet=True).artifact
+    return cwl_tree(compile_source(bundle_from_disk(wic, {}, SYNTHETIC_TOOLS), CompileSettings(), quiet=True))
 
 
 @pytest.mark.fast
@@ -32,7 +32,7 @@ def test_a_wic_file_default_is_written_absolute_against_the_wic(tmp_path: Path,
     assert inputs['cfg']['default'] == {'class': 'File', 'location': (project / 'data' / 'config.txt').as_uri()}
     assert inputs['ref']['default'] == {'class': 'File', 'path': str(project / 'data' / 'ref.txt')}
     assert inputs['far']['default'] == {'class': 'File', 'location': 'file:///elsewhere/far.txt'}
-    (child,) = (document for document in artifact.children if document.graph is not None)
+    (child,) = (document for document in artifact.children if document.cwl['class'] == 'Workflow')
     assert child.cwl['inputs']['cfg']['default']['location'] == (project / 'sub' / 'other.txt').as_uri()
     assert artifact.cwl['steps'][-1]['in']['file'] == {
         'default': {'class': 'File', 'location': (project / 'data' / 'step.txt').as_uri()}}

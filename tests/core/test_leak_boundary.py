@@ -19,7 +19,7 @@ from . import ast_strategies as strat
 from .ast_strategies import hints_values, passthrough_keys, passthrough_values
 from .compile_harness import COMPILED, compile_info
 from .cwl_validation import validate_cwl
-from .hermetic import compile_hermetic_cwl
+from .hermetic import compile_hermetic, cwl_tree
 
 #: Top-level keys the *compiler* owns, a larger set than the parser claims: it writes `class` and `cwlVersion`,
 #: merges into `inputs`, `outputs` and `requirements`, and keeps `$namespaces` and `$schemas` by its own rules.
@@ -46,14 +46,14 @@ def test_freight_survives_byte_for_byte_and_changes_nothing_else(data: st.DataOb
     freighted = strat.to_yml_with_freight(document, index, {**step_freight, **hinted})
     freighted.update(top_freight, **hinted)
 
-    compiled = compile_hermetic_cwl(freighted)
+    compiled = cwl_tree(compile_hermetic(freighted)).cwl
     assert 'ScatterFeatureRequirement' in compiled['requirements']
     step = compiled['steps'][index]
     for key, value in {**step_freight, **hinted}.items():
         assert step.pop(key) == value, f'{key} was altered by compilation'
     for key, value in {**top_freight, **hinted}.items():
         assert compiled.pop(key) == value, f'{key} was altered by compilation'
-    assert compiled == compile_hermetic_cwl(strat.to_yml(document))
+    assert compiled == cwl_tree(compile_hermetic(strat.to_yml(document))).cwl
 
     for key in [*step_freight, *Grammar.INTERPRETED_STEP_KEYS]:
         parsed = parse(f'steps:\n- id: s\n  {key}: x\n', 'freight.wic').document
@@ -86,7 +86,7 @@ def test_residue_validates_as_cwl_v1_2(freight: dict[str, Any], authored: bool) 
     workflow: Yaml = {'steps': [{'id': 'touch', 'in': {'filename': {'wic_inline_input': 'empty.txt'}}, **freight}]}
     if authored:
         workflow['outputs'] = {'mine': {'type': 'File', 'outputSource': 'touch/file'}}
-    inlined = sophios.post_compile.inline_artifact_runs(compile_info(workflow, 'leak').artifact).cwl
+    inlined = sophios.post_compile.inline_artifact_runs(cwl_tree(compile_info(workflow, 'leak'))).cwl
     assert not authored or inlined['outputs']['mine']['outputSource'] == 'touch/file'
     with tempfile.TemporaryDirectory() as workdir:
         target = Path(workdir) / 'residue.cwl'

@@ -332,6 +332,15 @@ forbidden_modules = ["sophios.ir.stepin", "sophios.ir.names"]
 allow_indirect_imports = true
 
 [[tool.importlinter.contracts]]
+name = "The CWL target lowers the resolved view, not the graph"
+type = "forbidden"
+source_modules = ["sophios.ir.emit"]
+forbidden_modules = ["sophios.ir.stepin", "sophios.ir.complete", "sophios.ir.link", "sophios.ir.infer",
+                     "sophios.ir.lower"]
+# The view reads them on the target's behalf; only the lowering's own imports are checked.
+allow_indirect_imports = true
+
+[[tool.importlinter.contracts]]
 name = "The resolved view reads the graph, never its CWL"
 type = "forbidden"
 source_modules = ["sophios.ir.resolved"]

@@ -20,6 +20,7 @@ from sophios.wic_types import Yaml
 
 from .cases import DATA, match
 from .helpers import stated
+from .hermetic import cwl_tree
 from .test_compiler import _tools
 from .test_setup import workflow_paths
 
@@ -29,10 +30,7 @@ TREE = DATA / 'inline'
 def _compiled(root: str) -> CompilationArtifact:
     """`root` of the inline tree compiled, its children the other `.wic` files beside it."""
     others = {'global': {path.stem: path for path in TREE.glob('*.wic') if path.name != root}}
-    artifact = compile_source(bundle_from_disk(TREE / root, others, _tools(TREE)), CompileSettings(),
-                              quiet=True).artifact
-    assert artifact is not None
-    return artifact
+    return cwl_tree(compile_source(bundle_from_disk(TREE / root, others, _tools(TREE)), CompileSettings(), quiet=True))
 
 
 def _runs(form: CompilationArtifact) -> list[str]:
@@ -66,7 +64,7 @@ def test_the_inline_tree_flattens_to_the_document_it_states(capsys: pytest.Captu
         replace(child, cwl={**child.cwl, 'requirements': [{'class': 'EnvVarRequirement', 'envDef': {'A': 'b'}}]})
         if child.namespace == ('plain',) else child for child in nested.children))
     assert [step['id'] for step in post_compile.flatten_subworkflows(listed).cwl['steps']][1] == 'plain'
-    assert match({'contains': [{'contains': ["step 'plain.wic'", 'requirements are written as a list']}]},
+    assert match({'contains': [{'contains': ["step 'plain'", 'requirements are written as a list']}]},
                  capsys.readouterr().err.splitlines())
 
 
@@ -149,5 +147,5 @@ def test_the_inline_flags_on_the_command_line(  # pylint: disable=too-many-local
         assert (written / call['run']).is_file() and _document(written, workflow)['requirements'][
             'SubworkflowFeatureRequirement'] == {}
         kept[name] = [line for line in capsys.readouterr().err.splitlines() if line.startswith('Warning!')]
-    assert match({'scattered': [{'contains': ["step 'fail.wic'", 'carries `scatter`']}],
-                  'gated': [{'contains': ["step 'append_twice.wic'", 'carries `when`']}]}, kept)
+    assert match({'scattered': [{'contains': ["step 'fail'", 'carries `scatter`']}],
+                  'gated': [{'contains': ["step 'append_twice'", 'carries `when`']}]}, kept)

@@ -23,6 +23,7 @@ from sophios.plugins import get_tools_cwl
 from sophios.wic_types import StepId, Tools
 
 from .cases import DATA
+from .hermetic import cwl_tree
 from .helpers import ADAPTERS, EACH_RUNNER, no_preflight, run_cli, run_local_process, search_config
 
 PROJECT: Final = DATA / 'packing'
@@ -33,8 +34,7 @@ PRINTED: Final = 'from-include\n' + (TOOLS / 'data.txt').read_text(encoding='utf
 
 
 def _compile(wic: Path, tools: Tools | None = None) -> CompilationArtifact:
-    return compile_source(bundle_from_disk(wic, {}, tools or {}), CompileSettings(),
-                          quiet=True).artifact
+    return cwl_tree(compile_source(bundle_from_disk(wic, {}, tools or {}), CompileSettings(), quiet=True))
 
 
 def _tool(artifact: CompilationArtifact, step: str) -> dict[str, Any]:

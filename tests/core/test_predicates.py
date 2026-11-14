@@ -8,7 +8,7 @@ from hypothesis import strategies as st
 from sophios.ir.artifacts import CompilationArtifact
 from sophios.wic_types import Tools, Yaml
 
-from .hermetic import ORACLE, compile_hermetic, subworkflow_step
+from .hermetic import ORACLE, compile_hermetic, cwl_tree, subworkflow_step
 from .synthetic_tools import clt, registered
 
 #: Authored names (wic045 admits `[A-Za-z0-9_.-]`) over a small alphabet, so one is often another's prefix.
@@ -126,6 +126,6 @@ def test_distinct_authored_names_never_share_a_made_name(tree: tuple[str, Yaml, 
     root, yml, signatures = tree
     compiled = compile_hermetic(copy.deepcopy(yml), root, tools=_tools(signatures))
     files: list[str] = []
-    _assert_every_name_is_distinct(yml, signatures, compiled.artifact, files)
+    _assert_every_name_is_distinct(yml, signatures, cwl_tree(compiled), files)
     duplicates = sorted({name for name in files if files.count(name) > 1})
     assert not duplicates, f'two processes are written to the same file: {duplicates}'

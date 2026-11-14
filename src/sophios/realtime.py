@@ -27,7 +27,7 @@ import yaml
 
 from . import compiler, plugins
 from . import input_output as io
-from .ir import frontdoor
+from .ir import emit, frontdoor
 from .ir.artifacts import CompilationArtifact
 from .ir.realtime import Declaration
 from .lang.diagnostics import Diagnostic, Severity, SophiosError
@@ -76,8 +76,9 @@ def compile_analyses(declarations: tuple[Declaration, ...],
                 Severity.ERROR, SophiosErrorCode.REALTIME_DECLARATION,
                 f'real-time analysis {declaration.analysis!r} does not compile: {diagnostic}',
                 declaration.span) for diagnostic in e.diagnostics) from e
-        analyses.append(Analysis(name, declaration, result.artifact,
-                                 frozenset(output_target_inputs(compiler.resolved_view(result)))))
+        view = compiler.resolved_view(result)
+        analyses.append(Analysis(name, declaration, emit.artifact_tree(view),
+                                 frozenset(output_target_inputs(view))))
     return tuple(analyses)
 
 

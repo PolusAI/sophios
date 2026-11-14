@@ -9,6 +9,7 @@ from typing import Any
 from unittest import mock
 
 import pytest
+import yaml
 from hypothesis import example, given, strategies as st
 
 from sophios import backends, preflight, run_setup, targets
@@ -20,7 +21,7 @@ from sophios.backends import RunRequest
 from sophios.input_output_nf import write_nextflow_artifacts
 from sophios.lang.diagnostics import Diagnostic, Severity, SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
-from sophios.runners import Nextflow, RunSettings, Toil, build
+from sophios.runners import Cwltool, Nextflow, RunSettings, Toil, build
 
 from .budgets import budget
 from .cases import DATA
@@ -257,17 +258,37 @@ def test_failed_nextflow_processes_are_read_from_its_log_lines(log: tuple[list[s
 _WRITE_INTO = DATA / 'backends' / 'write_into.cwl'
 
 
-def _write_into() -> Any:
-    """The compilation of a one-step workflow `wf` whose step `write-into` writes into `made`, beside `source.txt`."""
+def _write_into(source: Any = Path('source.txt')) -> Any:
+    """The compilation of a one-step workflow `wf` whose step `write-into` writes into `made`, beside `source`."""
     step = Step(clt_path=_WRITE_INTO, step_name='write-into')
     step.inputs.outDir = Path('made')
-    step.inputs.source = Path('source.txt')
+    step.inputs.source = source
     return compile_workflow_result(Workflow([step], 'wf'))
 
 
-def _lowered(result: CompilationResult, root: Path) -> run_setup.Lowered[Any]:
-    """`result` lowered to Nextflow as a run lowers it: each relative path read against `root`."""
-    return targets.target('nextflow').lower(result, run_setup.absolute_view(resolved_view(result), root))
+def _prepared(result: CompilationResult, root: Path, base: Path, run: RunSettings = RunSettings(Nextflow()),
+              **settings: Any) -> tuple[run_setup.Lowered[Any], run_setup.Prepared]:
+    """`result` lowered, and prepared for `run` under `base`, as a run does: each relative path read against `root`."""
+    row, view = targets.target(run.runner.target), resolved_view(result)
+    lowered = row.lower(targets.for_run(row, view, root))
+    return lowered, targets.backend(run.runner).prepare(
+        lowered, (), base, run_setup.Settings(run, root, row.run_values(view), **settings))
+
+
+@pytest.mark.fast
+def test_a_cwl_run_changes_only_the_job_and_only_as_its_runner_needs(tmp_path: Path) -> None:
+    """A CWL run writes the workflow a compile writes, with the namespace a bound File's `edam:` format needs, also
+    when no extension narrows its formats. Its job has each relative File path absolute from the root, and an
+    output-target Directory still a name: a Directory literal the run creates."""
+    root = tmp_path / 'root'
+    write_tree(root, {'source.unknownext': ''})
+    source = {'class': 'File', 'location': 'source.unknownext', 'format': ['edam:format_2330', 'edam:format_1915']}
+    lowered, _ = _prepared(_write_into(source), root, tmp_path / 'base', RunSettings(Cwltool()), pull=False)
+    assert lowered.model.cwl == targets.target('cwl').lower(resolved_view(_write_into(source))).model.cwl
+    assert lowered.model.cwl['$namespaces'] == {'edam': 'https://edamontology.org/'}
+    assert yaml.safe_load((tmp_path / 'base' / 'wf_inputs.yml').read_text(encoding='utf-8')) == {
+        'write-into~outDir': {'class': 'Directory', 'basename': 'made', 'listing': []},
+        'write-into~source': {'class': 'File', 'location': (root / 'source.unknownext').as_uri()}}
 
 
 #: What a Nextflow run asks of this machine.
@@ -290,21 +311,19 @@ def test_a_nextflow_run_is_checked_prepared_and_read_back_by_its_sophios_names(
     root = tmp_path / 'root'
     root.mkdir()
     backend = targets.backend(Nextflow())
-    check = run_setup.Settings(_NEXTFLOW_SETTINGS, root, check=True)
     with pytest.raises(SophiosError) as raised:
-        backend.prepare(_lowered(_write_into(), root), (), tmp_path / 'base', check)
+        _prepared(_write_into(), root, tmp_path / 'base', check=True)
     (missing,) = raised.value.diagnostics
     assert missing.code is SophiosErrorCode.MISSING_INPUT_FILE
     assert f"input 'write-into~source' (from the workflow, whose relative paths are read from {root}) names " \
-        f"'{root / 'source.txt'}', which does not exist" in missing.message
+        f"'source.txt', which does not exist at {root / 'source.txt'}" in missing.message
     write_tree(root, {'source.txt': ''})
-    backend.prepare(_lowered(_write_into(), root), (), tmp_path / 'base', check)
+    _prepared(_write_into(), root, tmp_path / 'base', check=True)
     assert not (tmp_path / 'base').exists() and not (root / 'made').exists()
 
-    settings = run_setup.Settings(_NEXTFLOW_SETTINGS, root)
-    prepared = backend.prepare(_lowered(_write_into(), root), (), tmp_path / 'base', settings)
-    backend.prepare(_lowered(compile_workflow_result(Workflow([adapter_step('echo', message='hello')], 'other')),
-                             root), (), tmp_path / 'base', settings)
+    _, prepared = _prepared(_write_into(), root, tmp_path / 'base')
+    _prepared(compile_workflow_result(Workflow([adapter_step('echo', message='hello')], 'other')), root,
+              tmp_path / 'base')
     base = tmp_path / 'base' / 'nextflow_wf'
     assert prepared.documents == tuple(base / name for name in (
         'nextflow_workflow.json', 'workflow.nf', 'nextflow.config', 'nextflow_params.json'))

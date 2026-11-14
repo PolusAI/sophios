@@ -11,8 +11,9 @@ import pytest
 import yaml
 
 import sophios.compiler
+from sophios import targets
 from sophios.input_output import NoAliasDumper
-from sophios.ir.artifacts import CompilationResult
+from sophios.ir.artifacts import CompilationArtifact, CompilationResult
 from sophios.ir.frontdoor import SourceBundle
 from sophios.ir.resolve import RegistrySnapshot
 from sophios.lang import Document, ParseResult, parse
@@ -120,11 +121,10 @@ def compile_production(yml: Yaml, name: str = 'binding', *, tools: Tools | None 
         sophios.compiler.CompileSettings(), quiet=False)
 
 
-def compile_hermetic_cwl(yml: Yaml, name: str = 'oracle', *,
-                         tools: Tools | None = None,
-                         insert_steps_automatically: bool = False) -> Yaml:
-    """Compile one in-memory workflow and return the emitted CWL."""
-    return compile_hermetic(yml, name, tools=tools, insert_steps_automatically=insert_steps_automatically).artifact.cwl
+def cwl_tree(result: CompilationResult) -> CompilationArtifact:
+    """The CWL the CWL target emits for `result`, the one way a test reaches it."""
+    tree: CompilationArtifact = targets.target('cwl').lower(sophios.compiler.resolved_view(result)).model
+    return tree
 
 
 def nested_workflow(levels: int) -> Yaml:

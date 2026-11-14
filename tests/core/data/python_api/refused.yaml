@@ -42,6 +42,7 @@ unknown_target_to_compile: &target {raises: ValueError, names: ["unknown target 
 unknown_target_to_check: *target
 unknown_target_to_run: *target
 unknown_target_to_start: *target
+drawing_with_a_required_value_missing: {raises: SophiosError, code: MISSING_REQUIRED_INPUT, names: [refused.py]}
 string_comparison_under_nextflow: {raises: NotLowered, code: NF_WHEN_SUBSET, names: [refused.py, "'echo'", '<']}
 real_time_analysis_under_run_async: {raises: SophiosError, code: REALTIME_NOT_ASYNC, names: [refused.py, "'touch'"]}
 wic_text_of_a_workflow: {raises: AttributeError, names: [Workflow.write_wic]}

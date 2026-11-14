@@ -331,7 +331,7 @@ _TOOL_PARTS = ('CommandLineTool', 'CommandInputParameter', 'CommandInputArraySch
 _REQUIREMENT_TABLES = tuple(sorted(name for classes in REQUIREMENT_CLASSES.values() for name in classes
                                    if name in FIELDS))
 
-#: Each construct a refusal names (`sophios.ir.resolved.Construct`, by its value) and the rows of `FIELDS` it
+#: Each construct a refusal names (`sophios.ir.refusals.Construct`, by its value) and the rows of `FIELDS` it
 #: stands for: `(class, field)`, or `(class, None)` for every field of the class. A refusal of a field names the
 #: construct the field's row stands under, at the most specific row; a requirement class's fields are a workflow's
 #: or a step's `requirement`, and a tool's `tool`. `policy` stands for no CWL field: it is a compile option.

@@ -369,7 +369,7 @@ def flatten_model(artifact: CompilationArtifact) -> Yaml:
             # A tool's file is named by where its step sits, which a split moves: label the step with the process.
             flat_steps.append({**step, 'run': copy.deepcopy(child.cwl)})
             continue
-        if set(step) - {'id', 'in', 'run', 'out'} or (child.graph is not None and not child.graph.inlineable):
+        if set(step) - {'id', 'in', 'run', 'out'} or not child.inlining.inlineable:
             # More than `in` and `out` on the call, or `inlineable: false`: the boundary is not proved removable.
             kept_any = True
             flat_steps.append(step)

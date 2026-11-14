@@ -8,7 +8,7 @@ from sophios.wic_types import Tools, Yaml
 
 from .budgets import budget
 from .cases import cases
-from .hermetic import compile_production
+from .hermetic import compile_production, cwl_tree
 from .strategies import pinned
 from .synthetic_tools import clt, registered
 
@@ -68,7 +68,7 @@ def test_an_edge_reference_names_one_earlier_definition(case: Yaml) -> None:
     tools = _with_tools(case.get('tools', {}))
     raised: list[Diagnostic] = []
     try:
-        compiled = compile_production({'steps': case['steps']}, 'root', tools=tools).artifact.cwl
+        compiled = cwl_tree(compile_production({'steps': case['steps']}, 'root', tools=tools)).cwl
     except SophiosError as error:
         raised = list(error.diagnostics)
     else:

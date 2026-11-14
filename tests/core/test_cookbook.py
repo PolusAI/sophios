@@ -25,6 +25,7 @@ from sophios.wic_types import Json
 
 from .cases import DATA, diagnostic, match
 from .helpers import REPO_ROOT, shipped_tools
+from .hermetic import cwl_tree
 from .test_setup import home_with_shipped_tools, use_home
 from .wic_reading import read_wic
 
@@ -93,7 +94,7 @@ def _through_the_file(root: Path, settings: sophios.compiler.CompileSettings) ->
         result = _compile_wic(root, settings)
     except SophiosError as error:
         return _refusal(error)
-    artifact = inline_artifact_runs(result.artifact)
+    artifact = inline_artifact_runs(cwl_tree(result))
     cwl = {**artifact.cwl}
     if named := read_wic(root.read_text(encoding='utf-8'), root.name).get('outputs'):
         cwl['outputs'] = {name: cwl['outputs'][name] for name in named}

@@ -13,7 +13,8 @@ import yaml
 from sophios.compiler import CompileSettings, compile_source, cwl_notes, resolved_view
 from sophios.input_output import write_artifacts_to_disk
 from sophios.ir.frontdoor import bundle_from_disk
-from sophios.ir.resolved import NotLowered
+from sophios.ir.refusals import NotLowered
+from sophios.ir.resolved import bind
 from sophios.lang.diagnostics import SophiosError
 from sophios.runtime_inputs import output_target_inputs
 from sophios.utils_nf import NEXTFLOW
@@ -21,6 +22,7 @@ from sophios.wic_types import StepId, Tool, Tools, Yaml
 
 from .cases import DATA, diagnostic, match
 from .helpers import cwltool_outputs, example_workflow, examples, files_beside, observed, stated
+from .hermetic import cwl_tree
 from .synthetic_tools import SYNTHETIC_NS, SYNTHETIC_TOOLS
 
 
@@ -92,13 +94,13 @@ def _compiled_as_stated(folder: Path, root: str, expected: Yaml, out: Path,
     notes = [*result.diagnostics, *cwl_notes(resolved_view(result))]
     assert match(expected.get('notes', []), [diagnostic(found) for found in notes]), root
     assert match(expected.get('said', []), capsys.readouterr().err.splitlines()), root
-    write_artifacts_to_disk(result.artifact, out, output_targets=output_target_inputs(resolved_view(result)))
+    write_artifacts_to_disk(cwl_tree(result), out, output_targets=output_target_inputs(resolved_view(result)))
     if 'nextflow' in expected:
         job = folder / 'job.yml'
         values = yaml.safe_load(job.read_text(encoding='utf-8')) if job.exists() else {}
         try:
-            NEXTFLOW.lower(resolved_view(result, values={name: value for name, value in values.items()
-                                                         if name in result.artifact.cwl['inputs']}))
+            NEXTFLOW.lower(bind(resolved_view(result), values={name: value for name, value in values.items()
+                                                               if name in cwl_tree(result).cwl['inputs']}))
             refusals = []
         except NotLowered as refused:
             refusals = [{'step': found.step, 'says': found.message} for found in refused.refusals]

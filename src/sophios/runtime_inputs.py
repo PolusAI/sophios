@@ -22,7 +22,13 @@ _INPUT_REFERENCE = re.compile(r"\binputs\.([A-Za-z_][A-Za-z0-9_-]*)")
 def runner_job_inputs(job_inputs: Mapping[str, Any], output_targets: Collection[str]) -> Json:
     """`job_inputs` as a runner gets them: each File's format resolved, and each of `output_targets` (the root
     job keys `output_target_inputs` names) a Directory literal the runner creates, empty, under the name it gave."""
-    job = resolve_file_formats(job_inputs)
+    return name_output_targets(resolve_file_formats(job_inputs), output_targets)
+
+
+def name_output_targets(job_inputs: Mapping[str, Any], output_targets: Collection[str]) -> Json:
+    """A copy of `job_inputs` in which each of `output_targets` is a Directory literal the runner creates, empty,
+    under the name it gave: a runner given an absolute path for a Directory would never create it."""
+    job = dict(job_inputs)
     for name in output_targets:
         if name in job:
             job[name] = _output_target_directory(job[name], name)

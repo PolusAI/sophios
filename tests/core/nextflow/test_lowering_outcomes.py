@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 from hypothesis import example, given, strategies as st
 
-from sophios.ir.resolved import NotLowered
+from sophios.ir.refusals import NotLowered
 from sophios.lang.diagnostics import SophiosError
 
 from ..budgets import budget

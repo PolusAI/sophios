@@ -24,6 +24,7 @@ from sophios.input_output_nf import write_nextflow_artifacts
 
 from ..budgets import budget
 from ..helpers import REPO_ROOT
+from ..hermetic import cwl_tree
 from .testkit import assert_succeeded, compiled_case, execute_nextflow, lowered_case
 
 
@@ -178,7 +179,7 @@ def _under_nextflow(case: dict[str, Any], directory: Path) -> dict[str, Any]:
 def _under_cwltool(case: dict[str, Any], directory: Path) -> dict[str, Any]:
     import cwltool.main  # pylint: disable=import-outside-toplevel
 
-    artifact = compiled_case(case).artifact
+    artifact = cwl_tree(compiled_case(case))
     write_artifacts_to_disk(artifact, directory, output_targets=())
     jobs = directory / f"{artifact.name}_inputs.yml"
     jobs.write_text(json.dumps({**(yaml.safe_load(jobs.read_text("utf-8")) or {}), **case["job"]}), "utf-8")
