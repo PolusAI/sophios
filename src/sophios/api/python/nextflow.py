@@ -61,7 +61,7 @@ from sophios.ir.refusals import Construct, NotLowered, Refusal
 from sophios.lang.diagnostics import SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
 from sophios.lang.spans import SourceSpan
-from sophios.lang.subset import Expr, references, source_text
+from sophios.lang.subset import Expr, Null, Op, Ref, references, source_text
 from sophios.nf_reader import read_nextflow
 from sophios.nf_types import (
     ExecutableNextflowWorkflow,
@@ -212,9 +212,12 @@ def _item(model: ExecutableNextflowWorkflow, edge: NfIncomingConnection) -> str:
 
 def _null_compared(node: Expr) -> set[str]:
     """The inputs a condition compares with ``null``, which are optional."""
-    found = {node.args[0].value} if node.op in ("==", "!=") and (node.args[0].op, node.args[1].op) == ("ref", "null") \
-        else set()
-    return found.union(*(_null_compared(arg) for arg in node.args))
+    match node:
+        case Op(op="==" | "!=", args=(Ref(name=name), Null())):
+            return {name}
+        case Op(args=args):
+            return {name for arg in args for name in _null_compared(arg)}
+    return set()
 
 
 def _optional(model: ExecutableNextflowWorkflow, process: NfProcess, port: NfPort, edge: NfIncomingConnection) -> bool:

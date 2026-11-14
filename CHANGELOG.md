@@ -46,6 +46,11 @@ Codes in parentheses are the codes Sophios prints with each diagnostic.
   `RunRequest` and `run_setup.Settings` carry; `preflight.RunSettings` is gone. A `wic021` for `outdir` says
   `give outdir a directory you can write to` from both doors.
 
+### Nextflow
+
+- `NfProcess(condition=...)` takes a `sophios.lang.subset` tree (`Number`, `Text`, `Boolean`, `Null`, `Ref` or `Op`) in
+  place of `Expr(kind, value, args)`: build a hand-written condition from those, or read one with `parse`.
+
 ### Packaging
 
 - The `cyto` extra is gone, with `ipycytoscape.ipynb`, the notebook it served,

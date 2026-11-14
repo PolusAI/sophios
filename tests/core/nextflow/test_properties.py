@@ -19,7 +19,7 @@ from sophios.input_output_nf import (
     render_nextflow,
     render_nextflow_config,
 )
-from sophios.lang.subset import Expr
+from sophios.lang.subset import Op, Ref, Text
 from sophios.nf_expr import groovy_literal
 from sophios.nf_symbols import is_nextflow_identifier, normalize_nextflow_identifier
 from sophios.nf_types import (
@@ -94,7 +94,7 @@ def test_a_text_reaches_the_shell_and_groovy_as_itself(value: str, suffix: str, 
     spoken = "".join(char for char in any_text if " " <= char <= "~" and char != "\\")  # a when literal's alphabet
     process = NfProcess("TASK", [NfPort("s", "val"), NfPort("src", "path", entry=NfEntry(staged))], [],
                         NfCommand((NfTemplate((NfLiteral("true"),)),)), container=any_text,
-                        condition=Expr("==", (Expr("ref", (), "s"), Expr("string", (), spoken))))
+                        condition=Op("==", (Ref("s"), Text(spoken))))
     rendered = render_nextflow(ExecutableNextflowWorkflow(
         "PIPELINE", [process], [NfWorkflowInputConnection(name, "TASK", name) for name in ("s", "src")],
         {"s": "x", "src": "in.txt"}, {"s": "string", "src": "File"}))
