@@ -116,10 +116,9 @@ html_context = {'building_pdf': building_pdf}
 html_static_path = ['_static']
 
 
-# -- The Nextflow support table ----------------------------------------------
-
-# docs/nextflow.md holds this marker where src/sophios/nf_support.py's table is rendered.
-NF_SUPPORT_MARKER = '<!-- nf-support-table -->'
+# -- Tables rendered from the code -------------------------------------------
+# docs/nextflow.md shows src/sophios/nf_support.py's table and docs/error_codes.md the catalog of
+# src/sophios/lang/error_codes.py, each where the page holds its marker (`_RENDERED`).
 
 # Where a class's fields are written, for a class whose name does not say.
 _NF_SUPPORT_PLACES = {
@@ -139,7 +138,7 @@ _NF_SUPPORT_PLACES = {
 }
 
 
-def _nf_support_table(head: str, rows: list[tuple[str, ...]]) -> list[str]:
+def _table(head: str, rows: list[tuple[str, ...]]) -> list[str]:
     columns = head.split(' | ')
     return [f'| {head} |', '|' + '---|' * len(columns), *(f"| {' | '.join(row)} |" for row in rows)]
 
@@ -163,7 +162,7 @@ def nf_support_markdown() -> str:
     from sophios.nf_support import FIELDS, REQUIREMENT_CLASSES, State, constructs_of
 
     native = Counter(FIELDS[cwl_class][name].state for cwl_class, rows in SUPPORT_MATRIX.items()
-                     for name, row in rows.items() if row.support is Support.NATIVE)
+                     for name, support in rows.items() if support is Support.NATIVE)
     lines = [
         f'Of the {native.total()} fields Sophios supports natively, the Nextflow target lowers '
         f'{native[State.LOWERED]}, uses {native[State.COMPILE_TIME]} at compile time only, and rejects '
@@ -177,15 +176,15 @@ def nf_support_markdown() -> str:
         lines += ['', f'### `{cwl_class}`' + (f', {place}' if place else ''), '']
         lines += [_refused_as(constructs_of(cwl_class)), '']
         if (sophios := SUPPORT_MATRIX.get(cwl_class)) is None:
-            lines += _nf_support_table('Field | Nextflow | Note', [
+            lines += _table('Field | Nextflow | Note', [
                 (f'`{name}`', row.state, _noted(row)) for name, row in rows.items()])
         else:
-            lines += _nf_support_table('Field | Sophios | Nextflow | Note', [
-                (f'`{name}`', sophios[name].support, row.state, _noted(row)) for name, row in rows.items()])
+            lines += _table('Field | Sophios | Nextflow | Note', [
+                (f'`{name}`', sophios[name], row.state, _noted(row)) for name, row in rows.items()])
     for level, classes in REQUIREMENT_CLASSES.items():
         tool = level == 'CommandLineTool'
         lines += ['', f'### Requirement and hint classes of a `{level}`' + ('' if tool else ' or a step'), '']
-        lines += _nf_support_table('Class | Nextflow | Note', [
+        lines += _table('Class | Nextflow | Note', [
             (f'`{name}`', row.state, _noted(row)) for name, row in classes.items()])
         lines += ['', 'Any other class is rejected.' if tool else
                   'Any other class is inherited by each tool step inside, and lowered or rejected as the same '
@@ -194,18 +193,35 @@ def nf_support_markdown() -> str:
         if cwl_class in requirements:
             lines += ['', f'### `{cwl_class}` fields', '']
             lines += [_refused_as(constructs_of(cwl_class)), '']
-            lines += _nf_support_table('Field | Nextflow | Note', [
+            lines += _table('Field | Nextflow | Note', [
                 (f'`{name}`', row.state, _noted(row)) for name, row in rows.items()])
     return '\n'.join(lines) + '\n'
 
 
-def _render_nf_support(_app: Sphinx, docname: str, source: list[str]) -> None:
-    if docname == 'nextflow':
-        if NF_SUPPORT_MARKER not in source[0]:
-            raise ValueError(f'docs/nextflow.md has no {NF_SUPPORT_MARKER} for the support table')
-        source[0] = source[0].replace(NF_SUPPORT_MARKER, nf_support_markdown())
+def error_code_markdown() -> str:
+    """The catalog of error codes as Markdown: one row per code, in the order the codes are declared."""
+    from sophios.lang.error_codes import EXPLANATIONS  # pylint: disable=import-outside-toplevel
+
+    return '\n'.join(_table('Code | Kind | Meaning | Fix', [
+        (f'`{code}`', explanation.kind, explanation.meaning, explanation.fix)
+        for code, explanation in EXPLANATIONS.items()])) + '\n'
+
+
+# Per page, the marker it holds and the table Sphinx renders there from the code.
+_RENDERED = {
+    'nextflow': ('<!-- nf-support-table -->', nf_support_markdown),
+    'error_codes': ('<!-- error-code-table -->', error_code_markdown),
+}
+
+
+def _render_tables(_app: Sphinx, docname: str, source: list[str]) -> None:
+    if docname in _RENDERED:
+        marker, render = _RENDERED[docname]
+        if marker not in source[0]:
+            raise ValueError(f'docs/{docname}.md has no {marker} for its table')
+        source[0] = source[0].replace(marker, render())
 
 
 def setup(app: Sphinx) -> None:
-    """Render the Nextflow support table into docs/nextflow.md as Sphinx reads it."""
-    app.connect('source-read', _render_nf_support)
+    """Render each table that is held in the code into its page as Sphinx reads it."""
+    app.connect('source-read', _render_tables)

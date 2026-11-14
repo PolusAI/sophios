@@ -83,9 +83,7 @@ def serialize_value(value: Any) -> Any:
     match value:
         case Path():
             return str(value)
-        case list() as items:
-            return [serialize_value(item) for item in items]
-        case tuple() as items:
+        case list() | tuple() as items:
             return [serialize_value(item) for item in items]
         case dict() as items:
             return {key: serialize_value(item) for key, item in items.items()}
@@ -95,21 +93,10 @@ def serialize_value(value: Any) -> Any:
 
 def _infer_array_parameter_type(items: Sequence[Any]) -> Any:
     """Infer a CWL array type from a homogeneous list/tuple literal, or `None` if it isn't one."""
-    if not items:
+    item_types = [infer_literal_parameter_type(item) for item in items]
+    if not item_types or None in item_types or any(item_type != item_types[0] for item_type in item_types):
         return None
-    inferred_item_types = []
-    for item in items:
-        inferred = infer_literal_parameter_type(item)
-        if inferred is None:
-            return None
-        inferred_item_types.append(inferred)
-    unique_types = []
-    for inferred in inferred_item_types:
-        if inferred not in unique_types:
-            unique_types.append(inferred)
-    if len(unique_types) != 1:
-        return None
-    return {"type": "array", "items": unique_types[0]}
+    return {"type": "array", "items": item_types[0]}
 
 
 def infer_literal_parameter_type(value: Any) -> Any:  # pylint: disable=too-many-return-statements

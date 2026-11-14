@@ -50,7 +50,7 @@ from sophios.wic_types import DEFAULT_BASEPATH, GraphSettings, Json, StepId, Too
 
 from ._inference import Inference
 from ._errors import InvalidCLTError, InvalidStepError
-from ._compiled import CompiledNextflowWorkflow, CompiledWorkflow
+from ._compiled import CompiledNextflowWorkflow, CompiledWorkflow, _artifact_path
 from ._ports import InputParameter, OutputParameter, ParameterStore
 from ._utils import load_yaml as _load_yaml, serialize_value
 
@@ -103,14 +103,7 @@ def coerce_path(value: str | Path | None, *, field_name: str, allow_none: bool =
 
 
 def normalize_workflow_name(workflow_name: str) -> str:
-    """Convert a user-facing workflow name into a filesystem-safe id.
-
-    Args:
-        workflow_name (str): Original workflow name.
-
-    Returns:
-        str: Normalized workflow id used by the Python API.
-    """
+    """Convert a user-facing workflow name into a filesystem-safe id."""
     normalized_name = workflow_name.lstrip("/").lstrip(" ")
     parts = PurePath(normalized_name).parts
     return "_".join(part for part in parts if part).lstrip("_").replace(" ", "_")
@@ -151,17 +144,9 @@ def _validate_scatter(items: list[Any], owner: Any | None) -> None:
 def validate_step_assignment(name: str, value: Any, *, owner: Any | None = None) -> None:
     """Validate assignments to special step attributes.
 
-    Args:
-        name (str): Attribute name being assigned.
-        value (Any): Candidate value for that attribute.
-        owner (Any | None): Optional `Step` owning the assignment.
-
     Raises:
         TypeError: If `scatter` is not a list of `InputParameter` values.
         ValueError: If `scatterMethod` or `when` receive invalid values.
-
-    Returns:
-        None: Validation happens for its side effect of raising on invalid input.
     """
     match name, value:
         case "scatter", list() as items:
@@ -186,17 +171,7 @@ def populate_parameters(
     *,
     parent: Any,
 ) -> None:
-    """Populate a parameter store from CWL input or output declarations.
-
-    Args:
-        cwl_parameters (list[_CWLParameterDefinition]): Parsed CWL parameters.
-        store (ParameterStore[Any]): Destination store for Python API parameter wrappers.
-        parameter_cls (type[InputParameter] | type[OutputParameter]): Wrapper type to instantiate.
-        parent (Any): Owning `Step` or `Workflow`.
-
-    Returns:
-        None: The destination store is populated in place.
-    """
+    """Populate a parameter store from CWL input or output declarations."""
     for parameter in cwl_parameters:
         store.add(parameter_cls(_parameter_name(parameter.id), parameter.type_, parent_obj=parent))
 
@@ -204,15 +179,8 @@ def populate_parameters(
 def load_clt(clt_path: Path, tool_registry: Tools) -> tuple[CWLCommandLineTool, dict[str, Any]]:
     """Load a CWL CommandLineTool from disk or a fallback registry.
 
-    Args:
-        clt_path (Path): Filesystem path to the CWL tool.
-        tool_registry (Tools): Registry used when the file is unavailable on disk.
-
     Raises:
         InvalidCLTError: If the tool cannot be loaded from disk or the registry.
-
-    Returns:
-        tuple[CWLCommandLineTool, dict[str, Any]]: Parsed CWL object and raw YAML.
     """
     stepid = StepId(clt_path.stem, "global")
 
@@ -248,16 +216,9 @@ def load_clt_document(
 ) -> tuple[CWLCommandLineTool, dict[str, Any]]:
     """Load an in-memory CWL CommandLineTool document.
 
-    Args:
-        document (Mapping[str, Any]): Parsed CWL document.
-        run_path (Path): Virtual run path used as the tool base URI.
-
     Raises:
         TypeError: If `document` does not normalize to a mapping.
         InvalidCLTError: If the CWL document cannot be parsed.
-
-    Returns:
-        tuple[CWLCommandLineTool, dict[str, Any]]: Parsed CWL object and normalized YAML.
     """
     match yaml.safe_load(yaml.safe_dump(dict(document), sort_keys=False)):
         case dict() as loaded:
@@ -277,12 +238,6 @@ def workflow_document(workflow: "Workflow") -> Document:
     Steps name their tools (a step renamed from its tool carries `run:`), nested
     workflows appear as steps naming their own `.wic` documents, and every
     workflow output is addressed by its authored step name.
-
-    Args:
-        workflow (Workflow): Workflow to serialize.
-
-    Returns:
-        Document: The workflow's document.
     """
     workflow_inputs: dict[str, Any] = {}
     for parameter in workflow._inputs:
@@ -325,19 +280,6 @@ def _read_by_a_record(workflow: "Workflow", parameter: InputParameter) -> bool:
                for source in step_input.record_sources())
 
 
-def _wic_output_path(workflow: "Workflow", path: str | Path | None) -> Path:
-    """Resolve user-provided `.wic` output destinations."""
-    if path is None:
-        return Path(f"{workflow.process_name}.wic")
-
-    output_path = Path(path)
-    if output_path.suffix == ".wic":
-        return output_path
-    if output_path.suffix:
-        raise ValueError("path must be a .wic file or a directory")
-    return output_path / f"{workflow.process_name}.wic"
-
-
 def step_run(clt_path: Path) -> str:
     """What a step's `run:` names: `<stem>.cwl`, the tool written beside the document.
 
@@ -369,17 +311,9 @@ def write_workflow_wic(workflow: "Workflow", path: str | Path | None = None) -> 
     it refers to by relative path (such as a `$import`) are not copied. A tool
     already on disk as its target is left alone, and a different file there is
     an error.
-
-    Args:
-        workflow (Workflow): Workflow to serialize.
-        path (str | Path | None): Destination `.wic` path or output directory.
-            When omitted, writes `<workflow>.wic` in the current directory.
-
-    Returns:
-        Path: The path to the root `.wic` file that was written.
     """
     workflow._validate()
-    root = _wic_output_path(workflow, path)
+    root = _artifact_path(path, default_name=f"{workflow.process_name}.wic", suffixes=(".wic",))
     missing_tools: dict[Path, "Step"] = {}
     for stem, step in _bundle_tools(workflow).items():
         if step_run(step.clt_path) != f"{stem}.cwl":
@@ -449,21 +383,7 @@ def compile_workflow_result(  # pylint: disable=too-many-arguments
     policy: RunPolicy = RunPolicy(),
     quiet: bool = False,
 ) -> CompilationResult:
-    """Compile a Python API workflow to the graph-derived internal result.
-
-    Args:
-        workflow (Workflow): Workflow to compile.
-        lang_version (str | None): Pin the Sophios language version for this
-            compilation; None (the default) infers it. An explicit setting
-            beats any file tag.
-        tool_registry (Tools | None): Optional tool registry override.
-        inference (Inference): How unbound inputs are connected.
-        policy (RunPolicy): How the workflow runs: partial failure, and the exit codes that count as success.
-        quiet (bool): Print nothing: neither the compile's progress nor its plain warnings.
-
-    Returns:
-        CompilationResult: The typed compiler output for the workflow.
-    """
+    """Compile a Python API workflow to the graph-derived internal result."""
     return _compile_bundle(workflow, tool_registry, lang_version, inference, policy, quiet=quiet)[1]
 
 

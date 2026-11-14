@@ -24,14 +24,13 @@ from ..lang import (
     RawCwlRef,
     Step,
     UnresolvedName,
-    WicSidecar,
     parse,
 )
 from ..python_cwl_adapter import generate_CWL_CommandLineTool, get_module
 from ..utils_cwl import desugar_into_canonical_normal_form, tool_process
 from ..wic_types import StepId, Tool, Tools
-from .resolve import (RegistrySnapshot, generated_process_id, inline_run_name, is_run_path, path_from_root,
-                      run_path_name, step_sidecar)
+from .resolve import (RegistrySnapshot, generated_process_id, inline_run_name, namespace_of, path_from_root,
+                      run_path_name, step_sidecar, version_pins)
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,15 +127,9 @@ def _collect_pins(document: Document, pins: list[str]) -> None:
     follows the body's steps, and selection compiles the body, so a pin that
     lives only there still decides the version.
     """
-    _append_pin(document, pins)
+    pins.extend(version_pins(document))
     for _name, body in (document.sidecar.implementations if document.sidecar else ()):
         _collect_pins(body, pins)
-
-
-def _append_pin(document: Document, pins: list[str]) -> None:
-    pinned = dict(document.sidecar.entries).get('lang_version') if document.sidecar else None
-    if pinned is not None:
-        pins.append(pinned if isinstance(pinned, str) else str(pinned))
 
 
 def _reach(document: Document, document_dir: Path, reading: _Reading) -> None:
@@ -148,7 +141,7 @@ def _reach(document: Document, document_dir: Path, reading: _Reading) -> None:
     """
     counts = Counter(step.id for step in document.steps)
     for index, step in enumerate(document.steps, start=1):
-        namespace = _namespace(step_sidecar(document.sidecar, index, step.id, counts[step.id]))
+        namespace = namespace_of(step_sidecar(document.sidecar, index, step.id, counts[step.id]))
         if _register_run(step, namespace, document_dir, reading):
             continue
         if step.id == 'python_script':
@@ -194,13 +187,13 @@ def _register_run(step: Step, namespace: str, document_dir: Path, reading: _Read
     """
     run = dict(step.interpreted).get('run')
     if isinstance(run, dict):
-        name = inline_run_name(step, path_from_root(document_dir, reading.root_directory))
-        assert name is not None
+        name = inline_run_name(step.id, run, path_from_root(document_dir, reading.root_directory))
         body = desugar_into_canonical_normal_form({**deepcopy(run), 'cwlVersion': CWL_VERSION})
         # Written in the document, so its relative references are read beside it, as the step's own file would be.
         reading.generated[StepId(name, namespace)] = Tool(str(document_dir / f'{Path(step.id).stem}.cwl'), body)
         return True
-    if not isinstance(run, str) or not is_run_path(run):
+    # Any other string names a registry entry, not a file.
+    if not isinstance(run, str) or not run.endswith(('.cwl', '.wic')):
         return False
     target = (document_dir / run).resolve()
     if not target.is_file():
@@ -215,13 +208,6 @@ def _register_run(step: Step, namespace: str, document_dir: Path, reading: _Read
     else:
         _register_workflow((namespace, name), target, reading)
     return True
-
-
-def _namespace(sidecar: WicSidecar | None) -> str:
-    """The plugin namespace a ``wic:`` block declares, defaulting to global."""
-    if sidecar is None:
-        return 'global'
-    return str(dict(sidecar.entries).get('namespace', 'global'))
 
 
 def _generated_tool(step: Step, script_dir: Path) -> Tool:

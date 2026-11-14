@@ -9,11 +9,8 @@ from typing import Final
 from .diagnostics import SophiosError
 from .error_codes import SophiosErrorCode
 
-#: Every version that has ever existed, oldest first. Append-only.
+#: Every version that has ever existed, oldest first. Append-only. The newest is what untagged sources resolve to.
 KNOWN_VERSIONS: Final[tuple[str, ...]] = ('0.0.1',)
-
-#: The newest version — what untagged sources resolve to.
-LANG_VERSION: Final[str] = KNOWN_VERSIONS[-1]
 
 
 def resolve(requested: str | None = None,
@@ -30,25 +27,14 @@ def resolve(requested: str | None = None,
     `known` exists so the mechanism can be tested against fabricated version
     histories; production callers never pass it.
     """
-    if requested is not None:
-        if requested not in known:
-            raise SophiosError.error(
-                SophiosErrorCode.UNKNOWN_LANG_VERSION,
-                f'Unknown lang_version {requested!r}. Known versions: {", ".join(known)}')
-        return requested
-
-    distinct = sorted(set(pins), key=known.index) if set(pins) <= set(known) else None
-    if distinct is None:
-        bad = sorted(set(pins) - set(known))
+    asked = set(pins) if requested is None else {requested}
+    if unknown := sorted(asked - set(known)):
         raise SophiosError.error(
             SophiosErrorCode.UNKNOWN_LANG_VERSION,
-            f'Unknown lang_version tag(s) {", ".join(map(repr, bad))}. Known versions: {", ".join(known)}')
-    if len(distinct) > 1:
+            f'Unknown lang_version {", ".join(map(repr, unknown))}. Known versions: {", ".join(known)}')
+    if len(asked) > 1:
         raise SophiosError.error(
             SophiosErrorCode.LANG_VERSION_CONFLICT,
-            f'One compilation resolves to one version, but the tree pins {", ".join(distinct)}.',
+            f'One compilation resolves to one version, but the tree pins {", ".join(sorted(asked, key=known.index))}.',
             'Remove the conflicting lang_version tags, or set one explicitly to override them all.')
-    if distinct:
-        return distinct[0]
-
-    return known[-1]
+    return next(iter(asked), known[-1])

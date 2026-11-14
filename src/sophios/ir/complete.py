@@ -1,19 +1,19 @@
 """Complete graph facts that are determined by resolved process interfaces.
 
-The seam between semantic inference and emission: it turns facts already
-present in a `WorkflowGraph` into the workflow boundary that Link and Infer
-compose against, without loading a process, discovering a file, or replaying
-source. A boundary name it derives is a `DerivedName`, not text: `ir.names`
-spells it, at Emit. It states no document -- requirements, `$namespaces`,
-`$schemas`, a step's `run:` path and field order are spelled in `emit.surface`.
+It turns facts already present in a lowered `WorkflowGraph` into the workflow
+boundary that Link and Infer compose against, without loading a process,
+discovering a file, or replaying source. A boundary name it derives is a
+`DerivedName`, not text: `ir.names` spells it, at Emit. It states no document
+-- requirements, `$namespaces`, `$schemas`, a step's `run:` path and field
+order are spelled in `emit.surface`.
 """
 import datetime
 import difflib
 import json
 import re
 from copy import deepcopy
-from dataclasses import replace
-from typing import Any, Final, TypeVar
+from dataclasses import dataclass, replace
+from typing import Any, Final
 
 from ..lang.nodes import CwlRecord, InlineLiteral, UnresolvedName
 from ..lang.diagnostics import Locator, SophiosError
@@ -32,6 +32,7 @@ from .types import (
     PortId,
     PortName,
     PortType,
+    StepNode,
     StepOutputRef,
     WorkflowGraph,
     WorkflowPort,
@@ -39,133 +40,79 @@ from .types import (
 
 
 def complete(graph: WorkflowGraph) -> WorkflowGraph:
-    """Return a graph carrying every fact its resolved interfaces determine.
+    """`graph` and every graph beneath it, each with the boundary its steps determine, for Link to compose.
 
-    Idempotent, so any phase may call it whenever it needs the facts current:
-    calling it before Link makes recursively derived workflow interfaces
-    visible to composition, and calling it after Infer materializes newly
-    inferred sources and boundary inputs.
+    A value a step input holds is lifted to a workflow input and the job, an
+    output left untyped takes the type of the step output it names, and every
+    step output is promoted. Run once, on what Lower built: Infer keeps the
+    boundary current for what it adds (`call_interfaces`, `promote_outputs`).
     """
     children = tuple(complete(child) for child in graph.children)
-    current = replace(graph, children=children)
-    current = _synchronize_children(current)
-    current = _materialize_bindings(current)
-    return _materialize_outputs(current)
+    current = _lift_values(call_interfaces(replace(graph, children=children)))
+    return promote_outputs(_materialize_outputs(current))
 
 
-def _synchronize_children(graph: WorkflowGraph) -> WorkflowGraph:
-    child_by_step = {child.namespace.parts[-1]: child for child in graph.children
-                     if child.namespace.parts}
+def call_interfaces(graph: WorkflowGraph) -> WorkflowGraph:
+    """`graph`, each call having the ports of its child's boundary as it is now: the inputs it had, then
+    the others, and every output as the child declares it.
+
+    Resolve read the child's interface before the child had its own boundary
+    made: an output its author left untyped takes the type the child gave it.
+    """
+    def exposed(step: StepNode, direction: Direction, boundary: WorkflowPort) -> Port:
+        return Port(PortId(step.id, direction, boundary.name), boundary.declaration.type, boundary.declaration,
+                    step.span)
+
+    steps = []
+    for step in graph.steps:
+        child = graph.child(step.id)
+        if child is not None:
+            held = {port.id.port for port in step.inputs}
+            added = tuple(exposed(step, Direction.INPUT, boundary) for boundary in child.workflow_inputs
+                          if boundary.name not in held)
+            outputs = tuple(exposed(step, Direction.OUTPUT, boundary) for boundary in child.workflow_outputs)
+            step = replace(step, inputs=step.inputs + added, outputs=outputs)
+        steps.append(step)
+    return replace(graph, steps=tuple(steps))
+
+
+def _lift_values(graph: WorkflowGraph) -> WorkflowGraph:
+    """Lift each value a step input holds to a workflow input of `graph` and its job: a job value a child
+    holds for an input its call leaves unbound, which Emit renders from `input_mapping` alone as a relay back
+    into the call's port, then each literal an input is bound to. A workflow input a step reads takes the
+    `doc` and `label` of the port it feeds."""
     workflow_inputs = list(graph.workflow_inputs)
     job_bindings = list(graph.job_bindings)
     input_mapping = list(graph.input_mapping)
     shorthand_relays = list(graph.shorthand_relays)
-    steps = []
+
+    def lift(step: StepNode, port: Port, value: Any, span: SourceSpan | None) -> DerivedName:
+        name = DerivedName(step.id, port.id.port)
+        declaration = feeding_declaration(step, port)
+        workflow_inputs.append(WorkflowPort(name, declaration))
+        job_bindings.append(JobBinding(name, coerce_job_value(
+            port.id.port, declaration, value, scatter_rank=input_rank(step, port.id.port), span=span,
+            locator=Locator(step.id.name, step.id.index, '/'.join(authored_path(port.id.port))))))
+        input_mapping.append((name, (port.id,)))
+        return name
 
     for step in graph.steps:
-        run = step.run
-        child = child_by_step.get(step.id)
-        if run is None or child is None:
-            steps.append(step)
-            continue
-
-        inputs = list(step.inputs)
-        outputs = _completed_outputs(step.outputs, child)
-        input_names = {port.id.port for port in inputs}
-        output_names = {port.id.port for port in outputs}
-        for boundary in child.workflow_inputs:
-            if boundary.name not in input_names:
-                inputs.append(Port(PortId(step.id, Direction.INPUT, boundary.name),
-                                   boundary.declaration.type, boundary.declaration, step.span))
-        for boundary in child.workflow_outputs:
-            if boundary.name not in output_names:
-                outputs.append(Port(PortId(step.id, Direction.OUTPUT, boundary.name),
-                                    boundary.declaration.type, boundary.declaration, step.span))
-
-        # A child boundary input this step never authored, but the child can
-        # satisfy from its own job bindings, is lifted to a workflow input of
-        # this document -- Emit renders it, from `input_mapping` alone, as a
-        # relay back into the port just added above.
-        authored = {binding.sink.port for binding in step.bindings}
-        child_jobs = {binding.name: binding.value for binding in child.job_bindings}
-        for boundary in child.workflow_inputs:
-            if boundary.name in authored or boundary.name not in child_jobs:
-                continue
-            outer_name = DerivedName(step.id, boundary.name)
-            sink = next(port for port in inputs if port.id.port == boundary.name)
-            declaration = feeding_declaration(step, sink)
-            _put(workflow_inputs, WorkflowPort(outer_name, declaration))
-            _put(job_bindings, JobBinding(outer_name, coerce_job_value(
-                boundary.name, declaration, child_jobs[boundary.name],
-                scatter_rank=input_rank(step, sink.id.port), span=step.span,
-                locator=Locator(step.id.name, step.id.index, '/'.join(authored_path(boundary.name))))))
-            _put_input_mapping(input_mapping, outer_name, sink.id)
-            if outer_name not in shorthand_relays:
-                shorthand_relays.append(outer_name)
-
-        steps.append(replace(
-            step,
-            inputs=tuple(inputs),
-            outputs=tuple(outputs),
-            run=replace(run, child=child),
-        ))
-    return replace(graph, steps=tuple(steps), workflow_inputs=tuple(workflow_inputs),
-                   job_bindings=tuple(job_bindings), input_mapping=tuple(input_mapping),
-                   shorthand_relays=tuple(shorthand_relays))
-
-
-def _materialize_bindings(graph: WorkflowGraph) -> WorkflowGraph:
-    workflow_inputs = list(graph.workflow_inputs)
-    job_bindings = list(graph.job_bindings)
-    input_mapping = list(graph.input_mapping)
-    authored_inputs = {port.name for port in graph.workflow_inputs}
-
+        child = graph.child(step.id)
+        bound = {binding.sink.port for binding in step.bindings}
+        jobs = {binding.name: binding.value for binding in child.job_bindings} if child is not None else {}
+        shorthand_relays += [lift(step, port, jobs[port.id.port], step.span) for port in step.inputs
+                             if port.id.port in jobs and port.id.port not in bound]
     for step in graph.steps:
-        if step.run is None:
-            continue
         for binding in step.bindings:
             port = next(port for port in step.inputs if port.id == binding.sink)
-            match binding.value:
-                case InlineLiteral(value=value, span=span):
-                    name = DerivedName(step.id, port.id.port)
-                    declaration = feeding_declaration(step, port)
-                    _put(workflow_inputs, WorkflowPort(name, declaration))
-                    locator = Locator(step.id.name, step.id.index, '/'.join(authored_path(port.id.port)))
-                    _put(job_bindings, JobBinding(name, coerce_job_value(
-                        port.id.port, declaration, value, scatter_rank=input_rank(step, port.id.port),
-                        span=span, locator=locator)))
-                    _put_input_mapping(input_mapping, name, port.id)
-                case UnresolvedName(name=text):
-                    _relay(workflow_inputs, input_mapping, authored_inputs, AuthoredName(text), port)
-                case CwlRecord(sources=sources):
-                    for source in sources:
-                        if isinstance(source, UnresolvedName):
-                            _relay(workflow_inputs, input_mapping, authored_inputs, AuthoredName(source.name), port)
-                case _:
-                    pass
-    return replace(graph, workflow_inputs=tuple(workflow_inputs),
-                   job_bindings=tuple(job_bindings), input_mapping=tuple(input_mapping))
-
-
-def _completed_outputs(outputs: tuple[Port, ...], child: WorkflowGraph) -> list[Port]:
-    """`outputs` of a call step, each taking the declaration its completed child gives it.
-
-    Resolve read the child's interface before the child was completed, so an
-    output its author left untyped is untyped there until it takes the type the
-    child gave it.
-    """
-    completed = {boundary.name: boundary.declaration for boundary in child.workflow_outputs}
-    return [replace(port, type=declaration.type, declaration=declaration)
-            if (declaration := completed.get(port.id.port)) is not None else port
-            for port in outputs]
-
-
-def _emitted_source(graph: WorkflowGraph, port_id: PortId) -> StepOutputRef | None:
-    """The `step/port` reference an emitted document can resolve."""
-    step = next((item for item in graph.steps if item.id == port_id.step), None)
-    if step is None or step.run is None:
-        return None
-    return StepOutputRef(step.id, port_id.port)
+            value = binding.value
+            for source in value.sources if isinstance(value, CwlRecord) else (value,):
+                if isinstance(source, UnresolvedName):
+                    _merge_boundary_documentation(workflow_inputs, AuthoredName(source.name), port.declaration)
+            if isinstance(value, InlineLiteral):
+                lift(step, port, value.value, value.span)
+    return replace(graph, workflow_inputs=tuple(workflow_inputs), job_bindings=tuple(job_bindings),
+                   input_mapping=tuple(input_mapping), shorthand_relays=tuple(shorthand_relays))
 
 
 def _produced_type(graph: WorkflowGraph, port_id: PortId) -> PortType:
@@ -203,7 +150,7 @@ def _untyped_output(graph: WorkflowGraph, output: WorkflowPort) -> SophiosError:
 
 
 def _materialize_outputs(graph: WorkflowGraph) -> WorkflowGraph:
-    # Record Link's resolved producer, not the authored `outputSource:` string:
+    # Record the producer Lower resolved, not the authored `outputSource:` string:
     # emission renames every step, so the authored text points nowhere.
     resolved = dict(graph.output_mapping)
     outputs = []
@@ -214,50 +161,25 @@ def _materialize_outputs(graph: WorkflowGraph) -> WorkflowGraph:
                 raise _untyped_output(graph, output)
             output = replace(output, declaration=BoundaryDeclaration(replace(
                 output.declaration, type=_produced_type(graph, producer))))
-        emitted = _emitted_source(graph, producer) if producer is not None else None
-        if output.has_output_source and emitted is not None:
-            output = replace(output, output_source=emitted)
+        if producer is not None:
+            output = replace(output, output_source=StepOutputRef(producer.step, producer.port))
         outputs.append(output)
+    return replace(graph, workflow_outputs=tuple(outputs))
+
+
+def promote_outputs(graph: WorkflowGraph) -> WorkflowGraph:
+    """`graph`, every output of its steps a workflow output under its derived name, unless it is one already."""
+    outputs = list(graph.workflow_outputs)
     output_mapping = list(graph.output_mapping)
-    authored = {port.name for port in outputs}
+    held = {port.name for port in outputs}
     for step in graph.steps:
-        if step.run is None:
-            continue
         for port in step.outputs:
             name = DerivedName(step.id, port.id.port)
-            if name in authored:
-                continue
-            outputs.append(WorkflowPort(name, produced_declaration(step, port),
-                                        StepOutputRef(step.id, port.id.port), True))
-            output_mapping.append((name, port.id))
+            if name not in held:
+                outputs.append(WorkflowPort(name, produced_declaration(step, port),
+                                            StepOutputRef(step.id, port.id.port), True))
+                output_mapping.append((name, port.id))
     return replace(graph, workflow_outputs=tuple(outputs), output_mapping=tuple(output_mapping))
-
-
-_Named = TypeVar('_Named', WorkflowPort, JobBinding)
-
-
-def _put(items: list[_Named], item: _Named) -> None:
-    """Append `item` unless an entry with its name is already present."""
-    if item.name not in {existing.name for existing in items}:
-        items.append(item)
-
-
-def _put_input_mapping(mappings: list[tuple[PortName, tuple[PortId, ...]]],
-                       name: PortName, sink: PortId) -> None:
-    for index, (existing, sinks) in enumerate(mappings):
-        if existing == name:
-            if sink not in sinks:
-                mappings[index] = (existing, (*sinks, sink))
-            return
-    mappings.append((name, (sink,)))
-
-
-def _relay(workflow_inputs: list[WorkflowPort], input_mapping: list[tuple[PortName, tuple[PortId, ...]]],
-           authored_inputs: set[PortName], name: AuthoredName, port: Port) -> None:
-    """Relay the workflow input `name` to `port`, when the document declares it."""
-    if name in authored_inputs:
-        _put_input_mapping(input_mapping, name, port.id)
-        _merge_boundary_documentation(workflow_inputs, name, port.declaration)
 
 
 def _merge_boundary_documentation(ports: list[WorkflowPort], name: PortName,
@@ -320,13 +242,24 @@ def coerce_job_value(name: PortName, declaration: PortDeclaration, value: Any, *
             f'Input {str(name)!r} is scattered, so its literal must be a list of values to scatter over; '
             f'{value!r} is a scalar. Write `!ii [...]`, or drop the port from `scatter:`.',
             span=span, locator=locator)
-    return _coerce_type(name, declaration.type.canonical, value,
-                        declaration.format if declaration.has_format else None, span=span, locator=locator)
+    try:
+        return _coerce_type(declaration.type.canonical, value, declaration.format if declaration.has_format else None)
+    except _Mismatch as error:
+        raise SophiosError.error(
+            SophiosErrorCode.LITERAL_TYPE_MISMATCH,
+            f'Input {str(name)!r} is declared type {error.raw!r} but its literal {error.value!r} '
+            f'{_what_is_wrong(error.raw, error.value)}', span=span, locator=locator) from error
 
 
-# pylint: disable-next=too-many-arguments
-def _coerce_type(name: PortName, raw: Any, value: Any, fmt: Any, *,
-                 span: SourceSpan | None, locator: Locator | None) -> Any:
+@dataclass(eq=False)
+class _Mismatch(Exception):
+    """A literal that is not of the scalar type its port declares."""
+
+    raw: Any
+    value: Any
+
+
+def _coerce_type(raw: Any, value: Any, fmt: Any) -> Any:
     if isinstance(raw, list):
         non_null = [item for item in raw if item != 'null']
         arrays = [item for item in non_null if isinstance(item, dict)
@@ -341,8 +274,8 @@ def _coerce_type(name: PortName, raw: Any, value: Any, fmt: Any, *,
             raw = arrays[0] if arrays else (non_null[0] if len(non_null) == 1 else non_null)
     if isinstance(raw, dict) and raw.get('type') == 'array':
         values = value if isinstance(value, list) else [value]
-        return [_coerce_type(name, raw.get('items'), item, fmt, span=span, locator=locator) for item in values]
-    return _coerce_scalar(name, raw, value, fmt, span=span, locator=locator)
+        return [_coerce_type(raw.get('items'), item, fmt) for item in values]
+    return _coerce_scalar(raw, value, fmt)
 
 
 def _scalar_member_for(members: list[Any], value: Any) -> Any:
@@ -371,34 +304,32 @@ def _plain(value: Any) -> Any:
     return value
 
 
-# pylint: disable-next=too-many-arguments
-def _coerce_scalar(name: PortName, raw: Any, value: Any, fmt: Any, *,
-                   span: SourceSpan | None, locator: Locator | None) -> Any:
+def _coerce_scalar(raw: Any, value: Any, fmt: Any) -> Any:
     if raw in ('File', 'Directory'):
         if isinstance(value, str):
             value = {'class': raw, 'location': value}
         elif not isinstance(value, dict) or value.get('class') != raw:
-            raise _mismatch(name, raw, value, span, locator)
+            raise _Mismatch(raw, value)
         result = deepcopy(value)
         if raw == 'File' and fmt and 'format' not in result:
             result['format'] = fmt
         return result
     if raw == 'string':
-        return _coerce_string(name, value, span=span, locator=locator)
+        return _coerce_string(value)
     if raw in ('int', 'long'):
         if isinstance(value, int) and not isinstance(value, bool):
             return value
-        raise _mismatch(name, raw, value, span, locator)
+        raise _Mismatch(raw, value)
     if raw in ('float', 'double'):
-        return _coerce_float(name, raw, value, span=span, locator=locator)
+        return _coerce_float(raw, value)
     if raw == 'boolean':
         if isinstance(value, bool):
             return value
-        raise _mismatch(name, raw, value, span, locator)
+        raise _Mismatch(raw, value)
     return deepcopy(value)
 
 
-def _coerce_string(name: PortName, value: Any, *, span: SourceSpan | None, locator: Locator | None) -> str:
+def _coerce_string(value: Any) -> str:
     """The text of a scalar literal, or of a mapping or list as JSON.
 
     The one conversion kept besides an int into a float: `!ii 20` cannot be
@@ -411,14 +342,13 @@ def _coerce_string(name: PortName, value: Any, *, span: SourceSpan | None, locat
         try:
             return json.dumps(value)
         except TypeError as exc:
-            raise _mismatch(name, 'string', value, span, locator) from exc
+            raise _Mismatch('string', value) from exc
     if isinstance(value, (str, int, float, datetime.date)):
         return str(value)
-    raise _mismatch(name, 'string', value, span, locator)
+    raise _Mismatch('string', value)
 
 
-def _coerce_float(name: PortName, raw: Any, value: Any, *,
-                  span: SourceSpan | None, locator: Locator | None) -> float:
+def _coerce_float(raw: Any, value: Any) -> float:
     """A float as it is, or an int the float holds exactly."""
     if isinstance(value, float):
         return float(value)
@@ -426,10 +356,10 @@ def _coerce_float(name: PortName, raw: Any, value: Any, *,
         try:
             as_float = float(value)
         except OverflowError as exc:
-            raise _mismatch(name, raw, value, span, locator) from exc
+            raise _Mismatch(raw, value) from exc
         if int(as_float) == value:
             return as_float
-    raise _mismatch(name, raw, value, span, locator)
+    raise _Mismatch(raw, value)
 
 
 #: A number written in scientific notation that YAML 1.1 reads as text: PyYAML
@@ -442,14 +372,6 @@ _KINDS: Final = {str: 'text', bool: 'a boolean', int: 'an int', float: 'a float'
 #: The Python type each scalar port type is, named when a value of another type is passed.
 _PYTHON_TYPE: Final = {'int': int, 'long': int, 'float': float, 'double': float,
                        'boolean': bool, 'string': str}
-
-
-def _mismatch(name: PortName, raw: Any, value: Any, span: SourceSpan | None,
-              locator: Locator | None) -> SophiosError:
-    return SophiosError.error(
-        SophiosErrorCode.LITERAL_TYPE_MISMATCH,
-        f'Input {str(name)!r} is declared type {raw!r} but its literal {value!r} {_what_is_wrong(raw, value)}',
-        span=span, locator=locator)
 
 
 def _what_is_wrong(raw: Any, value: Any) -> str:

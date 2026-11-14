@@ -34,6 +34,12 @@ CALLS = {
     "Math.abs": 1, "Math.sqrt": 1, "Math.floor": 1, "Math.ceil": 1, "Math.round": 1,
     "Math.pow": 2, "Math.min": -2, "Math.max": -2,
 }
+# What each operator and call takes and gives; an equality is typed apart, as it alone admits null.
+_SIGNATURES = {
+    **dict.fromkeys(("u!", "&&", "||"), (BOOLEAN, BOOLEAN)),
+    **dict.fromkeys(("<", "<=", ">", ">="), (NUMBER, BOOLEAN)),
+    **dict.fromkeys(("u-", "u+", "+", "-", "*", "/", "%", *CALLS), (NUMBER, NUMBER)),
+}
 _WHOLE_FIELD = re.compile(r"^\$\((?P<body>.*)\)$", re.DOTALL)
 # JavaScript strict mode rejects a leading zero on an integer (octal). ASCII
 # digits only: Python's float() accepts U+0663, and Double.valueOf does not.
@@ -197,11 +203,7 @@ def _number_literal(value: Any) -> None:
     """Reject a number literal that is not a finite strict-mode decimal."""
     if not isinstance(value, str) or _NUMBER.fullmatch(value) is None:
         raise ValueError(f"number literal {value!r} is not a strict-mode decimal")
-    try:
-        parsed = float(value)
-    except ValueError as exc:
-        raise ValueError(f"number literal {value} is not finite") from exc
-    if not math.isfinite(parsed):
+    if not math.isfinite(float(value)):
         raise ValueError(f"number literal {value} is not finite")
 
 
@@ -219,15 +221,12 @@ def check(node: Expr, input_types: Mapping[str, Any]) -> str:
     input may appear only beside ``null`` in an equality, because
     JavaScript arithmetic would coerce its absence to 0.
     """
-    def operand(child: Expr) -> str:
-        return check(child, input_types)
-
     match node.op:
         case "number":
             _number_literal(node.value)
             return NUMBER
         case "string" | "boolean" | "null":
-            return {"string": STRING, "boolean": BOOLEAN, "null": NULL}[node.op]
+            return node.op
         case "ref":
             declared = input_types.get(node.value)
             if node.value not in input_types:
@@ -237,18 +236,6 @@ def check(node: Expr, input_types: Mapping[str, Any]) -> str:
             if not isinstance(declared, str) or declared not in _SCALAR_TYPES:
                 raise ValueError(f"inputs.{node.value} has type {declared!r}; only scalar inputs are admitted")
             return _SCALAR_TYPES[declared]
-        case "u!":
-            return _require(BOOLEAN, operand(node.args[0]), "!")
-        case "u-" | "u+":
-            return _require(NUMBER, operand(node.args[0]), node.op[1])
-        case "&&" | "||":
-            for child in node.args:
-                _require(BOOLEAN, operand(child), node.op)
-            return BOOLEAN
-        case "<" | "<=" | ">" | ">=":
-            for child in node.args:
-                _require(NUMBER, operand(child), node.op)
-            return BOOLEAN
         case "==" | "!=" | "===" | "!==":
             left, right = (_equality_operand(child, input_types) for child in node.args)
             if NULL in (left, right):
@@ -258,15 +245,14 @@ def check(node: Expr, input_types: Mapping[str, Any]) -> str:
             if left != right or "optional" in (left, right):
                 raise ValueError(f"{node.op} requires two operands of the same type, not {left} and {right}")
             return BOOLEAN
-        case "+" | "-" | "*" | "/" | "%":
+        case op if op in _SIGNATURES:
+            if op in CALLS:
+                _call_arity(op, node.args)
+            expected, result = _SIGNATURES[op]
             for child in node.args:
-                _require(NUMBER, operand(child), node.op)
-            return NUMBER
-        case call if call in CALLS:
-            _call_arity(call, node.args)
-            for child in node.args:
-                _require(NUMBER, operand(child), call)
-            return NUMBER
+                if (actual := check(child, input_types)) != expected:
+                    raise ValueError(f"{op.removeprefix('u')} requires {expected} operands, not {actual}")
+            return result
     raise ValueError(f"unsupported construct {node.op!r}")
 
 
@@ -284,12 +270,6 @@ def _equality_operand(node: Expr, input_types: Mapping[str, Any]) -> str:
     if node.op == "ref" and _optional_scalar(input_types.get(node.value)) is not None:
         return "optional"
     return check(node, input_types)
-
-
-def _require(expected: str, actual: str, construct: str) -> str:
-    if actual != expected:
-        raise ValueError(f"{construct} requires {expected} operands, not {actual}")
-    return expected
 
 
 def validate(node: Expr) -> None:

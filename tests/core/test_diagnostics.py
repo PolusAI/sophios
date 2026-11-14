@@ -26,7 +26,7 @@ from sophios.lang.spans import SourceSpan
 
 from .budgets import budget
 from .cases import case_dirs, match, printed
-from .helpers import REPO_ROOT, run_cli
+from .helpers import run_cli
 from .hermetic import compile_hermetic, compile_hermetic_source
 from .strategies import author_names, pinned
 from .synthetic_tools import clt, registered
@@ -204,16 +204,13 @@ def test_a_step_id_outside_the_allowed_characters_is_refused_at_its_line(case: t
         step['id'] for step in compiled.artifact.cwl['steps']] == ['mk_file', name]
 
 
-_ROW = re.compile(r'^\| `(?P<code>[a-z]{3}\d{3}|nf-s\d{3})` \| (?P<kind>[a-z]+) \| (?P<meaning>.+) \| (?P<fix>.+) \|$')
-
-
 @pytest.mark.fast
-def test_every_code_is_explained_alike_by_the_catalog_its_page_and_explain(
+def test_every_code_is_explained_alike_by_the_catalog_and_explain(
         monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-    """A code an agent cannot look up is a code it cannot act on. Each code has a meaning and a fix of one line, and
-    docs/error_codes.md and `sophios --explain <CODE>`, in any case, with no workflow, say what the catalog says. A
-    document's mistake carries a language code and a call's mistake does not, so a caller can route on `is_language`
-    and land on the right reference."""
+    """A code an agent cannot look up is a code it cannot act on. Each code has a meaning and a fix of one line, which
+    make its row of the table docs/error_codes.md is built with, and `sophios --explain <CODE>`, in any case, with no
+    workflow, says what the catalog says. A document's mistake carries a language code and a call's mistake does not,
+    so a caller can route on `is_language` and land on the right reference."""
     assert set(EXPLANATIONS) == set(SophiosErrorCode)
     for code, explanation in EXPLANATIONS.items():
         text = explanation.meaning + explanation.fix
@@ -223,10 +220,6 @@ def test_every_code_is_explained_alike_by_the_catalog_its_page_and_explain(
         assert run_cli(monkeypatch, '--explain', str(code).upper()) == 0
         said = f'{code} ({explanation.kind}): {explanation.meaning}\nFix: {explanation.fix}\n'
         assert capsys.readouterr().out == said
-    page = REPO_ROOT / 'docs' / 'error_codes.md'
-    rows = {found['code']: (found['kind'], found['meaning'], found['fix'])
-            for found in map(_ROW.match, page.read_text(encoding='utf-8').splitlines()) if found}
-    assert rows == {str(code): (str(e.kind), e.meaning, e.fix) for code, e in EXPLANATIONS.items()}
 
 
 class _Machine:

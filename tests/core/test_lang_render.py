@@ -54,10 +54,10 @@ def test_a_rendered_document_reads_the_same_and_renders_the_same(source: str) ->
     that never settled would churn every file it touched. The rendered text is also YAML that `yaml.SafeLoader` loads
     with the Sophios tags opaque, since a renderer writing what YAML rejects would be writing a dialect."""
     first = parse(source, 'a.wic')
-    assert first.ok and first.document is not None
+    assert not first.diagnostics.has_errors and first.document is not None
     rendered = render(first.document)
     second = parse(rendered, 'b.wic')
-    assert second.ok and second.document is not None, [str(d) for d in second.diagnostics]
+    assert not second.diagnostics.has_errors and second.document is not None, [str(d) for d in second.diagnostics]
     assert reading(second.document) == reading(first.document)
     assert render(second.document) == rendered
     yaml.load(rendered, Loader=YamlWithSophiosTagsOpaque)
@@ -86,8 +86,8 @@ def test_a_synthesized_literal_gets_a_spelling_that_survives(value: Any) -> None
     assert '!ii' in text, text
     yaml.load(text, Loader=YamlWithSophiosTagsOpaque)
     result = parse(text, 'synth.wic')
-    assert result.ok and result.document is not None, [str(d) for d in result.diagnostics]
-    reparsed = result.document.steps[0].input('a')
+    assert not result.diagnostics.has_errors and result.document is not None, [str(d) for d in result.diagnostics]
+    reparsed = dict(result.document.steps[0].inputs).get('a')
     assert isinstance(reparsed, InlineLiteral) and repr(reparsed.value) == repr(value), text
 
 

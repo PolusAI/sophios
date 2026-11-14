@@ -17,7 +17,7 @@ from hypothesis import example, given, strategies as st
 import sophios.plugins
 import sophios.post_compile
 import sophios.preflight
-from sophios.ir import PortType
+from sophios.ir.types import PortType
 from sophios.ir.policy import RunPolicy, tolerant_tool
 from sophios.lang.cwl import CWL_VERSION
 from sophios.wic_types import Yaml

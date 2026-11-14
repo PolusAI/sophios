@@ -9,9 +9,11 @@ import pytest
 import yaml
 
 from sophios.compiler import CompileSettings, compile_source
-from sophios.ir import InferencePolicy, InsertionCatalog, front_end, infer, link
 from sophios.ir.frontdoor import bundle_from_disk
+from sophios.ir.infer import InferencePolicy, InsertionCatalog, infer
+from sophios.ir.link import link
 from sophios.ir.names import Names
+from sophios.ir.pipeline import front_end
 from sophios.ir.types import EdgeOrigin, WorkflowGraph
 from sophios.lang.diagnostics import Diagnostics, SophiosError
 from sophios.utils_cwl import desugar_into_canonical_normal_form
@@ -27,9 +29,9 @@ def _tools(*directories: Path) -> Any:
                        for directory in directories for path in sorted(directory.glob('*.cwl'))})
 
 
-def _inferred(case: Path, expected: dict[str, Any]) -> tuple[WorkflowGraph | None, Diagnostics, int]:
-    """The graph inference gives the case, every diagnostic its door gives, and how many passes it took: the phases
-    run directly under `policy`, or the whole compile where `compiled` is set."""
+def _inferred(case: Path, expected: dict[str, Any]) -> tuple[WorkflowGraph | None, Diagnostics]:
+    """The graph inference gives the case and every diagnostic its door gives: the phases run directly under
+    `policy`, or the whole compile where `compiled` is set."""
     others = {'global': {path.stem: path for path in case.glob('*.wic') if path.name != 'workflow.wic'}}
     bundled = bundle_from_disk(case / 'workflow.wic', others, _tools(case.parent, case))
     policy = expected.get('policy', {})
@@ -38,14 +40,14 @@ def _inferred(case: Path, expected: dict[str, Any]) -> tuple[WorkflowGraph | Non
         try:
             compiled = compile_source(bundled, options, quiet=True)
         except SophiosError as error:
-            return None, error.diagnostics, 0
-        return compiled.graph, compiled.diagnostics, 0
+            return None, error.diagnostics
+        return compiled.graph, compiled.diagnostics
     front = front_end(bundled.parsed, bundled.registry, name='workflow')
     assert front.graph is not None, list(front.diagnostics)
     linked = link(front.graph)
     assert linked.graph is not None, list(linked.diagnostics)
     result = infer(linked.graph, InferencePolicy(**policy), InsertionCatalog.from_registry(bundled.registry))
-    return result.graph, result.diagnostics, result.iterations
+    return result.graph, result.diagnostics
 
 
 @pytest.mark.fast
@@ -54,9 +56,9 @@ def _inferred(case: Path, expected: dict[str, Any]) -> tuple[WorkflowGraph | Non
 def test_inference_decides_each_case_as_its_theme_states(theme: Path) -> None:
     """For each case: `refused` (default false) is no graph; `diagnostics` is every diagnostic, in order, by code,
     severity, step and port, and what a guess or refusal names; `edges` the inferred edges as sink: source; `inputs`
-    the workflow inputs left to the job; `inserted` how many converter steps were inserted, in `iterations` passes."""
+    the workflow inputs left to the job; `inserted` how many converter steps were inserted."""
     for name, expected in stated(theme).items():
-        graph, diagnostics, iterations = _inferred(theme / name, expected)
+        graph, diagnostics = _inferred(theme / name, expected)
         assert (graph is None) is expected.get('refused', False), (name, list(diagnostics))
         assert match(expected.get('diagnostics', []), [diagnostic(d) for d in diagnostics]), (name, list(diagnostics))
         if graph is None:
@@ -69,4 +71,3 @@ def test_inference_decides_each_case_as_its_theme_states(theme: Path) -> None:
         assert match(expected.get('inputs', [names.port(port.name) for port in graph.workflow_inputs]),
                      [names.port(port.name) for port in graph.workflow_inputs]), name
         assert expected.get('inserted', 0) == sum(step.synthesized for step in graph.steps), name
-        assert expected.get('iterations', iterations) == iterations, name

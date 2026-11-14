@@ -3,11 +3,11 @@
 A port promoted to a workflow's boundary keeps the `format:` CURIE its process
 wrote (`myns:format_1`), so the workflow has to bind `myns` as that process did.
 Which prefixes those are, and which steps own the ports that use them, is known
-only once every promoted port is placed, in every document: after Infer, and the
-`complete` that follows it. Only the document and those steps can disagree about
-a CURIE the output contains. A binding of the same prefix by any other step is
-no source for it: no CURIE in the output could mean it, so it conflicts with
-nothing, and which steps sit beneath a subworkflow does not change that.
+only once every promoted port is placed, in every document: after Infer. Only
+the document and those steps can disagree about a CURIE the output contains. A
+binding of the same prefix by any other step is no source for it: no CURIE in
+the output could mean it, so it conflicts with nothing, and which steps sit
+beneath a subworkflow does not change that.
 
 A tool's bindings are read from the registry here, not carried through the
 phases before: they are a fact about the tool, and the steps that count are the
@@ -22,7 +22,6 @@ from ..lang.error_codes import SophiosErrorCode
 from ..lang.nodes import OpaqueCwl
 from ..lang.spans import SourceSpan
 from .emit import EDAM_NAMESPACE
-from .link import attach_step_children
 from .resolve import RegistrySnapshot
 from .types import DerivedName, StepId, StepNode, WorkflowGraph
 
@@ -68,7 +67,7 @@ def declare_namespaces(graph: WorkflowGraph, registry: RegistrySnapshot) -> Work
 
 def _declare(graph: WorkflowGraph, registry: RegistrySnapshot, diagnostics: Diagnostics) -> WorkflowGraph:
     children = tuple(_declare(child, registry, diagnostics) for child in graph.children)
-    current = attach_step_children(graph, children)
+    current = replace(graph, children=children)
     owners = _promoting_steps(current)
     if not owners:
         return current
@@ -130,20 +129,21 @@ def _bindings(prefix: str, graph: WorkflowGraph, owners: Iterable[StepNode],
     """What `prefix` is bound to by `graph`'s own `$namespaces`, then by the process behind each owning step."""
     bound = [_Binding(uri, 'this document') for name, uri in graph.namespaces if name == prefix]
     for step in owners:
-        namespaces = dict(_process_namespaces(step, registry))
+        namespaces = dict(_process_namespaces(graph, step, registry))
         if prefix in namespaces:
             bound.append(_Binding(namespaces[prefix], f"step '{step.id.name}'", step.span,
                                   Locator(step=step.id.name, index=step.id.index)))
     return bound
 
 
-def _process_namespaces(step: StepNode, registry: RegistrySnapshot) -> tuple[tuple[str, OpaqueCwl], ...]:
-    """The `$namespaces` the process behind `step` declares: a tool's as written, a subworkflow's as declared."""
-    run = step.run
-    assert run is not None, 'a completed graph has no unrun step'
-    if run.child is not None:
-        return run.child.namespaces
-    definition = registry.tool(run.process_id)
-    assert definition is not None, f'{run.process_id} is in the registry once resolved'
+def _process_namespaces(graph: WorkflowGraph, step: StepNode,
+                        registry: RegistrySnapshot) -> tuple[tuple[str, OpaqueCwl], ...]:
+    """The `$namespaces` the process behind `step` of `graph` declares: a tool's as written, a subworkflow's as
+    declared."""
+    child = graph.child(step.id)
+    if child is not None:
+        return child.namespaces
+    definition = registry.tool(step.run)
+    assert definition is not None, f'{step.run} is in the registry once resolved'
     declared = definition.cwl.get('$namespaces')
     return tuple((str(prefix), uri) for prefix, uri in declared.items()) if isinstance(declared, dict) else ()

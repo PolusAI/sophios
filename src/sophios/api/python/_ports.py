@@ -83,16 +83,8 @@ class OutputSourceBinding:
         wrote, and it names the step in the error below. Step names are unique
         within a workflow, so the owner's name is its address.
 
-        Args:
-            steps (Sequence[Any]): The workflow's own steps.
-            source_parameter (Any): The bound source parameter, whose
-                `parent_obj` is the owning step.
-
         Raises:
             InvalidLinkError: If the source is not one of the workflow's steps.
-
-        Returns:
-            str: The serialized CWL `outputSource` value.
         """
         if self.step_id is None:
             return self.source_name
@@ -116,10 +108,9 @@ class ParameterStore(Generic[ParameterT]):
 
     parameters: dict[str, ParameterT] = field(default_factory=dict)
 
-    def add(self, parameter: ParameterT, *, name: str | None = None) -> ParameterT:
-        """Store `parameter` under `name` (or its own `.name`) and return it."""
-        self.parameters[name or getattr(parameter, "name")] = parameter
-        return parameter
+    def add(self, parameter: ParameterT) -> None:
+        """Store `parameter` under its own `.name`."""
+        self.parameters[getattr(parameter, "name")] = parameter
 
     def get(self, name: str) -> ParameterT:
         """Return the stored parameter with the given name."""
@@ -319,14 +310,8 @@ class OutputParameter(_ParameterBase):
     def to_workflow_output(self, steps: Sequence[Any]) -> dict[str, Any]:
         """Serialize this workflow output parameter to CWL.
 
-        Args:
-            steps (Sequence[Any]): The workflow's own steps.
-
         Raises:
             ValueError: If the output has no source or no resolved type.
-
-        Returns:
-            dict[str, Any]: Serialized CWL workflow output definition.
         """
         if self._source is None:
             raise ValueError(f"workflow output {self.name!r} has no source binding")

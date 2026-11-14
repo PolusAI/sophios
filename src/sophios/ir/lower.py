@@ -13,15 +13,14 @@ relative location in a `default:` is read against it.
 """
 import difflib
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from pathlib import Path
 from typing import Final
 
-from ..lang.cwl import CWL_VERSION
 from ..lang.diagnostics import Diagnostics, Locator
 from ..lang.error_codes import SophiosErrorCode
 from ..lang.names import check_written_name
-from ..lang.nodes import CwlRecord, Document, EdgeRef, InputValue, OpaqueCwl, Step, UnresolvedName
+from ..lang.nodes import CwlRecord, Document, EdgeRef, InputValue, OpaqueCwl, Step, UnresolvedName, WicSidecar
 from ..lang.parser import Grammar
 from ..lang.spans import SourceSpan
 from .declarations import port_declaration
@@ -35,13 +34,12 @@ from .types import (
     Direction,
     Edge,
     Namespace,
+    PhaseResult,
     Port,
     PortId,
     PortName,
     PortType,
-    ProcessRun,
     Resolution,
-    SourceList,
     StepId,
     StepNode,
     WorkflowGraph,
@@ -49,22 +47,9 @@ from .types import (
 )
 
 
-@dataclass(frozen=True, slots=True)
-class Lowered:
-    """The result of lowering: a graph when one could be built, and diagnostics."""
-
-    graph: WorkflowGraph | None
-    diagnostics: Diagnostics
-
-    @property
-    def ok(self) -> bool:
-        """Whether a graph was produced with no errors."""
-        return self.graph is not None and not self.diagnostics.has_errors
-
-
-def lower(document: ResolvedDocument,
-          namespace: Namespace | None = None) -> Lowered:
-    """Lower a resolved document to a graph.
+# pylint: disable-next=too-many-locals
+def lower(document: ResolvedDocument, here: Namespace = Namespace()) -> PhaseResult:
+    """Lower a resolved document to a graph, without consulting its registry again.
 
     An input bound with `!*` becomes an edge when the name was defined *earlier*
     in this document, and a `DeferredObligation` when it was never defined here
@@ -75,43 +60,25 @@ def lower(document: ResolvedDocument,
 
     Args:
         document (ResolvedDocument): The resolved document.
-        namespace (Namespace | None): Where this document sits. The root's
-            namespace is empty.
+        here (Namespace): Where this document sits. The root's namespace is empty.
 
     Returns:
-        Lowered: The graph, and any diagnostics raised on the way.
+        PhaseResult: The graph, and any diagnostics raised on the way.
     """
-    return _lower_resolved(document, namespace)
-
-
-# pylint: disable-next=too-many-locals
-def _lower_resolved(document: ResolvedDocument,
-                    namespace: Namespace | None = None) -> Lowered:
-    """Lower a fully resolved document without consulting its registry again."""
     diagnostics = Diagnostics()
-    here = namespace if namespace is not None else Namespace()
     identities = _step_identities(document.source, here, diagnostics)
     if identities is None or not _every_name_is_present(document.source, diagnostics):
-        return Lowered(None, diagnostics)
-    _check_written_names(document, namespace is None, diagnostics)
-    defined_anywhere = _edge_definitions(
-        identities, Document(steps=tuple(step.source for step in document.steps)), diagnostics)
-    defined_so_far: dict[str, PortId] = {}
+        return PhaseResult(None, diagnostics)
+    _check_written_names(document, not here.parts, diagnostics)
+    defined = _edge_definitions(identities, [step.source for step in document.steps], diagnostics)
     nodes: list[StepNode] = []
     children: list[WorkflowGraph] = []
 
     for identity, resolved_step in zip(identities, document.steps, strict=True):
         # Lowered before its step, so the child's diagnostics travel with it.
-        child = (_lower_resolved(resolved_step.process.child, here.child(identity))
+        child = (lower(resolved_step.process.child, here.child(identity))
                  if resolved_step.process.child is not None else None)
-        node = _resolved_step_node(identity, resolved_step, defined_so_far,
-                                   defined_anywhere, diagnostics, document.directory)
-        nodes.append(node)
-        for authored in resolved_step.source.outputs:
-            if authored.edge_def is not None:
-                defined_so_far.setdefault(
-                    authored.edge_def.name,
-                    PortId(identity, Direction.OUTPUT, AuthoredName(authored.name)))
+        nodes.append(_resolved_step_node(identity, resolved_step, defined, diagnostics, document.directory))
         if child is not None:
             if child.graph is not None:
                 children.append(child.graph)
@@ -119,28 +86,18 @@ def _lower_resolved(document: ResolvedDocument,
                 diagnostics._append(diagnostic)  # pylint: disable=protected-access
 
     passthrough = dict(document.source.passthrough)
-    spans = {side: {name: span for section, name, span in document.source.port_spans if section == side}
-             for side in ('inputs', 'outputs')}
-    workflow_inputs = _workflow_ports(passthrough.get('inputs', {}), output=False,
-                                      diagnostics=diagnostics, document_span=document.source.span,
-                                      directory=document.directory, spans=spans['inputs'])
-    workflow_outputs = _workflow_ports(passthrough.get('outputs', {}), output=True,
-                                       diagnostics=diagnostics, document_span=document.source.span,
-                                       directory=document.directory, spans=spans['outputs'])
-    workflow_input_names = {port.name for port in workflow_inputs}
-    input_mapping = tuple(
-        (name, tuple(binding.sink for node in nodes for binding in node.bindings
-                     if name in _input_names(binding)))
-        for name in (port.name for port in workflow_inputs)
-    )
+    workflow_inputs = _workflow_ports(document, 'inputs', diagnostics)
+    relays = {given.name: tuple(binding.sink for node in nodes for binding in node.bindings
+                                if given.name in _input_names(binding)) for given in workflow_inputs}
+    workflow_outputs = _workflow_ports(document, 'outputs', diagnostics)
     output_mapping = []
     for port in workflow_outputs:
         source = _output_port(nodes, port.output_source, diagnostics, document.source.span, str(port.name))
         if source is not None:
             output_mapping.append((port.name, source))
-    namespaces_raw = passthrough.get('$namespaces', {})
-    namespaces = tuple(namespaces_raw.items()) if isinstance(namespaces_raw, dict) else ()
-    namespaces = tuple((str(key), value) for key, value in namespaces)
+    namespaces_raw = passthrough.get('$namespaces')
+    namespaces = tuple((str(key), value) for key, value in namespaces_raw.items()) \
+        if isinstance(namespaces_raw, dict) else ()
     schemas_raw = passthrough.get('$schemas', ())
     schemas = tuple(schemas_raw) if isinstance(schemas_raw, list) else ()
     # Only the mapping form of `requirements:` is modeled; any other shape (a list
@@ -159,26 +116,19 @@ def _lower_resolved(document: ResolvedDocument,
         # definition registered for an output the process never declared
         # (reported above as wic028) would otherwise trip the graph's own
         # invariants with a ValueError instead of this report.
-        return Lowered(None, diagnostics)
-    known_ports = {port.id for node in nodes for port in node.inputs + node.outputs}
+        return PhaseResult(None, diagnostics)
     sidecar = document.source.sidecar
     inlineable = bool(dict(sidecar.entries).get('inlineable', True)) if sidecar is not None else True
     graph = WorkflowGraph(
         namespace=here,
         steps=tuple(nodes),
-        explicit_edge_defs=tuple((name, port) for name, port in defined_anywhere.items()
-                                 if port in known_ports),
-        explicit_edge_calls=tuple((obligation.name, obligation.sink)
-                                  for node in nodes for binding in node.bindings
-                                  for obligation in _obligations(binding.resolution)),
-        input_mapping=tuple((name, sinks) for name, sinks in input_mapping
-                            if name in workflow_input_names and sinks),
+        explicit_edge_defs=tuple(defined.items()),
+        input_mapping=tuple((name, sinks) for name, sinks in relays.items() if sinks),
         output_mapping=tuple(output_mapping),
         passthrough=opaque,
         span=document.source.span,
         name=document.name,
         lang_version=document.lang_version,
-        cwl_version=CWL_VERSION,
         workflow_inputs=workflow_inputs,
         workflow_outputs=workflow_outputs,
         requirements=requirements,
@@ -187,10 +137,9 @@ def _lower_resolved(document: ResolvedDocument,
         children=tuple(children),
         inlineable=inlineable,
     )
-    return Lowered(graph, diagnostics)
+    return PhaseResult(graph, diagnostics)
 
 
-# pylint: disable-next=too-many-arguments,too-many-positional-arguments,too-many-locals
 #: Bound on a `python_script` step to build its tool, never passed to it.
 _GENERATION_PARAMETERS: Final = ('script', 'dockerPull')
 
@@ -208,9 +157,8 @@ def _record_only_inputs(resolved: ResolvedStep, declared: Mapping[AuthoredName, 
                  if isinstance(value, CwlRecord) and AuthoredName(name) not in declared)
 
 
-# pylint: disable-next=too-many-arguments,too-many-positional-arguments,too-many-locals
-def _resolved_step_node(identity: StepId, resolved: ResolvedStep,
-                        defined_so_far: dict[str, PortId], defined_anywhere: dict[str, PortId],
+# pylint: disable-next=too-many-locals
+def _resolved_step_node(identity: StepId, resolved: ResolvedStep, defined: dict[str, PortId],
                         diagnostics: Diagnostics, directory: Path | None) -> StepNode:
     source = resolved.source
     declared_inputs = {AuthoredName(port.name): port.declaration for port in resolved.process.inputs}
@@ -246,14 +194,13 @@ def _resolved_step_node(identity: StepId, resolved: ResolvedStep,
                     for name, declaration in declared_outputs.items())
     by_input = {port.id.port: port for port in inputs}
     bindings = tuple(Binding(port.id, _with_defaults_resolved(value, directory),
-                             _resolve(value, port, defined_so_far, defined_anywhere, diagnostics))
+                             _resolve(value, port, defined, diagnostics))
                      for name, value in source.inputs
                      if (port := by_input.get(AuthoredName(name))) is not None)
-    run = ProcessRun(resolved.process.run_path, resolved.process.key)
     scatter_ports = _scatter_ports(source, identity, inputs, diagnostics,
                                    calls_workflow=resolved.process.child is not None)
-    return StepNode(identity, inputs, outputs, bindings, source.interpreted,
-                    source.passthrough, source.span, run, scatter_ports,
+    return StepNode(identity, resolved.process.key, inputs, outputs, bindings, source.interpreted,
+                    source.passthrough, source.span, scatter_ports,
                     _inference_rules(resolved.sidecar))
 
 
@@ -330,15 +277,18 @@ def _with_defaults_resolved(value: InputValue, directory: Path | None) -> InputV
                                        for key, field in value.fields))
 
 
-# pylint: disable-next=too-many-arguments
-def _workflow_ports(raw: object, *, output: bool, diagnostics: Diagnostics, document_span: SourceSpan | None,
-                    directory: Path | None, spans: Mapping[str, SourceSpan]) -> tuple[WorkflowPort, ...]:
+def _workflow_ports(document: ResolvedDocument, side: str, diagnostics: Diagnostics) -> tuple[WorkflowPort, ...]:
+    """The ports the document declares under `side`, its `inputs:` or its `outputs:`."""
+    raw: object = dict(document.source.passthrough).get(side)
     if not isinstance(raw, dict):
         return ()
+    output = side == 'outputs'
+    spans = {name: span for section, name, span in document.source.port_spans if section == side}
     ports: list[WorkflowPort] = []
     for name, declaration_raw in raw.items():
         if isinstance(declaration_raw, dict) and 'default' in declaration_raw:
-            declaration_raw = {**declaration_raw, 'default': _resolved_default(declaration_raw['default'], directory)}
+            declaration_raw = {**declaration_raw,
+                               'default': _resolved_default(declaration_raw['default'], document.directory)}
         if output and isinstance(declaration_raw, dict):
             rejected = sorted(key for key in ('linkMerge', 'pickValue') if key in declaration_raw)
             if isinstance(declaration_raw.get('outputSource'), list):
@@ -348,7 +298,7 @@ def _workflow_ports(raw: object, *, output: bool, diagnostics: Diagnostics, docu
                     SophiosErrorCode.STEP_INPUT_RECORD,
                     f"workflow output {str(name)!r} uses {', '.join(rejected)}, which Sophios does not "
                     'read; an output names one step/port',
-                    document_span)
+                    document.source.span)
         # Asserted, not reduced via `boundary_declaration`: it is already a
         # boundary declaration by where it's written, and reducing it would
         # discard fields the author wrote at the boundary on purpose.
@@ -382,8 +332,8 @@ def _output_port(nodes: list[StepNode], raw: object, diagnostics: Diagnostics,
                  span: SourceSpan | None, output_name: str) -> PortId | None:
     """The step output an authored `outputSource: <step>/<port>` names, if any.
 
-    `<step>` is the authored id (its first occurrence), or `(index, name)` (that
-    occurrence, which must carry that name).
+    `<step>` is the authored id (its first occurrence), or `(index, name)`: that
+    occurrence, which must carry that name and have that output, else a diagnostic.
     """
     if not isinstance(raw, str) or '/' not in raw:
         return None
@@ -391,20 +341,8 @@ def _output_port(nodes: list[StepNode], raw: object, diagnostics: Diagnostics,
     found = output_step([node.id.name for node in nodes], step_text)
     if found is None:
         return None
-    index, positional_name = found
-    if positional_name is not None:
-        return _positional_output_port(nodes, index, positional_name, port_name,
-                                       diagnostics, span, output_name)
-    return next((port.id for port in nodes[index - 1].outputs
-                 if port.id.port == AuthoredName(port_name)), None)
-
-
-# pylint: disable-next=too-many-arguments,too-many-positional-arguments
-def _positional_output_port(nodes: list[StepNode], index: int, name: str, port_name: str,
-                            diagnostics: Diagnostics, span: SourceSpan | None,
-                            output_name: str) -> PortId | None:
-    """The output `port_name` of step `index`, which must carry `name`; else a diagnostic."""
-    if not 1 <= index <= len(nodes) or nodes[index - 1].id.name != name:
+    index, name = found
+    if name is not None and (not 1 <= index <= len(nodes) or nodes[index - 1].id.name != name):
         actual = nodes[index - 1].id.name if 1 <= index <= len(nodes) else 'no step'
         diagnostics.error(
             SophiosErrorCode.POSITIONAL_OUTPUT_SOURCE,
@@ -412,15 +350,15 @@ def _positional_output_port(nodes: list[StepNode], index: int, name: str, port_n
             span, Locator(step=name, index=index, port=port_name))
         return None
     outputs = nodes[index - 1].outputs
-    found = next((port.id for port in outputs if port.id.port == AuthoredName(port_name)), None)
-    if found is None:
+    port = next((port.id for port in outputs if port.id.port == AuthoredName(port_name)), None)
+    if port is None and name is not None:
         declared = ', '.join(str(port.id.port) for port in outputs) or 'none'
         diagnostics.error(
             SophiosErrorCode.UNDECLARED_PORT,
             f"output {output_name!r} names '{port_name}' of step {index} ({name!r}), which has "
             f'no such output; its outputs are: {declared}',
             span, Locator(step=name, index=index, port=port_name))
-    return found
+    return port
 
 
 def _input_names(binding: Binding) -> tuple[str, ...]:
@@ -434,16 +372,9 @@ def _input_names(binding: Binding) -> tuple[str, ...]:
             return ()
 
 
-def _obligations(resolution: Resolution) -> tuple[DeferredObligation, ...]:
-    """The obligations one binding resolved to."""
-    items = resolution.items if isinstance(resolution, SourceList) else (resolution,)
-    return tuple(item for item in items if isinstance(item, DeferredObligation))
-
-
-def _inference_rules(sidecar: object) -> tuple[tuple[str, str], ...]:
+def _inference_rules(sidecar: WicSidecar | None) -> tuple[tuple[str, str], ...]:
     """Normalize the local output-selection policy carried by a step sidecar."""
-    entries = getattr(sidecar, 'entries', ())
-    raw = dict(entries).get('inference') if entries else None
+    raw = dict(sidecar.entries).get('inference') if sidecar is not None else None
     if not isinstance(raw, dict):
         return ()
     return tuple((str(name), str(rule)) for name, rule in raw.items())
@@ -469,34 +400,30 @@ def _every_name_is_present(document: Document, diagnostics: Diagnostics) -> bool
     """Report every position where the document left a name empty, all under
     one error code, so lowering stays total rather than raising `ValueError`.
     """
-    found = False
+    before = len(diagnostics)
     for index, step in enumerate(document.steps, start=1):
         for name, value in step.inputs:
             if not name:
                 diagnostics.error(SophiosErrorCode.EMPTY_NAME,
                                   f"step '{step.id}' binds an input with no name", step.span,
                                   Locator(step=step.id, index=index))
-                found = True
             references = value.sources if isinstance(value, CwlRecord) else (value,)
             for reference in references:
                 if isinstance(reference, EdgeRef) and not reference.name:
                     diagnostics.error(SophiosErrorCode.EMPTY_NAME,
                                       f"'!*' on '{step.id}.{name}' names no edge", reference.span,
                                       Locator(step=step.id, index=index, port=name))
-                    found = True
         for binding in step.outputs:
             if not binding.name:
                 diagnostics.error(SophiosErrorCode.EMPTY_NAME,
                                   f"step '{step.id}' declares an out: entry with no name",
                                   binding.span, Locator(step=step.id, index=index))
-                found = True
             if binding.edge_def is not None and not binding.edge_def.name:
                 diagnostics.error(SophiosErrorCode.EMPTY_NAME,
                                   f"'!&' on '{step.id}.{binding.name}' defines no edge",
                                   binding.edge_def.span,
                                   Locator(step=step.id, index=index, port=binding.name))
-                found = True
-    return not found
+    return len(diagnostics) == before
 
 
 def _check_written_names(document: ResolvedDocument, root: bool, diagnostics: Diagnostics) -> None:
@@ -519,11 +446,11 @@ def _check_written_names(document: ResolvedDocument, root: bool, diagnostics: Di
                           source.span)
 
 
-def _edge_definitions(identities: tuple[StepId, ...], document: Document,
+def _edge_definitions(identities: tuple[StepId, ...], steps: Sequence[Step],
                       diagnostics: Diagnostics) -> dict[str, PortId]:
     """Which port defines each explicit edge name, reporting any defined twice."""
     defined: dict[str, PortId] = {}
-    for step_id, step in zip(identities, document.steps, strict=True):
+    for step_id, step in zip(identities, steps, strict=True):
         for binding in step.outputs:
             if binding.edge_def is None:
                 continue
@@ -539,11 +466,10 @@ def _edge_definitions(identities: tuple[StepId, ...], document: Document,
     return defined
 
 
-def _resolve(value: InputValue, port: Port, defined_so_far: dict[str, PortId],
-             defined_anywhere: dict[str, PortId], diagnostics: Diagnostics) -> Resolution:
+def _resolve(value: InputValue, port: Port, defined: dict[str, PortId], diagnostics: Diagnostics) -> Resolution:
     """Where one bound input gets its value from, if it needs a producer."""
     if isinstance(value, CwlRecord):
-        items = tuple(_resolve_reference(source, port, defined_so_far, defined_anywhere, diagnostics)
+        items = tuple(_resolve_reference(source, port, defined, diagnostics)
                       if isinstance(source, EdgeRef) else None for source in value.sources)
         if len(items) > 1:
             for item in items:
@@ -557,24 +483,23 @@ def _resolve(value: InputValue, port: Port, defined_so_far: dict[str, PortId],
                         'Declare it as an input of this workflow and name that input instead.',
                         item.span,
                         Locator(step=port.id.step.name, index=port.id.step.index, port=str(port.id.port)))
-        return SourceList(port.id, items)
+        return items
     if not isinstance(value, EdgeRef):
         return None
-    return _resolve_reference(value, port, defined_so_far, defined_anywhere, diagnostics)
+    return _resolve_reference(value, port, defined, diagnostics)
 
 
-def _resolve_reference(value: EdgeRef, port: Port, defined_so_far: dict[str, PortId],
-                       defined_anywhere: dict[str, PortId],
+def _resolve_reference(value: EdgeRef, port: Port, defined: dict[str, PortId],
                        diagnostics: Diagnostics) -> Edge | DeferredObligation | None:
-    """An edge to an earlier definition, or an obligation on one outside this document."""
-    source = defined_so_far.get(value.name)
-    if source is not None:
+    """An edge to the definition an earlier step made, or an obligation on one outside this document."""
+    source = defined.get(value.name)
+    if source is None:
+        return DeferredObligation(port.id, value.name, span=value.span)
+    if source.step.index < port.id.step.index:
         return Edge(source, port.id, span=value.span)
-    if value.name in defined_anywhere:
-        diagnostics.error(
-            SophiosErrorCode.UNDEFINED_EDGE,
-            f"'!* {value.name}' is referenced before '!& {value.name}' defines it.",
-            value.span,
-            Locator(step=port.id.step.name, index=port.id.step.index, port=str(port.id.port)))
-        return None
-    return DeferredObligation(port.id, value.name, port.type, span=value.span)
+    diagnostics.error(
+        SophiosErrorCode.UNDEFINED_EDGE,
+        f"'!* {value.name}' is referenced before '!& {value.name}' defines it.",
+        value.span,
+        Locator(step=port.id.step.name, index=port.id.step.index, port=str(port.id.port)))
+    return None

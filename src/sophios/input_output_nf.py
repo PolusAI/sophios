@@ -9,7 +9,6 @@ import re
 from string import Formatter
 from typing import Any, Final
 
-from .lang.cwl import SCATTER_METHODS
 from .lang.subset import references, source_text
 from .nf_expr import (
     CONTROL_ESCAPES, GROOVY_IDENTIFIER, GROOVY_LITERAL, NF_EXPRESSION_FUNCTIONS, groovy_literal, render_groovy,
@@ -30,6 +29,7 @@ from .nf_types import (
     NfArrayBinding,
     NfBasenameReference,
     NfFlag,
+    NfIncomingConnection,
     NfInputReference,
     NfLiteral,
     NfOptionalBinding,
@@ -41,7 +41,12 @@ from .nf_types import (
     NfTemplate,
     NfWorkflowInputConnection,
     NfWorkflowOutputConnection,
+    edges,
+    incoming_connections,
+    inputs_read,
     param_channel,
+    scatter_edges,
+    template_segments,
 )
 
 
@@ -735,18 +740,6 @@ def _process_map(workflow: ExecutableNextflowWorkflow) -> dict[str, NfProcess]:
     return {process.name: process for process in workflow.processes}
 
 
-_Incoming = NfWorkflowInputConnection | NfProcessConnection | NfStepInputConnection
-
-
-def _incoming_connections(workflow: ExecutableNextflowWorkflow) -> dict[tuple[str, str], _Incoming]:
-    # The executable IR rejects multiple sources per input at construction.
-    return {
-        (connection.to_process, connection.to_port): connection
-        for connection in workflow.connections
-        if isinstance(connection, (NfWorkflowInputConnection, NfProcessConnection, NfStepInputConnection))
-    }
-
-
 # The line the entry workflow prints for each workflow output once it
 # completes (design §7): this marker, then the JSON array of the output's name
 # and its value. The helper makes the value: a path is an object with its
@@ -791,12 +784,8 @@ def _multi_input_sources(
     """
     processes = _process_map(workflow)
     by_port: dict[str, tuple[str, str]] = {}
-    for connection in workflow.connections:
-        if (
-            not isinstance(connection, (NfWorkflowInputConnection, NfProcessConnection))
-            or connection.to_process != process.name
-            or connection.adapter not in SCATTER_METHODS
-        ):
+    for connection in scatter_edges(workflow.connections):
+        if connection.to_process != process.name:
             continue
         match connection:
             case NfWorkflowInputConnection(from_port, _, to_port, _):
@@ -809,12 +798,7 @@ def _multi_input_sources(
 
 def _multi_input_methods(workflow: ExecutableNextflowWorkflow) -> dict[str, str]:
     """The multi-input scatter method of each process that has one; the model admits one per process."""
-    return {
-        connection.to_process: connection.adapter
-        for connection in workflow.connections
-        if isinstance(connection, (NfWorkflowInputConnection, NfProcessConnection))
-        and connection.adapter in SCATTER_METHODS
-    }
+    return {edge.to_process: str(edge.adapter) for edge in scatter_edges(workflow.connections)}
 
 
 def _output_record(workflow: ExecutableNextflowWorkflow, connection: NfWorkflowOutputConnection) -> str:
@@ -823,13 +807,8 @@ def _output_record(workflow: ExecutableNextflowWorkflow, connection: NfWorkflowO
     The value carries one array level per scattered input under ``nested_crossproduct``, one under any
     other scatter, and none for an unscattered process.
     """
-    adapters = [
-        incoming.adapter
-        for incoming in workflow.connections
-        if isinstance(incoming, (NfWorkflowInputConnection, NfProcessConnection))
-        and incoming.to_process == connection.from_process
-        and incoming.adapter in SCATTER_METHODS
-    ]
+    adapters = [edge.adapter for edge in scatter_edges(workflow.connections)
+                if edge.to_process == connection.from_process]
     depth = len(adapters) if "nested_crossproduct" in adapters else min(len(adapters), 1)
     value = f"{NF_OUTPUT_HELPER}(items, {depth})" if depth else f"{NF_OUTPUT_HELPER}(items[0], 0)"
     return (
@@ -948,7 +927,7 @@ def _step_input_expression(workflow: ExecutableNextflowWorkflow, connection: NfS
 
 
 def _argument(
-    workflow: ExecutableNextflowWorkflow, connection: _Incoming, methods: Mapping[str, str] | None = None
+    workflow: ExecutableNextflowWorkflow, connection: NfIncomingConnection, methods: Mapping[str, str] | None = None
 ) -> str:
     """The channel a process input is called with.
 
@@ -970,16 +949,13 @@ def _argument(
 
 def _workflow_input_names(workflow: ExecutableNextflowWorkflow) -> list[str]:
     return list(dict.fromkeys(
-        edge.from_port
-        for connection in workflow.connections
-        for edge in (connection.sources if isinstance(connection, NfStepInputConnection) else (connection,))
-        if isinstance(edge, NfWorkflowInputConnection)
+        edge.from_port for edge in edges(workflow.connections) if isinstance(edge, NfWorkflowInputConnection)
     ))
 
 
 def _render_named_workflow(workflow: ExecutableNextflowWorkflow) -> str:
     processes = _process_map(workflow)
-    incoming = _incoming_connections(workflow)
+    incoming = incoming_connections(workflow.connections)
     workflow_inputs = _workflow_input_names(workflow)
     lines = [Idioms.WORKFLOW.fill(name=workflow.name)]
     if workflow_inputs:
@@ -1077,18 +1053,13 @@ def _is_float(param_type: str) -> bool:
 def _float_texts(workflow: ExecutableNextflowWorkflow) -> dict[str, frozenset[str]]:
     """Each process's inputs a float parameter reaches that it renders as text."""
     reached = {
-        (edge.to_process, edge.to_port)
-        for connection in workflow.connections
-        for edge in (connection.sources if isinstance(connection, NfStepInputConnection) else (connection,))
+        (edge.to_process, edge.to_port) for edge in edges(workflow.connections)
         if isinstance(edge, NfWorkflowInputConnection) and _is_float(workflow.param_types[edge.from_port])
     }
     texts: dict[str, frozenset[str]] = {}
     for process in workflow.processes:
-        templates = [*process.command.templates, *(port.glob for port in process.outputs if port.glob is not None)]
-        names = {segment.name for template in templates for segment in template.segments
-                 if isinstance(segment, NfInputReference)}
-        names |= {token.name for token in process.command.tokens
-                  if isinstance(token, (NfArrayBinding, NfOptionalBinding))}
+        names = inputs_read(template_segments(process.command, process.outputs), NfInputReference) | inputs_read(
+            process.command.tokens, NfArrayBinding, NfOptionalBinding)
         texts[process.name] = frozenset(name for name in names if (process.name, name) in reached)
     return texts
 

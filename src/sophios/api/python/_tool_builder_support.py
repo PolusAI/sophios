@@ -5,88 +5,27 @@ holds the repetitive rendering, validation, and sanitization logic so the
 main `tool_builder.py` file can stay focused on the user-facing surface.
 """
 
-from argparse import Namespace
-from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-import re
 import tempfile
-from types import MappingProxyType
 import warnings
 from typing import Any
 
+from cwltool import load_tool
+from cwltool.context import LoadingContext
+
 from sophios.input_output import dump_wic_yaml
-
-from ._utils import validate_python_identifier_name
-
-
-@dataclass(frozen=True, slots=True)
-class _BuilderRules:
-    """Immutable support namespace for Tool Builder internals."""
-
-    unset: object
-    expression_markers: tuple[str, ...]
-    known_namespaces: MappingProxyType[str, str]
-    known_schemas: MappingProxyType[str, str]
-    dangerous_raw_keys: frozenset[str]
-    raw_class_name_pattern: str
-    reserved_document_keys: frozenset[str]
-
-
-_SUPPORT = _BuilderRules(
-    unset=object(),
-    expression_markers=("$(", "${"),
-    known_namespaces=MappingProxyType(
-        {
-            "cwltool": "http://commonwl.org/cwltool#",
-            "edam": "https://edamontology.org/",
-        }
-    ),
-    known_schemas=MappingProxyType(
-        {
-            "edam": "https://raw.githubusercontent.com/edamontology/edamontology/master/EDAM_dev.owl",
-        }
-    ),
-    dangerous_raw_keys=frozenset({"$graph", "$import", "$include", "$mixin"}),
-    raw_class_name_pattern=r"^[A-Za-z0-9_.-]+(?::[A-Za-z0-9_.-]+)?$",
-    reserved_document_keys=frozenset(
-        {
-            "$namespaces",
-            "$schemas",
-            "arguments",
-            "baseCommand",
-            "class",
-            "cwlVersion",
-            "doc",
-            "hints",
-            "id",
-            "inputs",
-            "intent",
-            "label",
-            "outputs",
-            "permanentFailCodes",
-            "requirements",
-            "stderr",
-            "stdin",
-            "stdout",
-            "successCodes",
-            "temporaryFailCodes",
-        }
-    ),
-)
 
 
 def _render(value: Any) -> Any:
     """Render helper objects to plain CWL/YAML-compatible values."""
     match value:
-        case Path() as path:
-            return str(path)
-        case list() as items:
-            return [_render(item) for item in items]
-        case tuple() as items:
-            return [_render(item) for item in items]
-        case dict() as mapping:
-            return {key: _render(item) for key, item in mapping.items()}
+        case Path():
+            return str(value)
+        case list() | tuple():
+            return [_render(item) for item in value]
+        case dict():
+            return {key: _render(item) for key, item in value.items()}
         case _ if hasattr(value, "to_dict") and callable(value.to_dict):
             return _render(value.to_dict())
         case _:
@@ -99,77 +38,29 @@ def _merge_if_set(target: dict[str, Any], key: str, value: Any) -> None:
 
 
 def _render_doc(value: str | list[str] | None) -> str | list[str] | None:
+    """A `doc` as CWL takes it: text, or lines of text. Any other value is left out."""
     match value:
-        case None:
+        case str():
+            return value
+        case list():
+            return [str(item) for item in value]
+        case _:
             return None
-        case str() as text:
-            return text
-        case list() as items:
-            return [str(item) for item in items]
-
-
-def _record_type_payload(
-    fields: Any,
-    *,
-    name: str | None = None,
-) -> dict[str, Any]:
-    """Build a CWL record schema payload from named or positional field specs."""
-    match fields:
-        case Mapping() as mapping:
-            field_defs = [spec.named(field_name).to_dict() for field_name, spec in mapping.items()]
-        case _:
-            field_defs = [_render(field_spec) for field_spec in fields]
-    payload: dict[str, Any] = {"type": "record", "fields": field_defs}
-    _merge_if_set(payload, "name", name)
-    return payload
-
-
-def _canonicalize_type(type_: Any) -> Any:
-    rendered = _render(type_)
-    match rendered:
-        case str() as text if text.endswith("?"):
-            return ["null", _canonicalize_type(text[:-1])]
-        case str() as text if text.endswith("[]"):
-            return {"type": "array", "items": _canonicalize_type(text[:-2])}
-        case dict() as mapping if mapping.get("type") == "array" and "items" in mapping:
-            return {**mapping, "items": _canonicalize_type(mapping["items"])}
-        case _:
-            return rendered
-
-
-def _apply_required(type_: Any, required: bool) -> Any:
-    if required:
-        return _canonicalize_type(type_)
-    canonical = _canonicalize_type(type_)
-    match canonical:
-        case list() as items if "null" in items:
-            return items
-        case _:
-            return ["null", canonical]
 
 
 def _contains_expression(value: Any) -> bool:
+    """Whether a value holds a CWL expression, `$(...)` or `${...}`."""
     match value:
-        case str() as text:
-            return any(marker in text for marker in _SUPPORT.expression_markers)
-        case list() as items:
-            return any(_contains_expression(item) for item in items)
-        case tuple() as items:
-            return any(_contains_expression(item) for item in items)
-        case dict() as mapping:
-            return any(_contains_expression(item) for item in mapping.values())
+        case str():
+            return "$(" in value or "${" in value
+        case list() | tuple():
+            return any(map(_contains_expression, value))
+        case dict():
+            return any(map(_contains_expression, value.values()))
         case _ if hasattr(value, "to_dict") and callable(value.to_dict):
             return _contains_expression(value.to_dict())
         case _:
             return False
-
-
-def _input_expression(name: str) -> str:
-    return f"$(inputs.{name})"
-
-
-def _basename_expression(name: str) -> str:
-    return f"$(inputs.{name}.basename)"
 
 
 def _warn_raw_escape_hatch(context: str) -> None:
@@ -183,62 +74,20 @@ def _warn_raw_escape_hatch(context: str) -> None:
     )
 
 
-def _sanitize_raw_mapping(
-    mapping: dict[str, Any],
-    *,
-    context: str,
-    allow_class_key: bool = False,
-    reserved_keys: set[str] | None = None,
-) -> dict[str, Any]:
+def _sanitize_raw_mapping(mapping: dict[str, Any], *, context: str, allow_class_key: bool = False) -> dict[str, Any]:
     rendered = _render(mapping)
-    match rendered:
-        case dict() as rendered_mapping:
-            pass
-        case _:
-            raise TypeError(f"{context} must be a mapping")
-    if any(not _is_non_empty_string(key) for key in rendered_mapping):
+    if not isinstance(rendered, dict):
+        raise TypeError(f"{context} must be a mapping")
+    if not all(isinstance(key, str) and key for key in rendered):
         raise TypeError(f"{context} keys must be non-empty strings")
-    blocked = sorted(key for key in rendered_mapping if key in _SUPPORT.dangerous_raw_keys)
-    if blocked:
+    directives = sorted(key for key in rendered if key.startswith("$"))
+    if directives:
         raise ValueError(
-            f"{context} does not accept SALAD document-assembly keys: {', '.join(blocked)}"
+            f"{context} does not accept '$'-prefixed keys, which SALAD reads as directives: {', '.join(directives)}"
         )
-    if reserved_keys is not None:
-        collisions = sorted(key for key in rendered_mapping if key in reserved_keys)
-        if collisions:
-            raise ValueError(
-                f"{context} cannot override builder-managed keys: {', '.join(collisions)}"
-            )
-    if not allow_class_key and "class" in rendered_mapping:
+    if not allow_class_key and "class" in rendered:
         raise ValueError(f"{context} cannot set 'class' directly")
-    if any(key.startswith("$") for key in rendered_mapping):
-        raise ValueError(f"{context} does not accept raw '$'-prefixed document keys")
-    return rendered_mapping
-
-
-def _is_non_empty_string(value: Any) -> bool:
-    match value:
-        case str() as text if text:
-            return True
-        case _:
-            return False
-
-
-def _named_parameter(reference: Any, *, kind: str) -> str:
-    match reference:
-        case _ if _is_non_empty_string(getattr(reference, "name", None)):
-            return str(reference.name)
-        case _:
-            raise TypeError(f"{kind} reference must be a named Input/Output object")
-
-
-def _validate_api_name(name: str, *, context: str) -> str:
-    return validate_python_identifier_name(name, context=context)
-
-
-def _optional_binding(binding: Any) -> Any:
-    rendered = binding.to_dict()
-    return binding if rendered else None
+    return rendered
 
 
 @dataclass(frozen=True, slots=True)
@@ -252,47 +101,6 @@ class ValidationResult:
 
 class ToolBuilderValidationError(ValueError):
     """Raised when a generated CLT fails schema validation."""
-
-
-def _import_cwltool_load_tool() -> Any:
-    try:
-        from cwltool import load_tool  # pylint: disable=import-outside-toplevel
-    except ModuleNotFoundError as exc:
-        raise ModuleNotFoundError(
-            "cwltool/schema_salad is required to validate generated CommandLineTools"
-        ) from exc
-    return load_tool
-
-
-def _import_cwltool_validation_support() -> tuple[Any, Any, Any]:
-    try:
-        from cwltool.context import RuntimeContext  # pylint: disable=import-outside-toplevel
-        from cwltool.main import (  # pylint: disable=import-outside-toplevel
-            get_default_args,
-            setup_loadingContext,
-        )
-    except ModuleNotFoundError as exc:
-        raise ModuleNotFoundError(
-            "cwltool/schema_salad is required to validate generated CommandLineTools"
-        ) from exc
-    return RuntimeContext, get_default_args, setup_loadingContext
-
-
-def _build_validation_loading_context(path: Path) -> Any:
-    runtime_context_cls, get_default_args, setup_loading_context = _import_cwltool_validation_support()
-    args_dict = get_default_args()
-    args_dict.update(
-        {
-            # The ontologies under `$schemas` are not loaded, as a local run does
-            # not load them: cwltool fetches each one, uncached, on every load.
-            "skip_schemas": True,
-            "validate": True,
-            "workflow": str(path),
-        }
-    )
-    args = Namespace(**args_dict)
-    runtime_context = runtime_context_cls(args_dict)
-    return setup_loading_context(None, runtime_context, args)
 
 
 def validate_cwl_document(
@@ -311,50 +119,16 @@ def validate_cwl_document(
 
 
 def _validate_path(path: Path) -> ValidationResult:
-    load_tool = _import_cwltool_load_tool()
     try:
-        loading_context = _build_validation_loading_context(path)
-        loading_context, workflowobj, uri = load_tool.fetch_document(str(path), loading_context)
-        loading_context, uri = load_tool.resolve_and_validate_document(
-            loading_context,
-            workflowobj,
-            uri,
-            preprocess_only=False,
-        )
-        process = load_tool.make_tool(uri, loading_context)
+        # cwltool.workflow needs the Unix-only `pwd` module, so it is imported where a tool is validated and not
+        # with this module: on Windows Sophios compiles and does not run.
+        from cwltool.workflow import default_make_tool  # pylint: disable=import-outside-toplevel
+        # The ontologies under `$schemas` are not loaded, as a local run does not load them: cwltool fetches each
+        # one, uncached, on every load.
+        context = LoadingContext({"skip_schemas": True, "construct_tool_object": default_make_tool})
+        context, document, uri = load_tool.fetch_document(str(path), context)
+        context, uri = load_tool.resolve_and_validate_document(context, document, uri)
+        process = load_tool.make_tool(uri, context)
     except Exception as exc:  # pylint: disable=W0718:broad-exception-caught
         raise ToolBuilderValidationError(f"Generated CommandLineTool failed validation: {path}") from exc
     return ValidationResult(path=path, uri=uri, process=process)
-
-
-def _is_requirement_spec(value: Any) -> bool:
-    return hasattr(value, "class_name") and callable(getattr(value, "to_fields", None))
-
-
-def _normalize_requirement(
-    requirement: Any,
-    value: dict[str, Any] | None = None,
-) -> tuple[str, dict[str, Any]]:
-    match requirement:
-        case str() as class_name:
-            if re.fullmatch(_SUPPORT.raw_class_name_pattern, class_name) is None:
-                raise ValueError(f"invalid requirement class name {class_name!r}")
-            payload = {} if value is None else _sanitize_raw_mapping(value, context=f"payload for {class_name}")
-            return class_name, payload
-        case _ if _is_requirement_spec(requirement):
-            return str(requirement.class_name), requirement.to_fields()
-        case dict() as payload:
-            _warn_raw_escape_hatch("requirement()/hint()")
-            payload_copy = _sanitize_raw_mapping(
-                payload,
-                context="raw requirement mapping",
-                allow_class_key=True,
-            )
-            if "class" not in payload_copy:
-                raise ValueError("raw requirement dicts must include a 'class' key")
-            class_name = str(payload_copy.pop("class"))
-            if re.fullmatch(_SUPPORT.raw_class_name_pattern, class_name) is None:
-                raise ValueError(f"invalid requirement class name {class_name!r}")
-            return class_name, payload_copy
-        case _:
-            raise TypeError("requirement must be a class name, requirement spec, or raw dict")

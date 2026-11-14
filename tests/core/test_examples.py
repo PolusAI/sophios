@@ -34,7 +34,7 @@ from sophios.ir.types import WorkflowGraph
 from sophios.wic_types import Json
 
 # pylint: disable-next=unused-import  # `corpus_registry` is a pytest fixture
-from .test_setup import CorpusRegistry, corpus_registry, workflow_paths
+from .test_setup import CorpusRegistry, corpus_config, corpus_registry, workflow_paths
 from .cwl_validation import validate_cwl
 from .equivalence import Strength, equivalent, flatten_model
 
@@ -43,8 +43,7 @@ yml_paths = workflow_paths()
 # Each directory of search_paths_wic may hold a config_ci.json; their lists concatenate. `//` lines are comments,
 # which JSON has none of.
 config_ci: Json = {}
-global_config = sophios.input_output.get_config(get_args().config_file, Path(get_args().homedir))
-for yml_dir in (directory for directories in global_config['search_paths_wic'].values() for directory in directories):
+for yml_dir in (directory for directories in corpus_config()['search_paths_wic'].values() for directory in directories):
     if (config_ci_json := Path(yml_dir) / 'config_ci.json').exists():
         lines = config_ci_json.read_text(encoding='utf-8').splitlines()
         config_ci = merge(config_ci, json.loads('\n'.join(line for line in lines if not line.strip().startswith('//'))),

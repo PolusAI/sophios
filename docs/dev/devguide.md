@@ -112,8 +112,7 @@ Chromium (`CHROME_BIN` names one). Pages are Markdown (MyST); the API pages
 use autodoc, so the build imports `sophios` from `src/`. Every workflow a page
 shows in both forms is a cookbook pair, which
 `tests/core/test_cookbook.py` keeps honest; `docs/error_codes.md` is
-generated from `EXPLANATIONS` in `src/sophios/lang/error_codes.py`, and a
-test keeps the two equal.
+built from `EXPLANATIONS` in `src/sophios/lang/error_codes.py`.
 
 ## The layout of `src/sophios`
 

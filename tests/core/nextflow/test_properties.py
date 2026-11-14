@@ -116,9 +116,9 @@ def test_a_command_is_read_as_cwltool_reads_it(text: str, order: tuple[str, ...]
         expected = interpolate(text, {"inputs": {"x": "VALUE"}}) if "$(" in text or "${" in text else text
     except (JavascriptException, SubstitutionError):
         with pytest.raises(ValueError, match="unsupported CWL expression"):
-            lower_template(text, context="property")
+            lower_template(text)
     else:
-        template = lower_template(text, context="property")
+        template = lower_template(text)
         assert "".join(segment.value if isinstance(segment, NfLiteral) else "VALUE"
                        for segment in template.segments) == expected
     command = lower_command({"baseCommand": "cmd", "arguments": ["a", "b", "c"],

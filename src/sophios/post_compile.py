@@ -115,17 +115,11 @@ def _parameter(parameter: Any) -> Any:
 
 
 def _secondary_files_as_lists(process: Cwl) -> Cwl:
-    """`process`, with every input's and output's `secondaryFiles` written as a list.
+    """`process`, about to be embedded, with every input's and output's `secondaryFiles` written as a list.
 
     A single pattern, a string or a mapping, means the same as a list holding it.
     cwltool's v1.0 updater writes the list, but an embedded process is not updated:
     the single pattern reaches cwltool's checker, which indexes it as a list.
-
-    Args:
-        process (Cwl): A process about to be embedded.
-
-    Returns:
-        Cwl: `process`, with its `inputs` and `outputs` rewritten where they held a single pattern.
     """
     sections: Cwl = {}
     for name in ('inputs', 'outputs'):
