@@ -1,2 +1,2 @@
 why: each document's run t.cwl is the file beside it, so a root t.cwl and a sub/t.cwl coexist
-steps: [{baseCommand: echo, inputs: {a: {type: string}}}, {steps: [{baseCommand: rm, inputs: {a: {type: string}}}]}]
+steps: [{baseCommand: echo, inputs: {a: string}}, {steps: [{baseCommand: rm, inputs: {a: string}}]}]

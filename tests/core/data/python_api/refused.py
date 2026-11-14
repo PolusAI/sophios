@@ -171,12 +171,6 @@ def cwl_workflow_as_a_tool() -> None:
     Workflow([step], 'wsay').compile()
 
 
-def absolute_output_directory() -> None:
-    step = Step(clt_path=HERE / 'write_dir.cwl')
-    step.inputs.outDir = Path('/absolute.outDir')
-    Workflow([step], 'w').compile()
-
-
 # Names Sophios cannot write: a step's name is an id of the compiled CWL, a workflow's the stem of its files.
 
 def step_named_with_a_tilde() -> None:
@@ -231,6 +225,14 @@ def scatter_over_a_nested_workflows_output() -> None:
 
 # Each door: an unknown target, before anything is compiled; what the Nextflow target cannot run; a real-time
 # analysis, which run_async() never runs.
+
+def tool_cwltool_refuses() -> None:
+    Workflow([Step(clt_path=HERE / 'not_a_list.cwl')], 'w').compile()
+
+
+def tool_cwltool_refuses_for_nextflow() -> None:
+    Workflow([Step(clt_path=HERE / 'not_a_list.cwl')], 'w').compile(target='nextflow')
+
 
 def unknown_target_to_compile() -> None:
     Workflow([_step('touch')], 'elsewhere').compile(target='wdl')  # type: ignore[call-overload]

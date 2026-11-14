@@ -1,6 +1,6 @@
 cwlVersion: v1.2
 class: CommandLineTool
-doc: Variables that are not literal text or one string input's value, read whole, and entries that are not entries.
+doc: Variables that are not literal text or one string input's value, read whole.
 requirements:
   EnvVarRequirement:
     envDef:
@@ -11,8 +11,6 @@ requirements:
     - {envName: JAVASCRIPT, envValue: '${return 1}'}
     - {envName: RUNTIME, envValue: $(runtime.cores)}
     - {envName: 1A, envValue: x}
-    - {envName: NOT_TEXT, envValue: 3}
-    - A=x
 baseCommand: env
 inputs:
   s: string

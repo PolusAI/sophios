@@ -3,29 +3,6 @@ from typing import Any
 from .wic_types import Yaml
 
 
-def require_step_id(step_dict: Yaml, context: str = "step") -> str:
-    """Return a validated step id from a step dictionary.
-
-    Args:
-        step_dict (Yaml): Candidate step object.
-        context (str): Context string used in error messages.
-
-    Raises:
-        TypeError: If `step_dict` is not a dictionary.
-        ValueError: If `step_dict` does not contain a non-empty string `id`.
-
-    Returns:
-        str: The validated step identifier.
-    """
-    if not isinstance(step_dict, dict):
-        raise TypeError(f"Error! {context} should be a dictionary.")
-    step_id = step_dict.get('id')
-    if not isinstance(step_id, str) or step_id == '':
-        raise ValueError(
-            'Error! Each step dictionary must contain a non-empty string id: tag.')
-    return step_id
-
-
 def recursively_delete_dict_key(key: str, obj: Any) -> Any:
     """Recursively deletes any dict entries with the given key.
 

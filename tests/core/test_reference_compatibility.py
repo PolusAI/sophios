@@ -157,9 +157,9 @@ def _typed_tools(source_type: Any, sink_type: Any) -> Tools:
     return {
         StepId('typed_source', 'global'): Tool('/synthetic/typed_source.cwl', clt(
             {'seed': {'type': 'string'}, 'seed2': {'type': 'string', 'default': 'y'}},
-            {'value': {'type': source_type}}, canonical=True)),
+            {'value': {'type': source_type}})),
         StepId('typed_sink', 'global'): Tool('/synthetic/typed_sink.cwl', clt(
-            {'value': {'type': sink_type}}, {}, canonical=True)),
+            {'value': {'type': sink_type}}, {})),
     }
 
 

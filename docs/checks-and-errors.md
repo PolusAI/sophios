@@ -88,7 +88,7 @@ In detail, layer by layer:
 | Layer | When | What it checks | Codes |
 |---|---|---|---|
 | Parse | as each `.wic` file is read | it is YAML, a mapping, with keys of the right shape, known tags in the right places, a well-formed `wic:` block | `wic001`–`wic010`, `wic019`, `wic024`, `wic030`, `wic033`–`wic035`, `wic038` |
-| Compile | after every file is read | every step names a tool or subworkflow that exists, every input and output a port it declares, every reference something defined, every literal a value of its type, every version pin a known one | `wic011`–`wic014`, `wic017`, `wic018`, `wic020`, `wic022`–`wic028`, `wic031`, `wic032`, `wic036`, `wic039`, `wic044`, `wic055`; notes `wic043` and `wic056`, and under `--target nextflow` `wic046` |
+| Compile | after every file is read | every step names a tool or subworkflow that exists, every input and output a port it declares, every reference something defined, every literal a value of its type, every version pin a known one | `wic011`–`wic014`, `wic017`, `wic018`, `wic020`, `wic022`–`wic028`, `wic031`, `wic032`, `wic036`, `wic039`, `wic044`, `wic055`, `wic057`; notes `wic043` and `wic056`, and under `--target nextflow` `wic046` |
 | Pre-flight | before a local run pulls or runs anything; the base path is checked before every compile | the container engine, input paths, writable directories, installed programs; then the image pulls | `wic015`, `wic016`, `wic021`, `wic029`, `wic037` |
 | Run | while the runner runs | nothing of Sophios's; a tool failed | `api005` in Python; `Failure!` lines on the command line |
 | The Python call | at the assignment or call | a value an input cannot take, a step the workflow cannot place, a link between mismatched ports, a tool that will not load, a `.wic` construct with no Python spelling, contradictory inference settings, real-time analyses given to `run_async` | `api001`–`api004`, `api006`–`api008` |
@@ -118,7 +118,9 @@ makes each guess an error, and it refuses two inputs of one step that would read
 the same output with nothing to say so (`wic055`). A real-time analysis that does not compile is `wic044` at
 its declaration. A `when:` that cannot give `true` or `false`, such as `$(inputs.count)` over an `int`, is a
 `wic056` note at its step: the CWL compiles as written, and cwltool would stop the run there. `--target nextflow`
-refuses it instead.
+refuses it instead. Each tool a step runs is first checked by cwltool's validator, once per compile; one
+it refuses is `wic057` at the step that runs it, with cwltool's message cleaned of colour and repeated paths, for
+both targets, and every refused tool is reported together.
 
 ### Pre-flight
 
@@ -188,8 +190,9 @@ the built-in exceptions.
 Sophios explains its own layer and nothing below it:
 
 - a YAML error is quoted as the YAML parser wrote it, inside `wic001`;
-- an invalid tool file is reported by cwltool's loader, wrapped in `api004`
-  (Python) or found by `--validate_plugins`;
+- an invalid tool file is reported by cwltool's validator, quoted inside `wic057` at the step that runs it
+  (or found by `--validate_plugins`, which checks every tool on the search paths); a tool the Python API cannot
+  load is `api004`;
 - a workflow the runner refuses when it loads the compiled CWL is reported by
   the runner, before any step runs;
 - a step that fails is reported by the runner and its tool, with the

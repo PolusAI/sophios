@@ -72,8 +72,8 @@ def test_a_file_has_the_format_its_extension_names_or_none(drawn: tuple[dict[str
 def _written(tmp_path: Path, source: str, inputs_file: str = '') -> Path:
     """`data/output_directory/<source>` compiled and written under `tmp_path / 'out'` as the CWL target writes it,
     its job read from `inputs_file` when given."""
-    tool = DATA / 'write_dir.cwl'
-    tools = {StepId('write_dir', 'global'): Tool(str(tool), yaml.safe_load(tool.read_text(encoding='utf-8')))}
+    tools = {StepId(tool.stem, 'global'): Tool(str(tool), yaml.safe_load(tool.read_text(encoding='utf-8')))
+             for tool in DATA.glob('*.cwl')}
     siblings = {'global': {p.stem: p for p in DATA.glob('*.wic')}}
     result = compile_source(bundle_from_disk(DATA / source, siblings, tools), CompileSettings(),
                             quiet=True)
@@ -102,11 +102,22 @@ def test_an_output_target_directory_in_a_job_is_a_directory_literal(tmp_path: Pa
 
 
 @pytest.mark.fast
+@pytest.mark.parametrize('given_directory', ['/lab/masks/p1', 'file:///lab/masks/p1'], ids=['path', 'url'])
+def test_an_output_target_directory_given_an_absolute_path_is_left_as_written(given_directory: str) -> None:
+    """An absolute path or a URL is a Directory as CWL reads any: whether its tool may write there is the runner's
+    to say, so the job keeps it."""
+    written = {'class': 'Directory', 'location': given_directory}
+    assert runner_job_inputs({'outDir': written}, {'outDir'}) == {'outDir': written}
+
+
+@pytest.mark.fast
 @pytest.mark.parametrize(('source', 'key'), [('nested.wic', 'w~write_dir~outDir'),
-                                             ('deeper.wic', 'nested~w~write_dir~outDir')], ids=['one', 'two'])
+                                             ('deeper.wic', 'nested~w~write_dir~outDir'),
+                                             ('listed.wic', 'write_dir_listed~outDir')], ids=['one', 'two', 'listed'])
 def test_an_output_target_directory_below_calls_is_a_directory_literal_at_its_root_key(
         tmp_path: Path, source: str, key: str) -> None:
-    """The job key is the step's qualified input, however many calls deep."""
+    """The job key is the step's qualified input, however many calls deep, and whether the tool writes its
+    requirements as a mapping or as a list."""
     out = _written(tmp_path, source, f'{key}: {{class: Directory, location: result.outDir}}\n')
     assert _job(out, source.removesuffix('.wic')) == {
         key: {'class': 'Directory', 'basename': 'result.outDir', 'listing': []}}

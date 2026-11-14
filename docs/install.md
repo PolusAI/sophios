@@ -195,13 +195,10 @@ Windows itself. Install [WSL 2](https://learn.microsoft.com/windows/wsl/install)
 with a Linux distribution such as Ubuntu, turn on Docker Desktop's WSL
 integration, and follow steps 2 to 4 in the WSL terminal. On Windows itself,
 Sophios compiles workflows, but a run stops before it starts with `wic029`
-and a pointer to WSL. Validating a tool you build in Python,
-`write_cwl(validate=True)` or `CommandLineTool.validate()`, raises
-`ToolBuilderValidationError: Generated CommandLineTool failed validation`,
-whose cause, a `ModuleNotFoundError` about `cwltool/schema_salad`, is
-misleading: cwltool is installed, and what fails is an import that exists only
-on POSIX. `sophios --validate_plugins` fails on Windows too, with a
-`NotImplementedError`. A run on the cluster needs WSL too:
+and a pointer to WSL. Validating a tool there, at compile or with
+`write_cwl(validate=True)` or `CommandLineTool.validate()`, checks the
+document only: the rest of cwltool's validation needs a module that exists
+only on POSIX. A run on the cluster needs WSL too:
 `sophios.compute`'s `Service(url)` raises `cmp002` on Windows itself.
 
 ## Troubleshooting

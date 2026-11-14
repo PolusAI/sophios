@@ -348,10 +348,10 @@ happens to each CWL field.
 ## The tools
 
 Sophios writes descriptions and never touches data. Each tool is written
-beside the workflow in a canonical form: `inputs` and `outputs` as mappings
-keyed by name, whatever form the source used. Its `cwlVersion` stays what
-the file said (`touch.cwl` stays `v1.0`), since each tool is its own
-document. A tool given inline under `run:` is written at `v1.2`.
+beside the workflow as its author wrote it, `inputs` and `outputs` in the
+form the source used. Its `cwlVersion` stays what the file said
+(`touch.cwl` stays `v1.0`), since each tool is its own document. A tool
+given inline under `run:` is written at `v1.2`.
 
 A tool that refers to a file by a path relative to itself means something
 only where it was written, so Sophios has cwltool pack it as it writes it:
@@ -384,7 +384,7 @@ Its step's file in the tree, `words~count.cwl` for a step `count` of
 `location: file:///home/you/sophios-tutorial/words.txt`. A packed tool is
 written in cwltool's own spelling, so other parts may read differently from
 what you wrote, such as `requirements` as a list. When cwltool cannot read a
-file a tool refers to, the compile stops with `wic013` at the step that runs
+file a tool refers to, the compile stops with `wic057` at the step that runs
 it, with cwltool's message.
 
 ## Packaging options

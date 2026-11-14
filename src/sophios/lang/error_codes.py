@@ -110,8 +110,7 @@ class SophiosErrorCode(StrEnum):
         'wic013',
         "A workflow or a step's process cannot be used: no steps, a tool or subworkflow not found, a CWL `Workflow` "
         "as a step, a packed `$graph` with no `main`, subworkflows that call each other in a cycle, "
-        "`implementations` with none chosen, ports only the CWL runner can read, or a tool's relative files "
-        "(`$include`, `$import`, a relative `location`) that cwltool cannot read.",
+        "`implementations` with none chosen, or ports only the CWL runner can read.",
         'Do what the message names: put the tool or `.wic` file on a search path of the config (`search_paths_cwl`, '
         '`search_paths_wic`), give the workflow steps, or break the cycle (.wic reference §2.3).')
     SCRIPT_ARGUMENT_MISMATCH = _explained(
@@ -314,6 +313,14 @@ class SophiosErrorCode(StrEnum):
         'the run there, and `--target nextflow` refuses it.',
         'Write the `when` as one expression that gives a boolean: `$(inputs.count > 0)` rather than '
         '`$(inputs.count)`, and `$(inputs.ready)` rather than `inputs.ready`.')
+    TOOL_REFUSED = _explained(
+        'wic057',
+        "A tool a step runs that cwltool refuses to make: a CWL `CommandLineTool` or `Workflow` with a field it does "
+        'not have (in `hints` too), a type it does not know, a value of the wrong shape, a JavaScript expression that '
+        'does not parse, or a relative file (`$include`, `$import`, a relative `location`) it cannot read. cwltool '
+        'would refuse the run too.',
+        'Correct what the message names, at the position it gives; `cwltool --validate` on the tool reports the '
+        'same.')
 
     # --- Python API. The document is valid; the call was not. ---
     INVALID_INPUT_VALUE = _explained(
@@ -618,9 +625,9 @@ class SophiosErrorCode(StrEnum):
     NF_INVALID_CWL = _explained(
         'nf-s055',
         'CWL v1.2 that cwltool would not run either: a multi-input scatter with no `scatterMethod`; a '
-        '`scatterMethod`, `linkMerge` or `pickValue` CWL does not have; a requirement without a string `class`; a'
-        ' section, binding, `envDef`, `outputBinding`, glob or `outputEval` of the wrong shape; a `prefix` that '
-        'is not text; `separate` without `prefix`; a `position` that is not an integer; a port with no `type`; a '
+        '`scatterMethod`, `linkMerge` or `pickValue` CWL does not have; a workflow\'s or a step\'s `requirements` or '
+        '`hints` that is not a mapping or a list; `separate` without `prefix`; a `position` that is not an integer; '
+        'an argument with no `valueFrom`; an empty `baseCommand`; a `DockerRequirement` that names no image; a '
         '`when` that is not a string; a resource or CUDA field that is not a positive number.',
         'Correct what the message names; `cwltool --validate` on the tool reports the same.',
         kind=Kind.DOCUMENT)

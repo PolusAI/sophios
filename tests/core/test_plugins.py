@@ -20,6 +20,7 @@ import sophios.preflight
 from sophios.ir.types import PortType
 from sophios.ir.policy import RunPolicy, tolerant_tool
 from sophios.lang.cwl import CWL_VERSION
+from sophios.lang.diagnostics import SophiosError
 from sophios.wic_types import Yaml
 
 from .budgets import budget
@@ -319,3 +320,14 @@ def _resolves(case: Yaml, base: Path, monkeypatch: pytest.MonkeyPatch, capsys: p
             assert out == ''
             assert _warnings(err, base, kind) == [[ns, stem, files] for ns, stems in case.get('warnings', {}).items()
                                                   for stem, files in stems.items()]
+
+
+@pytest.mark.fast
+def test_validate_plugins_accepts_the_shipped_tools_and_names_the_file_of_one_cwltool_refuses() -> None:
+    """`--validate_plugins` checks each tool found with cwltool's validator, as a compile checks the tools it uses:
+    the shipped adapters pass, and a tool cwltool refuses stops discovery naming its file and what is wrong."""
+    shipped = {'search_paths_cwl': {'global': [str(ADAPTERS)]}}
+    assert sophios.plugins.get_tools_cwl(shipped, validate_plugins=True) == sophios.plugins.get_tools_cwl(shipped)
+    refusing = {'search_paths_cwl': {'global': [str(DATA / 'compiler' / 'refused')]}}
+    with pytest.raises(SophiosError, match=r"(?s)wic057.*refused.\w+\.cwl is a tool cwltool refuses:"):
+        sophios.plugins.get_tools_cwl(refusing, validate_plugins=True)
