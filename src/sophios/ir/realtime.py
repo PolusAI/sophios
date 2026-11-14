@@ -60,7 +60,7 @@ def extract(graph: WorkflowGraph) -> tuple[WorkflowGraph, tuple[Declaration, ...
 
 def is_declaration(step: StepNode) -> bool:
     """Whether `step` runs the real-time analysis adapter, by its resolved identity."""
-    return step.run is not None and step.run.process_id.name == ADAPTER
+    return step.run.name == ADAPTER
 
 
 def _extract(graph: WorkflowGraph, diagnostics: Diagnostics) -> tuple[WorkflowGraph, tuple[Declaration, ...]]:

@@ -10,7 +10,7 @@ import yaml
 from hypothesis import example, strategies as st
 from hypothesis.strategies import SearchStrategy
 
-from sophios.lang import Forms
+from sophios.lang import Grammar
 
 
 def pinned(*examples: Any) -> Callable[[Any], Any]:
@@ -167,7 +167,7 @@ def _or_any(shape: SearchStrategy[Any]) -> SearchStrategy[Any]:
 
 #: A step body: `in:` values are any value or a construct, and an `out:` entry a name, a list or one `!&`.
 _BODY = st.fixed_dictionaries({}, optional={
-    'in': _or_any(st.dictionaries(_SHAPE_NAMES, _ANY | st.sampled_from(sorted(Forms.DESUGARED_KEYS)).map(
+    'in': _or_any(st.dictionaries(_SHAPE_NAMES, _ANY | st.sampled_from(sorted(Grammar.DESUGARED_KEYS)).map(
         lambda key: {key: 'x'}) | st.just({'wic_raw_cwl': {'source': 'x'}}), max_size=2)),
     'out': _SHAPE_SCALARS | st.dictionaries(_SHAPE_NAMES, _ANY, max_size=1) | st.lists(
         _SHAPE_NAMES | st.lists(_SHAPE_NAMES, max_size=1) | st.dictionaries(

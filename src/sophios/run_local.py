@@ -505,26 +505,16 @@ def run(request: RunRequest) -> int:
     return status.exit_code
 
 
-def _run_cwltool(allow_pf: bool) -> int:
+def cwltool_main() -> int:
     """cwltool on this process's arguments, with the known noise in its output silenced.
 
     `cwltool.main.run`, not `main`: it stops the containers the run started when the run is sent SIGTERM.
     """
     import cwltool.main  # pylint: disable=import-outside-toplevel
-    logging_filters(allow_pf)
+    logging_filters()
     # cwltool writes its provenance as N-Triples naming no encoding, so on every run rdflib warns that it
     # writes UTF-8 anyway. Silenced here, in the runner's own process, not by logging_filters, which
     # also runs in the process of a Python program that calls Workflow.run().
     warnings.filterwarnings('ignore', message='NTSerializer always uses UTF-8 encoding', category=UserWarning)
     retval: int = cwltool.main.run(sys.argv[1:])
     return retval
-
-
-def cwltool_main() -> int:
-    """Another entrypoint for filtering regular logged output."""
-    return _run_cwltool(False)
-
-
-def cwltool_main_pf() -> int:
-    """Another entrypoint for filtering partial failures logged output"""
-    return _run_cwltool(True)

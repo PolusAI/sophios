@@ -1,20 +1,21 @@
 """Inference, judged on cases in files: tests/core/data/infer/<theme>/<case> is a workflow.wic with the tools and child
 workflows it names (beside it, or shared by the theme), and the theme's expected.yaml states what each case infers.
 That every inferred edge is the independent model's choice is a law of test_emit.py's drawn workflows."""
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 import pytest
 import yaml
 
-from sophios.cli import default_compilation_settings
-from sophios.compiler import compile_source
-from sophios.ir import InferencePolicy, InsertionCatalog, front_end, infer, link
+from sophios.compiler import CompileSettings, compile_source
 from sophios.ir.frontdoor import bundle_from_disk
+from sophios.ir.infer import InferencePolicy, InsertionCatalog, infer
+from sophios.ir.link import link
 from sophios.ir.names import Names
+from sophios.ir.pipeline import front_end
 from sophios.ir.types import EdgeOrigin, WorkflowGraph
 from sophios.lang.diagnostics import Diagnostics, SophiosError
-from sophios.utils_cwl import desugar_into_canonical_normal_form
 
 from .cases import DATA, diagnostic, match
 from .helpers import stated
@@ -22,8 +23,8 @@ from .synthetic_tools import registered
 
 
 def _tools(*directories: Path) -> Any:
-    """The synthetic tools, and each tool in `directories`, the later winning, desugared as discovery desugars them."""
-    return registered({path.stem: desugar_into_canonical_normal_form(yaml.safe_load(path.read_text(encoding='utf-8')))
+    """The synthetic tools, and each tool in `directories`, the later winning, as discovery reads them."""
+    return registered({path.stem: yaml.safe_load(path.read_text(encoding='utf-8'))
                        for directory in directories for path in sorted(directory.glob('*.cwl'))})
 
 
@@ -34,8 +35,7 @@ def _inferred(case: Path, expected: dict[str, Any]) -> tuple[WorkflowGraph | Non
     bundled = bundle_from_disk(case / 'workflow.wic', others, _tools(case.parent, case))
     policy = expected.get('policy', {})
     if expected.get('compiled'):
-        options = default_compilation_settings()
-        options['inference_strict'] = policy.get('strict', False)
+        options = CompileSettings(replace(CompileSettings().inference, strict=policy.get('strict', False)))
         try:
             compiled = compile_source(bundled, options, quiet=True)
         except SophiosError as error:

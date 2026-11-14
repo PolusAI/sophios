@@ -9,13 +9,14 @@ import sys
 import tempfile
 from typing import Any, TypeAlias
 
-import cwltool.load_tool
 import yaml
 import podman
 import docker
 
 
 from . import utils_cwl
+from .lang.diagnostics import SophiosError
+from .lang.error_codes import SophiosErrorCode
 from .wic_types import DEFAULT_BASEPATH, Cwl, StepId, Tool, Tools, Json
 from .ir.artifacts import CompilationArtifact
 
@@ -36,45 +37,28 @@ class NoResolvedFilter(logging.Filter):
         return not bool(m)  # (True if m else False)
 
 
-class NoPartialFailureNullWarning(logging.Filter):
-    # pylint:disable=too-few-public-methods
-    def filter(self, record: logging.LogRecord) -> bool:
-        err_str = "Source is from conditional step and may produce `null`"
-        # this will indiscriminately filter this error string
-        return err_str not in record.getMessage()
-
-
-def logging_filters(allow_pf: bool = False) -> None:
-    """Install logging filters that silence known-noisy cwltool/salad log messages.
-
-    Args:
-        allow_pf (bool): Also silence the "may produce `null`" warning emitted
-            for conditional steps when partial failure is enabled.
-    """
+def logging_filters() -> None:
+    """Install logging filters that silence known-noisy cwltool/salad log messages."""
     logger_salad = logging.getLogger("salad")
     logger_salad.addFilter(NoPreviouslyDefinedFilter())
     logger_cwltool = logging.getLogger("cwltool")
     logger_cwltool.addFilter(NoResolvedFilter())
-    if allow_pf:
-        logger_cwltool.addFilter(NoPartialFailureNullWarning())
 
 
 def validate_cwl(cwl_path_str: str) -> None:
-    """Validate a CWL file using `cwltool.load_tool`.
+    """Validate a CWL file with cwltool's validator, as a compile does for each tool it uses.
 
     Args:
         cwl_path_str (str): The path to the CWL file.
+
+    Raises:
+        SophiosError: wic057, naming the file and what cwltool found wrong.
     """
-    # NOTE: This uses NoResolvedFilter to suppress the info messages to stdout.
-    loading_context, workflowobj, uri = cwltool.load_tool.fetch_document(cwl_path_str)
-    loading_context, uri = cwltool.load_tool.resolve_and_validate_document(
-        loading_context, workflowobj, uri, preprocess_only=False
-    )
-    # NOTE: Although resolve_and_validate_document does some validation,
-    # some additional validation is done in make_tool, i.e.
-    # resolve_and_validate_document does not in fact throw an exception for
-    # some invalid CWL files, but make_tool does!
-    cwltool.load_tool.make_tool(uri, loading_context)
+    try:
+        utils_cwl.validate(cwl_path_str)
+    except utils_cwl.InvalidTool as error:
+        raise SophiosError.error(SophiosErrorCode.TOOL_REFUSED,
+                                 f'{cwl_path_str} is a tool cwltool refuses:\n{error}') from error
 
 
 #: Per `(stem, namespace)`, every file that defines it, in the order found, keyed by real path.
@@ -175,10 +159,9 @@ def get_tools_cwl(config: Json, validate_plugins: bool = False,
                 if validate_plugins:
                     validate_cwl(cwl_path_str)
 
-                tool = utils_cwl.desugar_into_canonical_normal_form(tool)
                 cwl_path_abs = os.path.abspath(cwl_path_str)
                 _record(definitions, StepId(stem, plugin_ns), cwl_path_abs)
-                tools_cwl[StepId(stem, plugin_ns)] = Tool(cwl_path_abs, tool)
+                tools_cwl[StepId(stem, plugin_ns)] = Tool(cwl_path_abs, tool, from_file=True)
     _warn_duplicates('tool', definitions)
     return tools_cwl
 

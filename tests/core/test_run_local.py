@@ -499,9 +499,7 @@ def test_each_python_door_returns_a_completed_runs_result_and_raises_a_failed_on
 
 @pytest.mark.fast
 @pytest.mark.needs_cwltool
-@pytest.mark.parametrize('entry_point', [run_local.cwltool_main, run_local.cwltool_main_pf])
-def test_the_runner_prints_no_rdflib_encoding_warning(monkeypatch: pytest.MonkeyPatch,
-                                                      entry_point: Callable[[], int]) -> None:
+def test_the_runner_prints_no_rdflib_encoding_warning(monkeypatch: pytest.MonkeyPatch) -> None:
     """cwltool writes provenance as N-Triples naming no encoding; rdflib's warning about it is noise."""
     import cwltool.main  # pylint: disable=import-outside-toplevel
     import rdflib  # pylint: disable=import-outside-toplevel
@@ -514,7 +512,7 @@ def test_the_runner_prints_no_rdflib_encoding_warning(monkeypatch: pytest.Monkey
     monkeypatch.setattr(cwltool.main, 'run', provenance_run)
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter('always')
-        assert entry_point() == 0
+        assert run_local.cwltool_main() == 0
     assert not [w for w in caught if 'NTSerializer' in str(w.message)]
 
 

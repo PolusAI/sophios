@@ -8,10 +8,10 @@ around the compiler do.
 
 ## The pipeline
 
-`compile_source(bundle, options)` in `sophios.compiler` is the one entry
+`compile_source(bundle, settings)` in `sophios.compiler` is the one entry
 point. It takes a `SourceBundle`, the parsed root document, the registry of
 every parsed workflow and tool it reaches, and their version pins, plus
-immutable settings, and returns a `CompilationResult`: the final graph, the
+its `CompileSettings`, and returns a `CompilationResult`: the final graph, the
 artifact tree, the diagnostics, the resolved language version and the
 real-time declarations.
 
@@ -39,9 +39,10 @@ real-time declarations.
 7. **Emit** projects the final graph to CWL v1.2 documents and job inputs. It
    does not reopen source, consult registries, or revisit a decision.
 
-An idempotent completion step, run before Link and again after Infer, materialises emission
-facts already decided (boundary spellings, source strings); it looks nothing
-up and decides nothing. The phases are tested one by one (`tests/core/test_resolve.py`,
+A completion step, run once before Link, gives each workflow the boundary its
+steps already determine (an input for each written value, an output for each
+step output); it looks nothing up and decides nothing, and Infer keeps that
+boundary current for what it adds. The phases are tested one by one (`tests/core/test_resolve.py`,
 `test_lower.py`, `test_infer_phase.py`), together by the laws of `test_emit.py`, and
 on example workflows in files (`tests/core/data/examples`, `tests/core/data/compiler`).
 
@@ -81,7 +82,7 @@ use site (`!*`, an obligation on an input port identity). When a child
 refers to a producer outside its scope, Lower records a `DeferredObligation`
 rather than inventing a source string. Link owns the composed graph, so it
 finds the definition at the lowest common ancestor, judges the endpoint types
-with the versioned reference relation, and places the edge in exactly one
+with the reference relation, and places the edge in exactly one
 graph. An obligation still open at the root is `wic025`.
 
 Workflow boundaries are graph facts: Link exposes whatever intermediate input
@@ -147,15 +148,15 @@ Each process an artifact carries is a description, never data. When
 `compiler._artifact_tree` emits a step, a tool whose text refers to a file
 relative to itself (`$include`, `$import`, a relative `location`) is packed by
 cwltool where it was read (`utils_cwl.packed`), once per tool per compile; a
-pack error is `wic013` at the step. Inference and Link have already read the
-tool as written. Lower writes a relative `location` in a `.wic` `default:`
+tool cwltool cannot read is `wic057` at the step, before it is packed. Inference and Link have already read
+the tool as written. Lower writes a relative `location` in a `.wic` `default:`
 absolute against the `.wic`'s directory, and the Python adapter does the same
 for a `StepInput` default against the working directory.
 
 ## Around the compiler
 
 - `sophios.main` is the command-line adapter: it parses arguments once,
-  converts them to settings at the boundary (`cli.get_dicts_for_compilation`),
+  converts them to settings at the boundary (`cli.settings_from_args`),
   loads the registry through `plugins`, runs the compile, the rewrites, the
   drawing, the pre-flight and the run, and converts a `SophiosError` to
   diagnostics and exit code 1. Nothing below it sees an argparse namespace.

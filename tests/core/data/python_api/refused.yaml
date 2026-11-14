@@ -37,6 +37,8 @@ scatter_over_a_path: *scalar
 scatter_over_another_steps_port: {raises: ValueError, names: [same step]}
 scatter_over_a_picked_value: *scalar
 scatter_over_a_nested_workflows_output: *scalar
+tool_cwltool_refuses: &invalid {raises: SophiosError, code: TOOL_REFUSED, names: [not_a_list.cwl, "'listing'"]}
+tool_cwltool_refuses_for_nextflow: *invalid
 unknown_target_to_compile: &target {raises: ValueError, names: ["unknown target 'wdl'", cwl, nextflow]}
 unknown_target_to_check: *target
 unknown_target_to_run: *target

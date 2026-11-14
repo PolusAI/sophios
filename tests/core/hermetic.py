@@ -3,13 +3,13 @@ sibling compiles against SYNTHETIC_TOOLS."""
 import socket
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Final
 
 import pytest
 import yaml
 
-import sophios.cli
 import sophios.compiler
 from sophios.input_output import NoAliasDumper
 from sophios.ir.artifacts import CompilationResult
@@ -98,11 +98,10 @@ def compile_hermetic(yml: Yaml, name: str = 'oracle', *,
                      insert_steps_automatically: bool = False,
                      inference_strict: bool = False) -> CompilationResult:
     """Compile one in-memory workflow against the synthetic registry; options are named so a typo is a type error."""
-    compiler_options = sophios.cli.default_compilation_settings()
-    compiler_options['insert_steps_automatically'] = insert_steps_automatically
-    compiler_options['inference_strict'] = inference_strict
-    return sophios.compiler.compile_source(
-        bundle(yml, name, SYNTHETIC_TOOLS if tools is None else tools), compiler_options, quiet=True)
+    inference = replace(sophios.compiler.CompileSettings().inference,
+                        insert_steps_automatically=insert_steps_automatically, strict=inference_strict)
+    return sophios.compiler.compile_source(bundle(yml, name, SYNTHETIC_TOOLS if tools is None else tools),
+                                           sophios.compiler.CompileSettings(inference), quiet=True)
 
 
 def compile_hermetic_source(source: str, name: str = 'oracle', *, tools: Tools | None = None) -> CompilationResult:
@@ -111,14 +110,14 @@ def compile_hermetic_source(source: str, name: str = 'oracle', *, tools: Tools |
     parsed = parse(source, f'{name}.wic')
     return sophios.compiler.compile_source(
         SourceBundle(parsed, name, RegistrySnapshot.from_tools(SYNTHETIC_TOOLS if tools is None else tools), ()),
-        sophios.cli.default_compilation_settings(), quiet=True)
+        sophios.compiler.CompileSettings(), quiet=True)
 
 
 def compile_production(yml: Yaml, name: str = 'binding', *, tools: Tools | None = None) -> CompilationResult:
     """Compile with user-facing progress enabled (``quiet=False``)."""
     return sophios.compiler.compile_source(
         bundle(yml, name, SYNTHETIC_TOOLS if tools is None else tools),
-        sophios.cli.default_compilation_settings(), quiet=False)
+        sophios.compiler.CompileSettings(), quiet=False)
 
 
 def compile_hermetic_cwl(yml: Yaml, name: str = 'oracle', *,

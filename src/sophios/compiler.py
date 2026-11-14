@@ -3,12 +3,14 @@ import re
 import sys
 from collections.abc import Collection, Iterator, Mapping
 from copy import deepcopy
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
 import yaml
 
 from . import utils_cwl
+from .input_output import SHIPPED_RENAMINGS
 
 from .ir.complete import complete
 from .ir.artifacts import CompilationArtifact, CompilationResult
@@ -19,22 +21,33 @@ from .ir.namespaces import declare_namespaces
 from .ir.frontdoor import SourceBundle
 from .ir.pipeline import front_end
 from .ir.realtime import extract
-from .ir.resolve import RegistrySnapshot, ToolDefinition
+from .ir.resolve import RegistrySnapshot, ToolCheck, ToolDefinition
 from .ir.names import NAMESPACE_SEPARATOR, Names
 from .ir.policy import RunPolicy, tolerant_tool
-from .ir.resolved import ResolvedTool, ResolvedWorkflow, non_boolean_whens, resolve
+from .ir.resolved import ResolvedWorkflow, non_boolean_whens, resolve
 from .ir.types import RegistryKey, StepId, StepNode, WorkflowGraph
 from .lang import versions
 from .lang.diagnostics import Diagnostic, Diagnostics, Locator, Severity, SophiosError
 from .lang.nodes import CwlRecord, OpaqueCwl, UnresolvedName
 from .lang.parser import Grammar
 from .lang.error_codes import SophiosErrorCode
-from .wic_types import CompilerOptions, Cwl
+from .wic_types import Cwl, Tool
 
 
-# pylint: disable-next=too-many-locals
+@dataclass(frozen=True, slots=True)
+class CompileSettings:
+    """What a compilation is given besides its source: how it infers, how the workflow runs, the language version
+    (None infers it), and whether a step input may name what is not a workflow input. The defaults are the command
+    line's."""
+
+    inference: InferencePolicy = InferencePolicy(renaming_conventions=SHIPPED_RENAMINGS)
+    policy: RunPolicy = RunPolicy()
+    lang_version: str | None = None
+    allow_raw_cwl: bool = False
+
+
 def compile_source(bundle: SourceBundle,
-                   compiler_options: CompilerOptions,
+                   settings: CompileSettings,
                    *,
                    quiet: bool) -> CompilationResult:
     """Compile a parsed root workflow and every workflow it reaches.
@@ -46,17 +59,16 @@ def compile_source(bundle: SourceBundle,
     """
     if not quiet:
         print(' starting compilation of', bundle.name)
-    selected_version = versions.resolve(
-        compiler_options.get('lang_version'), bundle.lang_version_pins)
+    selected_version = versions.resolve(settings.lang_version, bundle.lang_version_pins)
     front = front_end(bundle.parsed, bundle.registry, name=bundle.name,
-                      lang_version=selected_version)
-    if front.graph is None or front.resolved is None or front.resolved.document is None:
+                      lang_version=selected_version, check=_tool_check())
+    if front.graph is None:
         raise SophiosError(front.diagnostics)
     if not front.graph.steps:
         raise SophiosError.error(SophiosErrorCode.SUBWORKFLOW_INVALID,
                                  'workflows must define at least one step')
     authored, realtime = extract(front.graph)
-    _check_unresolved_names(authored, compiler_options['allow_raw_cwl'])
+    _check_unresolved_names(authored, settings.allow_raw_cwl)
     if not quiet:
         for note in dict.fromkeys(_authored_spelling_notes(authored)):
             print(note, file=sys.stderr)
@@ -65,26 +77,32 @@ def compile_source(bundle: SourceBundle,
     linked = link(prepared)
     if linked.graph is None:
         raise SophiosError(linked.diagnostics)
-    policy = InferencePolicy(
-        disabled=compiler_options['inference_disable'],
-        use_naming_conventions=compiler_options['inference_use_naming_conventions'],
-        renaming_conventions=tuple(compiler_options.get('renaming_conventions', ())),
-        insert_steps_automatically=compiler_options['insert_steps_automatically'],
-        format_rules=tuple(compiler_options.get('inference_rules', {}).items()),
-        strict=compiler_options['inference_strict'],
-    )
-    inferred = infer(linked.graph, policy, InsertionCatalog.from_registry(bundle.registry))
+    inferred = infer(linked.graph, settings.inference, InsertionCatalog.from_registry(bundle.registry))
     if inferred.graph is None:
         raise SophiosError(inferred.diagnostics)
-    graph = declare_namespaces(complete(inferred.graph), bundle.registry)
+    graph = declare_namespaces(inferred.graph, bundle.registry)
     names = Names.of(graph)
     diagnostics = Diagnostics([*inferred.diagnostics, *dict.fromkeys(_when_notes(graph, names))])
-    run_policy = RunPolicy(compiler_options['partial_failure_enable'],
-                           compiler_options['partial_failure_success_codes'])
-    artifact = _artifact_tree(graph, graph.name, names, _Descriptions(bundle.registry), policy=run_policy)
+    artifact = _artifact_tree(graph, graph.name, names, _Descriptions(bundle.registry), policy=settings.policy)
     if not quiet:
         print('finishing compilation of', bundle.name)
-    return CompilationResult(graph, artifact, diagnostics, realtime, policy=run_policy)
+    return CompilationResult(graph, artifact, diagnostics, realtime, policy=settings.policy)
+
+
+def _tool_check() -> ToolCheck:
+    """What a compile asks of each tool a step runs: cwltool's validator, once per tool however many steps run it."""
+    refusals: dict[RegistryKey, str | None] = {}
+
+    def check(tool: ToolDefinition) -> str | None:
+        if tool.key not in refusals:
+            try:
+                utils_cwl.validate(tool.run_path, None if tool.from_file else tool.cwl)
+                refusals[tool.key] = None
+            except utils_cwl.InvalidTool as refused:
+                refusals[tool.key] = str(refused)
+        return refusals[tool.key]
+
+    return check
 
 
 def resolved_view(result: CompilationResult, *, values: Mapping[str, OpaqueCwl] | None = None,
@@ -110,14 +128,14 @@ def cwl_notes(view: ResolvedWorkflow) -> tuple[Diagnostic, ...]:
         for step, problem in non_boolean_whens(view))
 
 
-def _tools(graph: WorkflowGraph, artifact: CompilationArtifact) -> Iterator[tuple[StepId, ResolvedTool]]:
+def _tools(graph: WorkflowGraph, artifact: CompilationArtifact) -> Iterator[tuple[StepId, Tool]]:
     """Every tool step at any depth, with the tool its child artifact writes for it."""
     for step, child in zip(graph.steps, artifact.children, strict=True):
-        assert step.run is not None, 'a finished graph has no unrun step'
-        if step.run.child is None:
-            yield step.id, ResolvedTool(child.run_path, child.cwl)
+        called = graph.child(step.id)
+        if called is None:
+            yield step.id, Tool(child.run_path, child.cwl)
         else:
-            yield from _tools(step.run.child, child)
+            yield from _tools(called, child)
 
 
 #: `inputs.name` and `inputs["name"]` inside a `when:` expression.
@@ -218,7 +236,7 @@ def _artifact_tree(graph: WorkflowGraph, name: str, names: Names, descriptions: 
     children: list[CompilationArtifact] = []
     for step in document.steps:
         assert step.run is not None
-        child = step.run.child
+        child = graph.child(step.id)
         if child is not None:
             children.append(_artifact_tree(child, names.file(step.id), names, descriptions, policy=policy))
             continue
@@ -256,7 +274,7 @@ class _Descriptions:
     def tool(self, step: StepNode) -> ToolDefinition:
         """The registry's definition of the tool `step` runs."""
         assert step.run is not None
-        key = step.run.process_id
+        key = step.run
         definition = self._registry.tool(key)
         if definition is None:
             raise SophiosError.error(

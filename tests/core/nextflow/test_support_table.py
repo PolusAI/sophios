@@ -178,6 +178,10 @@ def test_compile_time_fields_leave_the_executable_model_unchanged() -> None:
 REJECTED_CLASSES = sorted(
     name for name, row in REQUIREMENT_CLASSES["CommandLineTool"].items() if row.state is State.REJECTED
 )
+#: What a requirement class that needs a field holds, for the class a bare `{}` is refused for by cwltool's validator.
+_CLASS_VALUES: dict[str, Yaml] = {"SoftwareRequirement": {"packages": [{"package": "x"}]}}
+#: The requirements cwltool does not support, which it refuses as a requirement and not as a hint.
+_CWLTOOL_REFUSES = [("requirements", "SoftwareRequirement")]
 _WITHHELD = "only the literal true is supported: a Nextflow task has network access, and the generated pipeline " \
     "cannot withhold it"
 
@@ -190,10 +194,20 @@ def _refused_as_its_row_says(place: Callable[[Yaml, Yaml], None], note: str,
     return [(refusal.construct in constructs, refusal.subject) for refusal in _refused(workflow, run, note)]
 
 
+#: A value of the shape CWL gives a field, for each field cwltool's validator refuses "x" for.
+SHAPED: dict[tuple[str, str], Any] = {
+    **{("CommandLineTool", name): [1] for name in ("successCodes", "permanentFailCodes", "temporaryFailCodes")},
+    **{("ResourceRequirement", name): 1 for name in ("outdirMin", "outdirMax", "tmpdirMin", "tmpdirMax")},
+    ("CommandInputParameter", "loadContents"): True, ("CommandLineBinding", "loadContents"): True,
+    ("CommandInputParameter", "loadListing"): "no_listing", ("CommandOutputBinding", "loadListing"): "no_listing",
+    ("CommandInputArraySchema", "inputBinding"): {}, ("InlineJavascriptRequirement", "expressionLib"): ["var x = 1;"],
+}
+
+
 def _field(cwl_class: str, name: str) -> Callable[[Yaml, Yaml], None]:
     """Set the field `name` of `cwl_class` where `_documents()` holds it."""
     def place(workflow: Yaml, run: Yaml) -> None:
-        _position(cwl_class)(workflow, run)[name] = "x"
+        _position(cwl_class)(workflow, run)[name] = SHAPED.get((cwl_class, name), "x")
     return place
 
 
@@ -217,12 +231,14 @@ def test_a_refused_row_is_refused_with_its_note_naming_its_place() -> None:
             _field(cwl_class, name), FIELDS[cwl_class][name].note, _constructs(cwl_class, name))
     for section in ("requirements", "hints"):
         for name in REJECTED_CLASSES:
+            if (section, name) in _CWLTOOL_REFUSES:
+                continue
             expected[f"{section}.{name}"] = [(True, f"T.cwl: {section}.{name}")]
             found[f"{section}.{name}"] = _refused_as_its_row_says(
-                _section(section, {name: {}}), REQUIREMENT_CLASSES["CommandLineTool"][name].note, {Construct.TOOL})
-        for value in (False, "$(inputs.x)", None):
+                _section(section, {name: _CLASS_VALUES.get(name, {})}),
+                REQUIREMENT_CLASSES["CommandLineTool"][name].note, {Construct.TOOL})
+        for value in (False, "$(inputs.x)"):
             expected[f"{section}.NetworkAccess={value!r}"] = [(True, f"T.cwl: {section}.NetworkAccess.networkAccess")]
             found[f"{section}.NetworkAccess={value!r}"] = _refused_as_its_row_says(
-                _section(section, {"NetworkAccess": {} if value is None else {"networkAccess": value}}), _WITHHELD,
-                {Construct.TOOL})
+                _section(section, {"NetworkAccess": {"networkAccess": value}}), _WITHHELD, {Construct.TOOL})
     assert found == expected

@@ -1,16 +1,13 @@
 cwlVersion: v1.2
 class: CommandLineTool
-doc: Ask for a fractional number of cores, and for GPUs with a field cwltool does not declare and counts that are not
-  positive whole numbers.
+doc: Ask for a fractional number of cores, and for GPUs with counts that are not positive whole numbers.
 $namespaces:
   cwltool: http://commonwl.org/cwltool#
 requirements:
   ResourceRequirement: {coresMax: 2.5}
 hints:
-- {class: 'cwltool:CUDARequirement', cudaComputeCapabilityMin: '3.0'}
-- {class: 'cwltool:CUDARequirement', cudaDeviceCountMin: 0, cudaDeviceCountMax: -1}
-- {class: 'cwltool:CUDARequirement', cudaDeviceCountMin: true, cudaDeviceCountMax: 1.5}
-- {class: 'cwltool:CUDARequirement', cudaDeviceCountMin: '2', cudaDeviceCountMax: $(inputs.n)}
+- {class: 'cwltool:CUDARequirement', cudaVersionMin: '11.4', cudaComputeCapability: '3.0', cudaDeviceCountMin: 0, cudaDeviceCountMax: -1}
+- {class: 'cwltool:CUDARequirement', cudaVersionMin: '11.4', cudaComputeCapability: '3.0', cudaDeviceCountMin: 2, cudaDeviceCountMax: $(inputs.n)}
 baseCommand: 'true'
 inputs: {}
 outputs: {}

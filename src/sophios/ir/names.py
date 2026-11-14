@@ -17,7 +17,7 @@ consumer that needs to know what a name came from is given the identity.
 from collections import Counter
 from dataclasses import dataclass
 
-from .types import DerivedName, Namespace, PortName, StepId, StepOutputRef, WorkflowGraph
+from .types import DerivedName, PortName, StepId, StepOutputRef, WorkflowGraph
 
 #: Joins a step to the name nested inside it.
 NAMESPACE_SEPARATOR = '~'
@@ -76,27 +76,12 @@ class Names:
         Returns:
             Names: The spelling of each step occurrence and derived name in the tree.
         """
-        graphs: list[WorkflowGraph] = []
-        seen: set[Namespace] = set()
-
-        def collect(graph: WorkflowGraph) -> None:
-            if graph.namespace in seen:
-                return
-            seen.add(graph.namespace)
-            nested = [step.run.child for step in graph.steps
-                      if step.run is not None and step.run.child is not None]
-            for child in (*graph.children, *nested):
-                collect(child)
-            graphs.append(graph)
-
-        collect(root)
         table = cls(root.name, {})
-        for graph in graphs:
-            table._spell(graph)  # pylint: disable=protected-access
+        table._spell(root)  # pylint: disable=protected-access
         return table
 
     def _spell(self, graph: WorkflowGraph) -> None:
-        """Enter `graph`'s steps, its children's already entered."""
+        """Enter the steps of `graph`, then of every graph nested in it."""
         authored = {side: {str(port.name).casefold() for port in ports if not isinstance(port.name, DerivedName)}
                     for side, ports in (('in', graph.workflow_inputs), ('out', graph.workflow_outputs))}
         ids = authored['in'] | authored['out']
@@ -107,9 +92,8 @@ class Names:
             # An index is unique in its graph (Infer numbers an inserted step after
             # every other), and no kept or authored name contains `@`.
             self.steps[step.id] = name if kept else f'{name}@{step.id.index}'
-
-    def _joined(self, name: DerivedName) -> str:
-        return f'{self.step(name.step)}{NAMESPACE_SEPARATOR}{self.port(name.port)}'
+        for child in graph.children:
+            self._spell(child)
 
     def step(self, step: StepId) -> str:
         """The id `step` carries in its own document."""
@@ -129,11 +113,9 @@ class Names:
 
     def port(self, name: PortName) -> str:
         """The text a port or boundary name carries."""
-        match name:
-            case DerivedName():
-                return self._joined(name)
-            case _:
-                return str(name)
+        if isinstance(name, DerivedName):
+            return f'{self.step(name.step)}{NAMESPACE_SEPARATOR}{self.port(name.port)}'
+        return str(name)
 
     def source(self, ref: 'PortName | StepOutputRef') -> str:
         """The text a `source:` or `outputSource:` reference carries."""

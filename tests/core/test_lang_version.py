@@ -7,7 +7,7 @@ import yaml
 from hypothesis import example, given
 from hypothesis import strategies as st
 
-from sophios.lang import KNOWN_VERSIONS, LANG_VERSION, resolve_lang_version
+from sophios.lang import KNOWN_VERSIONS, resolve_lang_version
 from sophios.lang.diagnostics import SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
 import sophios.cli
@@ -91,5 +91,5 @@ def test_a_compile_resolves_its_version_reports_it_and_writes_none(
         workflow.compile(tool_registry=tools, lang_version='9.9.9')
     assert caught.value.diagnostics[0].code is SophiosErrorCode.UNKNOWN_LANG_VERSION
     compiled = workflow.compile(tool_registry=tools)
-    assert compiled.lang_version == LANG_VERSION
+    assert compiled.lang_version == KNOWN_VERSIONS[-1]
     assert ANNOTATION_KEY not in compiled.cwl_workflow and 'sophios' not in compiled.cwl_workflow.get('$namespaces', {})

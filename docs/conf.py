@@ -163,7 +163,7 @@ def nf_support_markdown() -> str:
     from sophios.nf_support import FIELDS, REQUIREMENT_CLASSES, State, constructs_of
 
     native = Counter(FIELDS[cwl_class][name].state for cwl_class, rows in SUPPORT_MATRIX.items()
-                     for name, row in rows.items() if row.support is Support.NATIVE)
+                     for name, support in rows.items() if support is Support.NATIVE)
     lines = [
         f'Of the {native.total()} fields Sophios supports natively, the Nextflow target lowers '
         f'{native[State.LOWERED]}, uses {native[State.COMPILE_TIME]} at compile time only, and rejects '
@@ -181,7 +181,7 @@ def nf_support_markdown() -> str:
                 (f'`{name}`', row.state, _noted(row)) for name, row in rows.items()])
         else:
             lines += _nf_support_table('Field | Sophios | Nextflow | Note', [
-                (f'`{name}`', sophios[name].support, row.state, _noted(row)) for name, row in rows.items()])
+                (f'`{name}`', sophios[name], row.state, _noted(row)) for name, row in rows.items()])
     for level, classes in REQUIREMENT_CLASSES.items():
         tool = level == 'CommandLineTool'
         lines += ['', f'### Requirement and hint classes of a `{level}`' + ('' if tool else ' or a step'), '']

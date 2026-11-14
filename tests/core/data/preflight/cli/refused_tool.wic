@@ -1,0 +1,5 @@
+steps:
+- id: refused_tool
+  run: refused_tool.cwl
+  in:
+    message: !ii hello

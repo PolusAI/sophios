@@ -22,25 +22,22 @@ class CorpusRegistry:
     workflows: dict[str, dict[str, Path]]
 
 
-def _config() -> Json:
-    """Read configuration without provisioning a missing user config."""
+def corpus_config() -> Json:
+    """The configuration Sophios itself would use: the one named or found, generated first when there is none."""
     args = sophios.cli.get_args()
-    config_file = args.config_file or io.default_config_file(Path(args.homedir))
-    if config_file.exists():
-        return io.read_config_from_disk(config_file)
-    return io.get_basic_config()
+    return io.get_config(args.config_file, Path(args.homedir))
 
 
 @lru_cache(maxsize=1)
 def workflow_paths() -> dict[str, dict[str, Path]]:
     """Discover workflow source paths without loading any process plugins."""
-    return sophios.plugins.get_yml_paths(_config())
+    return sophios.plugins.get_yml_paths(corpus_config())
 
 
 @lru_cache(maxsize=1)
 def load_test_registry() -> CorpusRegistry:
     """The corpus registry, discovered on first use and never at collection, so importing this module writes nothing."""
-    return CorpusRegistry(sophios.plugins.get_tools_cwl(_config()), workflow_paths())
+    return CorpusRegistry(sophios.plugins.get_tools_cwl(corpus_config()), workflow_paths())
 
 
 @pytest.fixture(scope='session')

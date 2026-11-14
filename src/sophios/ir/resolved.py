@@ -14,10 +14,11 @@ nothing. Refusing is a target's job. Every name is spelled by `Names`, so a
 name in the view is the name the CWL target writes.
 """
 from collections.abc import Callable, Collection, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import NamedTuple, TypeAlias
 
+from ..lang.cwl import required
 from ..lang.diagnostics import Diagnostic, Diagnostics, Locator, Severity, lines
 from ..lang.error_codes import SophiosErrorCode
 from ..lang.nodes import OpaqueCwl
@@ -26,10 +27,11 @@ from ..lang.subset import BOOLEAN, Expr, check, is_safe_subset_text, parse
 from .declarations import delivered, layered, output_rank, written_order
 from .names import Names
 from .policy import RunPolicy, one_expression
-from .stepin import direct_source, step_inputs, step_out
+from .stepin import step_inputs
+from ..wic_types import Tool
 from .types import (
-    DerivedName, EmittedValue, Expression, PortDeclaration, PortId, PortName, Record, Source, StepId,
-    StepNode, StepOutputRef, WorkflowGraph, WorkflowPort,
+    DerivedName, EmittedValue, Expression, PortDeclaration, PortName, PortType, Record, Source, StepId,
+    StepNode, StepOutputRef, WorkflowGraph,
 )
 
 
@@ -85,15 +87,6 @@ class WorkflowOutput:
 
 
 @dataclass(frozen=True, slots=True)
-class ResolvedTool:
-    """The tool a step runs: the file the registry read it from and the document the CWL target writes for the
-    step."""
-
-    path: str
-    document: OpaqueCwl
-
-
-@dataclass(frozen=True, slots=True)
 class StepInput:  # pylint: disable=too-many-instance-attributes
     """One entry of a step's `in:`, in the order the CWL target writes it."""
 
@@ -139,12 +132,11 @@ class Condition:
 class ResolvedStep:  # pylint: disable=too-many-instance-attributes
     """One step occurrence: what it runs, what it binds, and the keys it carries."""
 
-    id: StepId
     #: Its id in its own workflow.
     local: str
     #: Its qualified id, outer~inner: what messages print.
     name: str
-    run: 'ResolvedTool | ResolvedWorkflow'
+    run: 'Tool | ResolvedWorkflow'
     inputs: tuple[StepInput, ...]
     #: Its outputs' names, as its out: lists them.
     outputs: tuple[str, ...]
@@ -196,14 +188,14 @@ class ResolvedWorkflow:  # pylint: disable=too-many-instance-attributes
                 raise ValueError(f'{ref} names nothing in workflow {self.name!r}')
 
 
-def resolve(graph: WorkflowGraph, tools: Mapping[StepId, ResolvedTool], *, policy: RunPolicy = RunPolicy(),
+def resolve(graph: WorkflowGraph, tools: Mapping[StepId, Tool], *, policy: RunPolicy = RunPolicy(),
             values: Mapping[str, OpaqueCwl] | None = None,
             outputs: Collection[str] | None = None) -> ResolvedWorkflow:
     """The view of a finished compilation's graph.
 
     Args:
         graph (WorkflowGraph): `CompilationResult.graph`: linked, inferred and completed.
-        tools (Mapping[StepId, ResolvedTool]): The tool every tool step runs, at any depth.
+        tools (Mapping[StepId, Tool]): The tool every tool step runs, at any depth.
         policy (RunPolicy): The compilation's run policy.
         values (Mapping[str, OpaqueCwl] | None): This run's values, by root input as the job spells it, each in
             place of the value the graph binds; `None` keeps the graph's.
@@ -216,7 +208,7 @@ def resolve(graph: WorkflowGraph, tools: Mapping[StepId, ResolvedTool], *, polic
         ResolvedWorkflow: The root workflow, every nested workflow inside its calls.
     """
     names = Names.of(graph)
-    root = _workflow(graph, _Level(names, tools, policy, {step.id: step for step in graph.all_steps}, {}))
+    root = _workflow(graph, _Level(names, tools, policy, {step.id: step for step in graph.all_steps}, graph, {}))
     bound = {names.port(binding.name): binding.value for binding in graph.job_bindings}
     for name in values or {}:
         if name not in {port.name for port in root.inputs}:
@@ -227,9 +219,8 @@ def resolve(graph: WorkflowGraph, tools: Mapping[StepId, ResolvedTool], *, polic
         if unknown := sorted(set(outputs) - {port.name for port in root.outputs}):
             raise ValueError(f'workflow {root.name!r} has no output {", ".join(map(repr, unknown))}')
         kept = tuple(port for port in root.outputs if port.name in outputs)
-    inputs = tuple(WorkflowInput(port.name, port.declaration, bound.get(port.name), port.name in bound,
-                                 port.made_from, port.span) for port in root.inputs)
-    return ResolvedWorkflow(root.name, inputs, kept, root.steps, root.requirements, root.fields, policy, root.span)
+    inputs = tuple(replace(port, value=bound.get(port.name), has_value=port.name in bound) for port in root.inputs)
+    return replace(root, inputs=inputs, outputs=kept)
 
 
 def _workflow(graph: WorkflowGraph, outer: '_Level', given: Mapping[str, OpaqueCwl] | None = None) -> ResolvedWorkflow:
@@ -241,14 +232,13 @@ def _workflow(graph: WorkflowGraph, outer: '_Level', given: Mapping[str, OpaqueC
     inputs = tuple(WorkflowInput(names.port(port.name), port.declaration,
                                  made_from=_made_from(port.name, names), span=port.span or graph.span)
                    for port in sorted(graph.workflow_inputs, key=lambda port: order(port.name)))
-    level = _Level(names, outer.tools, outer.policy, outer.everything, {
+    level = replace(outer, graph=graph, inputs={
         port.name: (given or {}).get(port.name, port.declaration.type.canonical) for port in inputs},
-        (*outer.outside, *requirements))
+        outside=(*outer.outside, *requirements))
     ins = step_inputs(graph)
-    steps = tuple(_step(step, ins[step.id], level) for step in graph.steps)
-    mapped = dict(graph.output_mapping)
+    steps = tuple(_step(step, graph.child(step.id), ins[step.id], level) for step in graph.steps)
     outputs = tuple(WorkflowOutput(names.port(port.name), port.declaration,
-                                   _output_source(graph, port, mapped.get(port.name), level.inputs, names),
+                                   _output_source(port.output_source, level.inputs, names),
                                    port.span or graph.span)
                     for port in graph.workflow_outputs)
     documents: tuple[tuple[str, OpaqueCwl], ...] = (('$namespaces', dict(graph.namespaces)),) \
@@ -265,14 +255,12 @@ def _made_from(name: PortName, names: Names) -> tuple[str, str] | None:
     return names.qualified(name.step), names.port(name.port)
 
 
-def _output_source(graph: WorkflowGraph, port: WorkflowPort, producer: PortId | None, inputs: Collection[str],
-                   names: Names) -> Ref | str | None:
-    """An output's source at its workflow's level: the producer Link resolved, one hop in; else the step output or
-    workflow input its `outputSource` names; else the text as written, or `None` for no `outputSource`."""
-    source = direct_source(graph, producer) if producer is not None else port.output_source
+def _output_source(source: StepOutputRef | OpaqueCwl, inputs: Collection[str], names: Names) -> Ref | str | None:
+    """An output's source at its workflow's level, as the CWL target writes it: the step output its `outputSource`
+    names; else the workflow input it names; else the text as written, or `None` for no `outputSource`."""
     match source:
-        case StepOutputRef(step=step, port=output):
-            return OutputRef(names.step(step), names.port(output))
+        case StepOutputRef():
+            return _ref(source, names)
         case str() if source in inputs:
             return InputRef(source)
         case str():
@@ -295,16 +283,19 @@ def _requirements(passthrough: tuple[tuple[str, OpaqueCwl], ...],
     return tuple(sorted(found, key=lambda requirement: requirement.hint)), tuple(fields)
 
 
-class _Level:  # pylint: disable=too-few-public-methods
-    """What a step's sources are read against: the spelling, the tools, every step of the tree, the type each input
-    of the step's own workflow holds; and the requirements and hints written outside the step, outermost first."""
+@dataclass(frozen=True, slots=True)
+class _Level:
+    """What a step's sources are read against: the spelling, the tools, every step of the tree, the step's own
+    workflow and the type each of its inputs holds; and the requirements and hints written outside the step,
+    outermost first."""
 
-    # pylint: disable-next=too-many-arguments,too-many-positional-arguments
-    def __init__(self, names: Names, tools: Mapping[StepId, ResolvedTool], policy: RunPolicy,
-                 everything: Mapping[StepId, StepNode], inputs: Mapping[str, OpaqueCwl],
-                 outside: tuple[Requirement, ...] = ()) -> None:
-        self.names, self.tools, self.policy, self.everything, self.inputs = names, tools, policy, everything, inputs
-        self.outside = outside
+    names: Names
+    tools: Mapping[StepId, Tool]
+    policy: RunPolicy
+    everything: Mapping[StepId, StepNode]
+    graph: WorkflowGraph
+    inputs: Mapping[str, OpaqueCwl]
+    outside: tuple[Requirement, ...] = ()
 
 
 def _inherited(written: tuple[Requirement, ...]) -> tuple[Requirement, ...]:
@@ -320,20 +311,17 @@ def _inherited(written: tuple[Requirement, ...]) -> tuple[Requirement, ...]:
     return tuple(sorted(found.values(), key=lambda requirement: requirement.hint))
 
 
-def _step(step: StepNode, ins: tuple[tuple[PortName, EmittedValue], ...], level: _Level) -> ResolvedStep:
-    if step.run is None:
-        raise ValueError(f'step {step.id.name!r} of a finished graph has no run')
+def _step(step: StepNode, child: WorkflowGraph | None, ins: tuple[tuple[PortName, EmittedValue], ...],
+          level: _Level) -> ResolvedStep:
     names = level.names
-    child = step.run.child
     called = {names.port(port.name): port.declaration for port in child.workflow_inputs} if child is not None else {}
     inputs = tuple(_step_input(name, value, step, called, level) for name, value in ins)
     requirements, fields = _requirements(step.passthrough)
-    within = _Level(names, level.tools, level.policy, level.everything, level.inputs, (*level.outside, *requirements))
-    run: ResolvedTool | ResolvedWorkflow = (
+    within = replace(level, outside=(*level.outside, *requirements))
+    run: Tool | ResolvedWorkflow = (
         _workflow(child, within, {port.name: port.type for port in inputs}) if child is not None
         else level.tools[step.id])
-    outputs = (tuple(port.name for port in run.outputs) if isinstance(run, ResolvedWorkflow)
-               else tuple(names.port(name) for name in step_out(step)))
+    outputs = tuple(names.port(port.id.port) for port in step.outputs)
     interpreted = dict(step.interpreted)
     scatter = (Scatter(tuple(names.port(port) for port in step.scatter_ports), interpreted.get('scatterMethod'))
                if interpreted.get('scatter') is not None else None)
@@ -341,9 +329,9 @@ def _step(step: StepNode, ins: tuple[tuple[PortName, EmittedValue], ...], level:
     if scatter is None and 'scatterMethod' in interpreted:
         # A method with nothing to scatter is not a scatter: a key as written.
         fields = (('scatterMethod', interpreted['scatterMethod']), *fields)
-    return ResolvedStep(step.id, names.step(step.id), names.qualified(step.id), run, inputs, outputs, scatter,
+    return ResolvedStep(names.step(step.id), names.qualified(step.id), run, inputs, outputs, scatter,
                         condition, requirements, fields, step.span,
-                        _inherited(within.outside) if isinstance(run, ResolvedTool) else ())
+                        _inherited(within.outside) if isinstance(run, Tool) else ())
 
 
 # pylint: disable-next=too-many-locals
@@ -392,7 +380,7 @@ def _source_type(ref: PortName | StepOutputRef, level: _Level) -> OpaqueCwl:
             producer = level.everything[producer_id]
             declared = next(candidate for candidate in producer.outputs if candidate.id.port == port)
             produced = layered(declared.type, output_rank(producer)).canonical
-            return _nullable(produced) if _may_skip(producer, port, level) else produced
+            return PortType(['null', produced]).canonical if _may_skip(producer, port, level) else produced
     return level.inputs.get(level.names.port(ref), 'Any')
 
 
@@ -401,19 +389,13 @@ def _may_skip(producer: StepNode, port: PortName, level: _Level) -> bool:
     output and every call on the way out to it, has a `when`."""
     if dict(producer.interpreted).get('when') is not None:
         return True
-    child = producer.run.child if producer.run is not None else None
+    child = level.graph.child(producer.id)
     inner = dict(child.output_mapping).get(port) if child is not None else None
     if inner is None:
         return False
     parts = inner.step.namespace.parts
     on_the_way = (*parts[parts.index(producer.id) + 1:], inner.step)
     return any(dict(level.everything[step].interpreted).get('when') is not None for step in on_the_way)
-
-
-def _nullable(canonical: OpaqueCwl) -> OpaqueCwl:
-    if isinstance(canonical, list):
-        return canonical if 'null' in canonical else ['null', *canonical]
-    return ['null', canonical]
 
 
 def _delivered_type(produced: list[OpaqueCwl], fields: Mapping[str, OpaqueCwl],
@@ -427,10 +409,7 @@ def _delivered_type(produced: list[OpaqueCwl], fields: Mapping[str, OpaqueCwl],
     alike = all(item == produced[0] for item in produced)
     merged: OpaqueCwl = delivered(produced[0] if alike else 'Any', sources=len(produced),
                                   link_merge=fields.get('linkMerge'), pick_value=fields.get('pickValue'))
-    if 'default' in fields and isinstance(merged, list) and 'null' in merged:
-        rest = [member for member in merged if member != 'null']
-        return rest[0] if len(rest) == 1 else rest
-    return merged
+    return required(merged)[0] if 'default' in fields else merged
 
 
 def _seen(port: StepInput, scatter: Scatter | None) -> OpaqueCwl:
@@ -560,7 +539,7 @@ class _Flattened:  # pylint: disable=too-few-public-methods
                 # The env lacks only an input the enclosing call leaves unbound, with no default.
                 return env[ref.name] if ref.name in env else _Found((), ((calls[-1].name, ref.name),))
             producer = local[ref.step]
-            if isinstance(producer.run, ResolvedTool):
+            if isinstance(producer.run, Tool):
                 return _Found((Through(OutputRef(producer.name, ref.port)),))
             source = next(port.source for port in producer.run.outputs if port.name == ref.port)
             if not isinstance(source, (InputRef, OutputRef)):
@@ -568,7 +547,7 @@ class _Flattened:  # pylint: disable=too-few-public-methods
             return inner[producer.local](source)
 
         for step in workflow.steps:
-            if isinstance(step.run, ResolvedTool):
+            if isinstance(step.run, Tool):
                 self._found.append(ToolStep(step, calls, tuple(
                     tuple(found for ref in port.sources for found in through(ref).sources) for port in step.inputs)))
                 continue

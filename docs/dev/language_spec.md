@@ -52,10 +52,9 @@ declared in one place, `sophios.lang.SUPPORT_MATRIX`
 
 `support.py` is the source and `tests/core/test_support_matrix.py` the
 check: it reads the fields of each class from `cwl_utils.parser.cwl_v1_2`,
-so a field the schema has and the matrix lacks fails the build, and so does a
-row whose pinning test does not exist. Where the tables below and
-`support.py` disagree, `support.py` wins. A test named without a file is in
-`tests/core/test_leak_boundary.py`. A field outside these five classes on a
+so a field the schema has and the matrix lacks fails the build. Where the
+tables below and `support.py` disagree, `support.py` wins. A test named
+without a file is in `tests/core/test_leak_boundary.py`. A field outside these five classes on a
 step's tool is passthrough wholesale: Sophios does not classify
 `CommandLineTool` fields.
 
@@ -342,8 +341,7 @@ per file (`wic: {lang_version: 0.0.1}`) or set for a whole compilation
 (`--lang_version`, `Workflow.compile(lang_version=...)`); the explicit setting
 beats any tag, and one compilation resolves to exactly one version tree-wide.
 An unknown version is `wic017`; pins that disagree within one compilation are
-`wic018`. Every known version owns a reference-type judgment in
-`sophios.lang.compatibility`, and the module refuses to import otherwise.
+`wic018`.
 
 ## 7. Diagnostic codes
 

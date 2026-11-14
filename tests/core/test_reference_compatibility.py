@@ -92,13 +92,13 @@ def test_the_versioned_judge_matches_the_independent_model(
     which cwltool refuses and Sophios, which refuses only what is provably disjoint, lets through."""
     source, sink, expected = case
     before = copy.deepcopy((source, sink))
-    found = reference_relation(source, sink, lang_version='0.0.1')
+    found = reference_relation(source, sink)
     assert (source, sink) == before, 'observing a passthrough declaration mutated it'
     assert found.name == reference_expectation(source, sink).name == (expected or found).name
     if found is not TypeRelation.UNKNOWN and _loaded(source) and _loaded(sink):
         refused = check_types(copy.deepcopy(source), copy.deepcopy(sink), None, None, None) == 'exception'
         assert refused is (found is TypeRelation.DISJOINT) or refused and 'null' in repr((source, sink)), found
-    assert reference_relation(_RECURSIVE, _STR_ARR, lang_version='0.0.1') is TypeRelation.UNKNOWN
+    assert reference_relation(_RECURSIVE, _STR_ARR) is TypeRelation.UNKNOWN
 
 
 #: A cyclic Python value, which the total raw judge must call unknown rather than recurse on forever.
@@ -157,9 +157,9 @@ def _typed_tools(source_type: Any, sink_type: Any) -> Tools:
     return {
         StepId('typed_source', 'global'): Tool('/synthetic/typed_source.cwl', clt(
             {'seed': {'type': 'string'}, 'seed2': {'type': 'string', 'default': 'y'}},
-            {'value': {'type': source_type}}, canonical=True)),
+            {'value': {'type': source_type}})),
         StepId('typed_sink', 'global'): Tool('/synthetic/typed_sink.cwl', clt(
-            {'value': {'type': sink_type}}, {}, canonical=True)),
+            {'value': {'type': sink_type}}, {})),
     }
 
 

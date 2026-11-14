@@ -23,7 +23,7 @@ def _tools(signatures: dict[str, _Signature]) -> Tools:
     """A registry with one stub tool per stem, every port a string."""
     return registered({stem: clt({port: {'type': 'string', 'inputBinding': {'position': 1}} for port in inputs},
                                  {port: {'type': 'string', 'outputBinding': {'outputEval': '$("x")'}}
-                                  for port in outputs}, javascript=True, canonical=True)
+                                  for port in outputs}, javascript=True)
                        for stem, (inputs, outputs) in signatures.items()}, {})
 
 

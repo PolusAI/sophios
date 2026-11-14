@@ -1140,10 +1140,10 @@ Codes in parentheses are the codes Sophios prints with each diagnostic.
   from it. Write a value as the runner should see it. A key that is not an
   environment variable name raises `ValueError` before the run starts, where
   it used to be dropped with a warning; rename or remove it.
-- `compile_source` takes the bundle and the compiler options only: drop
-  `yaml_tag_paths`, the graph settings and `graph_target`.
-  `sophios.cli.default_compilation_settings()` returns the compiler options, and
-  `get_dicts_for_compilation()` returns `(compiler_options, graph_settings)`.
+- `compile_source` takes the bundle and a `sophios.compiler.CompileSettings`
+  only: drop `yaml_tag_paths`, the graph settings and `graph_target`.
+  `CompileSettings()` holds the command line's defaults, and
+  `sophios.cli.settings_from_args(args)` returns `(settings, graph_settings)`.
   The compiler no longer draws: `CompilationArtifact.graph_view` and
   `sophios.utils_graphs` are gone, and `sophios.drawing.draw(result, bundle,
   graph_settings, name, *, background)` draws a compiled workflow. The

@@ -232,6 +232,14 @@ def scatter_over_a_nested_workflows_output() -> None:
 # Each door: an unknown target, before anything is compiled; what the Nextflow target cannot run; a real-time
 # analysis, which run_async() never runs.
 
+def tool_cwltool_refuses() -> None:
+    Workflow([Step(clt_path=HERE / 'not_a_list.cwl')], 'w').compile()
+
+
+def tool_cwltool_refuses_for_nextflow() -> None:
+    Workflow([Step(clt_path=HERE / 'not_a_list.cwl')], 'w').compile(target='nextflow')
+
+
 def unknown_target_to_compile() -> None:
     Workflow([_step('touch')], 'elsewhere').compile(target='wdl')  # type: ignore[call-overload]
 

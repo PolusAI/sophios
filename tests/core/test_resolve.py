@@ -8,7 +8,7 @@ from typing import Any, Final
 
 import pytest
 
-from sophios.ir import RegistrySnapshot, resolve
+from sophios.ir.resolve import RegistrySnapshot, resolve
 from sophios.lang import EdgeRef, InlineLiteral, RawCwlRef, UnresolvedName, parse
 
 from .cases import DATA, match

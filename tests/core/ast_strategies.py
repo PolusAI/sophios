@@ -6,7 +6,6 @@ from typing import Any, Final, cast
 from hypothesis import strategies as st
 from hypothesis.strategies import SearchStrategy
 
-from sophios import utils_cwl
 from sophios.lang import (CwlRecord, Document, EdgeDef, EdgeRef, Grammar, InlineLiteral, InputValue,
                           OpaqueCwl, OutputBinding, RawCwlRef, Step, StepKey, UnresolvedName, WicSidecar,
                           parse, render, to_json)
@@ -298,11 +297,13 @@ SUBWORKFLOW_BODIES: Final[dict[str, Yaml]] = {
 
 
 def to_yml(document: Document) -> Yaml:
-    """The compiler's input for a generated document: rendered and parsed as a user's file is, then desugared as
-    read_ast_from_disk does (mapping-form steps fail without it), and subworkflow bodies attached as files would be."""
+    """The compiler's input for a generated document: rendered and parsed as a user's file is, and subworkflow bodies
+    attached as files would be."""
     reread = parse(render(document), 'generated.wic')
-    assert reread.ok and reread.document is not None, [str(d) for d in reread.diagnostics]
-    loaded: Yaml = utils_cwl.desugar_into_canonical_normal_form(to_json(reread.document))
+    assert not reread.diagnostics.has_errors and reread.document is not None, [str(d) for d in reread.diagnostics]
+    loaded: Yaml = to_json(reread.document)
+    if isinstance(loaded.get('steps'), dict):  # the tests read steps as a list, as hermetic's documents write them
+        loaded['steps'] = [{'id': name, **(body or {})} for name, body in loaded['steps'].items()]
     for step in loaded.get('steps', []):
         if isinstance(step, dict) and str(step.get('id', '')).endswith('.wic'):
             body = str(step['id']).removesuffix('.wic').rstrip('0123456789')

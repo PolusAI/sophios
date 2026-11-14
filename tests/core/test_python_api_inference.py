@@ -233,12 +233,12 @@ def test_an_inference_is_refused_at_construction_or_keeps_what_it_was_given(
     assert inference.renamings == (None if given_renamings is None else tuple(tuple(pair) for pair in given_renamings))
     shipped = SHIPPED_RENAMINGS if settings.get("naming_conventions", True) else ()
     expected = given_renamings if given_renamings is not None else shipped
-    assert python_runtime.compiler_options(inference)["renaming_conventions"] == [tuple(pair) for pair in expected]
+    assert python_runtime.compile_settings(inference).inference.renaming_conventions == tuple(map(tuple, expected))
     assert dict(inference.format_rules) == given_rules
     with pytest.raises(TypeError):
         inference.format_rules["tiff"] = "continue"  # type: ignore[index]
     if given_renamings is None:  # a copy switching the conventions neither raises nor drops the shipped renamings
         for switched in (True, False):
             copy = replace(inference, naming_conventions=switched)
-            assert python_runtime.compiler_options(copy)["renaming_conventions"] == list(
+            assert python_runtime.compile_settings(copy).inference.renaming_conventions == (
                 SHIPPED_RENAMINGS if switched else ())

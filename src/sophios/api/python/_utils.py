@@ -11,10 +11,8 @@ from typing import Any, Final
 
 import yaml
 
-from sophios import utils_cwl
+from sophios.lang.cwl import CWLAtomicType, canonical_type
 from sophios.lang.spans import SourceSpan
-
-from ._types import CWLAtomicType
 
 _PACKAGE_ROOT: Final = Path(__file__).resolve().parents[2]
 
@@ -41,7 +39,7 @@ def normalize_parameter_type(parameter_type: Any) -> tuple[Any, bool]:
     """Return the canonicalized parameter type and whether it is required."""
     if parameter_type is None:
         return None, True
-    canonical = utils_cwl.canonicalize_type(parameter_type)
+    canonical = canonical_type(parameter_type)
     match canonical:
         case list() as options:
             null_type = CWLAtomicType.NULL.value

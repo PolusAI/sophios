@@ -35,3 +35,9 @@ disjoint.wic:
 unresolved.wic:
   refused: [{code: UNRESOLVED_INPUT, severity: error, step: mk_file, index: 1, port: name,
              message: {contains: ['!ii', not_a_workflow_input]}}]
+invalid_tools.wic:
+  refused:
+  - {code: TOOL_REFUSED, severity: error, step: misspelled_type,
+     message: {contains: [misspelled_type.cwl, "6:5", "Field 'type' references unknown identifier 'strin'"]}}
+  - {code: TOOL_REFUSED, severity: error, step: missing_import, index: 3,
+     message: {contains: [missing_import.cwl, refuses, missing_types.yml, "No such file or directory"]}}

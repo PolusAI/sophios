@@ -1,11 +1,13 @@
 import argparse
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 from . import __version__
-from .input_output import SHIPPED_RENAMINGS
+from .compiler import CompileSettings
+from .ir.policy import RunPolicy
 from .lang.error_codes import SophiosErrorCode
-from .wic_types import DEFAULT_BASEPATH, TARGET_NAMES, CompilerOptions, GraphSettings
+from .wic_types import DEFAULT_BASEPATH, TARGET_NAMES, GraphSettings
 
 
 def _config_file(path: str) -> Path:
@@ -84,9 +86,6 @@ neutral.add_argument('--inference_strict', default=False, action="store_true",
                      help='Treat a guessed edge (wic043) as an error.')
 neutral.add_argument('--validate_plugins', default=False, action="store_true",
                      help='Validate all CWL CommandLineTools')
-neutral.add_argument('--ignore_validation_errors', default=False, action="store_true",
-                     help='Deprecated; does nothing. The parser reports a malformed file, '
-                     'and nothing else validates one.')
 neutral.add_argument('--diagnostics', choices=['text', 'json'], default='text',
                      help='''How diagnostics are printed on stderr: text, or one JSON object per line
                      for programs and agents (see docs/error_codes.md)''')
@@ -165,10 +164,6 @@ cwl.add_argument('--cwl_inline_subworkflows', default=False, action="store_true"
                  subworkflow's own steps. Tools stay separate files. A subworkflow call that has
                  scatter, when or any other key besides in and out, or that is marked
                  inlineable: false, stays a subworkflow, and each one is named on stderr.''')
-cwl.add_argument('--no_skip_dollar_schemas', default=False, action="store_true",
-                 help='''Does not skip processing $schemas tags in CWL files for performance.
-                 Skipping significantly improves initial validation performance, but is not always desired.
-                 See https://github.com/common-workflow-language/cwltool/issues/623''')
 cwl.add_argument('--cachedir', type=str, required=False, default='',
                  help='''With --run_local and cwltool, the directory cwltool caches each step's outputs in:
                  a step whose tool and inputs are unchanged reuses them. No cache unless given.''')
@@ -189,8 +184,6 @@ cwl.add_argument('--graph_inline_depth', type=int, required=False, default=sys.m
                  help='Controls the depth of subgraphs which are displayed.')
 cwl.add_argument('--graph_dark_theme', default=False, action="store_true",
                  help='Draw text, box outlines and inferred edges in white, for a dark background.')
-cwl.add_argument('--custom_net', type=str, required=False,
-                 help='Passes --custom-net flag to cwltool.')
 
 
 def validate_target_args(args: argparse.Namespace) -> None:
@@ -213,15 +206,7 @@ def validate_success_code_range(args: argparse.Namespace) -> None:
 
 
 def _argv(yaml_path: str = '', suppliedargs: list[str] | None = None) -> list[str]:
-    """The argument list a synthesised parse should read.
-
-    Note there is no program name: `parse_args` takes the arguments *after*
-    argv[0]. Passing the list explicitly is the whole point — this module used
-    to build a full argv and install it over `sys.argv` with
-    `unittest.mock.patch` so that a no-argument `parse_args()` would read it.
-    That put a test idiom on the production path and mutated global process
-    state to compute a value, in a library other people embed.
-    """
+    """The arguments, without a program name, that `get_args` and `get_known_and_unknown_args` parse."""
     return ['--yaml', yaml_path] + (suppliedargs or [])
 
 
@@ -252,51 +237,19 @@ def get_known_and_unknown_args(
     return args, unknown
 
 
-def default_compilation_settings() -> CompilerOptions:
-    """The options a compilation runs with when nobody has chosen otherwise.
-
-    This is what a library caller wants — the Python API, the schema
-    generator, a real-time analysis — and it exists so that asking for defaults
-    is a thing you can *say*. Previously the only way to obtain them was to
-    fabricate a command line, so library code called a CLI helper and got its
-    configuration from an argv that no user had typed. Defaults still come
-    from one place, the parser's own `default=` values; only the fiction is
-    gone.
-    """
-    return get_dicts_for_compilation(get_args())[0]
-
-
-def get_dicts_for_compilation(args: argparse.Namespace) -> tuple[CompilerOptions, GraphSettings]:
-    """Split parsed command-line arguments into the compiler's options and the drawing's settings.
-
-    The adapter at the CLI boundary, and the only function here that takes an
-    `argparse.Namespace`. Arguments are parsed once, converted here, and
-    passed onward as plain settings — nothing downstream of `main` sees a
-    Namespace, and no library signature grows an `args` parameter.
-
-    `args` is required on purpose. It used to default to a fresh parse of a
-    synthesised argv, which meant a caller holding the user's real arguments
-    could forget to pass them and silently compile with defaults instead —
-    which is what `main` did, so `--lang_version`, `--allow_raw_cwl`,
-    `--inference_disable`, `--partial_failure_enable`,
-    `--insert_steps_automatically` and every graph setting were discarded on
-    the way to the compiler. Callers that genuinely want defaults now say so
-    with `default_compilation_settings()`.
-    """
-    # core compiler options for transformation into CWL
-    compiler_options: CompilerOptions = {
-        'partial_failure_enable': args.partial_failure_enable,
-        'partial_failure_success_codes': (*args.partial_failure_success_codes,
-                                          *range(*args.partial_failure_success_codes_range)),
-        'inference_use_naming_conventions': args.inference_use_naming_conventions,
-        'inference_strict': args.inference_strict,
-        'insert_steps_automatically': args.insert_steps_automatically,
-        'inference_disable': args.inference_disable,
-        'allow_raw_cwl': args.allow_raw_cwl,
-        'lang_version': args.lang_version,
-        'inference_rules': {},
-        'renaming_conventions': list(SHIPPED_RENAMINGS),
-    }
+def settings_from_args(args: argparse.Namespace) -> tuple[CompileSettings, GraphSettings]:
+    """Split parsed command-line arguments into the compile's settings, with the shipped renamings, and the drawing's
+    settings: the one conversion from an `argparse.Namespace` to the values everything after `main` takes."""
+    settings = CompileSettings(
+        replace(CompileSettings().inference,
+                disabled=args.inference_disable,
+                use_naming_conventions=args.inference_use_naming_conventions,
+                insert_steps_automatically=args.insert_steps_automatically,
+                strict=args.inference_strict),
+        RunPolicy(args.partial_failure_enable,
+                  (*args.partial_failure_success_codes, *range(*args.partial_failure_success_codes_range))),
+        args.lang_version,
+        args.allow_raw_cwl)
 
     # for drawing.draw, after the compile
     graph_settings: GraphSettings = {
@@ -307,4 +260,4 @@ def get_dicts_for_compilation(args: argparse.Namespace) -> tuple[CompilerOptions
         'graph_show_outputs': args.graph_show_outputs,
         'graph_show_inputs': args.graph_show_inputs,
     }
-    return (compiler_options, graph_settings)
+    return (settings, graph_settings)

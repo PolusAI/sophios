@@ -2,7 +2,8 @@
 
 What a tag or key means is decided by `sophios.lang.parse`, not here.
 """
-from typing import ClassVar, Final, final
+from types import MappingProxyType
+from typing import ClassVar, Final, Mapping, final
 
 
 @final
@@ -20,8 +21,8 @@ class Tag:  # pylint: disable=too-few-public-methods  # a namespace, not a type
     INLINE_INPUT: Final = '!ii'
     RAW_CWL: Final = '!cwl'
 
-    #: Every tag, for membership tests. Assigned below, from the members
-    #: declared above, so adding or renaming one cannot leave it behind.
+    #: Every tag, for membership tests. Assigned below, from the pairing of
+    #: tags and keys, so adding or renaming one cannot leave it behind.
     ALL: ClassVar[frozenset[str]]
 
 
@@ -40,17 +41,9 @@ class Key:  # pylint: disable=too-few-public-methods  # a namespace, not a type
     ALL: ClassVar[frozenset[str]]
 
 
-def _declared_spellings(vocabulary: type) -> frozenset[str]:
-    """Every spelling declared on a vocabulary namespace.
+#: Each tag with its desugared key: one construct, two spellings.
+KEY_OF_TAG: Final[Mapping[str, str]] = MappingProxyType({
+    Tag.ANCHOR: Key.ANCHOR, Tag.ALIAS: Key.ALIAS, Tag.INLINE_INPUT: Key.INLINE_INPUT, Tag.RAW_CWL: Key.RAW_CWL})
 
-    Derived rather than restated. A hand-written membership set is one edit
-    away from being wrong, and the failure is quiet in the worst way: the
-    parser reads these sets to decide which tags it owns, so a tag missing
-    from `ALL` would be diagnosed as unknown.
-    """
-    return frozenset(value for name, value in vars(vocabulary).items()
-                     if name.isupper() and isinstance(value, str))
-
-
-Tag.ALL = _declared_spellings(Tag)
-Key.ALL = _declared_spellings(Key)
+Tag.ALL = frozenset(KEY_OF_TAG)
+Key.ALL = frozenset(KEY_OF_TAG.values())

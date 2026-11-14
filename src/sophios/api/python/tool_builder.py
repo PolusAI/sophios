@@ -13,15 +13,15 @@ Everything else is optional and chainable.
 
 # pylint: disable=too-many-lines
 
-from dataclasses import MISSING, dataclass, field, fields as dataclass_fields
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar
+import re
+from typing import TYPE_CHECKING, Any, Final, Self
 
 from cwl_utils.parser import cwl_v1_2 as _cwl
 from sophios.wic_types import Tools
 
-from ._tool_builder_step_bridge import _command_line_tool_to_step
-from ._tool_builder_namespaces import Field, Fields, Input, Inputs, Output, Outputs, cwl
+from ._tool_builder_namespaces import Field, Fields, Input, Inputs, Output, Outputs
 from ._tool_builder_specs import (
     CommandArgument,
     CommandLineBinding,
@@ -46,14 +46,14 @@ from ._tool_builder_specs import (
     SoftwareRequirement,
     ToolTimeLimit,
     WorkReuse,
+    _RequirementSpec,
+    cwl,
     secondary_file,
 )
 from ._tool_builder_support import (
     _validate_path,
-    _SUPPORT,
     _contains_expression,
     _merge_if_set,
-    _normalize_requirement,
     _render,
     _render_doc,
     _sanitize_raw_mapping,
@@ -68,8 +68,14 @@ from ...lang.cwl import CWL_VERSION
 if TYPE_CHECKING:
     from .workflow import Step
 
+#: The prefixes `namespace()` knows; a requirement class written with one declares it.
+_NAMESPACES: Final = {"cwltool": "http://commonwl.org/cwltool#", "edam": "https://edamontology.org/"}
+#: The ontologies `schema()` knows by name.
+_SCHEMAS: Final = {"edam": "https://raw.githubusercontent.com/edamontology/edamontology/master/EDAM_dev.owl"}
+_CLASS_NAME: Final = re.compile(r"[A-Za-z0-9_.-]+(?::[A-Za-z0-9_.-]+)?")
 
-@dataclass(slots=True, init=False)
+
+@dataclass(slots=True)
 # pylint: disable=too-many-instance-attributes,too-many-public-methods
 class CommandLineTool:
     """A CWL v1.2 `CommandLineTool`, built from Python objects.
@@ -93,89 +99,68 @@ class CommandLineTool:
     name: str
     inputs: Inputs
     outputs: Outputs
-    cwl_version: str = CWL_VERSION
-    label_text: str | None = None
-    doc_text: str | list[str] | None = None
-    _base_command: list[str] = field(default_factory=list)
-    _arguments: list[str | dict[str, Any]] = field(default_factory=list)
-    _requirements: dict[str, dict[str, Any]] = field(default_factory=dict)
-    _hints: dict[str, dict[str, Any]] = field(default_factory=dict)
-    _stdin: str | None = None
-    _stdout: str | None = None
-    _stderr: str | None = None
-    _intent: list[str] = field(default_factory=list)
-    _namespaces: dict[str, str] = field(default_factory=dict)
-    _schemas: list[str] = field(default_factory=list)
-    _success_codes: list[int] = field(default_factory=list)
-    _temporary_fail_codes: list[int] = field(default_factory=list)
-    _permanent_fail_codes: list[int] = field(default_factory=list)
-    _extra: dict[str, Any] = field(default_factory=dict)
-
-    _CONSTRUCTOR_FIELDS: ClassVar[frozenset[str]] = frozenset({"name", "inputs", "outputs", "cwl_version"})
-
-    def __init__(
-        self,
-        name: str,
-        inputs: Inputs,
-        outputs: Outputs,
-        *,
-        cwl_version: str = CWL_VERSION,
-    ) -> None:
-        for item in dataclass_fields(self):
-            if item.name in self._CONSTRUCTOR_FIELDS:
-                continue
-            setattr(self, item.name, item.default_factory() if item.default_factory is not MISSING else item.default)
-        self.name = name
-        self.inputs = inputs
-        self.outputs = outputs
-        self.cwl_version = cwl_version
-        self.__post_init__()
+    cwl_version: str = field(default=CWL_VERSION, kw_only=True)
+    label_text: str | None = field(default=None, init=False)
+    doc_text: str | list[str] | None = field(default=None, init=False)
+    _base_command: list[str] = field(default_factory=list, init=False)
+    #: The other fields a method sets outright, by their CWL names.
+    _fields: dict[str, Any] = field(default_factory=dict, init=False)
+    _intent: list[str] = field(default_factory=list, init=False)
+    _arguments: list[str | dict[str, Any]] = field(default_factory=list, init=False)
+    _requirements: dict[str, dict[str, Any]] = field(default_factory=dict, init=False)
+    _hints: dict[str, dict[str, Any]] = field(default_factory=dict, init=False)
+    _namespaces: dict[str, str] = field(default_factory=dict, init=False)
+    _schemas: list[str] = field(default_factory=list, init=False)
+    _extra: dict[str, Any] = field(default_factory=dict, init=False)
 
     def __post_init__(self) -> None:
-        match self.inputs:
-            case Inputs():
-                pass
-            case _:
-                raise TypeError("inputs must be an Inputs(...) collection")
-        match self.outputs:
-            case Outputs():
-                pass
-            case _:
-                raise TypeError("outputs must be an Outputs(...) collection")
+        if not isinstance(self.inputs, Inputs):
+            raise TypeError("inputs must be an Inputs(...) collection")
+        if not isinstance(self.outputs, Outputs):
+            raise TypeError("outputs must be an Outputs(...) collection")
 
-    def _store_requirement(
-        self,
-        bucket: dict[str, dict[str, Any]],
-        requirement: Any,
-        value: dict[str, Any] | None,
-    ) -> None:
-        class_name, payload = _normalize_requirement(requirement, value)
-        if ":" in class_name:
-            prefix, _ = class_name.split(":", 1)
-            if prefix in _SUPPORT.known_namespaces and prefix not in self._namespaces:
-                self._namespaces[prefix] = _SUPPORT.known_namespaces[prefix]
-        bucket[class_name] = payload
+    def _set(self, **fields: Any) -> Self:
+        """Keep fields of the document. `None` clears one, so the tool equals one that never set it.
 
-    def _apply_spec(self, spec: Any, *, as_hint: bool) -> "CommandLineTool":
-        self._store_requirement(self._hints if as_hint else self._requirements, spec, None)
+        The mapping is replaced, not changed, so a `copy.copy()` of the tool keeps the fields it had.
+        """
+        fields = self._fields | fields
+        self._fields = {name: kept for name, kept in fields.items() if kept is not None}
         return self
 
-    def _append_requirement_entry(
-        self,
-        class_name: str,
-        list_key: str,
-        item: Any,
-        *,
-        as_hint: bool = False,
-    ) -> "CommandLineTool":
-        target = self._hints if as_hint else self._requirements
-        payload = target.setdefault(class_name, {list_key: []})
-        listing = payload.setdefault(list_key, [])
-        match listing:
-            case list() as items:
-                items.append(_render(item))
+    def _require(self, requirement: Any, value: dict[str, Any] | None = None, *, as_hint: bool = False) -> Self:
+        """Store a requirement or hint under its class name, declaring a known namespace prefix it uses."""
+        match requirement:
+            case str() as class_name:
+                payload = None
+            case _RequirementSpec():
+                class_name, payload = requirement.class_name, requirement.to_fields()
+            case dict():
+                _warn_raw_escape_hatch("requirement()/hint()")
+                payload = _sanitize_raw_mapping(requirement, context="raw requirement mapping", allow_class_key=True)
+                if "class" not in payload:
+                    raise ValueError("raw requirement dicts must include a 'class' key")
+                class_name = str(payload.pop("class"))
             case _:
-                raise TypeError(f"{class_name} {list_key} must be a list")
+                raise TypeError("requirement must be a class name, requirement spec, or raw dict")
+        if _CLASS_NAME.fullmatch(class_name) is None:
+            raise ValueError(f"invalid requirement class name {class_name!r}")
+        if payload is None:
+            # The payload given with a class name is checked once the name is.
+            payload = {} if value is None else _sanitize_raw_mapping(value, context=f"payload for {class_name}")
+        prefix, colon, _ = class_name.partition(":")
+        if colon and prefix in _NAMESPACES:
+            self._namespaces.setdefault(prefix, _NAMESPACES[prefix])
+        (self._hints if as_hint else self._requirements)[class_name] = payload
+        return self
+
+    def _append_requirement_entry(self, class_name: str, list_key: str, item: Any, as_hint: bool) -> Self:
+        entry = _render(item)  # before the tool changes: an entry that cannot be rendered leaves no requirement
+        payload = (self._hints if as_hint else self._requirements).setdefault(class_name, {})
+        listing = payload.setdefault(list_key, [])
+        if not isinstance(listing, list):
+            raise TypeError(f"{class_name} {list_key} must be a list")
+        listing.append(entry)
         return self
 
     def describe(
@@ -194,9 +179,9 @@ class CommandLineTool:
             CommandLineTool: This tool, for chaining.
         """
         if label is not None:
-            self.label_text = label
+            self.label(label)
         if doc is not None:
-            self.doc_text = doc
+            self.doc(doc)
         return self
 
     def label(self, text: str) -> "CommandLineTool":
@@ -236,7 +221,7 @@ class CommandLineTool:
         Raises:
             ValueError: If `iri` is not given and `prefix` is not a known prefix.
         """
-        namespace_iri = iri if iri is not None else _SUPPORT.known_namespaces.get(prefix)
+        namespace_iri = iri if iri is not None else _NAMESPACES.get(prefix)
         if namespace_iri is None:
             raise ValueError(
                 f"Unknown namespace prefix {prefix!r}; please provide an explicit iri"
@@ -254,7 +239,7 @@ class CommandLineTool:
         Returns:
             CommandLineTool: This tool, for chaining.
         """
-        schema_iri = _SUPPORT.known_schemas.get(iri, iri)
+        schema_iri = _SCHEMAS.get(iri, iri)
         if schema_iri not in self._schemas:
             self._schemas.append(schema_iri)
         return self
@@ -304,8 +289,7 @@ class CommandLineTool:
         Returns:
             CommandLineTool: This tool, for chaining.
         """
-        self._stdin = value
-        return self
+        return self._set(stdin=value)
 
     def stdout(self, value: str) -> "CommandLineTool":
         """Set `stdout`, the file the tool's standard output is written to.
@@ -319,8 +303,7 @@ class CommandLineTool:
         Returns:
             CommandLineTool: This tool, for chaining.
         """
-        self._stdout = value
-        return self
+        return self._set(stdout=value)
 
     def stderr(self, value: str) -> "CommandLineTool":
         """Set `stderr`, the file the tool's standard error is written to.
@@ -334,8 +317,7 @@ class CommandLineTool:
         Returns:
             CommandLineTool: This tool, for chaining.
         """
-        self._stderr = value
-        return self
+        return self._set(stderr=value)
 
     def add_argument(
         self,
@@ -416,8 +398,7 @@ class CommandLineTool:
             TypeError: If `requirement` is none of these.
             ValueError: If the class name is malformed, or a raw mapping has no `class`.
         """
-        self._store_requirement(self._requirements, requirement, value)
-        return self
+        return self._require(requirement, value)
 
     def hint(self, requirement: Any, value: dict[str, Any] | None = None) -> "CommandLineTool":
         """Add an entry to `hints`, which the runner may use or ignore.
@@ -433,8 +414,7 @@ class CommandLineTool:
         Returns:
             CommandLineTool: This tool, for chaining.
         """
-        self._store_requirement(self._hints, requirement, value)
-        return self
+        return self._require(requirement, value, as_hint=True)
 
     def docker(
         self,
@@ -462,7 +442,7 @@ class CommandLineTool:
         Returns:
             CommandLineTool: This tool, for chaining.
         """
-        return self._apply_spec(
+        return self._require(
             DockerRequirement(
                 docker_pull=kwargs.pop("docker_pull", None) or image,
                 extra=dict(kwargs.pop("extra", {}) or {}),
@@ -491,7 +471,7 @@ class CommandLineTool:
         Returns:
             CommandLineTool: This tool, for chaining.
         """
-        return self._apply_spec(
+        return self._require(
             InlineJavascriptRequirement(list(expression_lib) or None, extra=dict(extra or {})),
             as_hint=as_hint,
         )
@@ -513,7 +493,7 @@ class CommandLineTool:
         Returns:
             CommandLineTool: This tool, for chaining.
         """
-        return self._apply_spec(
+        return self._require(
             SchemaDefRequirement(list(types), extra=dict(extra or {})),
             as_hint=as_hint,
         )
@@ -535,7 +515,7 @@ class CommandLineTool:
         Returns:
             CommandLineTool: This tool, for chaining.
         """
-        return self._apply_spec(LoadListingRequirement(value, extra=dict(extra or {})), as_hint=as_hint)
+        return self._require(LoadListingRequirement(value, extra=dict(extra or {})), as_hint=as_hint)
 
     def shell_command(
         self,
@@ -555,7 +535,7 @@ class CommandLineTool:
         Returns:
             CommandLineTool: This tool, for chaining.
         """
-        return self._apply_spec(ShellCommandRequirement(extra=dict(extra or {})), as_hint=as_hint)
+        return self._require(ShellCommandRequirement(extra=dict(extra or {})), as_hint=as_hint)
 
     def software(
         self,
@@ -575,7 +555,7 @@ class CommandLineTool:
         Returns:
             CommandLineTool: This tool, for chaining.
         """
-        return self._apply_spec(SoftwareRequirement(packages, extra=dict(extra or {})), as_hint=as_hint)
+        return self._require(SoftwareRequirement(packages, extra=dict(extra or {})), as_hint=as_hint)
 
     def initial_workdir(
         self,
@@ -598,7 +578,7 @@ class CommandLineTool:
         Returns:
             CommandLineTool: This tool, for chaining.
         """
-        return self._apply_spec(InitialWorkDirRequirement(listing, extra=dict(extra or {})), as_hint=as_hint)
+        return self._require(InitialWorkDirRequirement(listing, extra=dict(extra or {})), as_hint=as_hint)
 
     # This helper deliberately bundles the common staging knobs into one call.
     # The slightly wider signature is easier to use than forcing nested objects.
@@ -632,17 +612,8 @@ class CommandLineTool:
             TypeError: If `reference` is not a named input, or the listing set by
                 `initial_workdir()` is an expression rather than a list.
         """
-        return self._append_requirement_entry(
-            "InitialWorkDirRequirement",
-            "listing",
-            Dirent.from_input(
-                reference,
-                writable=writable,
-                entryname=entryname,
-                extra=extra,
-            ).to_dict(),
-            as_hint=as_hint,
-        )
+        entry = Dirent.from_input(reference, writable=writable, entryname=entryname, extra=extra)
+        return self._append_requirement_entry("InitialWorkDirRequirement", "listing", entry, as_hint)
 
     def env_var(self, name: str, value: str, *, as_hint: bool = False) -> "CommandLineTool":
         """Set one environment variable for the tool: an `EnvVarRequirement` `envDef` entry.
@@ -655,12 +626,7 @@ class CommandLineTool:
         Returns:
             CommandLineTool: This tool, for chaining.
         """
-        return self._append_requirement_entry(
-            "EnvVarRequirement",
-            "envDef",
-            EnvironmentDef(name, value).to_dict(),
-            as_hint=as_hint,
-        )
+        return self._append_requirement_entry("EnvVarRequirement", "envDef", EnvironmentDef(name, value), as_hint)
 
     def resources(
         self,
@@ -689,25 +655,11 @@ class CommandLineTool:
         Returns:
             CommandLineTool: This tool, for chaining.
         """
-        cores_min = kwargs.pop("cores_min", None)
-        cores = kwargs.pop("cores", None)
-        ram_min = kwargs.pop("ram_min", None)
-        ram = kwargs.pop("ram", None)
-        tmpdir_min = kwargs.pop("tmpdir_min", None)
-        tmpdir = kwargs.pop("tmpdir", None)
-        outdir_min = kwargs.pop("outdir_min", None)
-        outdir = kwargs.pop("outdir", None)
-        aliases = {
-            "cores_min": cores if cores_min is None else cores_min,
-            "ram_min": ram if ram_min is None else ram_min,
-            "tmpdir_min": tmpdir if tmpdir_min is None else tmpdir_min,
-            "outdir_min": outdir if outdir_min is None else outdir_min,
-        }
-        aliases.update(kwargs)
-        return self._apply_spec(
-            ResourceRequirement(extra=dict(extra or {}), **aliases),
-            as_hint=as_hint,
-        )
+        for short in ("cores", "ram", "tmpdir", "outdir"):
+            value = kwargs.pop(short, None)
+            if kwargs.get(f"{short}_min") is None:
+                kwargs[f"{short}_min"] = value
+        return self._require(ResourceRequirement(extra=dict(extra or {}), **kwargs), as_hint=as_hint)
 
     # GPU hints naturally need a few related knobs, so this stays slightly wide.
     def gpu(  # pylint: disable=too-many-arguments
@@ -739,9 +691,7 @@ class CommandLineTool:
         _merge_if_set(payload, "cudaComputeCapability", compute_capability)
         _merge_if_set(payload, "cudaDeviceCountMin", device_count_min)
         payload.update(_render(extra or {}))
-        if as_hint:
-            return self.hint("cwltool:CUDARequirement", payload)
-        return self.requirement("cwltool:CUDARequirement", payload)
+        return self._require("cwltool:CUDARequirement", payload, as_hint=as_hint)
 
     def work_reuse(
         self,
@@ -761,7 +711,7 @@ class CommandLineTool:
         Returns:
             CommandLineTool: This tool, for chaining.
         """
-        return self._apply_spec(WorkReuse(enable, extra=dict(extra or {})), as_hint=as_hint)
+        return self._require(WorkReuse(enable, extra=dict(extra or {})), as_hint=as_hint)
 
     def network_access(
         self,
@@ -782,7 +732,7 @@ class CommandLineTool:
         Returns:
             CommandLineTool: This tool, for chaining.
         """
-        return self._apply_spec(NetworkAccess(enable, extra=dict(extra or {})), as_hint=as_hint)
+        return self._require(NetworkAccess(enable, extra=dict(extra or {})), as_hint=as_hint)
 
     def inplace_update(
         self,
@@ -804,7 +754,7 @@ class CommandLineTool:
         Returns:
             CommandLineTool: This tool, for chaining.
         """
-        return self._apply_spec(
+        return self._require(
             InplaceUpdateRequirement(enable, extra=dict(extra or {})),
             as_hint=as_hint,
         )
@@ -827,7 +777,7 @@ class CommandLineTool:
         Returns:
             CommandLineTool: This tool, for chaining.
         """
-        return self._apply_spec(ToolTimeLimit(seconds, extra=dict(extra or {})), as_hint=as_hint)
+        return self._require(ToolTimeLimit(seconds, extra=dict(extra or {})), as_hint=as_hint)
 
     def success_codes(self, *codes: int) -> "CommandLineTool":
         """Set `successCodes`, the exit codes that mean the tool succeeded.
@@ -840,8 +790,7 @@ class CommandLineTool:
         Returns:
             CommandLineTool: This tool, for chaining.
         """
-        self._success_codes = list(codes)
-        return self
+        return self._set(successCodes=list(codes) or None)
 
     def temporary_fail_codes(self, *codes: int) -> "CommandLineTool":
         """Set `temporaryFailCodes`, the exit codes that mean a run may succeed if retried.
@@ -852,8 +801,7 @@ class CommandLineTool:
         Returns:
             CommandLineTool: This tool, for chaining.
         """
-        self._temporary_fail_codes = list(codes)
-        return self
+        return self._set(temporaryFailCodes=list(codes) or None)
 
     def permanent_fail_codes(self, *codes: int) -> "CommandLineTool":
         """Set `permanentFailCodes`, the exit codes that mean a retry will fail too.
@@ -864,8 +812,7 @@ class CommandLineTool:
         Returns:
             CommandLineTool: This tool, for chaining.
         """
-        self._permanent_fail_codes = list(codes)
-        return self
+        return self._set(permanentFailCodes=list(codes) or None)
 
     def extra(self, **values: Any) -> "CommandLineTool":
         """Write further top-level fields of the document, as given.
@@ -884,13 +831,11 @@ class CommandLineTool:
                 `$namespaces`, ...), `class`, or another `$`-prefixed key.
         """
         _warn_raw_escape_hatch("extra()")
-        self._extra.update(
-            _sanitize_raw_mapping(
-                values,
-                context="extra()",
-                reserved_keys=set(_SUPPORT.reserved_document_keys),
-            )
-        )
+        fields = _sanitize_raw_mapping(values, context="extra()")
+        managed = sorted(fields.keys() & _cwl.CommandLineTool.attrs)
+        if managed:
+            raise ValueError(f"extra() cannot override builder-managed keys: {', '.join(managed)}")
+        self._extra.update(fields)
         return self
 
     def to_step(
@@ -914,10 +859,13 @@ class CommandLineTool:
         Returns:
             Step: A workflow step backed by this tool's document.
         """
-        return _command_line_tool_to_step(
-            self,
-            step_name=step_name,
-            run_path=run_path,
+        from .workflow import Step  # pylint: disable=import-outside-toplevel
+
+        name = step_name or self.name
+        return Step.from_cwl_document(
+            self.to_cwl_document(),
+            process_name=name,
+            run_path=run_path or f"{name}.cwl",
             step_inputs=step_inputs,
             tool_registry=tool_registry,
         )
@@ -934,41 +882,30 @@ class CommandLineTool:
         """
         requirements = [{"class": name, **payload} for name, payload in self._requirements.items()]
         hints = [{"class": name, **payload} for name, payload in self._hints.items()]
-        base_command = (
-            self._base_command[0] if len(self._base_command) == 1 else list(self._base_command)
-        ) if self._base_command else None
-        clt = _cwl.CommandLineTool(
+        parts = self._base_command
+        document: dict[str, Any] = _cwl.CommandLineTool(
             id=self.name,
             cwlVersion=self.cwl_version,
             inputs=self.inputs.to_dict(),
             outputs=self.outputs.to_dict(),
-            label=self.label_text,
-            doc=_render_doc(self.doc_text),
-            intent=list(self._intent) or None,
-            baseCommand=base_command,
-            arguments=list(self._arguments) or None,
             requirements=requirements or None,
             hints=hints or None,
-            stdin=self._stdin,
-            stdout=self._stdout,
-            stderr=self._stderr,
-            successCodes=list(self._success_codes) or None,
-            temporaryFailCodes=list(self._temporary_fail_codes) or None,
-            permanentFailCodes=list(self._permanent_fail_codes) or None,
-        )
-        document: dict[str, Any] = clt.save(top=True, relative_uris=False)
+            label=self.label_text,
+            doc=_render_doc(self.doc_text),
+            baseCommand=parts[0] if len(parts) == 1 else parts or None,
+            intent=self._intent or None,
+            arguments=self._arguments or None,
+            **self._fields,
+        ).save(top=True, relative_uris=False)
         if self._namespaces:
             document["$namespaces"] = dict(self._namespaces)
         if self._schemas:
             document["$schemas"] = list(self._schemas)
         document.update(_render(self._extra))
         if _contains_expression(document):
+            # `requirements` is written even when it stays empty because a hint declares the requirement.
             requirements = document.setdefault("requirements", [])
-            has_inline_js = any(
-                item.get("class") == "InlineJavascriptRequirement"
-                for item in [*requirements, *document.get("hints", [])]
-            )
-            if not has_inline_js:
+            if all(item["class"] != "InlineJavascriptRequirement" for item in requirements + hints):
                 requirements.append({"class": "InlineJavascriptRequirement"})
         return document
 

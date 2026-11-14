@@ -11,15 +11,14 @@ collection is re-spelled rather than handed raw to the dumper.
 """
 from dataclasses import dataclass
 from datetime import date, datetime
-from typing import Any, Final, Literal, final
+from typing import Any, get_args
 
 import yaml
 
-from ..utils_yaml import Key, Tag
+from ..utils_yaml import KEY_OF_TAG, Key, Tag
 from .nodes import (
     CwlRecord,
     Document,
-    EdgeDef,
     EdgeRef,
     InlineLiteral,
     InputValue,
@@ -31,17 +30,6 @@ from .nodes import (
     WicSidecar,
 )
 from .parser import SIDECAR_WRAPPER_KEY
-
-
-@final
-class _Emit:  # pylint: disable=too-few-public-methods  # a namespace, not a type
-    """Everything the emitter needs to decide how to write a value."""
-
-    #: Every tag the tagged spelling emits.
-    WIC_TAGS: Final = Tag.ALL
-
-    #: What YAML resolves a plain scalar to when it reads it as text.
-    STR_TAG: Final = 'tag:yaml.org,2002:str'
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,12 +54,11 @@ class _Tagged:
 class _Writer:
     """Turns an AST into plain data, in one of the two surface spellings.
 
-    `mode='tagged'` is what people write and what `render` emits;
-    `mode='json'` is the desugared, JSON-serialisable projection `to_json`
-    returns.
+    Tagged is what people write and what `render` emits; otherwise it is the
+    desugared, JSON-serialisable projection `to_json` returns.
     """
 
-    mode: Literal['tagged', 'json']
+    tagged: bool
 
     def document(self, document: Document) -> dict[str, Any]:
         """Key order follows the .wic reference: `wic:`, then `steps:`, then the rest."""
@@ -110,14 +97,14 @@ class _Writer:
         return out
 
     def output(self, binding: OutputBinding) -> Any:
-        """One `out:` entry: a bare name, or a name bound to an edge."""
+        """One `out:` entry: a bare name, or a name bound to an edge, defined only here (.wic reference §3.6)."""
         if binding.edge_def is None:
             return binding.name
-        return {binding.name: self.edge_def(binding.edge_def)}
+        return {binding.name: self.construct(Tag.ANCHOR, binding.edge_def.name)}
 
-    def edge_def(self, edge: EdgeDef) -> Any:
-        """Spell an `!&` edge definition — legal only on an `out:` entry (.wic reference §3.6)."""
-        return _Tagged(Tag.ANCHOR, edge.name) if self.mode == 'tagged' else {Key.ANCHOR: edge.name}
+    def construct(self, tag: str, payload: Any) -> Any:
+        """Spell one construct: `!tag payload`, or `{key: payload}` desugared."""
+        return _Tagged(tag, payload) if self.tagged else {KEY_OF_TAG[tag]: payload}
 
     def sidecar(self, sidecar: WicSidecar) -> Any:
         """A `wic:` block, restoring its `(index, name)` step keys.
@@ -138,9 +125,9 @@ class _Writer:
             case InlineLiteral():
                 return self._literal(value)
             case EdgeRef(name=name):
-                return _Tagged(Tag.ALIAS, name) if self.mode == 'tagged' else {Key.ALIAS: name}
+                return self.construct(Tag.ALIAS, name)
             case RawCwlRef(expression=expression):
-                return _Tagged(Tag.RAW_CWL, expression) if self.mode == 'tagged' else {Key.RAW_CWL: expression}
+                return self.construct(Tag.RAW_CWL, expression)
             case UnresolvedName(name=name):
                 return name
             case CwlRecord(sources=sources, fields=fields):
@@ -151,24 +138,18 @@ class _Writer:
                     body['source'] = spelled[0] if len(spelled) == 1 and 'linkMerge' not in dict(fields) \
                         else spelled
                 body.update({key: self.plain(value) for key, value in fields})
-                return _Tagged(Tag.RAW_CWL, body) if self.mode == 'tagged' else {Key.RAW_CWL: body}
+                return self.construct(Tag.RAW_CWL, body)
 
     def _literal(self, literal: InlineLiteral) -> Any:
         """Spell an `!ii` literal: transcribed from source text when parsed, else serialised."""
-        if self.mode != 'tagged':
-            return {Key.INLINE_INPUT: self.plain(literal.value)}
-
-        if literal.text is not None:
+        if self.tagged and literal.text is not None:
             return _Tagged(Tag.INLINE_INPUT, literal.text)
-
-        if isinstance(literal.value, (list, dict)):
-            return _Tagged(Tag.INLINE_INPUT, self.plain(literal.value))
-
-        if isinstance(literal.value, (InlineLiteral, EdgeRef, RawCwlRef, UnresolvedName, CwlRecord)):
+        if not self.tagged or isinstance(literal.value, (list, dict)):
+            return self.construct(Tag.INLINE_INPUT, self.plain(literal.value))
+        if isinstance(literal.value, get_args(InputValue)):
             # A construct as the direct payload has no tagged spelling — two
             # tags cannot share a node — so the desugared form carries it.
             return {Key.INLINE_INPUT: self.plain(literal.value)}
-
         return _spell_scalar(literal.value)
 
     def plain(self, value: OpaqueCwl) -> Any:
@@ -180,7 +161,7 @@ class _Writer:
                 return {k: self.plain(v) for k, v in value.items()}
             case list():
                 return [self.plain(v) for v in value]
-            case datetime() | date() if self.mode == 'json':
+            case datetime() | date() if not self.tagged:
                 return value.isoformat()  # JSON has no date type
             case None | bool() | int() | float() | str() | date() | datetime():
                 return value
@@ -201,7 +182,7 @@ def _spell_scalar(value: Any) -> _Tagged:
     """
     if isinstance(value, str):
         resolved = yaml.resolver.Resolver().resolve(yaml.nodes.ScalarNode, value, (True, False))
-        return _Tagged(Tag.INLINE_INPUT, value, quoted=resolved != _Emit.STR_TAG)
+        return _Tagged(Tag.INLINE_INPUT, value, quoted=resolved != 'tag:yaml.org,2002:str')
     return _Tagged(Tag.INLINE_INPUT, yaml.safe_dump(value, default_flow_style=True).partition('\n')[0].strip())
 
 
@@ -238,7 +219,7 @@ class _WicDumper(yaml.SafeDumper):
         an explicit tag would otherwise force quotes on every value.
         """
         event = self.event
-        if isinstance(event, yaml.events.ScalarEvent) and event.tag in _Emit.WIC_TAGS and event.style == '':
+        if isinstance(event, yaml.events.ScalarEvent) and event.tag in Tag.ALL and event.style == '':
             if self.analysis is None:
                 self.analysis = self.analyze_scalar(event.value)
             if self.analysis.allow_block_plain:
@@ -256,7 +237,7 @@ _WicDumper.add_representer(_Tagged, _represent_tagged)
 
 def render(document: Document) -> str:
     """Render a document to `.wic` source text, in the tagged spelling."""
-    body = _Writer('tagged').document(document)
+    body = _Writer(tagged=True).document(document)
     if not body:
         return ''
     return yaml.dump(body, Dumper=_WicDumper, sort_keys=False, default_flow_style=False, width=10_000)
@@ -268,4 +249,4 @@ def to_json(document: Document) -> dict[str, Any]:
     This is what a consumer without YAML tags sees, and what the exported
     JSON Schema describes. `json.dumps` of the result always succeeds.
     """
-    return _Writer('json').document(document)
+    return _Writer(tagged=False).document(document)

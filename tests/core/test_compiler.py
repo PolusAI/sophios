@@ -3,22 +3,21 @@ expected.yaml states (every platform) and runs under cwltool to the outputs it s
 tests/core/data/compiler compiles, or is refused, as its expected.yaml states."""
 import contextlib
 import io
+from dataclasses import replace
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import pytest
 import yaml
 
-from sophios.cli import default_compilation_settings
-from sophios.compiler import compile_source, cwl_notes, resolved_view
+from sophios.compiler import CompileSettings, compile_source, cwl_notes, resolved_view
 from sophios.input_output import write_artifacts_to_disk
 from sophios.ir.frontdoor import bundle_from_disk
 from sophios.ir.resolved import NotLowered
 from sophios.lang.diagnostics import SophiosError
 from sophios.runtime_inputs import output_target_inputs
-from sophios.utils_cwl import desugar_into_canonical_normal_form
 from sophios.utils_nf import NEXTFLOW
-from sophios.wic_types import CompilerOptions, StepId, Tool, Tools, Yaml
+from sophios.wic_types import StepId, Tool, Tools, Yaml
 
 from .cases import DATA, diagnostic, match
 from .helpers import cwltool_outputs, example_workflow, examples, files_beside, observed, stated
@@ -64,10 +63,11 @@ def test_an_example_runs_under_cwltool_as_stated(folder: Path, tmp_path: Path,
 
 def _tools(directory: Path) -> Tools:
     """The synthetic tools, each tool beside the example under its stem, and each in a folder beside it under that
-    folder's name as its namespace, desugared as discovery desugars them."""
+    folder's name as its namespace, read from its file as discovery reads it."""
     return {**SYNTHETIC_TOOLS, **{
         StepId(path.stem, SYNTHETIC_NS if path.parent == directory else path.parent.name): Tool(
-            str(path), desugar_into_canonical_normal_form(yaml.safe_load(path.read_text(encoding='utf-8'))))
+            str(path), yaml.safe_load(path.read_text(encoding='utf-8')),
+            from_file=True)
         for path in [*directory.glob('*.cwl'), *directory.glob('*/*.cwl')]}}
 
 
@@ -83,7 +83,7 @@ def _compiled_as_stated(folder: Path, root: str, expected: Yaml, out: Path,
     what it writes goes into `out`."""
     others = {'global': {path.stem: path for path in folder.glob('*.wic') if path.name != root}}
     bundled = bundle_from_disk(folder / root, others, _tools(folder))
-    options = cast(CompilerOptions, {**default_compilation_settings(), **expected.get('options', {})})
+    options = replace(CompileSettings(), **expected.get('options', {}))
     if 'refused' in expected:
         with pytest.raises(SophiosError) as caught:
             compile_source(bundled, options, quiet=True)

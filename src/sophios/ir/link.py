@@ -1,5 +1,6 @@
 """Pure composition and reference linking over workflow graphs."""
-from dataclasses import dataclass, replace
+from collections.abc import Iterator
+from dataclasses import replace
 from typing import Any
 
 from ..lang import CwlRecord, SophiosErrorCode
@@ -8,166 +9,123 @@ from ..lang.diagnostics import Diagnostics, Locator
 from .declarations import boundary_declaration, delivered, input_rank, layered, output_rank
 from .names import Names
 from .types import (
+    Binding,
+    DeferredObligation,
     DerivedName,
     Edge,
     EdgeOrigin,
     Namespace,
+    PhaseResult,
     Port,
     WorkflowPort,
     PortId,
-    SourceList,
     StepId,
     StepNode,
     WorkflowGraph,
+    resolved_items,
 )
 
 
-@dataclass(frozen=True, slots=True)
-class Linked:
-    """A linked graph when successful and every diagnostic either way."""
-
-    graph: WorkflowGraph | None
-    diagnostics: Diagnostics
-
-    @property
-    def ok(self) -> bool:
-        """Whether Link produced a graph with no errors."""
-        return self.graph is not None and not self.diagnostics.has_errors
-
-
-def link(graph: WorkflowGraph) -> Linked:
+def link(graph: WorkflowGraph) -> PhaseResult:
     """Compose ``graph`` and discharge every obligation it can prove."""
     diagnostics = Diagnostics()
-    attached = _attach_children(graph)
-    attached = _attach_children(_normalize_explicit_edges(attached, attached, diagnostics))
-    _check_workflow_inputs(attached, diagnostics)
-    definitions = _definitions(attached)
-    unjudged = _merging_sinks(attached)
-    merges = _merges_by_sink(attached)
+    merging = _merging(graph)
+    graph = _normalize_explicit_edges(graph, graph, merging, diagnostics)
+    _check_workflow_inputs(graph, merging, diagnostics)
+    definitions = _definitions(graph)
     edges: list[Edge] = []
-    discharged: list[PortId] = []
 
-    for obligation in attached.obligations:
+    for obligation in graph.obligations:
         source = definitions.get(obligation.name)
         if source is None:
             diagnostics.error(
                 SophiosErrorCode.UNDEFINED_EDGE,
                 f"'!* {obligation.name}' names an edge nothing in the composed workflow defines.",
-                obligation.span, _locator(attached, obligation.sink),
+                obligation.span, _locator(graph, obligation.sink),
             )
             continue
-        if _position(attached, source.step) >= _position(attached, obligation.sink.step):
+        if _position(graph, source.step) >= _position(graph, obligation.sink.step):
             # .wic reference §4: a call does not exempt a document from resolving
             # against definitions seen so far, or splitting it would legalize the error.
             diagnostics.error(
                 SophiosErrorCode.UNDEFINED_EDGE,
                 f"'!* {obligation.name}' is defined after the step that consumes it. "
                 'An edge reference resolves against the definitions before it.',
-                obligation.span, _locator(attached, obligation.sink),
+                obligation.span, _locator(graph, obligation.sink),
             )
             continue
-        for sink in _concrete_input_sinks(attached, obligation.sink):
+        record = merging.get(obligation.sink)
+        for sink in _concrete_input_sinks(graph, obligation.sink):
             edge = Edge(source, sink, obligation.span)
-            record = merges.get(obligation.sink)
-            if (obligation.sink not in unjudged or record is not None) \
-                    and _relation(attached, edge, record) is TypeRelation.DISJOINT:
-                produced, consumed = _compared_types(attached, edge, record)
-                diagnostics.error(
-                    SophiosErrorCode.INCOMPATIBLE_INPUT_REFERENCE,
-                    f"edge '{obligation.name}' is provably disjoint: "
-                    f'{produced!r} cannot feed {consumed!r}.',
-                    obligation.span, _locator(attached, sink),
-                )
-                continue
-            edges.append(edge)
-        discharged.append(obligation.sink)
+            if (record is None and obligation.sink in merging) \
+                    or not _reject_if_disjoint(graph, edge, diagnostics, record):
+                edges.append(edge)
 
-    edges.extend(_judged_call_edges(attached, unjudged, diagnostics))
-    unique_edges = tuple(dict.fromkeys(edges))
-    linked = _place_edges(attached, unique_edges, tuple(discharged))
-    linked = _expose_cross_scope_inputs(linked, unique_edges)
-    linked = _redirect_output_mappings(linked)
-    return Linked(linked if not diagnostics.has_errors else None, diagnostics)
+    # A call edge into a merging record is not judged.
+    edges += [edge for sink, edge in _call_edges(graph)
+              if sink in merging or not _reject_if_disjoint(graph, edge, diagnostics)]
+    linked = _placed(graph, tuple(dict.fromkeys(edges)))
+    return PhaseResult(linked if not diagnostics.has_errors else None, diagnostics)
 
 
 def _normalize_explicit_edges(graph: WorkflowGraph, universe: WorkflowGraph,
-                              diagnostics: Diagnostics) -> WorkflowGraph:
-    """Move wrapper sources to producers and judge every authored local edge."""
+                              merging: dict[PortId, CwlRecord | None], diagnostics: Diagnostics) -> WorkflowGraph:
+    """Move wrapper sources to producers and judge every authored local edge, as `merging` says its input
+    is judged."""
+    def moved(binding: Binding, item: Edge | DeferredObligation | None) -> Edge | DeferredObligation | None:
+        if not isinstance(item, Edge):
+            return item
+        # `universe` resolves the alias to its concrete producer, but the
+        # judgment stays scoped to `graph` so ancestor scatter layers
+        # outside this local edge's scope are not double-counted.
+        edge = replace(item, source=_concrete_output(universe, item.source))
+        record = merging.get(binding.sink)
+        if record is not None or binding.sink not in merging:
+            _reject_if_disjoint(graph, edge, diagnostics, record)
+        return edge
+
     steps: list[StepNode] = []
     for step in graph.steps:
         bindings = []
         for binding in step.bindings:
-            record = _merge_without_value_from(binding.value)
-            judged = record is not None or not _merges(binding.value)
             resolution = binding.resolution
-            if isinstance(resolution, Edge):
-                resolution = _normalized(resolution, graph, universe, diagnostics, judged=judged, record=record)
-            elif isinstance(resolution, SourceList):
-                resolution = replace(resolution, items=tuple(
-                    _normalized(item, graph, universe, diagnostics, judged=judged, record=record)
-                    if isinstance(item, Edge) else item for item in resolution.items))
+            if isinstance(resolution, tuple):
+                resolution = tuple(moved(binding, item) for item in resolution)
+            else:
+                resolution = moved(binding, resolution)
             bindings.append(replace(binding, resolution=resolution))
         steps.append(replace(step, bindings=tuple(bindings)))
-    children = tuple(_normalize_explicit_edges(child, universe, diagnostics)
+    children = tuple(_normalize_explicit_edges(child, universe, merging, diagnostics)
                      for child in graph.children)
     return replace(graph, steps=tuple(steps), children=children)
 
 
-def _normalized(edge: Edge, graph: WorkflowGraph, universe: WorkflowGraph,
-                diagnostics: Diagnostics, *, judged: bool, record: CwlRecord | None) -> Edge:
-    """`edge` from its concrete producer, judged unless its sink is rewritten by a `valueFrom`;
-    a `record` that merges or picks is judged by what it delivers."""
-    edge = replace(edge, source=_concrete_output(universe, edge.source))
-    # `universe` resolves the alias to its concrete producer, but the
-    # judgment stays scoped to `graph` so ancestor scatter layers
-    # outside this local edge's scope are not double-counted.
-    if judged:
-        _reject_if_disjoint(graph, edge, diagnostics, record)
-    return edge
-
-
-def _merges(value: object) -> bool:
-    """Whether a binding is a record whose input is not its one source's value as it is.
+def _merging(graph: WorkflowGraph) -> dict[PortId, CwlRecord | None]:
+    """Every input in `graph`'s tree bound by a record whose input is not its one source's value as it is.
 
     CWL types such an input from the merge, pick or `valueFrom` that makes it,
-    so no source of it is judged against the input's own type.
+    so no source of it is judged against the input's own type. A record that
+    merges or picks and leaves the result as it is delivers a type of its own,
+    which its sources are judged by: the input is held with its record. A
+    `valueFrom` computes the input, so nothing is judged: it is held with None.
     """
-    return isinstance(value, CwlRecord) and not value.delivers_its_source
+    return {binding.sink: None if 'valueFrom' in dict(binding.value.fields) else binding.value
+            for step in graph.all_steps for binding in step.bindings
+            if isinstance(binding.value, CwlRecord) and not binding.value.delivers_its_source}
 
 
-def _merge_without_value_from(value: object) -> CwlRecord | None:
-    """`value` when it is a record that merges or picks and leaves the result as it is:
-    what it delivers has a type of its own, so its sources are judged by that."""
-    if isinstance(value, CwlRecord) and _merges(value) and 'valueFrom' not in dict(value.fields):
-        return value
-    return None
-
-
-def _merges_by_sink(graph: WorkflowGraph) -> dict[PortId, CwlRecord]:
-    """Every input in `graph`'s tree bound by a record `_merge_without_value_from` names."""
-    return {binding.sink: record for step in graph.all_steps for binding in step.bindings
-            if (record := _merge_without_value_from(binding.value)) is not None}
-
-
-def _merging_sinks(graph: WorkflowGraph) -> frozenset[PortId]:
-    """Every input in `graph`'s tree bound by a record that `_merges`."""
-    return frozenset(binding.sink for step in graph.all_steps for binding in step.bindings
-                     if _merges(binding.value))
-
-
-def _check_workflow_inputs(graph: WorkflowGraph, diagnostics: Diagnostics) -> None:
+def _check_workflow_inputs(graph: WorkflowGraph, merging: dict[PortId, CwlRecord | None],
+                           diagnostics: Diagnostics) -> None:
     """Apply the same conservative relation to typed workflow-input references."""
     declarations = {port.name: port.declaration.type.canonical
                     for port in graph.workflow_inputs}
-    unjudged = _merging_sinks(graph)
     for name, sinks in graph.input_mapping:
         source_type = declarations.get(name)
         for sink in sinks:
-            if sink in unjudged:
+            if sink in merging:
                 continue
             sink_type = _effective_type(graph, sink, producing=False)
-            relation = reference_relation(
-                source_type, sink_type, lang_version=graph.lang_version)
+            relation = reference_relation(source_type, sink_type)
             if relation is TypeRelation.DISJOINT:
                 diagnostics.error(
                     SophiosErrorCode.INCOMPATIBLE_INPUT_REFERENCE,
@@ -177,15 +135,26 @@ def _check_workflow_inputs(graph: WorkflowGraph, diagnostics: Diagnostics) -> No
                     _locator(graph, sink),
                 )
     for child in graph.children:
-        _check_workflow_inputs(child, diagnostics)
+        _check_workflow_inputs(child, merging, diagnostics)
 
 
 def _reject_if_disjoint(graph: WorkflowGraph, edge: Edge, diagnostics: Diagnostics,
                         record: CwlRecord | None = None) -> bool:
-    """Diagnose one edge only when the language relation proves rejection."""
-    if _relation(graph, edge, record) is not TypeRelation.DISJOINT:
+    """Diagnose one edge only when the language relation proves rejection, judged in its own scope.
+
+    Ancestor scatter layers that wrap both endpoints alike are excluded; they
+    would inflate the comparison unevenly. Where `record` merges or picks, the
+    source is judged as what the record makes of it.
+    """
+    scope = _graph_at(graph, _owner_namespace(edge))
+    produced = _effective_type(scope, edge.source, producing=True)
+    if record is not None:
+        fields = dict(record.fields)
+        produced = delivered(produced, sources=len(record.sources), link_merge=fields.get('linkMerge'),
+                             pick_value=fields.get('pickValue'))
+    consumed = _effective_type(scope, edge.sink, producing=False)
+    if reference_relation(produced, consumed) is not TypeRelation.DISJOINT:
         return False
-    produced, consumed = _compared_types(graph, edge, record)
     diagnostics.error(
         SophiosErrorCode.INCOMPATIBLE_INPUT_REFERENCE,
         f'edge is provably disjoint: {produced!r} cannot feed {consumed!r}.',
@@ -199,49 +168,9 @@ def _locator(graph: WorkflowGraph, sink: PortId) -> Locator:
     return Locator(sink.step.name, sink.step.index, Names.of(graph).port(sink.port))
 
 
-def _attach_children(graph: WorkflowGraph) -> WorkflowGraph:
-    children = tuple(_attach_children(child) for child in graph.children)
-    return attach_step_children(graph, children)
-
-
-def attach_step_children(graph: WorkflowGraph,
-                         children: tuple[WorkflowGraph, ...]) -> WorkflowGraph:
-    """Attach ``children`` to the steps that call them, at this level only.
-
-    Shared by Link (which recurses itself, see ``_attach_children`` above)
-    and Infer (whose own tree walk already recursed before calling this).
-    """
-    by_namespace = {child.namespace.parts[-1]: child for child in children
-                    if child.namespace.parts}
-    steps: list[StepNode] = []
-    for step in graph.steps:
-        if step.run is None:
-            steps.append(step)
-            continue
-        child = by_namespace.get(step.id)
-        run = replace(step.run, child=child) if child is not None else step.run
-        steps.append(replace(step, run=run))
-    return replace(graph, steps=tuple(steps), children=children)
-
-
 def _position(graph: WorkflowGraph, step_id: StepId) -> tuple[int, ...]:
     """Document order for a step: the indices on the path down to it, compared lexicographically."""
-    for step in graph.steps:
-        if step.id == step_id:
-            return (step.id.index,)
-    for child in graph.children:
-        if not _namespace_contains(child.namespace, step_id.namespace):
-            continue
-        nested = _position(child, step_id)
-        if not nested:
-            continue
-        wrapper = next((step for step in graph.steps
-                        if step.run is not None
-                        and step.run.child is not None
-                        and step.run.child.namespace == child.namespace), None)
-        if wrapper is not None:
-            return (wrapper.id.index, *nested)
-    return ()
+    return tuple(step.id.index for _owner, step in _step_path(graph, step_id))
 
 
 def _definitions(graph: WorkflowGraph) -> dict[str, PortId]:
@@ -255,72 +184,31 @@ def _definitions(graph: WorkflowGraph) -> dict[str, PortId]:
 
 
 def _concrete_output(graph: WorkflowGraph, port: PortId) -> PortId:
-    step = _step(graph, port.step)
-    if step is None or step.run is None or step.run.child is None:
-        return port
-    child = step.run.child
-    mapped = dict(child.output_mapping).get(port.port)
-    return _concrete_output(child, mapped) if mapped is not None else port
+    """The step output `port` stands for: a call's output is the one its child maps it to, all the way down."""
+    child = _graph_at(graph, port.step.namespace).child(port.step)
+    mapped = dict(child.output_mapping).get(port.port) if child is not None else None
+    return port if child is None or mapped is None else _concrete_output(child, mapped)
 
 
 def _concrete_input_sinks(graph: WorkflowGraph, port: PortId) -> tuple[PortId, ...]:
-    step = _step(graph, port.step)
-    if step is None or step.run is None or step.run.child is None:
-        return (port,)
-    mapped = dict(step.run.child.input_mapping).get(port.port, ())
-    return tuple(mapped) if mapped else (port,)
+    """The step inputs `port` feeds: a call's input feeds the ones its child maps it to."""
+    child = _graph_at(graph, port.step.namespace).child(port.step)
+    mapped = dict(child.input_mapping).get(port.port) if child is not None else None
+    return mapped or (port,)
 
 
-def _judged_call_edges(graph: WorkflowGraph, unjudged: frozenset[PortId],
-                       diagnostics: Diagnostics) -> tuple[Edge, ...]:
-    """Each call edge but those proved disjoint; one into a merging record is not judged."""
-    return tuple(edge for sink, edge in _workflow_call_edges(graph)
-                 if sink in unjudged or not _reject_if_disjoint(graph, edge, diagnostics))
-
-
-def _workflow_call_edges(graph: WorkflowGraph) -> tuple[tuple[PortId, Edge], ...]:
-    """Each edge a call step's binding carries on into its child, beside the call's own input."""
-    found: list[tuple[PortId, Edge]] = []
+def _call_edges(graph: WorkflowGraph) -> Iterator[tuple[PortId, Edge]]:
+    """Each edge a call step's binding carries on into its child, with the call's own input."""
     for step in graph.steps:
-        child = step.run.child if step.run is not None else None
-        if child is None:
-            continue
-        child_inputs = dict(child.input_mapping)
+        child = graph.child(step.id)
+        inner = dict(child.input_mapping) if child is not None else {}
         for binding in step.bindings:
-            resolution = binding.resolution
-            items = resolution.items if isinstance(resolution, SourceList) else (resolution,)
-            for item in items:
-                if not isinstance(item, Edge):
-                    continue
-                for sink in child_inputs.get(binding.sink.port, ()):
-                    found.append((binding.sink, Edge(item.source, sink, item.span)))
+            for item in resolved_items(binding.resolution):
+                if isinstance(item, Edge):
+                    for sink in inner.get(binding.sink.port, ()):
+                        yield binding.sink, Edge(item.source, sink, item.span)
     for child in graph.children:
-        found.extend(_workflow_call_edges(child))
-    return tuple(found)
-
-
-def _compared_types(graph: WorkflowGraph, edge: Edge,
-                    record: CwlRecord | None = None) -> tuple[Any, Any]:
-    """The two types `_relation` judges, in the scope it judges them in. Where `record` merges
-    or picks, the first is what it makes of the edge's source."""
-    scope = _graph_at(graph, _owner_namespace(edge))
-    produced = _effective_type(scope, edge.source, producing=True)
-    fields = dict(record.fields) if record is not None else {}
-    return (produced if record is None else delivered(produced, sources=len(record.sources),
-                                                      link_merge=fields.get('linkMerge'),
-                                                      pick_value=fields.get('pickValue')),
-            _effective_type(scope, edge.sink, producing=False))
-
-
-def _relation(graph: WorkflowGraph, edge: Edge, record: CwlRecord | None = None) -> TypeRelation:
-    """Judge one edge in its own scope.
-
-    Ancestor scatter layers that wrap both endpoints alike are excluded; they
-    would inflate the comparison unevenly.
-    """
-    scope = _graph_at(graph, _owner_namespace(edge))
-    source, sink = _compared_types(graph, edge, record)
-    return reference_relation(source, sink, lang_version=scope.lang_version)
+        yield from _call_edges(child)
 
 
 def _effective_type(graph: WorkflowGraph, port: PortId, *, producing: bool) -> Any:
@@ -332,8 +220,6 @@ def _rank(graph: WorkflowGraph, port: PortId, *, producing: bool) -> int:
     path = _step_path(graph, port.step)
     if producing:
         return sum(output_rank(step) for _owner, step in path)
-    if not path:
-        return 0
     rank = input_rank(path[-1][1], port.port)
     # A wrapper's `scatter:` names the callee's declared input, which
     # `input_mapping` relates to the port it feeds.
@@ -347,29 +233,17 @@ def _rank(graph: WorkflowGraph, port: PortId, *, producing: bool) -> int:
 
 def _step_path(graph: WorkflowGraph,
                step_id: StepId) -> tuple[tuple[WorkflowGraph, StepNode], ...]:
-    local = next((step for step in graph.steps if step.id == step_id), None)
-    if local is not None:
-        return ((graph, local),)
-    for child in graph.children:
-        if not _namespace_contains(child.namespace, step_id.namespace):
-            continue
-        nested = _step_path(child, step_id)
-        wrapper = next((step for step in graph.steps
-                        if step.run is not None
-                        and step.run.child is not None
-                        and step.run.child.namespace == child.namespace), None)
-        if wrapper is not None and nested:
-            return ((graph, wrapper), *nested)
-    return ()
+    """Each call from `graph` down to `step_id`, then the step, each with the graph it is a step of."""
+    path: list[tuple[WorkflowGraph, StepNode]] = []
+    for part in (*step_id.namespace.parts[len(graph.namespace.parts):], step_id):
+        path.append((graph, next(step for step in graph.steps if step.id == part)))
+        graph = graph.child(part) or graph
+    return tuple(path)
 
 
 def _port(graph: WorkflowGraph, port_id: PortId) -> Port:
     return next(port for step in graph.all_steps for port in step.inputs + step.outputs
                 if port.id == port_id)
-
-
-def _step(graph: WorkflowGraph, step_id: StepId) -> StepNode | None:
-    return next((step for step in graph.all_steps if step.id == step_id), None)
 
 
 def _owner_namespace(edge: Edge) -> Namespace:
@@ -394,76 +268,34 @@ def _graph_at(graph: WorkflowGraph, namespace: Namespace) -> WorkflowGraph:
     return _graph_at(child, namespace)
 
 
-def _place_edges(graph: WorkflowGraph, edges: tuple[Edge, ...],
-                 discharged: tuple[PortId, ...]) -> WorkflowGraph:
-    children = tuple(_place_edges(child, edges, discharged) for child in graph.children)
-    local_edges = tuple(replace(edge, origin=EdgeOrigin.COMPOSED)
-                        for edge in edges if _owner_namespace(edge) == graph.namespace)
-    local_discharged = tuple(sink for sink in discharged
-                             if _namespace_contains(graph.namespace, sink.step.namespace)
-                             and not any(_namespace_contains(child.namespace, sink.step.namespace)
-                                         for child in children))
-    return replace(graph, children=children,
-                   linked_edges=graph.linked_edges + local_edges,
-                   discharged_obligations=graph.discharged_obligations + local_discharged)
-
-
-def _expose_cross_scope_inputs(graph: WorkflowGraph,
-                               edges: tuple[Edge, ...]) -> WorkflowGraph:
-    """Give every edge entering a child an explicit workflow boundary input."""
-    children = tuple(_expose_cross_scope_inputs(child, edges) for child in graph.children)
-    current = replace(graph, children=children)
+def _placed(graph: WorkflowGraph, edges: tuple[Edge, ...]) -> WorkflowGraph:
+    """`graph` and every graph beneath it, composed: each holds the edges it is the lowest to enclose,
+    has a boundary input for every edge that enters it, and maps each output to its concrete producer."""
+    current = replace(graph, children=tuple(_placed(child, edges) for child in graph.children))
     inputs = list(current.workflow_inputs)
-    mappings = list(current.input_mapping)
+    mappings = dict(current.input_mapping)
     for edge in edges:
-        if not _namespace_contains(current.namespace, edge.sink.step.namespace):
+        inside = edge.sink.step.namespace
+        if not _namespace_contains(current.namespace, inside) \
+                or _namespace_contains(current.namespace, edge.source.step.namespace):
             continue
-        if _namespace_contains(current.namespace, edge.source.step.namespace):
-            continue
-        if edge.sink.step.namespace == current.namespace:
-            step = _step(current, edge.sink.step)
-            if step is None or step.run is None:
-                continue
-            # Reuse a sink already relayed by name, or deriving a second name
-            # here adds an `inputs:` entry no step ever reads.
-            relayed = next((entry for entry, sinks in mappings if edge.sink in sinks), None)
-            derived_from: PortId | None = None if relayed is not None else edge.sink
-            name = relayed if relayed is not None else DerivedName(step.id, edge.sink.port)
-        elif any(_namespace_contains(child.namespace, edge.sink.step.namespace)
-                 for child in current.children):
-            child = next(child for child in current.children
-                         if _namespace_contains(child.namespace, edge.sink.step.namespace))
-            child_mapping = next(((name, sinks) for name, sinks in child.input_mapping
-                                  if edge.sink in sinks), None)
-            if child_mapping is None:
-                continue
-            name = child_mapping[0]
-            derived_from = next((port.origin for port in child.workflow_inputs
-                                 if port.name == name), None)
-        else:
-            continue
+        # The name the sink is relayed under already, here or by the child it is in: deriving a second
+        # name here adds an `inputs:` entry no step ever reads.
+        relays = mappings if inside == current.namespace else dict(next(
+            child for child in current.children if _namespace_contains(child.namespace, inside)).input_mapping)
+        name = next((entry for entry, sinks in relays.items() if edge.sink in sinks),
+                    DerivedName(edge.sink.step, edge.sink.port))
         if name not in {port.name for port in inputs}:
-            sink_port = _port(current, edge.sink)
-            inputs.append(WorkflowPort(
-                name, boundary_declaration(sink_port, _rank(current, edge.sink, producing=False)),
-                origin=sink_port.origin or derived_from))
-        for index, (existing, sinks) in enumerate(mappings):
-            if existing == name:
-                if edge.sink not in sinks:
-                    mappings[index] = (existing, (*sinks, edge.sink))
-                break
-        else:
-            mappings.append((name, (edge.sink,)))
-    return replace(current, workflow_inputs=tuple(inputs), input_mapping=tuple(mappings))
+            inputs.append(WorkflowPort(name, boundary_declaration(
+                _port(current, edge.sink), _rank(current, edge.sink, producing=False))))
+        if edge.sink not in mappings.get(name, ()):
+            mappings[name] = (*mappings.get(name, ()), edge.sink)
+    return replace(
+        current, workflow_inputs=tuple(inputs), input_mapping=tuple(mappings.items()),
+        linked_edges=graph.linked_edges + tuple(replace(edge, origin=EdgeOrigin.COMPOSED) for edge in edges
+                                                if _owner_namespace(edge) == graph.namespace),
+        output_mapping=tuple((name, _concrete_output(current, port)) for name, port in graph.output_mapping))
 
 
 def _namespace_contains(parent: Namespace, child: Namespace) -> bool:
     return child.parts[:len(parent.parts)] == parent.parts
-
-
-def _redirect_output_mappings(graph: WorkflowGraph) -> WorkflowGraph:
-    children = tuple(_redirect_output_mappings(child) for child in graph.children)
-    temporary = replace(graph, children=children)
-    mappings = tuple((name, _concrete_output(temporary, port))
-                     for name, port in graph.output_mapping)
-    return replace(temporary, output_mapping=mappings)

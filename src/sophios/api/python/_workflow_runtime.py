@@ -30,6 +30,7 @@ from sophios.run_status import RunResult
 from sophios.ir.artifacts import CompilationArtifact, CompilationResult
 from sophios.ir.complete import coerce_job_value
 from sophios.ir.frontdoor import SourceBundle
+from sophios.ir.infer import InferencePolicy
 from sophios.ir.locations import absolute_paths
 from sophios.ir.policy import RunPolicy
 from sophios.ir.realtime import ADAPTER, Declaration
@@ -37,20 +38,20 @@ from sophios.ir.resolve import RegistrySnapshot
 from sophios.ir.resolved import NotLowered, ResolvedWorkflow
 from sophios.ir.types import AuthoredName, WorkflowGraph
 from sophios.lang import CwlRecord, Diagnostic, Diagnostics, Document, ParseResult, Severity, SophiosError, render
+from sophios.lang.cwl import SCATTER_METHODS
 from sophios.lang.diagnostics import report
 from sophios.lang import Step as LangStep
 from sophios.lang.error_codes import SophiosErrorCode
-from sophios.cli import default_compilation_settings, get_args, get_known_and_unknown_args, target_options
+from sophios.cli import get_args, get_known_and_unknown_args, target_options
 from sophios.runtime_inputs import output_target_inputs, resolve_file_formats, runner_job_inputs
 from sophios.utils import convert_args_dict_to_args_list
 from sophios.utils_cwl import tool_process
-from sophios.wic_types import DEFAULT_BASEPATH, CompilerOptions, GraphSettings, Json, StepId, Tool, Tools
+from sophios.wic_types import DEFAULT_BASEPATH, GraphSettings, Json, StepId, Tool, Tools
 
 from ._inference import Inference
 from ._errors import InvalidCLTError, InvalidStepError
 from ._compiled import CompiledNextflowWorkflow, CompiledWorkflow
 from ._ports import InputParameter, OutputParameter, ParameterStore
-from ._types import ScatterMethod
 from ._utils import load_yaml as _load_yaml, serialize_value
 
 if TYPE_CHECKING:
@@ -168,11 +169,10 @@ def validate_step_assignment(name: str, value: Any, *, owner: Any | None = None)
         case "scatter", invalid if invalid:
             raise TypeError("scatter must be assigned a list of InputParameter values")
         case "scatterMethod", str() as scatter_method if scatter_method:
-            allowed = {member.value for member in ScatterMethod}
-            if scatter_method not in allowed:
+            if scatter_method not in SCATTER_METHODS:
                 raise ValueError(
                     "Invalid value for scatterMethod. "
-                    f"Valid values are: {', '.join(sorted(allowed))}"
+                    f"Valid values are: {', '.join(sorted(SCATTER_METHODS))}"
                 )
         case "when", condition if condition and not (
                 isinstance(condition, str) and condition.startswith("$(") and condition.endswith(")")):
@@ -225,7 +225,7 @@ def load_clt(clt_path: Path, tool_registry: Tools) -> tuple[CWLCommandLineTool, 
             raise
         except Exception as exc:
             raise InvalidCLTError(f"invalid cwl file: {clt_path}") from exc
-        tool_registry[stepid] = Tool(str(clt_path), yaml_file)
+        tool_registry[stepid] = Tool(str(clt_path), yaml_file, from_file=True)
         return clt, yaml_file
 
     if stepid in tool_registry:
@@ -423,26 +423,21 @@ def _nested_documents(workflow: "Workflow") -> dict[tuple[str, str], ParseResult
     return documents
 
 
-def compiler_options(inference: Inference, lang_version: str | None = None,
-                     policy: RunPolicy = RunPolicy()) -> CompilerOptions:
-    """The options the command line builds from its inference and partial-failure flags, from `inference` and
+def compile_settings(inference: Inference, lang_version: str | None = None,
+                     policy: RunPolicy = RunPolicy()) -> compiler.CompileSettings:
+    """The settings the command line builds from its inference and partial-failure flags, from `inference` and
     `policy`. No configuration file is read."""
-    options: CompilerOptions = {
-        **default_compilation_settings(),
-        'partial_failure_enable': policy.partial_failure,
-        'partial_failure_success_codes': policy.success_codes,
-        'inference_disable': not inference.enabled,
-        'inference_strict': inference.strict,
-        'inference_use_naming_conventions': inference.naming_conventions,
-        'insert_steps_automatically': inference.insert_steps,
-        'inference_rules': dict(inference.format_rules),
-        'renaming_conventions': list(
-            SHIPPED_RENAMINGS if inference.renamings is None and inference.naming_conventions
-            else inference.renamings or ()),
-    }
-    if lang_version is not None:
-        options['lang_version'] = lang_version
-    return options
+    return compiler.CompileSettings(
+        InferencePolicy(disabled=not inference.enabled,
+                        use_naming_conventions=inference.naming_conventions,
+                        renaming_conventions=tuple(
+                            SHIPPED_RENAMINGS if inference.renamings is None and inference.naming_conventions
+                            else inference.renamings or ()),
+                        insert_steps_automatically=inference.insert_steps,
+                        format_rules=tuple(inference.format_rules.items()),
+                        strict=inference.strict),
+        policy,
+        lang_version)
 
 
 def compile_workflow_result(  # pylint: disable=too-many-arguments
@@ -486,12 +481,12 @@ def _compile_bundle(  # pylint: disable=too-many-arguments
 
     merged_tools = _merged_known_tools(workflow, tool_registry)
 
-    options = compiler_options(inference, lang_version, policy)
+    settings = compile_settings(inference, lang_version, policy)
     bundle = SourceBundle(
         ParseResult(workflow_document(workflow), Diagnostics()),
         Path(workflow.process_name).stem,
         RegistrySnapshot.from_tools(merged_tools, workflows=_nested_documents(workflow)))
-    return bundle, _with_bound_values(workflow, compiler.compile_source(bundle, options, quiet=quiet))
+    return bundle, _with_bound_values(workflow, compiler.compile_source(bundle, settings, quiet=quiet))
 
 
 def _bound_values(workflow: "Workflow", graph: WorkflowGraph) -> dict[str, Any]:
@@ -740,7 +735,7 @@ def _compiled_for_run(workflow: "Workflow", options: RunOptions, *, refuse_realt
     analyses = realtime.compile_analyses(
         result.realtime, {namespace: dict(paths) for namespace, paths in (options.workflow_paths or {}).items()},
         _merged_known_tools(workflow, options.tool_registry),
-        compiler_options(options.inference, policy=options.policy))
+        compile_settings(options.inference, policy=options.policy))
     if (problem := preflight.unwritable(Path(options.basepath), "the workflow and its run",
                                         "pass run() a basepath you can write to")) is not None:
         raise SophiosError([problem])

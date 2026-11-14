@@ -1,6 +1,6 @@
 from importlib.resources import files
 import json
-from pathlib import PurePosixPath, PureWindowsPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
 from typing import Any, Final
 
@@ -8,121 +8,14 @@ import cwltool.context
 from cwltool.errors import WorkflowException
 import cwltool.load_tool
 from cwltool.pack import pack
-from cwltool.process import custom_schemas, use_custom_schema
+from cwltool.process import Process, custom_schemas, use_custom_schema
 from schema_salad.exceptions import SchemaSaladException
 from schema_salad.fetcher import DefaultFetcher
 import yaml
 
-from . import utils
 from .lang.diagnostics import SophiosError
 from .lang.error_codes import SophiosErrorCode
-from .wic_types import Yaml
-
-
-def canonicalize_type(type_obj: Any) -> Any:
-    """Recursively desugars the CWL type: field into a canonical normal form.\n
-    In particular, CWL automatically desugars File[] into {'type': 'array', 'items': File},
-    but File[][] causes a syntax error! Etc.
-
-    Args:
-        type_obj (Any): An object that is a syntactic hodgepodge of valid CWL types.
-
-    Returns:
-        Any: The JSON canonical normal form associated with type_obj
-    """
-    match type_obj:
-        case str() as str_obj:
-            if len(str_obj) >= 1 and str_obj[-1:] == '?':
-                return ['null', canonicalize_type(str_obj[:-1])]
-            if len(str_obj) >= 2 and str_obj[-2:] == '[]':
-                return {'type': 'array', 'items': canonicalize_type(str_obj[:-2])}
-            return str_obj
-        case dict() as dict_obj:
-            if dict_obj.get('type') == 'array':
-                return {**dict_obj, 'items': canonicalize_type(dict_obj['items'])}
-            return dict_obj
-        case _:
-            return type_obj
-
-
-def _require_list_of_dicts(items: list, msg: str) -> None:
-    """Raise ValueError (with a yaml dump of items appended) unless every element of items is a dict."""
-    if not all(isinstance(elt, dict) for elt in items):
-        raise ValueError(f"{msg}\n{yaml.dump(items)}")
-
-
-def canonicalize_steps_list(steps: Yaml) -> list[Yaml]:
-    """Converts the steps: tag (either a List or a Dictionary) into canonical List form."""
-    if isinstance(steps, list):
-        _require_list_of_dicts(
-            steps, 'Error! If steps: tag is a List then all its elements should be Dictionaries!')
-        for step in steps:
-            utils.require_step_id(step)
-        return steps
-    if isinstance(steps, dict):
-        invalid_keys = [key for key in steps if not isinstance(
-            key, str) or key == '']
-        if invalid_keys:
-            msg = 'Error! If steps: tag is a Dictionary then all its keys should be non-empty strings!'
-            raise ValueError(f"{msg}\n{yaml.dump(steps)}")
-        items = [(key, {}) if val is None else (key, val)
-                 for key, val in steps.items()]
-        msg = 'Error! If steps: tag is a Dictionary then all its values should be Dictionaries!'
-        _require_list_of_dicts([val for _, val in items], msg)
-        return [{'id': key, **val} for key, val in items]
-    # steps should either be a list or a dict, but...
-    return steps
-
-
-def remove_id_tags(list_of_dicts_with_id_keys: list) -> dict[str, Yaml]:
-    """Converts a List of Dictionaries with `id` tags into a Dictionary keyed on those `id` tags."""
-    d_canon = {}
-    for d in list_of_dicts_with_id_keys:
-        id_tag = utils.require_step_id(d)
-        del d['id']
-        # NOTE: The order of the steps may not be preserved!
-        d_canon[id_tag] = d
-    return d_canon
-
-
-def canonicalize_inputs_dict(inputs: Yaml) -> dict[str, Yaml]:
-    """Converts the inputs: tag (either a List or a Dictionary) into canonical Dictionary form."""
-    inputs_canon = {}
-    if isinstance(inputs, dict):
-        for key, val in inputs.items():
-            match val:
-                case dict():
-                    inputs_canon[key] = val
-                case str():
-                    inputs_canon[key] = {'type': val}  # NOTICE
-                case _:
-                    msg = ('Error! If inputs: tag is a dictionary, then all its values should be '
-                           'either strings (representing types) or dictionaries.')
-                    raise ValueError(f"{msg}\n{yaml.dump(inputs)}")
-    if isinstance(inputs, list):
-        _require_list_of_dicts(
-            inputs, 'Error! If inputs: tag is a list then all its elements should be dictionaries!')
-        return remove_id_tags(inputs)
-    return inputs_canon
-
-
-def canonicalize_outputs_dict(outputs: Yaml) -> dict[str, Yaml]:
-    """Converts the outputs: tag (either a List or a Dictionary) into canonical Dictionary form."""
-    outputs_canon: dict[str, Yaml] = {}
-    if isinstance(outputs, dict):
-        for key, val in outputs.items():
-            if isinstance(val, (dict, str)):
-                # TODO need to lookup output file mapping for the str (output file) case!
-                outputs_canon[key] = val  # type: ignore
-            else:
-                msg = ('Error! outputs: tag should be a dictionary whose values are either '
-                       'strings (representing output files) or dictionaries.')
-                raise ValueError(f"{msg}\n{yaml.dump(outputs)}")
-    if isinstance(outputs, list):
-        _require_list_of_dicts(
-            outputs, 'Error! If outputs: tag is a list then all its elements should be dictionaries!')
-        return remove_id_tags(outputs)
-    return outputs_canon
+from .wic_types import Cwl, Yaml
 
 
 def tool_process(cwl: Yaml, source: str) -> Yaml:
@@ -178,24 +71,6 @@ def _without_main_prefix(port: Any) -> Any:
     return port
 
 
-def desugar_into_canonical_normal_form(cwl: Yaml) -> Yaml:
-    """Desugars the inputs:, outputs:, and steps: tags of a CWL AST into their canonical forms."""
-    if 'inputs' in cwl:
-        # Arbitrarily choose dict form
-        cwl['inputs'] = canonicalize_inputs_dict(cwl['inputs'])
-    if 'outputs' in cwl:
-        cwl['outputs'] = canonicalize_outputs_dict(cwl['outputs'])
-    if 'steps' in cwl:
-        # NOTE: No steps: to canonicalize for class: CommandLineTool
-        # Choose list form due to
-        # 1. dict keys must be unique (thus cannot use the same CLT twice)
-        # 2. Some AST transformations (i.e. python_script) need to mutate the step id in-place
-        # (which is not possible in dict form)
-        # 3. Inlineing a subworkflow dict into the parent workflow dict may also cause key collisions.
-        cwl['steps'] = canonicalize_steps_list(cwl['steps'])
-    return cwl
-
-
 #: The keys schema-salad resolves against the document that writes them.
 _REFERENCE_KEYS: Final = ('$include', '$import', '$mixin')
 #: A URI scheme of two letters or more, so a Windows drive (`C:`) is not one.
@@ -229,7 +104,8 @@ def has_relative_reference(cwl: Any) -> bool:
             schemas = cwl.get('$schemas', [])
             return (any(key in cwl for key in _REFERENCE_KEYS)
                     or any(_relative(schema) for schema in (schemas if isinstance(schemas, list) else [schemas]))
-                    or any(_relative(cwl.get(key)) for key in ('location', 'path'))
+                    or cwl.get('class') in ('File', 'Directory') and any(
+                        _relative(cwl.get(key)) for key in ('location', 'path'))
                     or any(has_relative_reference(value) for value in cwl.values()))
         case list():
             return any(has_relative_reference(item) for item in cwl)
@@ -250,15 +126,126 @@ def _register_extensions() -> None:
             use_custom_schema(version, _EXTENSION_NAMESPACE, text)
 
 
+class InvalidTool(Exception):
+    """cwltool's validator refuses a tool: what it found wrong, one line to each place, without terminal colour."""
+
+
+#: The position cwltool's message line starts with, `<file or URI>:<line>:<column>:`, and the nesting after it.
+_POSITION: Final = re.compile(r'^\S+?:(\d+):(\d+):( *)')
+_COLOUR: Final = re.compile(r'\x1b\[[0-9;]*m')
+#: What schema-salad heads a nested resolution error with: the loader's object id, and the document's URI.
+_IDENTIFIED: Final = re.compile(r'\(\d+\) (?:\([^)\s]*\) )?')
+_ATTEMPT: Final = re.compile(r"tried (?:array of <[^>]*>|\S+) but\b\s*|,? tried \S+$")
+
+
+def _plain(error: Exception, name: str, *, positions: bool) -> str:
+    """cwltool's message for `error` as a reader needs it: each place a line, its position and what is wrong there.
+
+    cwltool wraps the message to the width of a terminal, colours it, writes the document's path at the head of every
+    line and at each mention of an identifier, and says `tried 'X' but` before each alternative it rejected. An error
+    met while resolving the document is nested, each level headed by the loader's object id and the document's URI:
+    the levels stay lines, without the ids. The document is `name`; the positions go when they count lines of a
+    document no file holds.
+    """
+    places: list[list[str]] = []
+    for line in _COLOUR.sub('', str(error)).splitlines():
+        if found := _POSITION.match(line):
+            places.append([f"{found[1]}:{found[2]}" if positions else '', found[3] + line[found.end():].strip()])
+        elif _IDENTIFIED.match(line.lstrip()):
+            places.append(['', line[:len(line) - len(line.lstrip())] + line.strip()])
+        elif places:
+            places[-1][1] += ' ' + line.strip()
+        else:
+            places.append(['', line.strip()])
+    named = re.compile(rf"[^\s']*{re.escape(name)}#?")
+    lines = [(position, _ATTEMPT.sub('', named.sub('', _IDENTIFIED.sub('', text))).replace("Object ''", 'The tool')
+              .rstrip()) for position, text in places]
+    return '\n'.join(f'{position} {text}' if position else text for position, text in lines)
+
+
+def load_validated(uri: str, text: str | None = None) -> tuple[cwltool.context.LoadingContext, str]:
+    """cwltool's loader and validator, on the one loading context Sophios uses, for the tool at `uri`.
+
+    The tool is read from `uri`, or is `text` when no file holds it (an inline `run:` body, a tool built in Python):
+    `uri` is then the document it is written as, which need not exist, and a reference relative to it is resolved
+    there. `$schemas` are resolved against the tool but not fetched, as a run with `--skip-schemas` does. `make_tool`
+    makes the process.
+
+    Raises:
+        SchemaSaladException, WorkflowException: cwltool's own, for a tool it refuses.
+
+    Returns:
+        The loading context, and the document's URI.
+    """
+    class _Serving(DefaultFetcher):
+        """The fetcher cwltool loads with, reading `text` for `uri` and every other URI as usual."""
+
+        def fetch_text(self, url: str, content_types: list[str] | None = None) -> str:
+            return text if text is not None and url == uri else super().fetch_text(url, content_types)
+
+        def check_exists(self, url: str) -> bool:
+            # A remote reference (an ontology under `$schemas`) is not fetched, so it is not asked for either.
+            return (text is not None and url == uri) or url.startswith(('http://', 'https://')) \
+                or super().check_exists(url)
+
+    _register_extensions()
+    context, document, resolved = cwltool.load_tool.fetch_document(uri, cwltool.context.LoadingContext(
+        {'fetcher_constructor': _Serving, 'skip_schemas': True}))
+    return cwltool.load_tool.resolve_and_validate_document(context, document, resolved)
+
+
+def make_tool(uri: str, text: str | None = None) -> Process | None:
+    """The process cwltool makes of the tool at `uri` (or `text`, as `load_validated` says): every check it makes.
+
+    Beyond the schema, making the tool validates its hints and parses its JavaScript expressions, as
+    `cwltool --validate` does.
+
+    Raises:
+        SchemaSaladException, WorkflowException: cwltool's own, for a tool it refuses.
+
+    Returns:
+        The process, or None where `cwltool.workflow` cannot be imported (Windows lacks `pwd`), and the document
+        check alone ran.
+    """
+    context, resolved = load_validated(uri, text)
+    try:
+        from cwltool.workflow import default_make_tool  # pylint: disable=import-outside-toplevel
+    except ImportError:  # Windows lacks `pwd`, which cwltool.workflow needs: only the document is checked.
+        return None
+    context.construct_tool_object = default_make_tool
+    return cwltool.load_tool.make_tool(resolved, context)
+
+
+def validate(path: str, cwl: Cwl | None = None) -> None:
+    """Check that cwltool accepts the tool at `path`, as it does to run it.
+
+    A tool that is a file is validated as that file, so a position names a line the author can open. A tool no file
+    holds, which `cwl` is given for (an inline `run:` body, a tool built in Python), is validated as `cwl` written as
+    `path`, whatever file is there.
+
+    Raises:
+        InvalidTool: what cwltool found wrong, as `_plain` says it.
+    """
+    location = Path(path).absolute()
+    try:
+        make_tool(location.as_uri(), None if cwl is None else yaml.safe_dump(cwl, sort_keys=False))
+    except (SchemaSaladException, WorkflowException) as error:
+        raise InvalidTool(_plain(error, location.name, positions=cwl is None)) from error
+    except ValueError:
+        # cwltool names every file relative to the working directory, and `os.path.relpath` raises for a path on
+        # another Windows drive: such a tool cannot be loaded by cwltool, so it is not validated.
+        return
+
+
 def packed(text: str, base_uri: str) -> Yaml:
     """A tool packed by cwltool as if its text were the document at `base_uri`.
 
     Every reference relative to `base_uri` is resolved there: an `$include`
     becomes the text it names, an `$import` its content, a relative
     `location` an absolute URI. The result is read as Sophios reads any
-    packed tool (`tool_process`, then the canonical form). Nothing is read
+    packed tool (`tool_process`). Nothing is read
     from `base_uri` itself, which need not exist: an inline `run:` body has no file.
-    `$schemas` are resolved against the tool but not fetched, as a run with `--skip-schemas` does.
+    `$schemas` are resolved against the tool but not fetched.
 
     Args:
         text (str): The tool, as YAML or JSON.
@@ -268,23 +255,11 @@ def packed(text: str, base_uri: str) -> Yaml:
         PackError: cwltool's own message, when it cannot load or pack the tool.
 
     Returns:
-        Yaml: The packed tool, in canonical form.
+        Yaml: The packed tool.
     """
-    class _Serving(DefaultFetcher):
-        """The fetcher cwltool loads with, reading `text` for `base_uri` and every other URI as usual."""
-
-        def fetch_text(self, url: str, content_types: list[str] | None = None) -> str:
-            return text if url == base_uri else super().fetch_text(url, content_types)
-
-        def check_exists(self, url: str) -> bool:
-            return url == base_uri or super().check_exists(url)
-
-    _register_extensions()
     try:
-        loading = cwltool.context.LoadingContext({'fetcher_constructor': _Serving, 'skip_schemas': True})
-        context, document, uri = cwltool.load_tool.fetch_document(base_uri, loading)
-        context, uri = cwltool.load_tool.resolve_and_validate_document(context, document, uri)
+        context, uri = load_validated(base_uri, text)
         tool = json.loads(json.dumps(pack(context, uri)))
     except (SchemaSaladException, WorkflowException) as error:
         raise PackError(str(error)) from error
-    return desugar_into_canonical_normal_form(tool_process(tool, base_uri))
+    return tool_process(tool, base_uri)

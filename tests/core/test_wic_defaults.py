@@ -5,8 +5,7 @@ import shutil
 
 import pytest
 
-from sophios.cli import default_compilation_settings
-from sophios.compiler import compile_source
+from sophios.compiler import CompileSettings, compile_source
 from sophios.ir.artifacts import CompilationArtifact
 from sophios.ir.frontdoor import bundle_from_disk
 
@@ -15,7 +14,7 @@ from .synthetic_tools import SYNTHETIC_TOOLS
 
 
 def _compile_wic(wic: Path) -> CompilationArtifact:
-    return compile_source(bundle_from_disk(wic, {}, SYNTHETIC_TOOLS), default_compilation_settings(),
+    return compile_source(bundle_from_disk(wic, {}, SYNTHETIC_TOOLS), CompileSettings(),
                           quiet=True).artifact
 
 
