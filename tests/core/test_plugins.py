@@ -38,7 +38,7 @@ def test_partial_failure_and_entrypoint_removal_write_what_their_example_states(
     shutil.copytree(DATA / 'partial_failure', project, ignore=shutil.ignore_patterns('expected.yaml'))
     # file_watchers holds cwl_subinterpreter, the step a real-time analysis is declared with.
     search_config(project / 'config.json', [project, ADAPTERS / 'file_watchers'], [project])
-    monkeypatch.setattr(sophios.preflight, 'prepare', lambda *_a, **_k: None)
+    monkeypatch.setattr(sophios.preflight, 'ready', lambda *_a, **_k: None)
     monkeypatch.setattr(sophios.post_compile.docker, 'from_env', _no_images)
     monkeypatch.chdir(project)
     for run in yaml.safe_load((DATA / 'partial_failure' / 'expected.yaml').read_text(encoding='utf-8')):

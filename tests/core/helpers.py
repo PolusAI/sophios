@@ -83,10 +83,10 @@ def no_preflight(monkeypatch: pytest.MonkeyPatch) -> list[list[Path]]:
     """Replace the container-engine preflight with a recorder of the documents it was asked to prepare."""
     prepared: list[list[Path]] = []
 
-    def recorder(documents: Iterable[Path], *_settings_and_jobs: Any) -> None:
+    def recorder(documents: Iterable[Path], *_settings_and_jobs: Any, **_: Any) -> None:
         prepared.append(list(documents))
 
-    monkeypatch.setattr(sophios.preflight, 'prepare', recorder)
+    monkeypatch.setattr(sophios.preflight, 'ready', recorder)
     return prepared
 
 

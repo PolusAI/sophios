@@ -227,7 +227,7 @@ class _Cwl:
     def check(self, documents: Sequence[Path], jobs: Sequence[preflight.Job],
               settings: preflight.RunSettings) -> None:
         """The pre-flight's checks: paths, programs and the container engine."""
-        preflight.check(preflight.needs(documents, jobs), settings)
+        preflight.ready(documents, settings, jobs, pulling=False)
 
     def prepare(self, lowered: run_setup.Lowered[CompilationArtifact], analyses: tuple[realtime.Analysis, ...],
                 basepath: Path, settings: run_setup.Settings) -> run_setup.Prepared:

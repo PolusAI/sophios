@@ -231,18 +231,19 @@ def _unavailable(message: str) -> Diagnostic:
                       'then run again.')
 
 
-def prepare(documents: Sequence[Path], settings: RunSettings, jobs: Sequence[Job] = ()) -> None:
-    """Check what running `documents` with `jobs` needs from this machine, then pull their images.
+def ready(documents: Sequence[Path], settings: RunSettings, jobs: Sequence[Job] = (), *, pulling: bool = True) -> None:
+    """Check what running `documents` with `jobs` needs from this machine, then, with `pulling`, pull their images.
 
-    The one call every local run makes before it starts: the CLI's compiled and
-    plain-CWL runs and `Workflow.run()`.
+    The one call every local run makes before it starts: the CLI's compiled and plain-CWL runs, `--check`
+    (which pulls nothing) and `Workflow.run()`.
 
     Raises:
         SophiosError: Every problem found, before anything is pulled.
     """
     found = needs(documents, jobs)
     check(found, settings)
-    pull(found, settings)
+    if pulling:
+        pull(found, settings)
 
 
 def unwritable(directory: Path, holds: str, remedy: str) -> Diagnostic | None:
