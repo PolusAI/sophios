@@ -200,9 +200,9 @@ Nextflow, and a line on stderr says so.
 Every option of `nextflow run`, an executor among them, is yours to pass,
 unchecked, as a CWL runner's options are. On the command line add
 `--passthrough_flags yes` and the options; they follow the command above. In
-Python each `run_args_dict` key Sophios does not read becomes
-`-<key> <value>`, or `-<key>` alone for an empty value, since Nextflow's
-options take one dash, and a key only a CWL run reads is a `ValueError`. An
+Python they are the flags of `Nextflow`, handed over as they are with
+Nextflow's one dash, and `outdir=` or `inputs_file=`, which only a CWL run reads, is a
+`ValueError`. An
 option of the `nextflow` launcher itself, such as `-log`, `-q` or `-D`,
 belongs before `run`, so it cannot be passed:
 
@@ -211,7 +211,9 @@ sophios --yaml workflow.wic --target nextflow --run_local --passthrough_flags ye
 ```
 
 ```python
-workflow.run(target="nextflow", run_args_dict={"process.executor": "slurm", "resume": ""})
+from sophios.api.python.workflow import Nextflow
+
+workflow.run(target="nextflow", runner=Nextflow("-process.executor", "slurm", "-resume"))
 ```
 
 Sophios does not check what an executor does with the tasks; that is the

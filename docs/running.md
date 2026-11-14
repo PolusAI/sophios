@@ -35,14 +35,16 @@ Each command stops after a different stage:
 |---|---|---|
 | compile only | `sophios --yaml w.wic --generate_cwl_workflow` | `flow.compile()` |
 | compile and check the machine | `sophios --yaml w.wic --check` | none; `run()` checks before it runs |
-| prepare a run to start later | `sophios --yaml w.wic --generate_run_script` | `flow.run(run_args_dict={'generate_run_script': 'yes'})` |
+| prepare a run to start later | `sophios --yaml w.wic --generate_run_script` | `flow.run(generate_run_script=True)` |
 | run | `sophios --yaml w.wic --run_local` | `flow.run()` |
 | run, and get on with something else | none | `flow.start()`, or `await flow.run_async()` |
 
-The command line needs exactly one of these. In Python, options go in
-`run()`'s `run_args_dict`, a mapping from flag names, without the dashes, to
-strings; [The same options from Python](cli-reference.md#the-same-options-from-python)
-lists them.
+The command line needs exactly one of these. In Python, the runner and its
+settings are a value, `Cwltool(...)`, `Toil(...)` or `Nextflow(...)`, passed as
+`run(runner=...)`; what is given to the job is a keyword: `outdir=`,
+`inputs_file=`, `quiet=` and `generate_run_script=`.
+[The same options from Python](cli-reference.md#the-same-options-from-python)
+maps each flag to its value.
 
 ## Check before a long run
 
@@ -77,7 +79,7 @@ directory inside it, named for the runner, the workflow and the time.
   `error_<workflow>.txt` and, when a real-time analysis turns caching on
   without `--cachedir`, `cachedir/` stay in the current directory.
 - To put only the output files somewhere else, pass `--outdir <dir>`, or
-  `run_args_dict={'outdir': '<dir>'}`. The rest stays in the base path.
+  `outdir='<dir>'` in Python. The rest stays in the base path.
 
 ```bash
 sophios --yaml greeting.wic --run_local --basepath build --outdir results
@@ -86,7 +88,7 @@ sophios --yaml greeting.wic --run_local --basepath build --outdir results
 ```python
 from greeting import workflow
 
-workflow().run(basepath='build', run_args_dict={'outdir': 'results'})
+workflow().run(basepath='build', outdir='results')
 ```
 
 Both directories are checked before anything is compiled into them. One
@@ -108,7 +110,9 @@ sophios --yaml greeting.wic --run_local --container_engine podman
 ```
 
 ```python
-workflow().run(run_args_dict={'container_engine': 'podman'})
+from sophios.api.python.workflow import Cwltool
+
+workflow().run(runner=Cwltool(container_engine='podman'))
 ```
 
 | Engine | What changes |
@@ -130,15 +134,16 @@ sophios --yaml greeting.wic --run_local --cwl_runner toil-cwl-runner
 ```
 
 ```python
-workflow().run(run_args_dict={'cwl_runner': 'toil-cwl-runner'})
+from sophios.api.python.workflow import Toil
+
+workflow().run(runner=Toil())
 ```
 
 Toil keeps its state in a job store, `jobStore_<workflow>` in the base path,
 instead of a cache. Flags for the runner itself pass through: on the command
-line add `--passthrough_flags yes`, and in Python put them in
-`run_args_dict`, where every key Sophios does not use becomes
-`--<key> <value>` for the runner; `{'logLevel': 'INFO'}` reaches Toil as
-`--logLevel INFO`.
+line add `--passthrough_flags yes`, and in Python give them to the runner,
+which hands them over as they are: `Toil('--logLevel', 'INFO')` reaches Toil
+as `--logLevel INFO`.
 
 ### Run on a cluster
 
@@ -151,14 +156,14 @@ sophios --yaml greeting.wic --run_local --cwl_runner toil-cwl-runner --passthrou
 ```
 
 ```python
-workflow().run(run_args_dict={'cwl_runner': 'toil-cwl-runner', 'batchSystem': 'slurm'})
+workflow().run(runner=Toil('--batchSystem', 'slurm'))
 ```
 
 Three things to know. Sophios still makes its checks and pulls the images
 on the machine you start it from, before Toil starts, so the machine you
 start from needs the container engine, and so do the nodes the scheduler
 runs the steps on; on most clusters that is Singularity, with
-`--container_engine singularity`. Toil keeps its job store in the base path,
+`--container_engine singularity`, or `Toil(container_engine='singularity')`. Toil keeps its job store in the base path,
 and the scheduler's nodes must be able to read it, so start from a directory
 on the cluster's shared filesystem. And when the flags you pass mention
 `slurm`, Sophios leaves out the `--provenance` record it otherwise asks Toil
@@ -184,13 +189,14 @@ workflow().run(target='nextflow')
 `--check`, `--generate_run_script`, `start(target='nextflow')` and
 `run_async(target='nextflow')` work as they do for CWL. The options that only
 a CWL run reads, such as `--cwl_runner`, `--container_engine`, `--outdir`,
-`--cachedir` and `--quiet`, are refused with `--target nextflow`. The
+`--cachedir` and `--quiet`, are refused with `--target nextflow`, and so are
+`outdir=` and `inputs_file=` in Python. `run(runner=Nextflow())` without
+`target='nextflow'` is refused too: the target decides which runners exist. The
 options of `nextflow run` pass through as a runner's do, though not those of
 the `nextflow` launcher, which go before `run`: on the command line after
 `--passthrough_flags yes`, as in `--passthrough_flags yes -process.executor
-slurm -resume`, and in Python as `run_args_dict` keys, each of which becomes
-`-<key> <value>`, or `-<key>` alone for an empty value:
-`{'process.executor': 'slurm', 'resume': ''}`. The outputs stay in Nextflow's
+slurm -resume`, and in Python as the flags of `Nextflow`, as they are:
+`Nextflow('-process.executor', 'slurm', '-resume')`. The outputs stay in Nextflow's
 work directory, `nextflow_<workflow>/work/` in the base path, and
 `output_<workflow>.json` names them. [Nextflow](nextflow.md#running-on-the-nextflow-target)
 says what the run does and what it does not support.
@@ -208,7 +214,7 @@ sophios --yaml greeting.wic --run_local --cachedir cache
 ```
 
 ```python
-workflow().run(run_args_dict={'cachedir': 'cache'})
+workflow().run(runner=Cwltool(cachedir='cache'))
 ```
 
 There is no cache unless you ask for one. Toil ignores it, since it has its
@@ -220,14 +226,12 @@ turns it on, in `cachedir/`, unless you named a directory.
 The command line shows cwltool's log of every step, each command it ran and
 how each ended, and what each tool prints. Add `--quiet` to hide cwltool's
 own log; what each tool prints still shows as the run goes. Python is quiet
-by default; pass `run_args_dict={'quiet': 'no'}` to see the log. `--quiet`
+by default; pass `quiet=False` to see the log. `--quiet`
 changes only what the runner prints: the compiled CWL is the same with or
 without it.
 
-In Python, `quiet`, `no_provenance`, `generate_run_script` and
-`docker_remove_entrypoints` are yes/no switches: `yes`, `true`, `1` and `on` turn one on. The last is a
-diagnostic, not a setting for everyday runs; the
-[section on entrypoints](#images-that-rely-on-an-entrypoint) explains it.
+`Cwltool(remove_entrypoints=True)` is a diagnostic, not a setting for everyday
+runs; the [section on entrypoints](#images-that-rely-on-an-entrypoint) explains it.
 
 ## Give tools an environment variable
 
@@ -308,11 +312,11 @@ with the full traceback, go into the current directory.
 The record in `provenance/<workflow>/` is a research object, cwltool's and
 Toil's account of the run: every document the run used, each step file
 included, the job, and what each step produced. To run without it, pass
-`--no_provenance`, or `run_args_dict={'no_provenance': 'yes'}` in Python.
+`--no_provenance`, or `provenance=False` on the runner in Python.
 
 When one document refers to two different data files with the same name (most often a single-document run, `--cwl_inline_runtag` or `Workflow.run()`; in the tree, when one tool with two data defaults, the second a directory, is run by two steps), the run finishes and writes its outputs, and only writing the record fails, with exit code 1.
 This happens under cwltool and toil-cwl-runner alike, and the fix is in cwltool ([cwltool#2370](https://github.com/common-workflow-language/cwltool/pull/2370), for [issue #2369](https://github.com/common-workflow-language/cwltool/issues/2369)).
-Until it ships, pass `--no_provenance`, or `run_args_dict={'no_provenance': 'yes'}`.
+Until it ships, pass `--no_provenance`, or `provenance=False` on the runner.
 
 ## Follow a run from Python
 
@@ -424,6 +428,24 @@ its work first, since a thread cannot be stopped from outside:
 workflow that declares one is refused with `api008`, before anything is
 written or run. Use `run()` or `start()` for it; from a coroutine,
 `await asyncio.to_thread(flow.run)` keeps the event loop free.
+
+## Code that still passes `run_args_dict`
+
+`run_args_dict`, a mapping from flag names to strings, is deprecated: it still
+works, and warns once per call. Each key means what its typed spelling means:
+
+| Key | Python now |
+|---|---|
+| `cwl_runner` | the runner: `Cwltool()` or `Toil()` |
+| `container_engine`, `pull_dir`, `cachedir` | the runner's setting of that name (`cachedir` is cwltool's alone) |
+| `no_provenance` | the runner's `provenance=` (`'yes'` is `False`) |
+| `docker_remove_entrypoints` | the runner's `remove_entrypoints=` |
+| `ignore_docker_install`, `ignore_docker_processes` | the runner's `ignore_install=` and `ignore_processes=` |
+| `outdir`, `inputs_file`, `quiet`, `generate_run_script` | the keyword of that name (a switch is on for `yes`, `true`, `1` or `on`) |
+| any other key | a flag of the runner: `--<key> <value>`, or `-<key> <value>` for Nextflow |
+
+A key the command line declares and no run reads is dropped, with its value.
+`run_args_dict` and `runner=` together are an error.
 
 ## When a run fails
 

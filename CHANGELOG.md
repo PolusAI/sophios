@@ -31,6 +31,21 @@ Codes in parentheses are the codes Sophios prints with each diagnostic.
 - Every guessed edge is one row of one note (wic043), and wic042 is retired:
   under `--inference_strict` a guess fails as wic043.
 
+### Running from Python
+
+- `Cwltool`, `Toil` and `Nextflow` are the runners `Workflow.run`, `start`, `run_async` and `check` take as
+  `runner=`: their positional arguments reach the runner as they are, and `container_engine=`, `pull_dir=`,
+  `ignore_install=`, `ignore_processes=`, `provenance=`, `remove_entrypoints=` and (cwltool's) `cachedir=` are
+  their settings. `outdir=`, `inputs_file=`, `quiet=` and `generate_run_script=` take what `run_args_dict` keys
+  of those names did. A runner the target does not run is refused: `Nextflow()` needs `target='nextflow'`, and
+  `outdir=` and `inputs_file=` are refused under it.
+- `run_args_dict` is deprecated: it still works, and warns once per call; [Running](docs/running.md) maps each
+  key. `ignore_docker_install` and `ignore_docker_processes` now take effect, where they were parsed and left
+  over, and a key of the command line that no run reads is dropped with its value.
+- Internals: a run is one `RunSettings` (`sophios.runners`) built alike by the command line and Python, which
+  `RunRequest` and `run_setup.Settings` carry; `preflight.RunSettings` is gone. A `wic021` for `outdir` says
+  `give outdir a directory you can write to` from both doors.
+
 ### Packaging
 
 - The `cyto` extra is gone, with `ipycytoscape.ipynb`, the notebook it served,

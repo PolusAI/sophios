@@ -174,13 +174,20 @@ for a `StepInput` default against the working directory.
 - `sophios.preflight` answers what a local run needs from this machine, with
   one diagnostic per problem, and pulls images; it is called by both
   adapters and never by a compute submission.
-- `sophios.backends` describes a run once, as a `RunRequest`, which the
-  command line, the Python API and the CI harness each build. The backend for
-  its target and runner (`BACKENDS`, keyed by `('cwl', 'cwltool')` and
-  `('cwl', 'toil-cwl-runner')`) answers four questions and starts nothing:
+- `sophios.runners` is the one value of a local run: `Cwltool`, `Toil` and
+  `Nextflow` hold the flags their program is given and the settings Sophios
+  reads for it, and a `RunSettings` is a runner with what is given to the job
+  (`outdir`, `inputs_file`, `quiet`, `generate_run_script`). The command line
+  (`cli.run_settings_from_args`) and the Python API (`Workflow.run(runner=...)`)
+  build the same value, and the deprecated dictionary form of `run()` is
+  translated onto it in one function. The parser reads its defaults and choices from it.
+- `sophios.backends` describes a run once, as a `RunRequest` that carries the
+  `RunSettings`, which the command line, the Python API and the CI harness
+  each build. The backend of its runner (`targets.backend`) answers four
+  questions and starts nothing:
   `check` (the pre-flight), `prepare` (`run_setup.prepare`), `launch` (the
   runner's argv, environment and working directory; `--provenance` unless
-  `no_provenance`) and `outcome` (after exit: the output object and the
+  the runner's `provenance` is off) and `outcome` (after exit: the output object and the
   failed steps, read from the runner's log lines).
 - `sophios.run_local` is the one path that runs a launch: always as a child
   process in its own session, whose two streams it echoes line by line and
