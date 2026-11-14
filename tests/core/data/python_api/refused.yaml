@@ -27,7 +27,6 @@ merge_into_a_file: {raises: SophiosError, code: INCOMPATIBLE_INPUT_REFERENCE, na
 two_tools_one_stem: &stem {raises: InvalidStepError, code: INVALID_STEP, names: ["'cat'", "'shipped_cat'", "stem 'cat'"]}
 two_tools_one_stem_written: *stem
 cwl_workflow_as_a_tool: {raises: SophiosError, code: SUBWORKFLOW_INVALID, names: [say.cwl, nested Workflow, --allow_raw_cwl]}
-absolute_output_directory: {raises: ValueError, names: [write_dir~outDir, absolute location]}
 step_named_with_a_tilde: {raises: ValueError, names: ["step name 'a~b'"]}
 step_named_hidden: {raises: ValueError, names: ["step name '.hidden'"]}
 workflow_named_for_the_directory_above: {raises: ValueError, names: ["workflow name '..'"]}
@@ -37,6 +36,8 @@ scatter_over_a_path: *scalar
 scatter_over_another_steps_port: {raises: ValueError, names: [same step]}
 scatter_over_a_picked_value: *scalar
 scatter_over_a_nested_workflows_output: *scalar
+tool_cwltool_refuses: &invalid {raises: SophiosError, code: TOOL_REFUSED, names: [not_a_list.cwl, "'listing'"]}
+tool_cwltool_refuses_for_nextflow: *invalid
 unknown_target_to_compile: &target {raises: ValueError, names: ["unknown target 'wdl'", cwl, nextflow]}
 unknown_target_to_check: *target
 unknown_target_to_run: *target

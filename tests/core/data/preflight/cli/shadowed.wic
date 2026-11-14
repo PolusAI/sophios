@@ -1,0 +1,2 @@
+steps: {shadowed: {run: {class: CommandLineTool, cwlVersion: v1.2, baseCommand: echo, inputs: {message: string},
+                         outputs: {}}, in: {message: !ii hi}}}

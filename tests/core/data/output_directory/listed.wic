@@ -1,0 +1,4 @@
+steps:
+- id: write_dir_listed
+  in:
+    outDir: !ii result.outDir

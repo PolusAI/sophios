@@ -6,11 +6,9 @@ steps:
 - id: absent_values              # none of its optional inputs has a value
 - id: env_list
   in: {s: !ii v, n: !ii 1, f: !ii x.txt}
-- id: env_map
 - id: flags
   in: {bools: !ii [true, false], bare_bools: !ii [true, false], maybe_bools: !ii [true, false],
-       short_bools: !ii [true, false], typed_bools: !ii [true], aliased: !ii true, literal: !ii true,
-       suffixed: !ii true, other: !ii false}
+       aliased: !ii true, literal: !ii true, suffixed: !ii true, other: !ii false}
 - id: unquoted
   in: {message: !ii hi, text: !ii Hello}
 - id: unquoted_without_shell
@@ -24,16 +22,10 @@ steps:
   in: {s: !ii x, n: !ii 1, x: !ii 1.5, f: !ii x.txt}
 - id: containers
 - id: tool_fields
-- id: requirements_as_a_name
-  in: {x: !ii a}
-- id: arguments_as_a_string
-  in: {x: !ii a}
 - id: double
   in: {x: !ii 1}
 - id: make_lists
   out: [files: !& files, lists: !& lists]
-- id: per_item
-  in: {files: !* files}
 - id: lists
   in: {lists: !* lists}
 

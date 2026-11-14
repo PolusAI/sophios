@@ -10,8 +10,8 @@ promises the user pages make.
 | Layer | Artifact | Question | Where |
 |---|---|---|---|
 | Parser | a `.wic` file | is it a well-formed document? | `sophios.lang.parse`; codes `wic001`–`wic010` and the other `PARSE` codes of the [language specification](dev/language_spec.md) |
-| Compiler | the document and the tools it names | does every step, port, reference and literal resolve and type-check? | `sophios.compiler.compile_source`, through Resolve, Lower, Link and Infer |
-| Tool builder | a `CommandLineTool` document | is it a valid CWL v1.2 tool? | `CommandLineTool.validate()` and `write_cwl(validate=True)`, which load it with cwltool; `--validate_plugins` does the same for every tool on the search paths |
+| Compiler | the document and the tools it names | is each tool a step runs valid CWL, and does every step, port, reference and literal resolve and type-check? | `sophios.compiler.compile_source`: cwltool's validator on each tool (`wic057`), then Resolve, Lower, Link and Infer |
+| Tool builder | a `CommandLineTool` document | is it a valid CWL v1.2 tool? | `CommandLineTool.validate()` and `write_cwl(validate=True)`, which load it with cwltool; `--validate_plugins` runs the compiler's check on every tool on the search paths |
 | Editor schema | a `.wic` file in an editor | is its shape right? | `sophios --generate_schemas`, a JSON Schema generated from the AST |
 | Pre-flight | this machine | can it run the compiled CWL? | `sophios.preflight`, before every local run |
 | Runner | the compiled CWL | does the runner accept it? | cwltool or Toil, when the document is loaded |

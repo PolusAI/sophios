@@ -62,7 +62,7 @@ def _binds(name: str, value: Any) -> bool:
 
 def _job_value(declared: object, literal: object) -> object:
     """The job value `!ii literal` gives the one input of a tool that declares `declared`."""
-    tool = clt({'x': {'type': declared, 'inputBinding': {'position': 1}}}, {}, canonical=True)
+    tool = clt({'x': {'type': declared, 'inputBinding': {'position': 1}}}, {})
     compiled = compile_hermetic({'steps': [{'id': 'probe', 'in': {'x': {'wic_inline_input': literal}}}]},
                                 tools=registered({'probe': tool}, {}))
     (value,) = compiled.artifact.job_inputs.values()
@@ -113,7 +113,7 @@ def test_a_literal_binds_only_as_the_value_it_is(case: Any) -> None:
 def test_scientific_notation_yaml_reads_as_text_says_how_to_write_a_float(text: str) -> None:
     """YAML reads a float with no signed exponent as text, so it is wic020. The message gives the spelling YAML, and
     so the parser, reads as a float, with the value the author meant: the same float, infinity included."""
-    tool = clt({'x': {'type': 'float', 'inputBinding': {'position': 1}}}, {}, canonical=True)
+    tool = clt({'x': {'type': 'float', 'inputBinding': {'position': 1}}}, {})
     assume(isinstance(yaml.safe_load(text), str))
     with pytest.raises(SophiosError) as caught:
         compile_hermetic_source(f'steps:\n- id: probe\n  in:\n    x: !ii {text}\n',

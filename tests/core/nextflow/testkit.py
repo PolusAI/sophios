@@ -28,7 +28,6 @@ from sophios.nf_types import (
     NfWorkflowOutputConnection,
 )
 from sophios.plugins import get_tools_cwl
-from sophios.utils_cwl import desugar_into_canonical_normal_form
 from sophios.utils_nf import NEXTFLOW
 from sophios.wic_types import StepId, Tool, Yaml
 
@@ -131,8 +130,7 @@ def compiled_case(data: Yaml) -> CompilationResult:
     its id names. A step holding a `subtree` calls that nested workflow, as `hermetic.subworkflow_step` writes it.
     """
     document, tools = _case_document(data)
-    registry = {StepId(run["id"], SYNTHETIC_NS): Tool(f"{run['id']}.cwl", desugar_into_canonical_normal_form(
-        copy.deepcopy(run))) for run in tools}
+    registry = {StepId(run["id"], SYNTHETIC_NS): Tool(f"{run['id']}.cwl", copy.deepcopy(run)) for run in tools}
     return compile_source(bundle(document, "wf", registry), CompileSettings(), quiet=True)
 
 

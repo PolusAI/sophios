@@ -11,8 +11,7 @@ from typing import Any, Final
 
 import yaml
 
-from sophios import utils_cwl
-from sophios.lang.cwl import CWLAtomicType
+from sophios.lang.cwl import CWLAtomicType, canonical_type, required
 from sophios.lang.spans import SourceSpan
 
 _PACKAGE_ROOT: Final = Path(__file__).resolve().parents[2]
@@ -38,18 +37,8 @@ def is_reserved_name(name: str, owner: type) -> bool:
 
 def normalize_parameter_type(parameter_type: Any) -> tuple[Any, bool]:
     """Return the canonicalized parameter type and whether it is required."""
-    if parameter_type is None:
-        return None, True
-    canonical = utils_cwl.canonicalize_type(parameter_type)
-    match canonical:
-        case list() as options:
-            null_type = CWLAtomicType.NULL.value
-            required = null_type not in options
-            non_null_types = [entry for entry in options if entry != null_type]
-            canonical = non_null_types[0] if len(non_null_types) == 1 else non_null_types
-        case _:
-            required = True
-    return canonical, required
+    canonical, optional = required(canonical_type(parameter_type))
+    return canonical, not optional
 
 
 def contains_any_type(type_obj: Any) -> bool:

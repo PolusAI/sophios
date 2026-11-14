@@ -35,6 +35,8 @@ from sophios.nf_types import (
     NfWorkflowInputConnection,
 )
 from sophios.utils_nf import _command as lower_command
+from sophios.utils_nf import _Tool
+from sophios.wic_types import Tool
 from sophios.utils_nf import _template as lower_template
 from sophios.utils_nf import _normalized_identifiers
 
@@ -121,8 +123,9 @@ def test_a_command_is_read_as_cwltool_reads_it(text: str, order: tuple[str, ...]
         template = lower_template(text)
         assert "".join(segment.value if isinstance(segment, NfLiteral) else "VALUE"
                        for segment in template.segments) == expected
-    command = lower_command({"baseCommand": "cmd", "arguments": ["a", "b", "c"],
-                             "inputs": {name: {"type": "string", "inputBinding": {}} for name in order}})
+    command = lower_command(_Tool.of(Tool("cmd.cwl", {
+        "cwlVersion": "v1.2", "class": "CommandLineTool", "baseCommand": "cmd", "arguments": ["a", "b", "c"],
+        "inputs": {name: {"type": "string", "inputBinding": {}} for name in order}, "outputs": {}})))
     templates = [token for token in command.tokens if isinstance(token, NfTemplate)]
     assert [[segment.value if isinstance(segment, NfLiteral) else getattr(segment, "name")
              for segment in token.segments] for token in templates] == [

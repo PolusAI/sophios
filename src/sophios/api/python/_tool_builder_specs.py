@@ -19,6 +19,8 @@ from typing import Any, ClassVar, Final, Self
 
 from cwl_utils.parser import cwl_v1_2 as _cwl_v12
 
+from sophios.lang.cwl import canonical_type, required
+
 from ._tool_builder_support import _merge_if_set, _render, _render_doc
 from ._utils import validate_python_identifier_name
 
@@ -27,16 +29,7 @@ _UNSET: Final = object()
 
 
 def _canonicalize_type(type_: Any) -> Any:
-    rendered = _render(type_)
-    match rendered:
-        case str() as text if text.endswith("?"):
-            return ["null", _canonicalize_type(text[:-1])]
-        case str() as text if text.endswith("[]"):
-            return {"type": "array", "items": _canonicalize_type(text[:-2])}
-        case dict() as mapping if mapping.get("type") == "array" and "items" in mapping:
-            return {**mapping, "items": _canonicalize_type(mapping["items"])}
-        case _:
-            return rendered
+    return canonical_type(_render(type_))
 
 
 class _CWLNamespace:
@@ -71,9 +64,7 @@ class _CWLNamespace:
             list[Any]: The union, as CWL writes it.
         """
         canonical = _canonicalize_type(type_)
-        if isinstance(canonical, list) and self.null in canonical:
-            return canonical
-        return [self.null, canonical]
+        return canonical if required(canonical)[1] else [self.null, canonical]
 
     def array(self, items: Any) -> dict[str, Any]:
         """Make an array type: `{type: array, items: ...}`, which `"<items>[]"` also spells.

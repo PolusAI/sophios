@@ -1,2 +1,2 @@
 why: a .cwl beside the document shadows the registry tool of the same stem
-steps: [{baseCommand: echo, inputs: {label: {type: string}}}]
+steps: [{baseCommand: echo, inputs: {label: string}}]

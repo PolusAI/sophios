@@ -4,7 +4,6 @@ from collections.abc import Mapping
 from typing import Final, cast
 
 from sophios.lang.cwl import CWL_VERSION
-from sophios.utils_cwl import desugar_into_canonical_normal_form
 from sophios.wic_types import Cwl, StepId, Tool, Tools, Yaml
 
 #: 'global', because the compiler looks a step's tool up under its `wic: namespace:`, which defaults to 'global'.
@@ -28,10 +27,9 @@ def _declared_prefixes(ports: dict[str, Cwl]) -> set[str]:
 
 
 def clt(inputs: dict[str, Cwl], outputs: dict[str, Cwl], *,
-        javascript: bool = False, requirements: dict[str, Cwl] | None = None,
-        canonical: bool = False) -> Cwl:
-    """One stub CommandLineTool (`true` succeeds and makes nothing), `$namespaces` only for prefixes its formats use;
-    `canonical` gives the normal form plugins.py applies on load."""
+        javascript: bool = False, requirements: dict[str, Cwl] | None = None) -> Cwl:
+    """One stub CommandLineTool (`true` succeeds and makes nothing), `$namespaces` only for prefixes its formats
+    use."""
     tool: Cwl = {
         'cwlVersion': CWL_VERSION,
         'class': 'CommandLineTool',
@@ -45,7 +43,7 @@ def clt(inputs: dict[str, Cwl], outputs: dict[str, Cwl], *,
     merged = {**({'InlineJavascriptRequirement': {}} if javascript else {}), **(requirements or {})}
     if merged:
         tool['requirements'] = merged
-    return desugar_into_canonical_normal_form(tool) if canonical else tool
+    return tool
 
 
 #: The named types `schemed` declares, so a literal strategy can draw a value for a port that only names one.
@@ -135,8 +133,7 @@ _SPECS: Final[dict[str, Cwl]] = {
     # A captured stream as an output: the one tool-only type.
     'captured': {**clt({'name': {'type': 'string', 'inputBinding': {'position': 1}}},
                        {'out': {'type': 'stdout'}}), 'stdout': 'captured.txt'},
-    # List-form ports, requirements and hints: desugaring lifts only `inputs` and `outputs`, so the compiler reads the
-    # rest in list form itself.
+    # List-form ports, requirements and hints, which the compiler reads as it reads the map form.
     'listed': {
         'cwlVersion': CWL_VERSION, 'class': 'CommandLineTool', 'baseCommand': 'true',
         'inputs': [{'id': 'name', 'type': 'string', 'inputBinding': {'position': 1}}],
@@ -148,12 +145,9 @@ _SPECS: Final[dict[str, Cwl]] = {
     },
 }
 
-#: Desugared as get_tools_cwl desugars real adapters; the run path names no file, since nothing reads it.
+#: As written, as get_tools_cwl registers real adapters; the run path names no file, since nothing reads it.
 SYNTHETIC_TOOLS: Final[Tools] = {
-    StepId(stem, SYNTHETIC_NS): Tool(f'/synthetic/{stem}.cwl',
-                                     desugar_into_canonical_normal_form(dict(cwl)))
-    for stem, cwl in _SPECS.items()
-}
+    StepId(stem, SYNTHETIC_NS): Tool(f'/synthetic/{stem}.cwl', dict(cwl)) for stem, cwl in _SPECS.items()}
 
 STEMS: Final[tuple[str, ...]] = tuple(sorted(_SPECS))
 
@@ -168,22 +162,29 @@ def insertion_registry() -> tuple[Yaml, Tools]:
     specs: dict[str, Cwl] = {}
     for k in (1, 2):
         source, sink = f'edam:format_src{k}', f'edam:format_dst{k}'
-        specs |= {f'mk_{k}': clt({}, {'file': {'type': 'File', 'format': source}}, canonical=True),
-                  f'use_{k}': clt({'file': {'type': 'File', 'format': sink}}, {}, canonical=True),
+        specs |= {f'mk_{k}': clt({}, {'file': {'type': 'File', 'format': source}}),
+                  f'use_{k}': clt({'file': {'type': 'File', 'format': sink}}, {}),
                   f'insert_steps_automatically_conv_{k}': clt({'file': {'type': 'File', 'format': source}},
-                                                              {'file': {'type': 'File', 'format': sink}},
-                                                              canonical=True)}
+                                                              {'file': {'type': 'File', 'format': sink}})}
     return {'steps': [{'id': f'{kind}_{k}'} for k in (1, 2) for kind in ('mk', 'use')]}, registered(specs, {})
 
 
+def _ports_of(stem: str, section: str) -> dict[str, Cwl]:
+    """The ports a tool declares in `section`, by name, whether it writes them as a map or as a list."""
+    declared = SYNTHETIC_TOOLS[StepId(stem, SYNTHETIC_NS)].cwl[section]
+    if isinstance(declared, list):
+        return {port['id']: {key: value for key, value in port.items() if key != 'id'} for port in declared}
+    return cast(dict[str, Cwl], declared)
+
+
 def inputs_of(stem: str) -> dict[str, Cwl]:
-    """The tool's declared inputs, after desugaring."""
-    return cast(dict[str, Cwl], SYNTHETIC_TOOLS[StepId(stem, SYNTHETIC_NS)].cwl['inputs'])
+    """The tool's declared inputs."""
+    return _ports_of(stem, 'inputs')
 
 
 def outputs_of(stem: str) -> dict[str, Cwl]:
-    """The tool's declared outputs, after desugaring."""
-    return cast(dict[str, Cwl], SYNTHETIC_TOOLS[StepId(stem, SYNTHETIC_NS)].cwl['outputs'])
+    """The tool's declared outputs."""
+    return _ports_of(stem, 'outputs')
 
 
 def _nullable(kind: Cwl) -> bool:

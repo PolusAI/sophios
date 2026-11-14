@@ -27,7 +27,7 @@ from ..lang import (
     parse,
 )
 from ..python_cwl_adapter import generate_CWL_CommandLineTool, get_module
-from ..utils_cwl import desugar_into_canonical_normal_form, tool_process
+from ..utils_cwl import tool_process
 from ..wic_types import StepId, Tool, Tools
 from .resolve import (RegistrySnapshot, generated_process_id, inline_run_name, namespace_of, path_from_root,
                       run_path_name, step_sidecar, version_pins)
@@ -188,7 +188,7 @@ def _register_run(step: Step, namespace: str, document_dir: Path, reading: _Read
     run = dict(step.interpreted).get('run')
     if isinstance(run, dict):
         name = inline_run_name(step.id, run, path_from_root(document_dir, reading.root_directory))
-        body = desugar_into_canonical_normal_form({**deepcopy(run), 'cwlVersion': CWL_VERSION})
+        body = {**deepcopy(run), 'cwlVersion': CWL_VERSION}
         # Written in the document, so its relative references are read beside it, as the step's own file would be.
         reading.generated[StepId(name, namespace)] = Tool(str(document_dir / f'{Path(step.id).stem}.cwl'), body)
         return True
@@ -203,8 +203,7 @@ def _register_run(step: Step, namespace: str, document_dir: Path, reading: _Read
     if run.endswith('.cwl'):
         with open(target, mode='r', encoding='utf-8') as handle:
             reading.generated[StepId(name, namespace)] = Tool(
-                str(target), desugar_into_canonical_normal_form(tool_process(yaml.safe_load(handle.read()),
-                                                                             str(target))))
+                str(target), tool_process(yaml.safe_load(handle.read()), str(target)), from_file=True)
     else:
         _register_workflow((namespace, name), target, reading)
     return True

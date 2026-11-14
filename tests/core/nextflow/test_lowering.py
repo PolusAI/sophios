@@ -42,7 +42,7 @@ def test_a_boolean_binding_is_a_flag_token_exactly_when_it_has_a_prefix(
 @budget(200)
 @given(st.lists(st.text("$ \n\ta5HOME)}{(\\\"'é").filter(lambda t: "$(" not in t and "${" not in t),
                 min_size=1, max_size=3))
-@example(["$", "cost $5", "$HOME", "a $ b", "$$", ' mv a "$1" ', "trailing $\n", "$)", "$}", "{$", "($", ""])
+@example(["$", "cost $5", "$HOME", "a $ b", "$$", ' mv a "$1" ', "trailing $\n", "$)", "$}", "{$", "($", "", "5E5"])
 def test_a_dollar_starting_no_expression_is_text_as_cwltool_reads_it(texts: list[str]) -> None:
     for text in texts:  # cwltool passes a text with no expression through, and reads one beside a reference
         workflow = lowered_case(one_step(tool("ARGS", inputs={"x": {"type": "string"}}, baseCommand="echo", arguments=[
