@@ -12,7 +12,7 @@ import yaml
 from cwl_utils.parser import cwl_v1_2
 
 from sophios.lang import SUPPORT_MATRIX
-from sophios.ir.resolved import Construct, NotLowered, Refusal
+from sophios.ir.refusals import Construct, NotLowered, Refusal
 from sophios.nf_support import CONSTRUCTS, FIELDS, REQUIREMENT_CLASSES, State
 from sophios.wic_types import Yaml
 

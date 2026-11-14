@@ -15,23 +15,20 @@ name in the view is the name the CWL target writes.
 """
 from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass, replace
-from enum import StrEnum
 from typing import NamedTuple, TypeAlias
 
 from ..lang.cwl import required
-from ..lang.diagnostics import Diagnostic, Diagnostics, Locator, Severity, lines
-from ..lang.error_codes import SophiosErrorCode
 from ..lang.nodes import OpaqueCwl
 from ..lang.spans import SourceSpan
 from ..lang.subset import BOOLEAN, Expr, check, is_safe_subset_text, parse
-from .declarations import delivered, layered, output_rank, written_order
+from .declarations import delivered, layered, output_rank, required as needs_value, written_order
 from .names import Names
 from .policy import RunPolicy, one_expression
 from .stepin import step_inputs
 from ..wic_types import Tool
 from .types import (
     DerivedName, EmittedValue, Expression, PortDeclaration, PortName, PortType, Record, Source, StepId,
-    StepNode, StepOutputRef, WorkflowGraph,
+    StepNode, StepOutputRef, WorkflowGraph, WorkflowPort,
 )
 
 
@@ -64,7 +61,7 @@ class Requirement:
 
 @dataclass(frozen=True, slots=True)
 class WorkflowInput:  # pylint: disable=too-many-instance-attributes
-    """A workflow input, and on the root, this run's value."""
+    """A workflow input, and this workflow's own job value for it: the graph's, and on the root, this run's."""
 
     name: str
     declaration: PortDeclaration
@@ -76,37 +73,145 @@ class WorkflowInput:  # pylint: disable=too-many-instance-attributes
 
 
 @dataclass(frozen=True, slots=True)
+class Verbatim:
+    """An `outputSource` that names nothing a target can follow: text no step output or input matches, or anything
+    that is not text. Written back as it was."""
+
+    value: OpaqueCwl
+
+
+#: What a workflow output's `outputSource` is: a reference; the text as written; or `None` for no `outputSource`.
+OutputSource: TypeAlias = Ref | Verbatim | None
+
+
+@dataclass(frozen=True, slots=True)
 class WorkflowOutput:
     """A workflow output and its `outputSource` at this workflow's level."""
 
     name: str
     declaration: PortDeclaration
-    #: A reference; or the text Link left unresolved, as written; or `None` for an output with no `outputSource`.
-    source: Ref | str | None
+    output_source: OutputSource
     span: SourceSpan | None
+
+    @property
+    def source(self) -> Ref | str | None:
+        """The reference, or the text Link left unresolved, as written; `None` for no `outputSource` or one that is
+        not text."""
+        match self.output_source:
+            case InputRef() | OutputRef() as ref:
+                return ref
+            case Verbatim(value=str() as text):
+                return text
+            case Verbatim() | None:
+                return None
+
+
+def spelling(ref: Ref) -> str:
+    """The text a `source:` or `outputSource:` writes for `ref`."""
+    match ref:
+        case InputRef(name=name):
+            return name
+        case OutputRef(step=step, port=port):
+            return f'{step}/{port}'
 
 
 @dataclass(frozen=True, slots=True)
-class StepInput:  # pylint: disable=too-many-instance-attributes
+class Bare:
+    """`in: {x: src}`: one source, written as the bare string."""
+
+    ref: Ref
+
+
+@dataclass(frozen=True, slots=True)
+class Raw:
+    """`in: {x: text}`: text CWL reads as the source or expression it is, kept as written. A name `--allow_raw_cwl`
+    lets through unresolved is one."""
+
+    text: str
+
+
+@dataclass(frozen=True, slots=True)
+class Entry:
+    """`in: {x: {source: ..., label: ...}}`: a WorkflowStepInput written as a mapping. `written` holds every field
+    but `source`, in the order the author wrote them."""
+
+    sources: tuple[Ref, ...]
+    written: tuple[tuple[str, OpaqueCwl], ...]
+
+
+#: What a step's `in:` entry says, in the form it was written.
+StepValue: TypeAlias = Bare | Raw | Entry
+
+
+@dataclass(frozen=True, slots=True)
+class StepInput:
     """One entry of a step's `in:`, in the order the CWL target writes it."""
 
     name: str
     #: The tool's or nested workflow's declaration; `None` for an input the tool does not declare.
     declared: PortDeclaration | None
-    sources: tuple[Ref, ...]
-    #: As written; CWL's values are strings, and a target refuses any other.
-    link_merge: OpaqueCwl
-    pick_value: OpaqueCwl
-    default: OpaqueCwl
-    has_default: bool
-    value_from: OpaqueCwl
-    #: The record's other fields, verbatim (label, loadContents, ...).
-    fields: tuple[tuple[str, OpaqueCwl], ...]
-    #: A raw `!cwl` reference the graph holds unresolved.
-    expression: str | None
+    #: What the entry says, once: everything else but `type` is read from it.
+    value: StepValue
     #: The canonical CWL type of the value the step input delivers (§5).
     type: OpaqueCwl
     span: SourceSpan | None
+
+    @property
+    def sources(self) -> tuple[Ref, ...]:
+        """The references it takes its value from."""
+        match self.value:
+            case Bare(ref=ref):
+                return (ref,)
+            case Entry(sources=sources):
+                return sources
+            case Raw():
+                return ()
+
+    @property
+    def written(self) -> tuple[tuple[str, OpaqueCwl], ...]:
+        """The fields of its mapping but `source`, in written order."""
+        match self.value:
+            case Entry(written=written):
+                return written
+            case Bare() | Raw():
+                return ()
+
+    @property
+    def expression(self) -> str | None:
+        """A raw `!cwl` reference the graph holds unresolved."""
+        match self.value:
+            case Raw(text=text):
+                return text
+            case Bare() | Entry():
+                return None
+
+    def _field(self, key: str) -> OpaqueCwl:
+        return dict(self.written).get(key)
+
+    @property
+    def link_merge(self) -> OpaqueCwl:
+        """As written; CWL's values are strings, and a target refuses any other."""
+        return self._field('linkMerge')
+
+    @property
+    def pick_value(self) -> OpaqueCwl:
+        """As written."""
+        return self._field('pickValue')
+
+    @property
+    def default(self) -> OpaqueCwl:
+        """As written."""
+        return self._field('default')
+
+    @property
+    def has_default(self) -> bool:
+        """Whether it has a `default`, whatever the value."""
+        return 'default' in dict(self.written)
+
+    @property
+    def value_from(self) -> OpaqueCwl:
+        """As written."""
+        return self._field('valueFrom')
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,15 +247,27 @@ class ResolvedStep:  # pylint: disable=too-many-instance-attributes
     outputs: tuple[str, ...]
     scatter: Scatter | None
     condition: Condition | None
-    #: The step's own requirements, then its hints.
-    requirements: tuple[Requirement, ...]
-    #: Every other step key, verbatim (label, doc, ...).
-    fields: tuple[tuple[str, OpaqueCwl], ...]
+    #: Every other step key, verbatim and in written order: label, doc, requirements, hints, ... An orphan
+    #: `scatterMethod`, with no `scatter`, is first.
+    passthrough: tuple[tuple[str, OpaqueCwl], ...]
+    #: The inputs its process must be given a value for (no default, not optional; one it does not declare counts),
+    #: spelled, in the order the process declares them.
+    required_inputs: tuple[str, ...]
     span: SourceSpan | None
     #: A tool step's requirements and hints from outside its tool, as cwltool gives them to it (§8): for each class,
     #: the innermost requirement written on an enclosing workflow, a call or the step, else the innermost such hint;
     #: requirements first. A call's is empty: its workflow's steps inherit.
     inherited: tuple[Requirement, ...] = ()
+
+    @property
+    def requirements(self) -> tuple[Requirement, ...]:
+        """The step's own requirements, then its hints."""
+        return _requirements(self.passthrough)[0]
+
+    @property
+    def fields(self) -> tuple[tuple[str, OpaqueCwl], ...]:
+        """Every other step key, verbatim (label, doc, ...)."""
+        return _requirements(self.passthrough)[1]
 
 
 @dataclass(frozen=True, slots=True)
@@ -161,13 +278,37 @@ class ResolvedWorkflow:  # pylint: disable=too-many-instance-attributes
     inputs: tuple[WorkflowInput, ...]
     outputs: tuple[WorkflowOutput, ...]
     steps: tuple[ResolvedStep, ...]
-    #: This document's own requirements, then its hints.
-    requirements: tuple[Requirement, ...]
-    #: Every other top-level key, verbatim ($namespaces, doc, ...).
-    fields: tuple[tuple[str, OpaqueCwl], ...]
+    #: `$namespaces`.
+    namespaces: tuple[tuple[str, OpaqueCwl], ...]
+    #: `$schemas`.
+    schemas: tuple[OpaqueCwl, ...]
+    #: The `requirements:` mapping the author wrote, as Lower takes it out of the document.
+    requirement_map: tuple[tuple[str, OpaqueCwl], ...]
+    #: Every other top-level key, verbatim and in written order: doc, hints, ...
+    passthrough: tuple[tuple[str, OpaqueCwl], ...]
     #: The compilation's; the same object at every depth.
     policy: RunPolicy
+    #: False when the workflow is marked `wic: inlineable: false`.
+    inlineable: bool
     span: SourceSpan | None
+
+    @property
+    def values(self) -> dict[str, OpaqueCwl]:
+        """The job values this workflow holds, by input name."""
+        return {port.name: port.value for port in self.inputs if port.has_value}
+
+    @property
+    def requirements(self) -> tuple[Requirement, ...]:
+        """This document's own requirements, then its hints."""
+        return _requirements(self.passthrough, self.requirement_map)[0]
+
+    @property
+    def fields(self) -> tuple[tuple[str, OpaqueCwl], ...]:
+        """Every other top-level key, verbatim: `$namespaces`, `$schemas`, doc, ..."""
+        documents: tuple[tuple[str, OpaqueCwl], ...] = (('$namespaces', dict(self.namespaces)),) \
+            if self.namespaces else ()
+        documents += (('$schemas', list(self.schemas)),) if self.schemas else ()
+        return documents + _requirements(self.passthrough, self.requirement_map)[1]
 
     def __post_init__(self) -> None:
         """Reject a reference to anything outside this workflow."""
@@ -188,64 +329,69 @@ class ResolvedWorkflow:  # pylint: disable=too-many-instance-attributes
                 raise ValueError(f'{ref} names nothing in workflow {self.name!r}')
 
 
-def resolve(graph: WorkflowGraph, tools: Mapping[StepId, Tool], *, policy: RunPolicy = RunPolicy(),
-            values: Mapping[str, OpaqueCwl] | None = None,
-            outputs: Collection[str] | None = None) -> ResolvedWorkflow:
+def resolve(graph: WorkflowGraph, tools: Mapping[StepId, Tool], *, policy: RunPolicy = RunPolicy()) -> ResolvedWorkflow:
     """The view of a finished compilation's graph.
 
     Args:
         graph (WorkflowGraph): `CompilationResult.graph`: linked, inferred and completed.
         tools (Mapping[StepId, Tool]): The tool every tool step runs, at any depth.
         policy (RunPolicy): The compilation's run policy.
-        values (Mapping[str, OpaqueCwl] | None): This run's values, by root input as the job spells it, each in
-            place of the value the graph binds; `None` keeps the graph's.
-        outputs (Collection[str] | None): The root outputs to keep; `None` keeps them all.
-
-    Raises:
-        ValueError: If `values` or `outputs` names nothing the root has: the caller's mistake, not the user's.
 
     Returns:
         ResolvedWorkflow: The root workflow, every nested workflow inside its calls.
     """
     names = Names.of(graph)
-    root = _workflow(graph, _Level(names, tools, policy, {step.id: step for step in graph.all_steps}, graph, {}))
-    bound = {names.port(binding.name): binding.value for binding in graph.job_bindings}
+    return _workflow(graph, _Level(names, tools, policy, {step.id: step for step in graph.all_steps}, graph, {}))
+
+
+def bind(view: ResolvedWorkflow, *, values: Mapping[str, OpaqueCwl] | None = None,
+         outputs: Collection[str] | None = None) -> ResolvedWorkflow:
+    """`view` for this run.
+
+    Args:
+        view (ResolvedWorkflow): A workflow as `resolve` made it.
+        values (Mapping[str, OpaqueCwl] | None): This run's values, by root input as the job spells it, each in
+            place of the value the root holds; `None` keeps them.
+        outputs (Collection[str] | None): The root outputs to keep; `None` keeps them all.
+
+    Raises:
+        ValueError: If `values` or `outputs` names nothing the root has: the caller's mistake, not the user's.
+    """
+    bound = view.values
     for name in values or {}:
-        if name not in {port.name for port in root.inputs}:
+        if name not in {port.name for port in view.inputs}:
             raise ValueError(f'value {name!r} has no declared workflow input')
     bound.update(values or {})
-    kept = root.outputs
+    kept = view.outputs
     if outputs is not None:
-        if unknown := sorted(set(outputs) - {port.name for port in root.outputs}):
-            raise ValueError(f'workflow {root.name!r} has no output {", ".join(map(repr, unknown))}')
-        kept = tuple(port for port in root.outputs if port.name in outputs)
-    inputs = tuple(replace(port, value=bound.get(port.name), has_value=port.name in bound) for port in root.inputs)
-    return replace(root, inputs=inputs, outputs=kept)
+        if unknown := sorted(set(outputs) - {port.name for port in view.outputs}):
+            raise ValueError(f'workflow {view.name!r} has no output {", ".join(map(repr, unknown))}')
+        kept = tuple(port for port in view.outputs if port.name in outputs)
+    inputs = tuple(replace(port, value=bound.get(port.name), has_value=port.name in bound) for port in view.inputs)
+    return replace(view, inputs=inputs, outputs=kept)
 
 
 def _workflow(graph: WorkflowGraph, outer: '_Level', given: Mapping[str, OpaqueCwl] | None = None) -> ResolvedWorkflow:
     """A workflow's view, inside the level `outer` of the call that runs it, or of nothing for the root; `given` is
     the type each input the call binds holds, which is what its sources deliver (§5)."""
     names = outer.names
-    requirements, fields = _requirements(graph.passthrough, graph.requirements)
+    requirements = _requirements(graph.passthrough, graph.requirements)[0]
     order = written_order(graph)
-    inputs = tuple(WorkflowInput(names.port(port.name), port.declaration,
-                                 made_from=_made_from(port.name, names), span=port.span or graph.span)
+    jobs = {names.port(binding.name): binding.value for binding in graph.job_bindings}
+    inputs = tuple(WorkflowInput(names.port(port.name), port.declaration, jobs.get(names.port(port.name)),
+                                 names.port(port.name) in jobs, made_from=_made_from(port.name, names),
+                                 span=port.span or graph.span)
                    for port in sorted(graph.workflow_inputs, key=lambda port: order(port.name)))
     level = replace(outer, graph=graph, inputs={
         port.name: (given or {}).get(port.name, port.declaration.type.canonical) for port in inputs},
         outside=(*outer.outside, *requirements))
     ins = step_inputs(graph)
     steps = tuple(_step(step, graph.child(step.id), ins[step.id], level) for step in graph.steps)
-    outputs = tuple(WorkflowOutput(names.port(port.name), port.declaration,
-                                   _output_source(port.output_source, level.inputs, names),
+    outputs = tuple(WorkflowOutput(names.port(port.name), port.declaration, _output_source(port, level.inputs, names),
                                    port.span or graph.span)
                     for port in graph.workflow_outputs)
-    documents: tuple[tuple[str, OpaqueCwl], ...] = (('$namespaces', dict(graph.namespaces)),) \
-        if graph.namespaces else ()
-    documents += (('$schemas', list(graph.schemas)),) if graph.schemas else ()
-    return ResolvedWorkflow(graph.name, inputs, outputs, steps, requirements, documents + fields, level.policy,
-                            graph.span)
+    return ResolvedWorkflow(graph.name, inputs, outputs, steps, graph.namespaces, graph.schemas, graph.requirements,
+                            graph.passthrough, level.policy, graph.inlineable, graph.span)
 
 
 def _made_from(name: PortName, names: Names) -> tuple[str, str] | None:
@@ -255,17 +401,17 @@ def _made_from(name: PortName, names: Names) -> tuple[str, str] | None:
     return names.qualified(name.step), names.port(name.port)
 
 
-def _output_source(source: StepOutputRef | OpaqueCwl, inputs: Collection[str], names: Names) -> Ref | str | None:
+def _output_source(port: WorkflowPort, inputs: Collection[str], names: Names) -> OutputSource:
     """An output's source at its workflow's level, as the CWL target writes it: the step output its `outputSource`
-    names; else the workflow input it names; else the text as written, or `None` for no `outputSource`."""
-    match source:
-        case StepOutputRef():
-            return _ref(source, names)
-        case str() if source in inputs:
-            return InputRef(source)
-        case str():
-            return source
-    return None
+    names; else the workflow input it names; else the value as written; `None` for no `outputSource`."""
+    if not port.has_output_source:
+        return None
+    match port.output_source:
+        case StepOutputRef() as ref:
+            return _ref(ref, names)
+        case str() as text if text in inputs:
+            return InputRef(text)
+    return Verbatim(port.output_source)
 
 
 def _requirements(passthrough: tuple[tuple[str, OpaqueCwl], ...],
@@ -316,22 +462,21 @@ def _step(step: StepNode, child: WorkflowGraph | None, ins: tuple[tuple[PortName
     names = level.names
     called = {names.port(port.name): port.declaration for port in child.workflow_inputs} if child is not None else {}
     inputs = tuple(_step_input(name, value, step, called, level) for name, value in ins)
-    requirements, fields = _requirements(step.passthrough)
-    within = replace(level, outside=(*level.outside, *requirements))
+    interpreted = dict(step.interpreted)
+    # A `scatterMethod` with nothing to scatter is not a scatter: a key as written.
+    passthrough = (('scatterMethod', interpreted['scatterMethod']), *step.passthrough) \
+        if interpreted.get('scatter') is None and 'scatterMethod' in interpreted else step.passthrough
+    within = replace(level, outside=(*level.outside, *_requirements(step.passthrough)[0]))
     run: Tool | ResolvedWorkflow = (
         _workflow(child, within, {port.name: port.type for port in inputs}) if child is not None
         else level.tools[step.id])
     outputs = tuple(names.port(port.id.port) for port in step.outputs)
-    interpreted = dict(step.interpreted)
     scatter = (Scatter(tuple(names.port(port) for port in step.scatter_ports), interpreted.get('scatterMethod'))
                if interpreted.get('scatter') is not None else None)
     condition = _condition(interpreted['when'], inputs, scatter) if interpreted.get('when') is not None else None
-    if scatter is None and 'scatterMethod' in interpreted:
-        # A method with nothing to scatter is not a scatter: a key as written.
-        fields = (('scatterMethod', interpreted['scatterMethod']), *fields)
-    return ResolvedStep(names.step(step.id), names.qualified(step.id), run, inputs, outputs, scatter,
-                        condition, requirements, fields, step.span,
-                        _inherited(within.outside) if isinstance(run, Tool) else ())
+    needed = tuple(names.port(port.id.port) for port in step.inputs if needs_value(port.declaration))
+    return ResolvedStep(names.step(step.id), names.qualified(step.id), run, inputs, outputs, scatter, condition,
+                        passthrough, needed, step.span, _inherited(within.outside) if isinstance(run, Tool) else ())
 
 
 # pylint: disable-next=too-many-locals
@@ -339,30 +484,28 @@ def _step_input(name: PortName, value: EmittedValue, step: StepNode, called: Map
                 level: _Level) -> StepInput:
     """One `in:` entry as the CWL target writes it, its sources references at this level; `called` holds the
     declaration of each input of the workflow a call runs."""
-    spelled = level.names.port(name)
+    spelled_name = level.names.port(name)
     port = next((port for port in step.inputs if port.id.port == name), None)
-    declared = called.get(spelled, port.declaration if port is not None else None)
+    declared = called.get(spelled_name, port.declaration if port is not None else None)
     binding = next((binding for binding in step.bindings if binding.sink.port == name), None)
     span = getattr(binding.value, 'span', None) if binding is not None else None
     refs: tuple[PortName | StepOutputRef, ...]
-    fields: dict[str, OpaqueCwl]
-    expression: str | None
+    form: StepValue
+    written: tuple[tuple[str, OpaqueCwl], ...] = ()
     match value:
-        case Source(ref=str() as ref) if level.names.port(ref) not in level.inputs:
+        case Source(ref=str() as ref, shorthand=True) if level.names.port(ref) not in level.inputs:
             # A name `--allow_raw_cwl` lets through unresolved: raw CWL, as `!cwl` writes it.
-            refs, fields, expression = (), {}, str(ref)
+            refs, form = (), Raw(str(ref))
+        case Source(ref=ref, shorthand=True):
+            refs, form = (ref,), Bare(_ref(ref, level.names))
         case Source(ref=ref):
-            refs, fields, expression = (ref,), {}, None
+            refs, form = (ref,), Entry((_ref(ref, level.names),), ())
         case Record(sources=sources, fields=written):
-            refs, fields, expression = sources, dict(written), None
+            refs, form = sources, Entry(tuple(_ref(ref, level.names) for ref in sources), written)
         case Expression(text=text):
-            refs, fields, expression = (), {}, text
-    carried = {'linkMerge', 'pickValue', 'default', 'valueFrom'}
-    return StepInput(
-        spelled, declared, tuple(_ref(ref, level.names) for ref in refs), fields.get('linkMerge'),
-        fields.get('pickValue'), fields.get('default'), 'default' in fields, fields.get('valueFrom'),
-        tuple((key, field) for key, field in fields.items() if key not in carried), expression,
-        _delivered_type([_source_type(ref, level) for ref in refs], fields, declared), span)
+            refs, form = (), Raw(text)
+    return StepInput(spelled_name, declared, form,
+                     _delivered_type([_source_type(ref, level) for ref in refs], dict(written), declared), span)
 
 
 def _ref(ref: PortName | StepOutputRef, names: Names) -> Ref:
@@ -567,64 +710,3 @@ def _plain(port: StepInput) -> bool:
     """Whether a call's binding passes its one source as it is: no merge, pick, default or computed value."""
     return (len(port.sources) == 1 and port.expression is None and port.link_merge is None
             and port.pick_value is None and not port.has_default and port.value_from is None)
-
-
-class Construct(StrEnum):
-    """What a target refuses: the construct of the view a refusal is about."""
-
-    WORKFLOW = 'workflow'
-    WORKFLOW_INPUT = 'workflow input'
-    WORKFLOW_OUTPUT = 'workflow output'
-    STEP = 'step'
-    STEP_INPUT = 'input'
-    WHEN = 'when'
-    SCATTER = 'scatter'
-    CALL = 'call'
-    REQUIREMENT = 'requirement'
-    TOOL = 'tool'
-    POLICY = 'policy'
-
-
-@dataclass(frozen=True, slots=True)
-class Refusal:  # pylint: disable=too-many-instance-attributes
-    """One construct a target cannot lower, where its author wrote it, and the code of the reason.
-
-    It is reported as its `diagnostic`, an error: `<span>: error [<code>] <construct>[ '<subject>']: <reason>`, then
-    `(step '<step>')` for a construct of a step.
-    """
-
-    code: SophiosErrorCode
-    construct: Construct
-    #: The construct's name: an input or output, a requirement class, a policy, or for a tool the tool's file and the
-    #: field's path in it, `echo.cwl: inputs.message.inputBinding`.
-    subject: str | None
-    #: The root workflow's name.
-    workflow: str
-    #: The qualified name of the step it is about; `None` for a construct of the workflow's own.
-    step: str | None
-    span: SourceSpan | None
-    reason: str
-
-    @property
-    def message(self) -> str:
-        """What it says: the construct, its subject, and the reason."""
-        subject = f' {self.subject!r}' if self.subject is not None else ''
-        return f'{self.construct}{subject}: {self.reason}'
-
-    @property
-    def diagnostic(self) -> Diagnostic:
-        """The refusal as Sophios reports any error."""
-        return Diagnostic(Severity.ERROR, self.code, self.message, self.span,
-                          Locator(step=self.step) if self.step is not None else None)
-
-
-class NotLowered(ValueError):
-    """What a target refuses to lower: every refusal, all at once.
-
-    Its text is its `diagnostics`, one line each, as Sophios prints any error.
-    """
-
-    def __init__(self, refusals: tuple[Refusal, ...]) -> None:
-        self.refusals = refusals
-        self.diagnostics = Diagnostics(refusal.diagnostic for refusal in refusals)
-        super().__init__('\n'.join(lines(self.diagnostics)))

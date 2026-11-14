@@ -7,6 +7,7 @@ for the policy as it is emitted, and nothing rewrites the CWL afterwards.
 """
 import hashlib
 import json
+from collections.abc import Sequence
 from copy import deepcopy
 from dataclasses import dataclass
 
@@ -15,9 +16,7 @@ from cwl_utils.expression import scanner
 
 from ..lang.nodes import OpaqueCwl
 from ..wic_types import Cwl
-from .declarations import required
-from .names import Names
-from .types import PortType, StepNode
+from .types import PortType
 
 #: A tool's own shorthand for an output that captures one of its streams.
 _STREAMS = ('stdout', 'stderr')
@@ -46,8 +45,8 @@ class RunPolicy:
         object.__setattr__(self, 'success_codes', tuple(sorted({0, *self.success_codes})))
 
 
-def effective_when(step: StepNode, names: Names, policy: RunPolicy) -> OpaqueCwl:
-    """The `when` `step` is written with: the null checks of every input it requires, then its own.
+def effective_when(authored: OpaqueCwl, needed: Sequence[str], policy: RunPolicy) -> OpaqueCwl:
+    """The `when` a step is written with: the null checks of every input it requires, then its own.
 
     The checks come first, so the author's condition is evaluated only once every
     required input has arrived, and at most once: it is written once, verbatim.
@@ -55,8 +54,6 @@ def effective_when(step: StepNode, names: Names, policy: RunPolicy) -> OpaqueCwl
     its author wrote, or none. A `when` that is neither one `$(...)` nor one
     `${...}` is not a condition cwltool evaluates, and is written as it is.
     """
-    authored = dict(step.interpreted).get('when')
-    needed = [names.port(port.id.port) for port in step.inputs if required(port.declaration)]
     if not policy.partial_failure or not needed:
         return authored
     checks = ' && '.join(f'inputs["{name}"] != null' for name in needed)

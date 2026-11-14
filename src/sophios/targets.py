@@ -16,13 +16,16 @@ from typing import Any, Final, Protocol, TypeVar
 from . import input_output, input_output_nf, realtime
 from .backends import Backend, CwltoolBackend, NextflowBackend, ToilBackend
 from .compiler import cwl_notes
-from .ir.artifacts import CompilationArtifact, CompilationResult
-from .ir.resolved import ResolvedWorkflow
+from .ir import emit
+from .ir.artifacts import CompilationArtifact
+from .ir.locations import absolute_paths
+from .ir.resolved import ResolvedWorkflow, bind
+from .lang.nodes import OpaqueCwl
 from .nf_types import ExecutableNextflowWorkflow
 from .run_setup import Lowered
 from .runners import RUNNERS, Cwltool, Nextflow, Runner, Toil, build, named
-from .runtime_inputs import output_target_inputs
-from .utils_nf import NEXTFLOW as _NEXTFLOW_LOWERING
+from .runtime_inputs import name_output_targets, output_target_inputs
+from .utils_nf import NEXTFLOW as _NEXTFLOW_LOWERING, local_locations_as_paths
 
 ModelT = TypeVar('ModelT')
 
@@ -43,8 +46,12 @@ class Target(Protocol[ModelT]):
         """The command-line flag that asks it to write without running, `--<option>`; None when it writes whenever
         it does not run."""
 
-    def lower(self, result: CompilationResult, view: ResolvedWorkflow) -> Lowered[ModelT]:
-        """The model `result` lowers to, read through `view`, and the notes the target makes.
+    def run_values(self, view: ResolvedWorkflow) -> dict[str, OpaqueCwl]:
+        """`view`'s root values as the target's runner reads them, before a relative path in them is made absolute:
+        the rewrite that must come first, because it reads the path as written."""
+
+    def lower(self, view: ResolvedWorkflow) -> Lowered[ModelT]:
+        """The model `view` lowers to, and the notes the target makes.
 
         Raises:
             NotLowered: The target cannot run the workflow: every refusal, each an error diagnostic with its code.
@@ -60,15 +67,20 @@ class Target(Protocol[ModelT]):
 
 
 class _Cwl:
-    """CWL: it refuses nothing, and its model is the CWL the compile emitted, as it emitted it."""
+    """CWL: it refuses nothing, and its model is the CWL it emits from the view."""
 
     name = 'cwl'
     write_option = 'generate_cwl_workflow'
     takes_plain_cwl = True
 
-    def lower(self, result: CompilationResult, view: ResolvedWorkflow) -> Lowered[CompilationArtifact]:
-        """`result.artifact`, and `wic056` at each `when` that cannot give `true` or `false`."""
-        return Lowered(result.artifact, cwl_notes(view), view)
+    def run_values(self, view: ResolvedWorkflow) -> dict[str, OpaqueCwl]:
+        """Each output-target Directory a name for the run to create: a runner given an absolute path for a
+        Directory would never create it."""
+        return name_output_targets(view.values, output_target_inputs(view))
+
+    def lower(self, view: ResolvedWorkflow) -> Lowered[CompilationArtifact]:
+        """The artifact tree emitted from the view, and `wic056` at each `when` that cannot give `true` or `false`."""
+        return Lowered(emit.artifact_tree(view), cwl_notes(view), view)
 
     def clear(self, basepath: Path) -> None:
         """Nothing: a write replaces every document it names."""
@@ -88,9 +100,13 @@ class _Nextflow:
     write_option = None
     takes_plain_cwl = False
 
-    def lower(self, result: CompilationResult,  # pylint: disable=unused-argument
-              view: ResolvedWorkflow) -> Lowered[ExecutableNextflowWorkflow]:
-        """The model the view lowers to, and the notes the lowering made; it never reads `result`'s CWL."""
+    def run_values(self, view: ResolvedWorkflow) -> dict[str, OpaqueCwl]:
+        """Each local `location` a `path`, and no format: the model refuses a URI, which an absolute `location` is."""
+        values: dict[str, OpaqueCwl] = local_locations_as_paths(view.values)
+        return values
+
+    def lower(self, view: ResolvedWorkflow) -> Lowered[ExecutableNextflowWorkflow]:
+        """The model the view lowers to, and the notes the lowering made."""
         model, notes = _NEXTFLOW_LOWERING.lower(view)
         return Lowered(model, notes, view)
 
@@ -109,6 +125,12 @@ class _Nextflow:
 
 #: Every target, by name.
 TARGETS: Final[Mapping[str, Target[Any]]] = MappingProxyType({'cwl': _Cwl(), 'nextflow': _Nextflow()})
+
+
+def for_run(row: Target[Any], view: ResolvedWorkflow, root_dir: Path) -> ResolvedWorkflow:
+    """`view` for a local run of `row`: its values as the runner reads them, each relative path read against
+    `root_dir` and written absolute, because a runner does not run where the workflow's paths are read."""
+    return bind(view, values=absolute_paths(row.run_values(view), root_dir))
 
 
 def target(name: str) -> Target[Any]:

@@ -13,7 +13,8 @@ from sophios.compiler import CompileSettings, compile_source, resolved_view
 from sophios.input_output_nf import write_nextflow_artifacts
 from sophios.ir.artifacts import CompilationResult
 from sophios.ir.frontdoor import bundle_from_disk
-from sophios.ir.resolved import NotLowered
+from sophios.ir.refusals import NotLowered
+from sophios.ir.resolved import bind
 from sophios.lang.diagnostics import Diagnostic
 from sophios.nf_types import (
     ExecutableNextflowWorkflow,
@@ -136,14 +137,14 @@ def compiled_case(data: Yaml) -> CompilationResult:
 
 def lowered(result: CompilationResult, values: Yaml | None = None) -> ExecutableNextflowWorkflow:
     """The Nextflow model of `result`, its root inputs given `values` in place of the values the graph holds."""
-    return NEXTFLOW.lower(resolved_view(result, values=values))[0]
+    return NEXTFLOW.lower(bind(resolved_view(result), values=values))[0]
 
 
 def lowered_case(data: Yaml) -> tuple[ExecutableNextflowWorkflow, tuple[Diagnostic, ...]]:
     """A case's model and notes: compiled, given its `job` as the workflow's values, keeping the outputs it declares."""
     document, _tools = _case_document(data)
-    return NEXTFLOW.lower(resolved_view(compiled_case(data), values=data.get("job", {}),
-                                        outputs=list(document.get("outputs", {}))))
+    return NEXTFLOW.lower(bind(resolved_view(compiled_case(data)), values=data.get("job", {}),
+                               outputs=list(document.get("outputs", {}))))
 
 
 def refusal_of(root: Path) -> NotLowered:

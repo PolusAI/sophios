@@ -29,7 +29,7 @@ from sophios import run_local, run_setup, targets
 from sophios.input_output import SHIPPED_RENAMINGS
 from sophios.run_local import RunHandle
 from sophios.run_status import RunResult
-from sophios.ir.artifacts import CompilationArtifact, CompilationResult
+from sophios.ir.artifacts import CompilationResult
 from sophios.ir.complete import coerce_job_value
 from sophios.ir.frontdoor import SourceBundle
 from sophios.ir.infer import InferencePolicy
@@ -37,8 +37,9 @@ from sophios.ir.locations import absolute_paths
 from sophios.ir.policy import RunPolicy
 from sophios.ir.realtime import ADAPTER, Declaration
 from sophios.ir.resolve import RegistrySnapshot
-from sophios.ir.resolved import NotLowered, ResolvedWorkflow
-from sophios.ir.types import AuthoredName, WorkflowGraph
+from sophios.ir.refusals import NotLowered
+from sophios.ir.resolved import ResolvedWorkflow, bind
+from sophios.ir.types import AuthoredName
 from sophios.lang import CwlRecord, Diagnostic, Diagnostics, Document, ParseResult, Severity, SophiosError, render
 from sophios.lang.cwl import SCATTER_METHODS
 from sophios.lang.diagnostics import report
@@ -48,7 +49,7 @@ from sophios.lang.error_codes import SophiosErrorCode
 from sophios.runners import Cwltool, Nextflow, Runner, RunSettings, Toil  # pylint: disable=unused-import
 from sophios.runtime_inputs import output_target_inputs, resolve_file_formats, runner_job_inputs
 from sophios.utils_cwl import tool_process
-from sophios.wic_types import DEFAULT_BASEPATH, GraphSettings, Json, StepId, Tool, Tools
+from sophios.wic_types import DEFAULT_BASEPATH, GraphSettings, Json, StepId, Tool, Tools, Yaml
 
 from ._inference import Inference
 from ._errors import InvalidCLTError, InvalidStepError
@@ -404,29 +405,26 @@ def _compile_bundle(  # pylint: disable=too-many-arguments
         ParseResult(workflow_document(workflow), Diagnostics()),
         Path(workflow.process_name).stem,
         RegistrySnapshot.from_tools(merged_tools, workflows=_nested_documents(workflow)))
-    return bundle, _with_bound_values(workflow, compiler.compile_source(bundle, settings, quiet=quiet))
+    result = compiler.compile_source(bundle, settings, quiet=quiet)
+    _bound_values(workflow, compiler.resolved_view(result))  # refuses a value that does not coerce
+    return bundle, result
 
 
-def _bound_values(workflow: "Workflow", graph: WorkflowGraph) -> dict[str, Any]:
+def _bound_values(workflow: "Workflow", view: ResolvedWorkflow) -> dict[str, Any]:
     """Each value bound on one of the workflow's own inputs, as an inputs file gives it, in the form a value written
     on a step takes (design §4.3)."""
-    declarations = {port.name: port.declaration for port in graph.workflow_inputs}
-    return {parameter.name: coerce_job_value(AuthoredName(parameter.name), declarations[AuthoredName(parameter.name)],
+    declarations = {port.name: port.declaration for port in view.inputs}
+    return {parameter.name: coerce_job_value(AuthoredName(parameter.name), declarations[parameter.name],
                                              serialize_value(binding.value), span=binding.span)
             for parameter in workflow._inputs if (binding := parameter._binding) is not None and not binding.linked}
-
-
-def _with_bound_values(workflow: "Workflow", result: CompilationResult) -> CompilationResult:
-    """`result`, whose job holds each value bound on one of the workflow's own inputs (`_bound_values`)."""
-    bound = _bound_values(workflow, result.graph)
-    return replace(result, artifact=replace(result.artifact, job_inputs={**result.artifact.job_inputs, **bound}))
 
 
 def _view(workflow: "Workflow", result: CompilationResult) -> ResolvedWorkflow:
     """The view a target lowers, whichever target: the workflow's bound values, and the outputs it declares, when it
     declares any."""
-    return compiler.resolved_view(result, values=_bound_values(workflow, result.graph),
-                                  outputs=[output.name for output in workflow._outputs] or None)
+    view = compiler.resolved_view(result)
+    return bind(view, values=_bound_values(workflow, view),
+                outputs=[output.name for output in workflow._outputs] or None)
 
 
 #: The background of a drawing from Python: opaque, so it reads in a light or a dark notebook,
@@ -461,23 +459,6 @@ def draw_workflow(
     return drawing.draw(result, bundle, settings, bundle.name, background=background)
 
 
-def _one_document(workflow: "Workflow", result: CompilationResult) -> CompilationArtifact:
-    """The one document `compile()` returns and `run()` runs: every process embedded,
-    and only the outputs the workflow declares, when it declares any."""
-    return _declared_outputs(workflow, pc.inline_artifact_runs(result.artifact))
-
-
-def _declared_outputs(workflow: "Workflow", artifact: CompilationArtifact) -> CompilationArtifact:
-    """`artifact` with only the outputs the workflow declares, when it declares any."""
-    if not workflow._outputs:
-        return artifact
-    match artifact.cwl.get("outputs"):
-        case dict() as outputs:
-            declared = {output.name: outputs[output.name] for output in workflow._outputs if output.name in outputs}
-            return replace(artifact, cwl={**artifact.cwl, "outputs": declared})
-    return artifact
-
-
 class ServiceDocument(NamedTuple):
     """What a remote service is sent to run `workflow`: see `service_document`."""
 
@@ -494,7 +475,7 @@ def service_document(workflow: "Workflow", *, tool_registry: Tools | None = None
     """Compile `workflow` for a service that runs it elsewhere: what `compile()` returns, without the local run's
     Directory literals for output directories, which only a local runner reads."""
     result = compile_workflow_result(workflow, tool_registry=tool_registry, inference=inference)
-    artifact = _one_document(workflow, result)
+    artifact = pc.inline_artifact_runs(targets.TARGETS["cwl"].lower(_view(workflow, result)).model)
     return ServiceDocument(copy.deepcopy(artifact.cwl), resolve_file_formats(artifact.job_inputs), result.realtime)
 
 
@@ -504,21 +485,21 @@ def compiled_workflow_from_result(
 ) -> CompiledWorkflow:
     """Build the public boundary from the typed internal result, with the notes the compile and the CWL target
     made."""
-    artifact = _one_document(workflow, result)
     view = _view(workflow, result)
+    lowered = targets.TARGETS["cwl"].lower(view)
+    artifact = pc.inline_artifact_runs(lowered.model)
     return CompiledWorkflow(
         name=workflow.process_name,
         cwl_workflow=copy.deepcopy(artifact.cwl),
         cwl_job_inputs=runner_job_inputs(artifact.job_inputs, output_target_inputs(view)),
         lang_version=result.lang_version,
-        diagnostics=tuple(Diagnostics([*result.diagnostics,
-                                       *targets.TARGETS["cwl"].lower(result, view).notes])),
+        diagnostics=tuple(Diagnostics([*result.diagnostics, *lowered.notes])),
     )
 
 
 def _compiled_nextflow(workflow: "Workflow", result: CompilationResult) -> CompiledNextflowWorkflow:
     """`result` lowered to Nextflow, with every note the compile and the lowering made."""
-    lowered = targets.TARGETS["nextflow"].lower(result, _view(workflow, result))
+    lowered = targets.TARGETS["nextflow"].lower(_view(workflow, result))
     return CompiledNextflowWorkflow(
         nextflow_workflow=lowered.model,
         lang_version=result.lang_version,
@@ -562,10 +543,10 @@ def check_workflow(workflow: "Workflow", options: "RunOptions") -> tuple[Diagnos
     row = targets.target(options.run.runner.target)
     result, analyses = _compiled_for_run(workflow, options, refuse_realtime=False, check=True)
     try:
-        lowered = _lowered_for_run(row, workflow, result)
+        lowered, bound = _lowered_for_run(row, workflow, result)
     except NotLowered as refused:
         return (*result.diagnostics, *refused.diagnostics)
-    _prepared(workflow, options, result=result, lowered=lowered, analyses=analyses, check=True)
+    _prepared(workflow, options, lowered=lowered, bound=bound, analyses=analyses, check=True)
     return (*result.diagnostics, *lowered.notes)
 
 
@@ -669,9 +650,9 @@ def _run_request(workflow: "Workflow", options: RunOptions, *, refuse_realtime: 
     logger.info("Running %s", workflow.process_name)
     plugins.logging_filters()
     result, analyses = _compiled_for_run(workflow, options, refuse_realtime=refuse_realtime, check=False)
-    lowered = _lowered_for_run(row, workflow, result)
+    lowered, bound = _lowered_for_run(row, workflow, result)
     report(lowered.notes)
-    request = _prepared(workflow, options, result=result, lowered=lowered, analyses=analyses, check=False)
+    request = _prepared(workflow, options, lowered=lowered, bound=bound, analyses=analyses, check=False)
     return replace(request, diagnostics=(*result.diagnostics, *lowered.notes))
 
 
@@ -701,14 +682,16 @@ def _compiled_for_run(workflow: "Workflow", options: RunOptions, *, refuse_realt
 
 
 def _lowered_for_run(row: targets.Target[Any], workflow: "Workflow",
-                     result: CompilationResult) -> run_setup.Lowered[Any]:
-    """`result` lowered by `row` for a runner, which does not run where the workflow's relative paths are read."""
-    return row.lower(result, run_setup.absolute_view(_view(workflow, result), Path.cwd()))
+                     result: CompilationResult) -> tuple[run_setup.Lowered[Any], Yaml]:
+    """`result` lowered by `row` for a runner, which does not run where the workflow's relative paths are read, and
+    the values bound in the workflow as the author wrote their paths."""
+    view = _view(workflow, result)
+    return row.lower(targets.for_run(row, view, Path.cwd())), row.run_values(view)
 
 
 # pylint: disable-next=too-many-arguments
-def _prepared(workflow: "Workflow", options: RunOptions, *, result: CompilationResult,
-              lowered: run_setup.Lowered[Any], analyses: tuple[realtime.Analysis, ...],
+def _prepared(workflow: "Workflow", options: RunOptions, *,
+              lowered: run_setup.Lowered[Any], bound: Yaml, analyses: tuple[realtime.Analysis, ...],
               check: bool) -> backends.RunRequest:
     """Write what `options.run`'s runner reads and make the machine ready for it: the run's request.
 
@@ -716,12 +699,12 @@ def _prepared(workflow: "Workflow", options: RunOptions, *, result: CompilationR
     """
     run = options.run
     if run.runner.target == "cwl":
-        lowered = replace(lowered, model=_one_document(workflow, result))
+        lowered = replace(lowered, model=pc.inline_artifact_runs(lowered.model))
         analyses = tuple(replace(analysis, artifact=pc.inline_artifact_runs(analysis.artifact))
                          for analysis in analyses)
     prepared = targets.backend(run.runner).prepare(
         lowered, analyses, Path(options.basepath),
-        run_setup.Settings(run, Path.cwd(), inputs_file_named="inputs_file", check=check))
+        run_setup.Settings(run, Path.cwd(), bound, inputs_file_named="inputs_file", check=check))
     return backends.RunRequest(workflow.process_name, Path(options.basepath), run,
                                env=dict(options.user_env_vars or {}), realtime_plans=prepared.plans)
 

@@ -1,7 +1,7 @@
 """The typed compiler boundary over the phase pipeline."""
 import re
 import sys
-from collections.abc import Collection, Iterator, Mapping
+from collections.abc import Iterator
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,8 +12,7 @@ from . import utils_cwl
 from .input_output import SHIPPED_RENAMINGS, dump_wic_yaml
 
 from .ir.complete import complete
-from .ir.artifacts import CompilationArtifact, CompilationResult
-from .ir.emit import emit, emit_job_inputs, surface
+from .ir.artifacts import CompilationResult
 from .ir.infer import InferencePolicy, InsertionCatalog, infer
 from .ir.link import link
 from .ir.namespaces import declare_namespaces
@@ -22,12 +21,12 @@ from .ir.pipeline import front_end
 from .ir.realtime import extract
 from .ir.resolve import RegistrySnapshot, ToolCheck, ToolDefinition
 from .ir.names import NAMESPACE_SEPARATOR, Names
-from .ir.policy import RunPolicy, tolerant_tool
+from .ir.policy import RunPolicy
 from .ir.resolved import ResolvedWorkflow, non_boolean_whens, resolve
 from .ir.types import RegistryKey, StepId, StepNode, WorkflowGraph
 from .lang import versions
 from .lang.diagnostics import Diagnostic, Diagnostics, Locator, Severity, SophiosError
-from .lang.nodes import CwlRecord, OpaqueCwl, UnresolvedName
+from .lang.nodes import CwlRecord, UnresolvedName
 from .lang.parser import Grammar
 from .lang.error_codes import SophiosErrorCode
 from .wic_types import Cwl, Tool
@@ -82,10 +81,10 @@ def compile_source(bundle: SourceBundle,
     graph = declare_namespaces(inferred.graph, bundle.registry)
     names = Names.of(graph)
     diagnostics = Diagnostics([*inferred.diagnostics, *dict.fromkeys(_when_notes(graph, names))])
-    artifact = _artifact_tree(graph, graph.name, names, _Descriptions(bundle.registry), policy=settings.policy)
+    tools = dict(_tools(graph, _Descriptions(bundle.registry)))
     if not quiet:
         print('finishing compilation of', bundle.name)
-    return CompilationResult(graph, artifact, diagnostics, realtime, policy=settings.policy)
+    return CompilationResult(graph, tools, diagnostics, realtime, policy=settings.policy)
 
 
 def _tool_check() -> ToolCheck:
@@ -104,16 +103,14 @@ def _tool_check() -> ToolCheck:
     return check
 
 
-def resolved_view(result: CompilationResult, *, values: Mapping[str, OpaqueCwl] | None = None,
-                  outputs: Collection[str] | None = None) -> ResolvedWorkflow:
+def resolved_view(result: CompilationResult) -> ResolvedWorkflow:
     """The resolved view of `result`'s graph, with `result.policy`, for a target to lower
-    (design_docs/resolved-view-design.md §4); `values` and `outputs` are `resolve`'s.
+    (design_docs/resolved-view-design.md §4); `bind` gives it a run's values and kept outputs.
 
-    Each tool step is paired with the tool document the CWL target writes for it, its child artifact, so
-    nothing that reads the view reads the artifact tree.
+    Each tool step is paired with the tool the compile found for it, `result.tools`: the view is built from
+    the graph and its tools, never from an emitted document.
     """
-    return resolve(result.graph, dict(_tools(result.graph, result.artifact)), policy=result.policy,
-                   values=values, outputs=outputs)
+    return resolve(result.graph, result.tools, policy=result.policy)
 
 
 def cwl_notes(view: ResolvedWorkflow) -> tuple[Diagnostic, ...]:
@@ -127,14 +124,15 @@ def cwl_notes(view: ResolvedWorkflow) -> tuple[Diagnostic, ...]:
         for step, problem in non_boolean_whens(view))
 
 
-def _tools(graph: WorkflowGraph, artifact: CompilationArtifact) -> Iterator[tuple[StepId, Tool]]:
-    """Every tool step at any depth, with the tool its child artifact writes for it."""
-    for step, child in zip(graph.steps, artifact.children, strict=True):
+def _tools(graph: WorkflowGraph, descriptions: '_Descriptions') -> Iterator[tuple[StepId, Tool]]:
+    """Every tool step at any depth, with the tool it runs."""
+    for step in graph.steps:
         called = graph.child(step.id)
         if called is None:
-            yield step.id, Tool(child.run_path, child.cwl)
+            tool = descriptions.tool(step)
+            yield step.id, Tool(tool.run_path, descriptions.of(step, tool))
         else:
-            yield from _tools(called, child)
+            yield from _tools(called, descriptions)
 
 
 #: `inputs.name` and `inputs["name"]` inside a `when:` expression.
@@ -226,39 +224,8 @@ def _check_unresolved_names(graph: WorkflowGraph, allow_raw_cwl: bool,
         _check_unresolved_names(child, allow_raw_cwl, names)
 
 
-def _artifact_tree(graph: WorkflowGraph, name: str, names: Names, descriptions: '_Descriptions', *,
-                   policy: RunPolicy) -> CompilationArtifact:
-    """One artifact per emitted document, each surfaced exactly once, a child
-    named as the `run:` its parent emits, so the file written is the one it runs,
-    and each written for `policy`."""
-    document = surface(graph, names, policy=policy)
-    children: list[CompilationArtifact] = []
-    for step in document.steps:
-        assert step.run is not None
-        child = graph.child(step.id)
-        if child is not None:
-            children.append(_artifact_tree(child, names.file(step.id), names, descriptions, policy=policy))
-            continue
-        tool = descriptions.tool(step)
-        # Named by the `run:` the parent emits, so the file written is the one it runs.
-        children.append(CompilationArtifact(
-            (names.step(step.id),), names.file(step.id), tool.run_path,
-            tolerant_tool(descriptions.of(step, tool), policy), {}, None,
-        ))
-
-    return CompilationArtifact(
-        tuple(names.step(part) for part in graph.namespace.parts),
-        name,
-        f'{name}.cwl',
-        emit(document, names),
-        emit_job_inputs(document, names),
-        graph,
-        tuple(children),
-    )
-
-
 class _Descriptions:
-    """The tool each step runs, as its artifact carries it, for one compile.
+    """The tool each step runs, for one compile.
 
     As read, unless it refers to a file by a path relative to where it was
     written: then packed by cwltool there, once however many steps run it, so

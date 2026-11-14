@@ -5,7 +5,7 @@ the command line and `Workflow.run()`: bind the job values, write the workflow
 and its real-time analyses, check the machine and pull the images, and name the
 images without entrypoints when asked.
 """
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from collections.abc import Collection
 from typing import Generic, TypeVar
 from pathlib import Path
@@ -13,12 +13,11 @@ import tempfile
 
 from sophios import input_output, post_compile, preflight, realtime
 from sophios.ir.artifacts import CompilationArtifact
-from sophios.ir.locations import absolute_paths
 from sophios.ir.resolved import ResolvedWorkflow
 from sophios.lang.diagnostics import Diagnostic
 from sophios.runners import RunSettings
 from sophios.runtime_inputs import runner_job_inputs
-from sophios.utils_nf import local_locations_as_paths
+from sophios.wic_types import Yaml
 
 ModelT = TypeVar('ModelT')
 
@@ -31,6 +30,8 @@ class Settings:
         run: The run: its runner, whose settings the pre-flight checks the machine for, and what is given to the job.
         root_dir: Where a relative path bound in the workflow is read: the `.wic`'s
             directory from the command line, the working directory from Python.
+        bound: The values bound in the workflow as the runner reads them, a relative path as the author wrote it
+            (`Target.run_values`): what the pre-flight checks, and its messages name.
         inputs_file_named: How the user named `run.inputs_file`, for the pre-flight's messages.
         check: Check the machine and stop: nothing is pulled.
         pull: Pull the images the run uses; off when an earlier step pulled them.
@@ -38,6 +39,7 @@ class Settings:
 
     run: RunSettings
     root_dir: Path
+    bound: Yaml
     inputs_file_named: str = '--inputs_file'
     check: bool = False
     pull: bool = True
@@ -51,15 +53,6 @@ class Lowered(Generic[ModelT]):
     model: ModelT
     notes: tuple[Diagnostic, ...]
     view: ResolvedWorkflow
-
-
-def absolute_view(view: ResolvedWorkflow, root_dir: Path) -> ResolvedWorkflow:
-    """`view`, each value a run reads a relative File or Directory path of, written absolute against `root_dir`:
-    a runner does not run where the workflow's paths are read."""
-    bound = absolute_paths(local_locations_as_paths({port.name: port.value for port in view.inputs
-                                                     if port.has_value}), root_dir)
-    return replace(view, inputs=tuple(replace(port, value=bound[port.name]) if port.name in bound else port
-                                      for port in view.inputs))
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,9 +70,9 @@ def prepare(artifact: CompilationArtifact, analyses: tuple[realtime.Analysis, ..
     """Write `artifact` and `analyses` under `basepath` as they are given, and make the machine ready to run them.
 
     `artifact` is written as it is: a tree from the command line, one document under
-    `--cwl_inline_runtag` and from Python. Its job is the values bound in the workflow,
-    a relative path read against `settings.root_dir`, under the inputs file's. Each of `output_targets`
-    (`runtime_inputs.output_target_inputs`) is a name for the run to create.
+    `--cwl_inline_runtag` and from Python. Its job is the values bound in the workflow, as `targets.for_run` made
+    them for the runner, under the inputs file's. The pre-flight reads `settings.bound`, the same values as written. Each of `output_targets` (`runtime_inputs.output_target_inputs`)
+    is a name for the run to create.
 
     A check (`settings.check`) writes them into a temporary directory instead, removed
     when the check ends, so it leaves `basepath` as it found it.
@@ -105,16 +98,13 @@ def inputs_job(inputs_file: str, named: str, output_targets: Collection[str] = (
 def _prepare(artifact: CompilationArtifact, analyses: tuple[realtime.Analysis, ...], basepath: Path,
              settings: Settings, output_targets: Collection[str]) -> Prepared:
     """`prepare`, writing under `basepath`."""
-    # As the runner gets them, in which an output-target Directory is a name for the run to create.
-    bound = runner_job_inputs(artifact.job_inputs, output_targets)
-    # The runner reads the job from `basepath`, so a relative path is written absolute.
-    artifact = replace(artifact, job_inputs=absolute_paths(bound, settings.root_dir))
     input_output.write_artifacts_to_disk(artifact, basepath, settings.run.inputs_file, output_targets=output_targets)
     plans = realtime.write(analyses, basepath, artifact.name, settings.root_dir)
     # The pre-flight reads the CWL the runner will get, so it runs after the write.
     documents = (basepath / f'{artifact.name}.cwl', *realtime.documents(analyses, basepath))
     extra = inputs_job(settings.run.inputs_file, settings.inputs_file_named, output_targets)
     # The inputs file wins over a value bound in the workflow for the same input when the job is written.
+    bound = runner_job_inputs(settings.bound, output_targets)
     jobs = (preflight.Job({key: value for key, value in bound.items() if extra is None or key not in extra.values},
                           settings.root_dir, 'the workflow'), *((extra,) if extra else ()))
     preflight.ready(documents, settings.run, jobs, pulling=settings.pull and not settings.check)

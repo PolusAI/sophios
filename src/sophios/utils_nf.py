@@ -15,11 +15,12 @@ from typing import Any, Final, TypeGuard, TypeVar
 from cwl_utils.parser import cwl_v1_2 as standard
 
 from .ir.complete import coerce_job_value
+from .ir.refusals import Construct, NotLowered, Refusal
 from .ir.resolved import (
-    Construct, Crossing, InputRef, NotLowered, Ref, Refusal, Requirement, ResolvedStep,
+    Crossing, InputRef, Ref, Requirement, ResolvedStep,
     ResolvedWorkflow, StepInput, Through, ToolStep, WorkflowInput, WorkflowOutput, boolean_problem, output_sources,
     output_unbound,
-    tool_steps,
+    spelling, tool_steps,
 )
 from .ir.types import AuthoredName, PortDeclaration, PortType
 from .lang.cwl import (
@@ -1590,22 +1591,19 @@ class _Step:
                 yield port, spelled
 
 
-def _spelled(found: Through) -> str:
-    """A source as a finding names it: a workflow input's name, or `<step>/<port>`."""
-    ref = found.ref
-    return ref.name if isinstance(ref, InputRef) else f"{ref.step}/{ref.port}"
-
-
 def _idioms(port: StepInput) -> set[str]:
     """The fixed step-input idioms a step input writes."""
     return {name for name, written in (("default", port.has_default), ("linkMerge", port.link_merge is not None),
                                        ("pickValue", port.pick_value is not None)) if written}
 
 
+_NULLABLE_FIELDS = frozenset({"linkMerge", "pickValue", "valueFrom"})
+
+
 def _record_fields(port: StepInput) -> set[str]:
-    """Every WorkflowStepInput field a step input writes besides its sources."""
-    return _idioms(port) | {name for name, _value in port.fields} | (
-        {"valueFrom"} if port.value_from is not None else set())
+    """Every WorkflowStepInput field a step input writes besides its sources: a `linkMerge`, `pickValue` or
+    `valueFrom` written as null says nothing."""
+    return {name for name, value in port.written if value is not None or name not in _NULLABLE_FIELDS}
 
 
 def _wired(port: StepInput, sources: tuple[Through | Crossing, ...]) -> list[str] | None:
@@ -1621,7 +1619,7 @@ def _wired(port: StepInput, sources: tuple[Through | Crossing, ...]) -> list[str
     if port.sources:
         if _record_fields(port) - consumed(FIELDS["WorkflowStepInput"]):
             return None
-        return [_spelled(found) for found in sources if isinstance(found, Through)]
+        return [spelling(found.ref) for found in sources if isinstance(found, Through)]
     return [] if port.has_default and _record_fields(port) <= {"default", "label"} else None
 
 
@@ -2391,7 +2389,7 @@ def _workflow_output_connections(outputs: tuple[tuple[WorkflowOutput, tuple[Thro
     for port, found in outputs:
         destination_port = _identifier(port.name)
         sources = [port.source] if isinstance(port.source, str) else [
-            _spelled(source) for source in found if isinstance(source, Through)]
+            spelling(source.ref) for source in found if isinstance(source, Through)]
         for source in sources:
             source_process, source_port = _source_endpoint(source, step_names)
             if source_process is None:
@@ -2683,8 +2681,8 @@ def _not_lowered(findings: Iterable[_Finding], view: ResolvedWorkflow) -> NotLow
 def _analysis(lowering: _Lowering) -> tuple[ExecutableNextflowWorkflow, tuple[Diagnostic, ...]]:
     """The workflow each tool step of the view lowers into, and the notes made on the way.
 
-    Under partial failure the policy is the one refusal: the tools the view carries are written for it (design §2),
-    so what the target would refuse in them, such as their `successCodes`, is the policy's, not their author's.
+    Under partial failure the policy is the one refusal: it is the CWL target's, and the tools the view carries are
+    not edited for it.
 
     Raises:
         NotLowered: Every construct of the view the target cannot lower.

@@ -412,7 +412,7 @@ class NextflowBackend:
         `basepath`, the check, and each output-target Directory input that names nothing yet made.
 
         The workflow was lowered from a view whose relative File or Directory paths are read against
-        `settings.root_dir` and written absolute (`run_setup.absolute_view`): Nextflow runs from its
+        `settings.root_dir` and written absolute (`targets.for_run`): Nextflow runs from its
         `nextflow_directory`.
 
         A check (`settings.check`) writes them into a temporary directory instead, removed when the check ends,
@@ -430,7 +430,7 @@ class NextflowBackend:
                  basepath: Path, settings: run_setup.Settings) -> run_setup.Prepared:
         """`prepare`, writing under `basepath`."""
         view, workflow = lowered.view, lowered.model
-        bound = {port.name: port.value for port in view.inputs if port.has_value}
+        bound = view.values
         directory = nextflow_directory(basepath, view.name)
         io_nf.remove_nextflow_artifacts(directory)
         documents = io_nf.write_nextflow_artifacts(workflow, directory)
@@ -439,8 +439,8 @@ class NextflowBackend:
         plans = realtime.write(analyses, basepath, view.name, settings.root_dir)
         targets = output_target_inputs(view)
         # An output-target Directory need not exist yet: it is made below.
-        job = preflight.Job({name: value for name, value in bound.items() if name not in targets}, settings.root_dir,
-                            'the workflow')
+        job = preflight.Job({name: value for name, value in settings.bound.items() if name not in targets},
+                            settings.root_dir, 'the workflow')
         self.check(documents, (job,), settings.run)
         if not settings.check:
             # The pipeline stages an output-target Directory as an input, so it must exist; a CWL runner makes it.

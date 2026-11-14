@@ -32,6 +32,7 @@ from sophios.lang import parse
 from sophios.lang.diagnostics import SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
 from sophios.ir.artifacts import CompilationArtifact, CompilationResult
+from sophios.ir.names import Names
 from sophios.ir.types import WorkflowGraph
 from sophios.wic_types import Json
 
@@ -39,6 +40,7 @@ from sophios.wic_types import Json
 from .test_setup import CorpusRegistry, corpus_config, corpus_registry, workflow_paths
 from .cwl_validation import validate_cwl
 from .equivalence import Strength, equivalent, flatten_model
+from .hermetic import cwl_tree
 
 yml_paths = workflow_paths()
 
@@ -222,10 +224,12 @@ def run_workflows(
     # As the CLI prepares it: a relative path is read beside the workflow. The pull lane pulls; the run
     # lanes run on the images it pulled.
     # The view is read from the compiled tree, before the inline flags reshape it.
-    lowered = targets.target('cwl').lower(compilation, sophios.compiler.resolved_view(compilation))
+    row, root = targets.target('cwl'), Path(args.yaml).parent.absolute()
+    view = sophios.compiler.resolved_view(compilation)
+    lowered = row.lower(targets.for_run(row, view, root))
     lowered = replace(lowered, model=_inlined(lowered.model, args))
     prepared = backend.prepare(lowered, (), Path(basepath), run_setup.Settings(
-        run, Path(args.yaml).parent.absolute(), pull=docker_pull_only))
+        run, root, row.run_values(view), pull=docker_pull_only))
     if docker_pull_only:
         return
     # NOTE: Do not use --cachedir; we want to actually test everything.
@@ -303,6 +307,11 @@ def _dependencies(graph: WorkflowGraph) -> nx.DiGraph:
     return dependencies
 
 
+def _workflows(graph: WorkflowGraph) -> list[WorkflowGraph]:
+    """`graph` and every workflow nested in it."""
+    return [graph, *(each for child in graph.children for each in _workflows(child))]
+
+
 def is_isomorphic_with_timeout(g_m: isomorphism.GraphMatcher, yml_path_str: str) -> None:
     """`g_m.is_isomorphic()` under a 10 s alarm, naming the workflow to add to large_workflows when it times out."""
     def handler(_signum, _frame):  # type: ignore
@@ -319,14 +328,16 @@ def is_isomorphic_with_timeout(g_m: isomorphism.GraphMatcher, yml_path_str: str)
         signal.alarm(0)
 
 
-def _check_embedding_independence(yml_path_str: str, nested: CompilationArtifact, registry: CorpusRegistry,
-                                  options: sophios.compiler.CompileSettings) -> None:
+def _check_embedding_independence(yml_path_str: str, graph: WorkflowGraph, nested: CompilationArtifact,
+                                  registry: CorpusRegistry, options: sophios.compiler.CompileSettings) -> None:
     """Each subworkflow compiled alone, from its own file, as a root is the CWL it is embedded as (but for `run:`
     paths, whose namespaces differ in length) and an isomorphic graph."""
-    for embedded in [artifact for artifact in _artifacts(nested) if artifact.graph is not None][1:]:
-        assert embedded.graph is not None
-        sub_path = _discover(yml_paths, embedded.graph.name)
-        assert sub_path is not None, f'{embedded.graph.name} is embedded but has no file of its own'
+    names = Names.of(graph)
+    graphs = {tuple(names.step(part) for part in each.namespace.parts): each for each in _workflows(graph)}
+    for embedded in [artifact for artifact in _artifacts(nested) if artifact.cwl['class'] == 'Workflow'][1:]:
+        inside = graphs[embedded.namespace]
+        sub_path = _discover(yml_paths, inside.name)
+        assert sub_path is not None, f'{inside.name} is embedded but has no file of its own'
         try:
             alone = sophios.compiler.compile_source(frontdoor.bundle_from_disk(sub_path, yml_paths, registry.tools),
                                                     options, quiet=True)
@@ -335,8 +346,8 @@ def _check_embedding_independence(yml_path_str: str, nested: CompilationArtifact
                 continue
             raise
         assert (sophios.utils.recursively_delete_dict_key('run', embedded.cwl)
-                == sophios.utils.recursively_delete_dict_key('run', alone.artifact.cwl)), embedded.graph.name
-        is_isomorphic_with_timeout(isomorphism.DiGraphMatcher(_dependencies(embedded.graph),
+                == sophios.utils.recursively_delete_dict_key('run', cwl_tree(alone).cwl)), inside.name
+        is_isomorphic_with_timeout(isomorphism.DiGraphMatcher(_dependencies(inside),
                                                               _dependencies(alone.graph)), yml_path_str)
 
 
@@ -372,7 +383,7 @@ def _kept_calls(artifact: CompilationArtifact) -> list[str]:
     return [step['id'] for document in _artifacts(artifact)
             for step, child in zip(document.cwl.get('steps', []), document.children)
             if child.cwl.get('class') == 'Workflow'
-            and (set(step) - {'id', 'in', 'run', 'out'} or (child.graph is not None and not child.graph.inlineable))]
+            and (set(step) - {'id', 'in', 'run', 'out'} or not child.inlining.inlineable)]
 
 
 def _check_flatten_keeps_meaning(yml_path_str: str, nested: CompilationArtifact,
@@ -402,8 +413,8 @@ def _check_inline_flags_change_nothing(yml_path: Path, registry: CorpusRegistry)
     def compiled(flags: list[str]) -> list[tuple[Any, ...]]:
         """Everything in the tree but the drawings, which are new objects each compile."""
         args = get_args(str(yml_path), flags)
-        tree = _inlined(_compiled(yml_path, args, registry).artifact, args)
-        return [(item.namespace, item.name, item.run_path, item.cwl, item.job_inputs, item.graph)
+        tree = _inlined(cwl_tree(_compiled(yml_path, args, registry)), args)
+        return [(item.namespace, item.name, item.run_path, item.cwl, item.job_inputs)
                 for item in _artifacts(tree)]
 
     assert compiled(['--cwl_inline_subworkflows']) == compiled([])
@@ -422,11 +433,11 @@ def test_corpus_compiles_clean_in_every_form(yml_path_str: str, yml_path: Path, 
     Serial: the isomorphism check's alarm needs the main thread."""
     result = _compile_corpus_workflow(yml_path_str, yml_path, corpus_registry)
     options = sophios.cli.settings_from_args(get_args(str(yml_path)))[0]
-    _check_residue(result.artifact)
+    _check_residue(cwl_tree(result))
     if yml_path_str not in large_workflows:
-        _check_embedding_independence(yml_path_str, result.artifact, corpus_registry, options)
-    _check_embedding_keeps_meaning(result.artifact)
-    _check_flatten_keeps_meaning(yml_path_str, result.artifact, capsys)
+        _check_embedding_independence(yml_path_str, result.graph, cwl_tree(result), corpus_registry, options)
+    _check_embedding_keeps_meaning(cwl_tree(result))
+    _check_flatten_keeps_meaning(yml_path_str, cwl_tree(result), capsys)
     if not _calls_a_workflow(yml_path):
         _check_inline_flags_change_nothing(yml_path, corpus_registry)
     for analysis in realtime.compile_analyses(result.realtime, corpus_registry.workflows, corpus_registry.tools,
@@ -465,7 +476,7 @@ def test_corpus_validates_in_cwltool_in_every_form(yml_path_str: str, yml_path: 
     directory-listing defaults it gives the same tool read from its own file: a tool written for CWL v1.0, embedded
     in a v1.2 document with no `cwlVersion` of its own, ran without network access, and every download of the weekly
     lane failed. The large workflows are only validated, as the weekly lane always did."""
-    nested = _compile_corpus_workflow(yml_path_str, yml_path, corpus_registry).artifact
+    nested = cwl_tree(_compile_corpus_workflow(yml_path_str, yml_path, corpus_registry))
     flat = post_compile.flatten_subworkflows(nested)
     for form, artifact in (('flat', flat), ('flat_embedded', inline_artifact_runs(flat))):
         sophios.input_output.write_artifacts_to_disk(artifact, tmp_path / form, output_targets=())

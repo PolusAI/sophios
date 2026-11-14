@@ -172,10 +172,8 @@ class _Stays(Exception):
 
 @dataclass(frozen=True, slots=True)
 class _Call:
-    """A step that runs a workflow, the document it sits in, and the (already flat) workflow it runs."""
+    """A step that runs a workflow, and the (already flat) workflow it runs."""
 
-    document: CompilationArtifact
-    index: int
     step: Yaml
     inner: CompilationArtifact
 
@@ -186,10 +184,8 @@ class _Call:
 
     def announce(self, reason: str) -> None:
         """Say on stderr, in one plain line, that this call stays a subworkflow and why."""
-        node = self.document.graph.steps[self.index] if self.document.graph is not None else None
-        where = f'{node.span}: ' if node is not None and node.span is not None else ''
-        name = node.id.name if node is not None else self.id
-        print(f"Warning! {where}step '{name}' stays a subworkflow under --cwl_inline_subworkflows: {reason}.",
+        where = f'{self.inner.inlining.span}: ' if self.inner.inlining.span is not None else ''
+        print(f"Warning! {where}step '{self.id}' stays a subworkflow under --cwl_inline_subworkflows: {reason}.",
               file=sys.stderr)
 
     def written_keys(self) -> list[str]:
@@ -206,7 +202,7 @@ class _Call:
         carried = self.written_keys()
         if carried:
             raise _Stays('it carries ' + ', '.join(f'`{key}`' for key in carried))
-        if self.inner.graph is not None and not self.inner.graph.inlineable:
+        if not self.inner.inlining.inlineable:
             raise _Stays('it is marked `wic: inlineable: false`')
         for name, value in self.step.get('in', {}).items():
             if _source_of(value) is None or (isinstance(value, dict) and len(value) > 1):
@@ -361,12 +357,12 @@ def flatten_subworkflows(artifact: CompilationArtifact) -> CompilationArtifact:
     children: list[CompilationArtifact] = []
     redirects: dict[str, str] = {}
     dissolved_any = False
-    for index, (step, child) in enumerate(zip(cwl['steps'], artifact.children)):
+    for step, child in zip(cwl['steps'], artifact.children):
         if child.cwl.get('class') != 'Workflow':
             steps.append(step)
             children.append(child)
             continue
-        call = _Call(artifact, index, step, flatten_subworkflows(child))
+        call = _Call(step, flatten_subworkflows(child))
         try:
             if root is None:
                 raise _Stays("the workflow's own requirements are written as a list, which flattening does not read")

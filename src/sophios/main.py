@@ -15,7 +15,7 @@ from sophios.lang import wic_schema
 from sophios.lang.diagnostics import Diagnostics, SophiosError, report
 from sophios.lang.error_codes import SophiosErrorCode
 from sophios.ir.artifacts import CompilationResult
-from sophios.ir.resolved import NotLowered
+from sophios.ir.refusals import NotLowered
 from . import input_output as io
 from . import post_compile as pc
 from . import backends, cli, compiler, drawing, plugins, preflight, realtime, run_local, run_setup, targets
@@ -339,13 +339,13 @@ def _main(args: argparse.Namespace, unknown_args: list[str]) -> None:
     target = targets.target(args.target)
     basepath, root_dir = Path(args.basepath), Path(args.yaml).parent.absolute()
     view = compiler.resolved_view(compilation)
+    bound = target.run_values(view)
     if _is_local_run(args):
-        # A runner does not run where the workflow's relative paths are read.
-        view = run_setup.absolute_view(view, root_dir)
+        view = targets.for_run(target, view, root_dir)
     else:
         target.clear(basepath)
     try:
-        lowered = target.lower(compilation, view)
+        lowered = target.lower(view)
     except NotLowered as refused:
         print('Failed to compile', yaml_path, file=sys.stderr)
         raise SophiosError(refused.diagnostics) from None
@@ -365,7 +365,7 @@ def _main(args: argparse.Namespace, unknown_args: list[str]) -> None:
 
     if _is_local_run(args):
         prepared = targets.backend(run.runner).prepare(lowered, analyses, basepath,
-                                                       run_setup.Settings(run, root_dir, check=args.check))
+                                                       run_setup.Settings(run, root_dir, bound, check=args.check))
         draw_after_write()
         if args.check:
             _checked(prepared.name)

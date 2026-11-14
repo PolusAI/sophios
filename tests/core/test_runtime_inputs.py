@@ -80,7 +80,7 @@ def _written(tmp_path: Path, source: str, inputs_file: str = '') -> Path:
     if inputs_file:
         write_tree(tmp_path, {'job.yml': inputs_file})
     cwl = targets.target('cwl')
-    cwl.write(cwl.lower(result, resolved_view(result)), (), tmp_path / 'out',
+    cwl.write(cwl.lower(resolved_view(result)), (), tmp_path / 'out',
               inputs_file=str(tmp_path / 'job.yml') if inputs_file else '', root_dir=tmp_path)
     return tmp_path / 'out'
 

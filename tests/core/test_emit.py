@@ -16,37 +16,32 @@ from hypothesis import assume, example, given, strategies as st
 from schema_salad.utils import yaml_no_ts  # pylint: disable=no-name-in-module
 
 from sophios import compute, post_compile
+from sophios.compiler import resolved_view
 from sophios.input_output import dump_wic_yaml
 from sophios.ir.artifacts import CompilationArtifact
 from sophios.ir.complete import coerce_job_value, complete
 from sophios.ir.declarations import port_declaration
-from sophios.ir.emit import emit, emit_job_inputs, surface
+from sophios.ir.emit import artifact_tree
 from sophios.ir.infer import infer
 from sophios.ir.link import link
-from sophios.ir.names import Names
 from sophios.ir.pipeline import front_end
+from sophios.ir.policy import RunPolicy
 from sophios.ir.resolve import RegistrySnapshot, resolve
-from sophios.ir.types import (AuthoredName, BoundaryDeclaration, Direction, EdgeOrigin, JobBinding, Namespace, Port,
-                              PortDeclaration, PortId, PortType, RegistryKey, StepId, StepNode, StepOutputRef,
-                              WorkflowGraph, WorkflowPort)
+from sophios.ir.resolved import (Entry, InputRef, OutputRef, ResolvedStep, ResolvedWorkflow, StepInput, WorkflowInput,
+                                 WorkflowOutput, resolve as resolve_view)
+from sophios.ir.types import AuthoredName, EdgeOrigin, PortDeclaration, PortType, WorkflowGraph
 from sophios.lang.cwl import CWL_VERSION
 from sophios.lang.diagnostics import SophiosError
-from sophios.wic_types import StepId as LegacyStepId, Yaml
+from sophios.wic_types import StepId as LegacyStepId, Tool, Yaml
 
 from . import ast_strategies as strat
 from .cwl_validation import validate_cwl
 from .equivalence import Strength, equivalent, flatten_model
-from .hermetic import (COVERAGE, ORACLE, bundle, compile_hermetic, compile_hermetic_cwl, network_refused,
+from .hermetic import (COVERAGE, ORACLE, bundle, compile_hermetic, cwl_tree, network_refused,
                        subworkflow_step)
 from .reference_model import inference_choice
 from .strategies import cwl_types, pinned
 from .synthetic_tools import SYNTHETIC_NS, SYNTHETIC_TOOLS, clt, inputs_of, outputs_of, registered
-
-
-def _render(graph: WorkflowGraph) -> Any:
-    """`graph` emitted as the compiler emits its root document."""
-    names = Names.of(graph)
-    return emit(surface(graph, names), names)
 
 
 def _graphs(graph: WorkflowGraph) -> tuple[WorkflowGraph, ...]:
@@ -75,7 +70,7 @@ def _documents(node: CompilationArtifact) -> list[Any]:
 
 def _addresses(node: CompilationArtifact) -> list[str]:
     """Each step that runs a tool, beneath `node` at any depth, by its address: the calls above it and its name."""
-    calls = {child.namespace[-1]: child for child in node.children if child.graph is not None}
+    calls = {child.namespace[-1]: child for child in node.children if child.cwl['class'] == 'Workflow'}
     return [address for step in node.cwl['steps'] for name in [step['id']]
             for address in ([f'{name}~{inner}' for inner in _addresses(calls[name])] if name in calls else [name])]
 
@@ -130,13 +125,13 @@ def test_a_drawn_workflow_compiles_by_every_law(workflow: Yaml) -> None:  # pyli
 
     source = copy.deepcopy(workflow)
     compiled = compile_hermetic(source)
-    nested = compiled.artifact
-    assert equivalent(_render(inferred.graph), nested.cwl, Strength.UP_TO_EMBEDDING) is None
-    names = Names.of(compiled.graph)
-    document = surface(compiled.graph, names)
-    first = emit(document, names)
+    nested = cwl_tree(compiled)
+    composed = resolve_view(inferred.graph, compiled.tools, policy=compiled.policy)
+    assert equivalent(artifact_tree(composed).cwl, nested.cwl, Strength.UP_TO_EMBEDDING) is None
+    view = resolved_view(compiled)
+    first = artifact_tree(view)
     source.clear()
-    assert equivalent(first, emit(document, names), Strength.IDENTICAL) is None
+    assert equivalent(first.cwl, artifact_tree(view).cwl, Strength.IDENTICAL) is None
 
     request = compute.request_for('oracle', nested.cwl, nested.job_inputs)
     assert (request['workflow'], request['inputs']) == (nested.cwl, nested.job_inputs)
@@ -155,37 +150,22 @@ def test_a_drawn_workflow_compiles_by_every_law(workflow: Yaml) -> None:  # pyli
 
 
 @pytest.mark.fast
-def test_a_hand_built_graph_emits_without_a_compiler_adapter() -> None:
-    """The graph projection cannot be green only through compiler construction.
+def test_a_hand_built_view_emits_without_a_compiler_adapter() -> None:
+    """The lowering cannot be green only through compiler construction.
 
-    Hand-built and surfaced, so this states the document the compiler ships:
-    the `run:` path, the file beside the root named by the root and the step, and nothing of the
-    compiler's own: no format says `edam:`, so no EDAM namespace either.
+    Hand-built, so this states the document the compiler ships: the `run:` path, the file beside the root named by
+    the root and the step, and nothing of the compiler's own: no format says `edam:`, so no EDAM namespace either.
     """
-    namespace = Namespace()
-    step_id = StepId(namespace, 1, 'write')
-    input_id = PortId(step_id, Direction.INPUT, AuthoredName('message'))
-    output_id = PortId(step_id, Direction.OUTPUT, AuthoredName('file'))
-    in_decl = PortDeclaration(PortType('string'))
-    out_decl = PortDeclaration(PortType('File'))
-    step = StepNode(
-        step_id,
-        inputs=(Port(input_id, in_decl.type, in_decl),),
-        outputs=(Port(output_id, out_decl.type, out_decl),),
-        run=RegistryKey('global', 'write'),
-    )
-    graph = WorkflowGraph(
-        namespace, (step,), name='handmade', lang_version='0.0.1',
-        workflow_inputs=(WorkflowPort(AuthoredName('message'), BoundaryDeclaration(in_decl)),),
-        workflow_outputs=(
-            WorkflowPort(AuthoredName('file'), BoundaryDeclaration(out_decl),
-                         StepOutputRef(step_id, AuthoredName('file')), True),),
-        job_bindings=(JobBinding(AuthoredName('message'), 'hello'),),
-        input_mapping=((AuthoredName('message'), (input_id,)),),
-    )
-    names = Names.of(graph)
-    document = surface(graph, names)
-    assert emit(document, names) == {
+    message, file = PortDeclaration(PortType('string')), PortDeclaration(PortType('File'))
+    step = ResolvedStep('write', 'write', Tool('write.cwl', {'class': 'CommandLineTool'}),
+                        (StepInput('message', None, Entry((InputRef('message'),), ()), 'string', None),),
+                        ('file',), None, None, (), ('message',), None)
+    view = ResolvedWorkflow(
+        'handmade', (WorkflowInput('message', message, 'hello', True),),
+        (WorkflowOutput('file', file, OutputRef('write', 'file'), None),), (step,),
+        (), (), (), (), RunPolicy(), True, None)
+    artifact = artifact_tree(view)
+    assert artifact.cwl == {
         'steps': [{'id': 'write', 'in': {'message': {'source': 'message'}},
                    'run': 'handmade~write.cwl', 'out': ['file']}],
         'cwlVersion': CWL_VERSION,
@@ -194,7 +174,19 @@ def test_a_hand_built_graph_emits_without_a_compiler_adapter() -> None:
         'outputs': {'file': {'type': 'File',
                              'outputSource': 'write/file'}},
     }
-    assert emit_job_inputs(document, names) == {'message': 'hello'}
+    assert artifact.job_inputs == {'message': 'hello'}
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('method, written', [('dotproduct', {'scatterMethod': 'dotproduct'}), (None, {})])
+def test_a_scatter_method_with_nothing_to_scatter_is_written_only_when_it_says_something(
+        method: str | None, written: Yaml) -> None:
+    """The method of a step with no `scatter` is a key as written, and `null` writes no key."""
+    step = ResolvedStep('write', 'write', Tool('write.cwl', {'class': 'CommandLineTool'}), (), (), None, None,
+                        (('scatterMethod', method), ('label', 'hi')), (), None)
+    view = ResolvedWorkflow('handmade', (), (), (step,), (), (), (), (), RunPolicy(), True, None)
+    assert artifact_tree(view).cwl['steps'][0] == {
+        'id': 'write', 'in': {}, 'run': 'handmade~write.cwl', 'out': [], **written, 'label': 'hi'}
 
 
 def _file_locations(value: Any) -> list[str]:
@@ -244,8 +236,8 @@ def _cwltool_validates(workflow: Yaml) -> bool:
     `secondaryFiles` are created empty, a required unset input is made optional, and `$schemas` is dropped (cwltool
     would fetch it; test_leak_boundary pins that it survives)."""
     info = compile_hermetic(workflow)
-    inlined = post_compile.inline_artifact_runs(info.artifact).cwl
-    job = info.artifact.job_inputs
+    inlined = post_compile.inline_artifact_runs(cwl_tree(info)).cwl
+    job = cwl_tree(info).job_inputs
     for name, declared in inlined['inputs'].items():
         if name not in job and 'default' not in declared:
             members = declared['type'] if isinstance(declared['type'], list) else [declared['type']]
@@ -360,9 +352,9 @@ _PLAIN: Final = {'type': 'File', 'secondaryFiles': ['.dict']}
 def _boundary(inputs: Yaml, outputs: Yaml) -> Yaml:
     """The workflow `probe`, a tool with these ports and `plain`, compiles to; the tool's
     `InlineJavascriptRequirement`, which an expression needs, is not the workflow's."""
-    compiled = compile_hermetic_cwl({'steps': [{'id': 'probe'}]}, tools=registered({'probe': clt(
+    compiled = cwl_tree(compile_hermetic({'steps': [{'id': 'probe'}]}, tools=registered({'probe': clt(
         {**inputs, 'plain': {**_PLAIN, 'inputBinding': {'position': 2}}},
-        {**outputs, 'plain': {**_PLAIN, 'outputBinding': {'glob': 'p'}}})}))
+        {**outputs, 'plain': {**_PLAIN, 'outputBinding': {'glob': 'p'}}})}))).cwl
     assert 'InlineJavascriptRequirement' not in (compiled.get('requirements') or {})
     return compiled
 
@@ -433,8 +425,8 @@ def test_user_requirements_are_merged_into_not_copied(  # pylint: disable=too-ma
     step = {'id': 'mk_file', 'in': {'name': {'wic_inline_input': ['a', 'b'] if scatter else 'a'}},
             **({'scatter': ['name']} if scatter else {}), **({'when': '$(true)'} if when else {})}
     hinted = {'hints': _written(hints, listed)} if hints else {}
-    cwl = compile_hermetic({'requirements': None if authored is None else _written(authored, listed),
-                            'steps': [{**step, **hinted}], **hinted}).artifact.cwl
+    cwl = cwl_tree(compile_hermetic({'requirements': None if authored is None else _written(authored, listed),
+                                     'steps': [{**step, **hinted}], **hinted})).cwl
     assert cwl.get('requirements', {}) == {**{name: body or {} for name, body in (authored or {}).items()},
                                            **{name: {} for name in needs - set(authored or {})}}
     assert not hints or cwl['hints'] == cwl['steps'][0]['hints'] == hints
@@ -447,14 +439,14 @@ def test_a_cwl_record_emits_the_fields_it_carries() -> None:
     WorkflowStepInput field but `id`."""
     carried = {'label': 'both files', 'loadContents': True, 'loadListing': 'no_listing',
                'pickValue': 'all_non_null'}
-    compiled = compile_hermetic_cwl({'steps': [
+    compiled = cwl_tree(compile_hermetic({'steps': [
         {'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'a'}}, 'out': [{'file': {'wic_anchor': 'fa'}}]},
         {'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'b'}}, 'out': [{'file': {'wic_anchor': 'fb'}}]},
         {'id': 'sink', 'in': {
             'file': {'wic_alias': 'fa'},
             'n': {'wic_raw_cwl': {'default': 3, 'valueFrom': '$(self + 1)'}},
             'extras': {'wic_raw_cwl': {'source': [{'wic_alias': 'fa'}, {'wic_alias': 'fb'}],
-                                       'linkMerge': 'merge_flattened', **carried}}}}]})
+                                       'linkMerge': 'merge_flattened', **carried}}}}]})).cwl
     sink = compiled['steps'][2]
     assert sink['in']['extras'] == {'source': ['mk_file@1/file', 'mk_file@2/file'],
                                     'linkMerge': 'merge_flattened', **carried}
