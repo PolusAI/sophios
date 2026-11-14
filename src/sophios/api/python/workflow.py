@@ -19,7 +19,6 @@ from sophios.lang.diagnostics import Diagnostic, SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
 from sophios.lang.names import check_written_name
 from sophios.lang.spans import SourceSpan
-from sophios.lang.versions import KNOWN_VERSIONS
 from sophios.run_status import RunResult, RunState, RunStatus, StepStatus, WorkflowRunError
 from sophios.wic_types import DEFAULT_BASEPATH, Tools
 
@@ -123,13 +122,9 @@ def _tool_builder_source_name(value: Any) -> str | None:
 
 
 def _python_api_types_match(parameter_type: Any, candidate_type: Any) -> bool:
-    """Whether an eager API binding is not disjoint in every known version.
+    """Whether an eager API binding is not provably disjoint.
 
-    A ``Workflow`` object has no resolved language version yet.  Rejecting only
-    when every supported version proves disjoint keeps this convenience check
-    from preempting the authoritative, resolved-version compiler judgment.
-
-    It also has no *scatter* yet: ``scatter_on()`` runs after the binding, and
+    A ``Workflow`` object has no *scatter* yet: ``scatter_on()`` runs after the binding, and
     lifts the sink to an array.  So the sink's declared type is not necessarily
     its effective one, and a pair disjoint as written may be exactly right once
     scattered.  Disjointness is only proven here when it holds for the sink as
@@ -138,11 +133,7 @@ def _python_api_types_match(parameter_type: Any, candidate_type: Any) -> bool:
     the compiler, which knows the scatter.
     """
     def proven_disjoint(sink_type: Any) -> bool:
-        return all(
-            reference_relation(candidate_type, sink_type, lang_version=lang_version)
-            is TypeRelation.DISJOINT
-            for lang_version in KNOWN_VERSIONS
-        )
+        return reference_relation(candidate_type, sink_type) is TypeRelation.DISJOINT
 
     return not (proven_disjoint(parameter_type)
                 and proven_disjoint({'type': 'array', 'items': parameter_type}))
@@ -363,9 +354,6 @@ class _ProcessBase:  # pylint: disable=too-few-public-methods
     process_name: str
     _inputs: ParameterStore[InputParameter]
 
-    def _lookup_input(self, name: str) -> InputParameter:
-        return _lookup_parameter(self._inputs, name, owner_name=self.process_name, kind="input")
-
     def _bound_inputs(self) -> tuple[tuple[str, InputValue], ...]:
         return tuple((port.name, port._binding.to_input_value())
                      for port in self._inputs if port._binding is not None)
@@ -515,24 +503,14 @@ class Step(_ProcessBase):
                 if step_inputs_file is not None:
                     raise TypeError("step_inputs_file is only supported when Step is created from a CWL file path")
                 assert source is not None
-                resolved_name = step_name or tool_name
-                run_path = Path(f"{resolved_name}.cwl")
                 match source.to_cwl_document():
                     case Mapping() as document:
-                        clt, yaml_file = _load_clt_document(document, run_path=run_path)
+                        name = step_name or tool_name
+                        self._initialize_document(document, name, f"{name}.cwl", None, resolved_registry)
                     case _:
                         raise TypeError(
                             "CommandLineTool-like Step source must return a mapping from to_cwl_document()"
                         )
-
-                self._initialize_loaded_tool(
-                    clt=clt,
-                    yaml_file=yaml_file,
-                    clt_path=run_path,
-                    cfg_yaml={},
-                    tool_registry=resolved_registry,
-                    process_name=resolved_name,
-                )
             case _:
                 raise TypeError("Step requires clt_path or a CommandLineTool-like source")
 
@@ -566,23 +544,31 @@ class Step(_ProcessBase):
         Returns:
             Step: A fully initialized step backed by the in-memory tool.
         """
-        default_name = process_name or str(document.get("id") or "in_memory_tool")
-        run_path_value = run_path or f"{default_name}.cwl"
-        clt_path = _coerce_path(run_path_value, field_name="run_path")
-        assert clt_path is not None
-        resolved_registry = {} if tool_registry is None else tool_registry
-        clt, yaml_file = _load_clt_document(document, run_path=clt_path)
-
         step = cls.__new__(cls)
-        step._initialize_loaded_tool(
+        step._initialize_document(document, process_name, run_path, step_inputs, tool_registry)
+        return step
+
+    def _initialize_document(
+        self,
+        document: Mapping[str, Any],
+        process_name: str | None,
+        run_path: StrPath | None,
+        step_inputs: Mapping[str, Any] | None,
+        tool_registry: Tools | None,
+    ) -> None:
+        """Populate a step from an in-memory tool document: the one door a document or a built tool comes through."""
+        clt_path = _coerce_path(run_path or f"{process_name or document.get('id') or 'in_memory_tool'}.cwl",
+                                field_name="run_path")
+        assert clt_path is not None
+        clt, yaml_file = _load_clt_document(document, run_path=clt_path)
+        self._initialize_loaded_tool(
             clt=clt,
             yaml_file=yaml_file,
             clt_path=clt_path,
-            cfg_yaml=dict(step_inputs or {}),
-            tool_registry=resolved_registry,
+            cfg_yaml=step_inputs or {},
+            tool_registry={} if tool_registry is None else tool_registry,
             process_name=process_name,
         )
-        return step
 
     def _initialize_loaded_tool(
         self,
@@ -625,8 +611,9 @@ class Step(_ProcessBase):
         _populate_parameters(clt.inputs, self._inputs, InputParameter, parent=self)
         _populate_parameters(clt.outputs, self._outputs, OutputParameter, parent=self)
 
-        if self.cfg_yaml:
-            self._set_from_io_cfg()
+        # Each value is bound as it is written: whatever runs the workflow checks the paths it names.
+        for name, value in self.cfg_yaml.items():
+            setattr(self, name, value)
 
     def __repr__(self) -> str:
         return f"Step(clt_path={self.clt_path!r})"
@@ -657,24 +644,12 @@ class Step(_ProcessBase):
         raise AttributeError(f"{self.__class__.__name__!s} has no attribute {name!r}")
 
     def _bind_input(self, name: str, value: Any) -> None:
-        """Bind a value or upstream output to a named step input parameter.
-
-        A ``StepInput`` bound to a name the tool does not declare creates that
-        input, typed ``Any``, as a ``!cwl`` record does in a ``.wic`` step.
-
-        Args:
-            name (str): The input parameter name.
-            value (Any): A literal value, a workflow input reference, a step output, or a ``StepInput``.
-
-        Raises:
-            AttributeError: If the tool does not declare the input and ``value`` is not a ``StepInput``.
-
-        Returns:
-            None: The step is mutated in place.
-        """
+        """Bind a literal, a workflow input, a step output or a ``StepInput`` to the input ``name``. A ``StepInput``
+        bound to a name the tool does not declare creates that input, typed ``Any``, as a ``!cwl`` record does in a
+        ``.wic`` step; anything else bound to such a name is an ``AttributeError``."""
         if isinstance(value, StepInput):
             self._inputs.ensure(name, self._undeclared_input)
-        elif not _lookup_parameter(self._inputs, name, owner_name=self.process_name, kind="input").declared:
+        elif not self._get_input(name).declared:
             raise AttributeError(f"{self.process_name!r} has no input named {name!r}; "
                                  "only a StepInput binds an input the tool does not declare")
         _bind_process_input(self, name, value)
@@ -714,35 +689,11 @@ class Step(_ProcessBase):
 
     def _get_input(self, name: str) -> InputParameter:
         """Return a named input parameter from this step."""
-        return self._lookup_input(name)
+        return _lookup_parameter(self._inputs, name, owner_name=self.process_name, kind="input")
 
     def _get_output(self, name: str) -> OutputParameter:
-        """Return a named output parameter from this step.
-
-        Args:
-            name (str): The output parameter name.
-
-        Raises:
-            AttributeError: If the output does not exist.
-
-        Returns:
-            OutputParameter: The requested step output parameter.
-        """
+        """The step's output ``name``, or an ``AttributeError`` when its tool declares none."""
         return _lookup_parameter(self._outputs, name, owner_name=self.process_name, kind="output")
-
-    def _set_from_io_cfg(self) -> None:
-        """Bind each value as it is written: whatever runs the workflow checks the paths it names."""
-        for name, value in self.cfg_yaml.items():
-            setattr(self, name, value)
-
-    def _validate(self) -> None:
-        """Validate step-local settings before compilation.
-
-        Required-but-unbound inputs are intentionally allowed here. The legacy
-        Sophios compiler performs edge inference for missing step inputs, just
-        as it does for `.wic` workflows.
-        """
-        return None
 
     def _flatten_steps(self) -> "list[Step]":
         """Return this step as a single-item list for recursive traversal."""
@@ -838,7 +789,7 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
 
         if "_inputs" in self.__dict__:
             if name in self._outputs:
-                self._bind_output(name, value)
+                _bind_workflow_output(self, name, value)
                 return
             self._bind_input(name, value)
             return
@@ -872,68 +823,24 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
     def _input_reference(self, name: str, *, implicit: bool = False) -> WorkflowInputReference:
         return WorkflowInputReference(self, name, implicit=implicit)
 
-    def _add_output(
-        self,
-        name: str,
-        source: Any = None,
-        *,
-        parameter_type: Any = None,
-        implicit: bool = False,
-    ) -> OutputParameter:
-        """Declare a workflow output explicitly.
-
-        Args:
-            name (str): The workflow output name.
-            source (Any): Optional step output or workflow input reference to expose.
-            parameter_type (Any): Optional CWL type expression for the output.
-
-        Returns:
-            OutputParameter: The created or existing workflow output parameter.
-        """
+    def _add_output(self, name: str, *, implicit: bool = False) -> OutputParameter:
+        """The workflow output ``name``, declared by the first call."""
         def create_output(parameter_name: str) -> OutputParameter:
             logger.warning("Adding a new output %s to workflow %s", parameter_name, self.process_name)
             if implicit:
                 _warn_implicit_workflow_parameter(self, parameter_name, "output")
-            return OutputParameter(parameter_name, parameter_type, parent_obj=self)
+            return OutputParameter(parameter_name, None, parent_obj=self)
 
-        output_parameter = self._outputs.ensure(name, create_output)
-        _resolve_parameter_type(
-            output_parameter,
-            parameter_type,
-            context=f"{self.process_name}.outputs.{name}",
-        )
-        if source is not None:
-            self._bind_output(name, source)
-        return output_parameter
+        return self._outputs.ensure(name, create_output)
 
     def _bind_input(self, name: str, value: Any) -> None:
-        """Bind a literal value or upstream output to a workflow input.
-
-        Args:
-            name (str): The workflow input name.
-            value (Any): A literal value, workflow reference, or step output.
-
-        Returns:
-            None: The workflow is mutated in place.
-        """
+        """Bind a literal, a workflow input or a step output to the workflow input ``name``."""
         self._ensure_input(name)
         _bind_process_input(self, name, value)
 
     def _bind_input_from_namespace(self, name: str, value: Any) -> None:
         self._ensure_input(name, implicit=False)
         _bind_process_input(self, name, value)
-
-    def _bind_output(self, name: str, value: Any) -> None:
-        """Bind a named workflow output to a step output or workflow input.
-
-        Args:
-            name (str): The workflow output name.
-            value (Any): A step output or workflow input reference to expose.
-
-        Returns:
-            None: The workflow is mutated in place.
-        """
-        _bind_workflow_output(self, name, value)
 
     def _bind_output_from_namespace(self, name: str, value: Any) -> None:
         self._add_output(name, implicit=False)
@@ -1004,10 +911,11 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
                 raise InvalidStepError(f"{self.process_name} has unbound output {output_parameter.name!r}",
                                        span=self._span)
         for step in self.steps:
-            try:
-                step._validate()
-            except Exception as exc:
-                raise InvalidStepError(f"{step.process_name} is invalid", span=step._span) from exc
+            if isinstance(step, Workflow):
+                try:
+                    step._validate()
+                except Exception as exc:
+                    raise InvalidStepError(f"{step.process_name} is invalid", span=step._span) from exc
 
     def write_wic(self, path: StrPath | None = None) -> Path:
         """Write this workflow as ``.wic``: the one way the Python API writes it.

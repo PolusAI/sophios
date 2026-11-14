@@ -35,10 +35,5 @@ class SourceSpan:
             end_column=end.column + 1,
         )
 
-    @classmethod
-    def of(cls, file: str, node: yaml.nodes.Node) -> Self:
-        """Build a span covering a composed YAML node."""
-        return cls.from_marks(file, node.start_mark, node.end_mark)
-
     def __str__(self) -> str:
         return f'{self.file}:{self.start_line}:{self.start_column}'

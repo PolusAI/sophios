@@ -8,13 +8,14 @@ has no YAML tags, and is a deliberate over-approximation — an editor aid, not
 a second implementation of the language.
 """
 from collections.abc import Callable, Mapping
+from copy import deepcopy
 from dataclasses import fields
 from types import MappingProxyType
 from typing import Any, Final, final
 
 from .nodes import Document, OutputBinding, Shape, Step, WicSidecar, surface_of
-from .parser import SIDECAR_WRAPPER_KEY, Forms, Grammar
-from .values import ValueShape
+from .cwl import CWL_VERSIONS
+from .parser import SIDECAR_WRAPPER_KEY, Grammar
 
 
 @final
@@ -66,7 +67,7 @@ def wic_schema() -> dict[str, Any]:
     """
     document = _object_schema(Document)
     document['properties']['cwlVersion'] = {
-        **Grammar.CWL_VERSION_VALUE.json(),
+        'enum': list(CWL_VERSIONS),
         'description': 'Ignored in favour of the substrate version, '
                        'but must be one the toolchain runs (language spec §1).',
     }
@@ -168,9 +169,9 @@ def _output_entry() -> dict[str, Any]:
     }
 
 
-def _values_schema(values: Mapping[str, ValueShape]) -> dict[str, Any]:
-    """One property per declared `wic:` key, shaped as the parser checks it."""
-    return {key: shape.json() for key, shape in sorted(values.items())}
+def _values_schema(values: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
+    """One property per declared `wic:` key, with the schema the parser checks its value against."""
+    return {key: deepcopy(schema) for key, schema in sorted(values.items())}
 
 
 def _wic_block() -> dict[str, Any]:
@@ -228,6 +229,6 @@ def _construct() -> dict[str, Any]:
         'type': 'object',
         'minProperties': 1,
         'maxProperties': 1,
-        'properties': {key: {} for key in sorted(Forms.DESUGARED_KEYS)},
+        'properties': {key: {} for key in sorted(Grammar.DESUGARED_KEYS)},
         'additionalProperties': False,
     }

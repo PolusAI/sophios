@@ -1,15 +1,14 @@
 """What Sophios does with each field of the CWL v1.2 workflow-level classes.
 
-One row per schema field, read from `cwl_utils.parser.cwl_v1_2.<Class>.attrs`,
+One entry per schema field, read from `cwl_utils.parser.cwl_v1_2.<Class>.attrs`,
 so a field the schema has and this table lacks fails the build
-(`tests/core/test_support_matrix.py`). Each row names the test that pins it.
+(`tests/core/test_support_matrix.py`).
 
 NATIVE: Sophios reads it and acts on it, or writes it.
 PASSTHROUGH: copied out unchanged.
 REJECTED: reported with a diagnostic, never silently dropped or coerced. It is positioned at the
 value; a step's `run` is positioned at the step, and a workflow output at the document.
 """
-from dataclasses import dataclass
 from enum import StrEnum
 from types import MappingProxyType
 from typing import Final, Mapping
@@ -23,104 +22,74 @@ class Support(StrEnum):
     REJECTED = 'rejected'
 
 
-@dataclass(frozen=True, slots=True)
-class Row:
-    """One field's classification and the test function that pins it."""
-
-    support: Support
-    pinned_by: str
-    note: str = ''
-
-
 _N, _P, _R = Support.NATIVE, Support.PASSTHROUGH, Support.REJECTED
 
-_WRITTEN: Final = 'test_a_compiler_example_compiles_as_it_states'
-_TOP_LEVEL: Final = 'test_freight_survives_byte_for_byte_and_changes_nothing_else'
-_STEP: Final = 'test_freight_survives_byte_for_byte_and_changes_nothing_else'
-_INTERPRETED: Final = 'test_freight_survives_byte_for_byte_and_changes_nothing_else'
-_OUTPUT_MERGE: Final = 'test_a_document_lowers_to_the_diagnostics_its_family_states'
-_PROMOTED_INPUT: Final = 'test_a_promoted_port_keeps_the_fields_a_workflow_port_may_state'
-_PROMOTED_OUTPUT: Final = 'test_a_promoted_port_keeps_the_fields_a_workflow_port_may_state'
-_RECORD: Final = 'test_a_cwl_record_emits_the_fields_it_carries'
-
-WORKFLOW: Final[Mapping[str, Row]] = MappingProxyType({
-    'class': Row(_N, _WRITTEN, 'written by the compiler'),
-    'cwlVersion': Row(_N, _WRITTEN, 'written; wic035 for an unrunnable value'),
-    'doc': Row(_P, _TOP_LEVEL),
-    'hints': Row(_P, _TOP_LEVEL),
-    'id': Row(_P, _TOP_LEVEL),
-    'inputs': Row(_N, _WRITTEN, 'merged into; the compiler wins on a collision'),
-    'intent': Row(_P, _TOP_LEVEL),
-    'label': Row(_P, _TOP_LEVEL),
-    'outputs': Row(_N, _WRITTEN, 'read: outputSource is resolved; merged into'),
-    'requirements': Row(_N, 'test_user_requirements_are_merged_into_not_copied', 'merged into'),
-    'steps': Row(_N, 'test_a_well_formed_document_is_read_whole'),
-})
-
-WORKFLOW_STEP: Final[Mapping[str, Row]] = MappingProxyType({
-    'doc': Row(_P, _STEP),
-    'hints': Row(_P, _STEP),
-    'id': Row(_N, 'test_a_well_formed_document_is_read_whole'),
-    'in': Row(_N, 'test_a_well_formed_document_is_read_whole'),
-    'label': Row(_P, _STEP),
-    'out': Row(_N, 'test_a_construct_reads_alike_in_either_spelling_and_position'),
-    'requirements': Row(_P, _STEP),
-    'run': Row(_N, 'test_each_step_runs_the_tool_its_run_names',
-               'a registry stem, a path relative to the document, or an inline body'),
-    'scatter': Row(_N, _INTERPRETED),
-    'scatterMethod': Row(_N, _INTERPRETED),
-    'when': Row(_N, _INTERPRETED),
-})
-
-WORKFLOW_STEP_INPUT: Final[Mapping[str, Row]] = MappingProxyType({
-    'id': Row(_N, 'test_a_document_reads_as_its_family_states', 'the in: key'),
-    'source': Row(_N, 'test_a_document_reads_as_its_family_states',
-                  '!*, a bare workflow-input name, or a list of them inside !cwl {source: [...]}'),
-    'default': Row(_N, _RECORD, 'through !cwl {...}'),
-    'label': Row(_N, _RECORD, 'through !cwl {...}'),
-    'linkMerge': Row(_N, _RECORD, 'through !cwl {...}'),
-    'loadContents': Row(_N, _RECORD, 'through !cwl {...}'),
-    'loadListing': Row(_N, _RECORD, 'through !cwl {...}'),
-    'pickValue': Row(_N, _RECORD, 'through !cwl {...}'),
-    'valueFrom': Row(_N, _RECORD, 'through !cwl {...}'),
-})
-
-WORKFLOW_OUTPUT_PARAMETER: Final[Mapping[str, Row]] = MappingProxyType({
-    'id': Row(_N, _WRITTEN),
-    'type': Row(_N, 'test_a_compiler_example_compiles_as_it_states'),
-    'outputSource': Row(_N, 'test_residue_validates_as_cwl_v1_2', 'one step/port reference; a list is wic038'),
-    'format': Row(_P, _WRITTEN),
-    'doc': Row(_P, _WRITTEN),
-    'label': Row(_P, _WRITTEN),
-    'secondaryFiles': Row(_P, _PROMOTED_OUTPUT),
-    'streamable': Row(_P, _PROMOTED_OUTPUT),
-    'linkMerge': Row(_R, _OUTPUT_MERGE),
-    'pickValue': Row(_R, _OUTPUT_MERGE),
-})
-
-WORKFLOW_INPUT_PARAMETER: Final[Mapping[str, Row]] = MappingProxyType({
-    'id': Row(_N, _WRITTEN),
-    'type': Row(_N, 'test_a_compiler_example_compiles_as_it_states', 'read for the reference judgment'),
-    'format': Row(_N, 'test_a_compiler_example_compiles_as_it_states', 'read by inference'),
-    'default': Row(_P, _WRITTEN),
-    'doc': Row(_P, _WRITTEN),
-    'label': Row(_P, _WRITTEN),
-    'inputBinding': Row(_P, _WRITTEN),
-    'loadContents': Row(_P, _PROMOTED_INPUT),
-    'loadListing': Row(_P, _PROMOTED_INPUT),
-    'secondaryFiles': Row(_P, _PROMOTED_INPUT),
-    'streamable': Row(_P, _PROMOTED_INPUT),
-})
-
-#: Every table, keyed by the cwl_utils class it classifies.
-SUPPORT_MATRIX: Final[Mapping[str, Mapping[str, Row]]] = MappingProxyType({
-    'Workflow': WORKFLOW,
-    'WorkflowStep': WORKFLOW_STEP,
-    'WorkflowStepInput': WORKFLOW_STEP_INPUT,
-    'WorkflowOutputParameter': WORKFLOW_OUTPUT_PARAMETER,
-    'WorkflowInputParameter': WORKFLOW_INPUT_PARAMETER,
+#: Each field's classification, keyed by the cwl_utils class it is a field of.
+SUPPORT_MATRIX: Final[Mapping[str, Mapping[str, Support]]] = MappingProxyType({
+    'Workflow': {
+        'class': _N,  # written by the compiler
+        'cwlVersion': _N,  # written; wic035 for an unrunnable value
+        'doc': _P,
+        'hints': _P,
+        'id': _P,
+        'inputs': _N,  # merged into; the compiler wins on a collision
+        'intent': _P,
+        'label': _P,
+        'outputs': _N,  # read: outputSource is resolved; merged into
+        'requirements': _N,  # merged into
+        'steps': _N,
+    },
+    'WorkflowStep': {
+        'doc': _P,
+        'hints': _P,
+        'id': _N,
+        'in': _N,
+        'label': _P,
+        'out': _N,
+        'requirements': _P,
+        'run': _N,  # a registry stem, a path relative to the document, or an inline body
+        'scatter': _N,
+        'scatterMethod': _N,
+        'when': _N,
+    },
+    'WorkflowStepInput': {
+        'id': _N,  # the in: key
+        'source': _N,  # !*, a bare workflow-input name, or a list of them inside !cwl {source: [...]}
+        'default': _N,  # through !cwl {...}
+        'label': _N,  # through !cwl {...}
+        'linkMerge': _N,  # through !cwl {...}
+        'loadContents': _N,  # through !cwl {...}
+        'loadListing': _N,  # through !cwl {...}
+        'pickValue': _N,  # through !cwl {...}
+        'valueFrom': _N,  # through !cwl {...}
+    },
+    'WorkflowOutputParameter': {
+        'id': _N,
+        'type': _N,
+        'outputSource': _N,  # one step/port reference; a list is wic038
+        'format': _P,
+        'doc': _P,
+        'label': _P,
+        'secondaryFiles': _P,
+        'streamable': _P,
+        'linkMerge': _R,
+        'pickValue': _R,
+    },
+    'WorkflowInputParameter': {
+        'id': _N,
+        'type': _N,  # read for the reference judgment
+        'format': _N,  # read by inference
+        'default': _P,
+        'doc': _P,
+        'label': _P,
+        'inputBinding': _P,
+        'loadContents': _P,
+        'loadListing': _P,
+        'secondaryFiles': _P,
+        'streamable': _P,
+    },
 })
 
 #: The keys that make an untagged mapping in `in:` a step-input record rather
 #: than a literal: every WorkflowStepInput field but the id.
-STEP_INPUT_RECORD_KEYS: Final = frozenset(WORKFLOW_STEP_INPUT) - {'id'}
+STEP_INPUT_RECORD_KEYS: Final = frozenset(SUPPORT_MATRIX['WorkflowStepInput']) - {'id'}

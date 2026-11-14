@@ -76,7 +76,7 @@ def test_the_schema_refuses_exactly_what_the_parser_reports(document: dict[str, 
     if 'cwlVersion' in document:
         assert ((SophiosErrorCode.UNSUPPORTED_CWL_VERSION in {d.code for d in result.diagnostics})
                 == (document['cwlVersion'] not in tuple(UPDATES)))
-    if result.ok and result.document is not None:
+    if not result.diagnostics.has_errors and result.document is not None:
         projection = json.loads(json.dumps(to_json(result.document)))
         assert VALIDATOR.is_valid(projection), list(VALIDATOR.iter_errors(projection))
 

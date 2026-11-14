@@ -8,12 +8,9 @@ specification of anything) and slotted (allocated once per construct).
 from dataclasses import dataclass, field, fields
 from datetime import date, datetime
 from enum import StrEnum
-from collections.abc import Mapping
-from typing import Any, Final, TypeAlias
+from typing import Any, TypeAlias
 
-from ..utils_yaml import Key
 from .spans import SourceSpan
-from .support import STEP_INPUT_RECORD_KEYS
 
 
 class Shape(StrEnum):
@@ -184,48 +181,6 @@ OpaqueCwl: TypeAlias = (
     | list['OpaqueCwl'] | dict[str, 'OpaqueCwl'] | InputValue
 )
 
-#: The WorkflowStepInput fields a record may carry, besides `source`.
-RECORD_FIELDS: Final = STEP_INPUT_RECORD_KEYS - {'source'}
-
-
-def _holds_construct(value: OpaqueCwl) -> bool:
-    """Whether a Sophios construct sits anywhere inside `value`."""
-    match value:
-        case dict():
-            return any(_holds_construct(item) for item in value.values())
-        case list():
-            return any(_holds_construct(item) for item in value)
-        case InlineLiteral() | EdgeRef() | RawCwlRef() | UnresolvedName() | CwlRecord():
-            return True
-        case _:
-            return False
-
-
-def cwl_record(mapping: Mapping[str, OpaqueCwl], span: SourceSpan | None) -> tuple[CwlRecord, tuple[str, ...]]:
-    """Build a record from its desugared mapping; also return the keys it may not carry.
-
-    `source` entries are `!*` or `{wic_alias: name}` (an edge), a bare string
-    (a workflow input), or a list of those. Anything else in `source` is not a
-    reference, so `'source'` is returned among the bad keys, as is a field
-    holding a Sophios construct: every field but `source` is CWL, copied out.
-    """
-    sources: list[EdgeRef | UnresolvedName] = []
-    bad: list[str] = [key for key, value in mapping.items()
-                      if key != 'source' and (key not in RECORD_FIELDS or _holds_construct(value))]
-    raw = mapping.get('source', [])
-    for entry in raw if isinstance(raw, list) else [raw]:
-        match entry:
-            case EdgeRef() | UnresolvedName():
-                sources.append(entry)
-            case {Key.ALIAS: str() as name, **rest} if not rest:
-                sources.append(EdgeRef(name, span))
-            case str() as name:
-                sources.append(UnresolvedName(name, span))
-            case _:
-                bad.append('source')
-    carried = tuple((key, value) for key, value in mapping.items() if key in RECORD_FIELDS and key not in bad)
-    return CwlRecord(tuple(sources), carried, span), tuple(dict.fromkeys(bad))
-
 
 @dataclass(frozen=True, slots=True)
 class OutputBinding:
@@ -257,10 +212,6 @@ class Step:
     interpreted: tuple[tuple[str, OpaqueCwl], ...] = surface(Shape.INTERPRETED, default=())
     passthrough: tuple[tuple[str, OpaqueCwl], ...] = surface(Shape.PASSTHROUGH, default=())
     span: SourceSpan | None = surface(Shape.INTERNAL, default=None)
-
-    def input(self, name: str) -> InputValue | None:
-        """Return the value bound to `name`, or None if unbound."""
-        return next((v for k, v in self.inputs if k == name), None)
 
 
 @dataclass(frozen=True, slots=True)
