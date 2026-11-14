@@ -1,6 +1,7 @@
 """Setup many tests repeat: files written under a directory, the command line run in-process, the shipped tools
-as Python API steps, a real-time analysis declared, a run kept off the container engine, a test run under
-each CWL runner, and the example workflows of tests/core/data/examples read and run."""
+as Python API steps, a real-time analysis declared, a run kept off the container engine, a test run under each CWL
+runner, the example workflows of tests/core/data/examples read and run, and the segmentation workflow a compute
+service is sent."""
 from collections.abc import Callable
 import functools
 import hashlib
@@ -20,6 +21,7 @@ import yaml
 import sophios
 import sophios.plugins
 import sophios.preflight
+from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl as types
 from sophios.api.python.workflow import Step, Workflow
 from sophios.main import main
 from sophios.wic_types import Tools
@@ -184,3 +186,29 @@ def cwltool_outputs(cwltool_main: Callable[..., int], workflow: Workflow, direct
     code, outputs, messages = cwltool_run(cwltool_main, workflow, directory)
     assert code == 0, messages
     return dict(json.loads(outputs))
+
+
+def autoseg(plate: str, folder: str | list[str], models: str, on_workflow: bool, gpu: bool = True) -> Workflow:
+    """The owner's segmentation shape: a containerized tool with no base command, asking for a GPU when `gpu`, which
+    reads `plate`, and `models` staged as `./models`, and fills the output folder `folder`, staged writable, and
+    returns it; scattered over `folder` when it is a list. Each is bound on the step, or on a workflow input of its own
+    name, which the Python API never scatters over."""
+    inputs = Inputs(input=Input(types.directory, flag='--inpDir', position=1),
+                    output=Input(types.directory, flag='--outDir', position=2), model=Input(types.directory))
+    tool = CommandLineTool('ichnaea_segmentation', inputs,
+                           Outputs(output=Output(types.directory, glob='$(inputs.output.basename)')))
+    if gpu:
+        tool = tool.gpu(cuda_version_min='12.6', compute_capability='3.0', device_count_min=1)
+    tool = (tool.docker('vjaganat90/ichnaea-segmentation-plugin:devn')
+            .stage(inputs.output, writable=True).stage(inputs.model, entryname='models').resources(cores=4, ram=64000))
+    step = Step(tool, step_name='autoseg')
+    workflow = Workflow([step], 'autoseg')
+    bound = workflow.inputs if on_workflow else step.inputs
+    bound.input, bound.output, bound.model = plate, folder, models
+    if on_workflow:
+        step.inputs.input, step.inputs.output, step.inputs.model = (
+            workflow.inputs.input, workflow.inputs.output, workflow.inputs.model)
+    if isinstance(folder, list):
+        step.scatter_on(step.inputs.output)
+    workflow.outputs.segmentation = step.outputs.output
+    return workflow

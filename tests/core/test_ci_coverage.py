@@ -220,8 +220,10 @@ def test_collection_is_pytests_answer_and_not_ours() -> None:
 #:
 #: `test_compute_service.py` runs `sophios.compute` against the slurm driver,
 #: which lives in a private repository Sophios CI cannot check out. Its lane is
-#: local: `SOPHIOS_SLURM_DRIVER=<driver checkout>/packages/slurm-driver pytest
-#: tests/core/test_compute_service.py -m skip_pypi_ci`. It expires when Sophios
+#: local: `SOPHIOS_SLURM_DRIVER=<driver checkout>/packages/slurm-driver
+#: SOPHIOS_NEXTFLOW_ENV=<a conda env holding nextflow> pytest
+#: tests/core/test_compute_service.py -m skip_pypi_ci`; without
+#: SOPHIOS_NEXTFLOW_ENV its Nextflow tests skip. It expires when Sophios
 #: CI can check the driver out: then a lane step names the file, and the entry
 #: goes.
 LOCAL_ONLY: Final = frozenset({'tests/core/test_compute_service.py'})
@@ -416,6 +418,9 @@ WINDOWS_EXCLUDED: Final = frozenset({
     # Seven runs (four pinned, three drawn) of a one-step tool under Nextflow and under cwltool, in about twelve
     # seconds. Lint And Test's Linux Nextflow step collects it, so the Windows leg gives up nothing it ran.
     'tests/core/nextflow/test_runtime.py::test_a_command_receives_the_arguments_cwltool_gives_it',
+    # cwltool's own requirement lookup, which Toil asks, over 256 placements of a ResourceRequirement, in under a
+    # second. Only Linux lanes collect test_sites.py, so the Windows leg gives up nothing it ran.
+    'tests/core/test_sites.py::test_a_step_declares_memory_exactly_when_cwltools_lookup_which_toil_asks_finds_it',
 })
 
 

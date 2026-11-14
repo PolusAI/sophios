@@ -2,7 +2,9 @@
 on arrival: each callable of COMPILED raises a SophiosError carrying its code, or test_lang_parser's census fails."""
 # pylint: disable=import-outside-toplevel  # the compiler and API load lazily, so enumerating codes stays cheap
 import asyncio
+import os
 import subprocess
+import sys
 import tempfile
 from collections.abc import Callable
 from functools import partial
@@ -10,6 +12,8 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any, Final
 from unittest import mock
+
+import pytest
 
 from sophios.lang import SophiosError, SophiosErrorCode, parse, resolve_lang_version
 from sophios.wic_types import Yaml
@@ -260,6 +264,20 @@ def _provoke_when_not_boolean() -> None:
         'provoke'))))
 
 
+def _provoke_nextflow_output_renamed() -> None:
+    """A workflow for a compute service on Nextflow with an output named `Made`, which Nextflow publishes as `_Made`."""
+    # pylint: disable=import-outside-toplevel
+    from sophios.api.python._workflow_runtime import service_pipeline
+    from sophios.api.python.tool_builder import CommandLineTool, Inputs, Output, Outputs, cwl
+    from sophios.api.python.workflow import Step, Workflow
+
+    make = Step(CommandLineTool('make', Inputs(), Outputs(made=Output(cwl.file, glob='made')))
+                .base_command('touch', 'made'))
+    workflow = Workflow([make], 'provoke')
+    workflow.outputs.Made = make.outputs.made
+    service_pipeline(workflow)
+
+
 #: One edit of the pipeline `import_edited` writes, for each import code: the file, the text replaced (every
 #: occurrence), its replacement, and text on the line the diagnostic names.
 IMPORT_EDITS: Final[dict[SophiosErrorCode, tuple[str, str, str, str]]] = {
@@ -280,6 +298,37 @@ IMPORT_EDITS: Final[dict[SophiosErrorCode, tuple[str, str, str, str]]] = {
     # A capitalized process name, which the compile writes with a leading `_`.
     SophiosErrorCode.IMPORT_UNWRITABLE: ('workflow.nf', 'greet', 'Greet', 'process Greet'),
 }
+
+
+def _provoke_site(call: str = 'check', engine: str = 'docker', site: str = 'Machine', **options: Any) -> None:
+    """A site's `check` of a one-step workflow, or its `attach` of no run, on a site that is this computer: `ssh
+    <host>` a local `bash`, with no login profile, as the site's own tests make it, and nothing of Sophios replaced.
+    `bin` is the empty `root`, so it holds no runner, and this computer has no Slurm; the problems are raised as
+    Sophios raises any error."""
+    from sophios import sites
+    from sophios.api.python.workflow import Workflow
+    from sophios.sites import _ssh
+
+    from .helpers import adapter_step
+
+    if sys.platform == 'win32':
+        pytest.skip('Sophios on Windows itself makes no site (wic057), so no other site code fires there')
+    with tempfile.TemporaryDirectory() as root, mock.patch.dict(os.environ, {'HOME': root}), \
+            mock.patch.object(_ssh, '_transport', return_value=['bash', '-c']):
+        machine = getattr(sites, site)('provoke', root=root, bin=root, container_engine=engine)
+        if call == 'attach':
+            machine.attach('provoke-20261109T000000-00000000')
+        raise SophiosError(machine.check(Workflow([adapter_step('touch', filename='empty.txt')], 'provoke'),
+                                         **options))
+
+
+def _provoke_site_unreachable() -> None:
+    """No ssh to run: the transport, a command no computer has; on Windows itself, the site is refused when made."""
+    from sophios import sites
+    from sophios.sites import _ssh
+
+    with mock.patch.object(_ssh, '_transport', return_value=['sophios-no-such-ssh']):
+        sites.Machine('provoke', root='/r', bin='/b').attach('provoke-20261109T000000-00000000')
 
 
 def import_edited(directory: str, file: str, old: str, new: str, workflow: Any = None) -> Any:
@@ -376,6 +425,16 @@ COMPILED: Final[dict[SophiosErrorCode, Callable[[], object]]] = {
     SophiosErrorCode.IMAGE_UNAVAILABLE: _provoke_image_unavailable,
     SophiosErrorCode.UNCHECKED_CUDA_FIELD: _provoke_unchecked_cuda_field,
     SophiosErrorCode.WHEN_NOT_BOOLEAN: _provoke_when_not_boolean,
+    SophiosErrorCode.SITE_UNREACHABLE: _provoke_site_unreachable,
+    SophiosErrorCode.SITE_RUNNER: _provoke_site,
+    SophiosErrorCode.SITE_RUN_UNKNOWN: partial(_provoke_site, 'attach'),
+    # touch's container on a Podman machine, under Nextflow.
+    SophiosErrorCode.SITE_NEXTFLOW_CONTAINER: partial(_provoke_site, engine='podman', target='nextflow'),
+    # touch declares no memory.
+    SophiosErrorCode.SITE_DEFAULT_MEMORY: partial(_provoke_site, runner='toil-cwl-runner'),
+    # This computer has no sbatch.
+    SophiosErrorCode.SITE_SLURM: partial(_provoke_site, site='Slurm'),
+    SophiosErrorCode.NEXTFLOW_OUTPUT_RENAMED: _provoke_nextflow_output_renamed,
     **{code: partial(_import_edited, code) for code in IMPORT_EDITS},
 }
 

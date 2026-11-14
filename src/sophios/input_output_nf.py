@@ -18,6 +18,7 @@ from .nf_types import (
     NF_INPUT_HELPER,
     NF_NEST_HELPER,
     NF_OUTPUT_HELPER,
+    NF_OUTPUTS_NAME,
     NF_STEP_INPUT_HELPER,
     MULTI_INPUT_ADAPTERS,
     ExecutableNextflowWorkflow,
@@ -526,6 +527,16 @@ NF_ENTRYPOINT_READ = (
     f"done < {NF_ENTRYPOINT_FILE}"
 )
 NF_ENTRYPOINT_WORDS = '\\${__sophios_entrypoint[@]+"\\${__sophios_entrypoint[@]}"}'
+# In the service form a task's script runs its command after the image's runscript, as `singularity run --no-eval`,
+# the CWL runners' way, does: with SINGULARITY_NO_EVAL set, the runscript Apptainer writes for an image execs the
+# image's ENTRYPOINT words and the command's with no shell evaluation. With no runscript the command runs alone.
+NF_RUNSCRIPT_READ = (
+    "export SINGULARITY_NO_EVAL=1; __sophios_entrypoint=(); "
+    "if [ -x /.singularity.d/runscript ]; then __sophios_entrypoint=(/.singularity.d/runscript); fi"
+)
+# In the service form a task's HOME is its task directory, as CWL makes it the designated output directory: Nextflow
+# runs a container without the user's home, whose path the image holds read-only. A tool's own HOME is set after it.
+NF_TASK_HOME = 'export HOME="\\$PWD"'
 
 
 def container_directives(container: str) -> tuple[str, ...]:
@@ -561,13 +572,20 @@ def _carriers(process: NfProcess) -> str:
     return ", ".join(Idioms.OPTION.fill(name=key, value=value(item)) for key, item in carried if item is not None)
 
 
-def _render_process(process: NfProcess, multi_input_ports: tuple[str, ...], floats: frozenset[str]) -> str:
+def _render_process(
+    process: NfProcess, multi_input_ports: tuple[str, ...], floats: frozenset[str], service: bool
+) -> str:
     # The Groovy text a reference to an input renders as, where it is not the value's own: an entry's name,
     # or a float's text.
     entries = {**_entry_names(process), **{name: Idioms.FLOAT_TEXT.fill(name=name) for name in floats}}
     lines = [Idioms.PROCESS.fill(name=process.name)]
     if process.container is not None:
-        lines.extend(f"    {directive}" for directive in container_directives(process.container))
+        # Singularity's `exec`, which runs a service form's task, runs no ENTRYPOINT, so nothing is cleared: the script
+        # runs the image's runscript (NF_RUNSCRIPT_READ). A process that asks for GPUs has them bound.
+        gpus = ("containerOptions '--nv'",) if process.resources.accelerator is not None else ()
+        directives = ((Idioms.CONTAINER.fill(literal=groovy_literal(process.container)), *gpus) if service
+                      else container_directives(process.container))
+        lines.extend(f"    {directive}" for directive in directives)
     if process.resources.cpus is not None:
         lines.append(f"    {Idioms.CPUS.fill(count=process.resources.cpus)}")
     if process.resources.memory_mb is not None:
@@ -618,12 +636,14 @@ def _render_process(process: NfProcess, multi_input_ports: tuple[str, ...], floa
                 Idioms.ENTRY.fill(
                     operator="cp -RL" if port.entry.copy else "ln -s", name=port.name, entry=entries[port.name]),
             ])
+    if service:
+        lines.append(NF_TASK_HOME)
     lines.extend(
         Idioms.EXPORT.fill(name=variable.name, value=_render_template(variable.value, entries))
         for variable in process.command.env
     )
     if process.container is not None:
-        lines.append(NF_ENTRYPOINT_READ)
+        lines.append(NF_RUNSCRIPT_READ if service else NF_ENTRYPOINT_READ)
         command = f"{NF_ENTRYPOINT_WORDS} {command}"
     if not isinstance(process.command.tokens[0], NfTemplate) or any(
             isinstance(token, NfShellLiteral) for token in process.command.tokens):
@@ -760,6 +780,29 @@ NF_OUTPUT_FUNCTION = f'''def {NF_OUTPUT_HELPER}(value, int depth) {{
         return ['class': java.nio.file.Files.isDirectory(value) ? 'Directory' : 'File', 'path': value.toString()]
     return value == [] ? null : value
 }}'''
+# The service form's helper (design §4.5) gives each path its place in the outputs folder, which is outside the work
+# directory, so Nextflow publishes it as it is, placed as Toil places a CWL run's outputs. `copies` holds each path
+# copied, for every output: a path a copied folder holds is at its place in that folder's copy, and any other is
+# copied once, under the first name no copy has taken, its own, then the name and _2, _3 and on. The caller first
+# passes each path no other returned path holds, the outputs in the order of their names, as Toil walks them, so that
+# a path inside a returned folder is never copied on its own.
+NF_PUBLISH_FUNCTION = f'''def {NF_OUTPUT_HELPER}(value, int depth, Map copies) {{
+    if( depth > 0 )
+        return value.collect {{ item -> {NF_OUTPUT_HELPER}(item, depth - 1, copies) }}
+    if( value instanceof java.nio.file.Path ) {{
+        def copied = copies.keySet().find {{ path -> value.startsWith(path) }}
+        if( copied == null ) {{
+            def taken = copies.values().collect {{ made -> made.name }}
+            def name = (1..taken.size() + 1).collect {{ copy -> copy == 1 ? value.name : value.name + '_' + copy }}
+                .find {{ candidate -> !(candidate in taken) }}
+            copies[value] = value.copyTo(workflow.outputDir.resolve(name))
+            copied = value
+        }}
+        return ['class': java.nio.file.Files.isDirectory(value) ? 'Directory' : 'File',
+                'path': copies[copied].resolve(copied.relativize(value))]
+    }}
+    return value == [] ? null : value
+}}'''
 
 
 def _shape_channel(process_name: str) -> str:
@@ -817,12 +860,9 @@ def _multi_input_methods(workflow: ExecutableNextflowWorkflow) -> dict[str, str]
     }
 
 
-def _output_record(workflow: ExecutableNextflowWorkflow, connection: NfWorkflowOutputConnection) -> str:
-    """The entry workflow's line that prints one workflow output once it completes (design §7).
-
-    The value carries one array level per scattered input under ``nested_crossproduct``, one under any
-    other scatter, and none for an unscattered process.
-    """
+def _output_depth(workflow: ExecutableNextflowWorkflow, connection: NfWorkflowOutputConnection) -> int:
+    """The array levels of a workflow output's value: one per scattered input under ``nested_crossproduct``, one
+    under any other scatter, and none for an unscattered process."""
     adapters = [
         incoming.adapter
         for incoming in workflow.connections
@@ -830,13 +870,42 @@ def _output_record(workflow: ExecutableNextflowWorkflow, connection: NfWorkflowO
         and incoming.to_process == connection.from_process
         and incoming.adapter in MULTI_INPUT_ADAPTERS
     ]
-    depth = len(adapters) if "nested_crossproduct" in adapters else min(len(adapters), 1)
+    return len(adapters) if "nested_crossproduct" in adapters else min(len(adapters), 1)
+
+
+def _output_record(workflow: ExecutableNextflowWorkflow, connection: NfWorkflowOutputConnection) -> str:
+    """The entry workflow's line that prints one workflow output once it completes (design §7)."""
+    depth = _output_depth(workflow, connection)
     value = f"{NF_OUTPUT_HELPER}(items, {depth})" if depth else f"{NF_OUTPUT_HELPER}(items[0], 0)"
     return (
         f"    {workflow.name}.out.{connection.to_port}.toList().subscribe {{ items -> "
         f"println({groovy_literal(NF_OUTPUT_MARKER + ' ')} + groovy.json.JsonOutput.toJson("
         f"[{groovy_literal(connection.to_port)}, {value}])) }}\n"
     )
+
+
+def _published_outputs(workflow: ExecutableNextflowWorkflow, outputs: list[NfWorkflowOutputConnection]) -> str:
+    """The entry workflow's lines that publish its outputs in the service form (design §4.5), after its call: each
+    the value its record prints, as one value, its paths in the outputs folder once every output has completed, as a
+    CWL run places them: each path no other returned path holds is copied first, the outputs in the order of their
+    names, and then each path is given its copy, or its place in the copy of the returned folder that holds it. A null
+    never binds a channel, so an output that is null leaves its channel empty instead, which Nextflow shows as null."""
+    outputs = sorted(outputs, key=lambda connection: connection.to_port)
+    sources = [f"{workflow.name}.out.{connection.to_port}.toList()" for connection in outputs]
+    values = ", ".join(
+        f"{NF_OUTPUT_HELPER}(items[{index}], {depth}, copies)" if depth
+        else f"{NF_OUTPUT_HELPER}(items[{index}][0], 0, copies)"
+        for index, depth in enumerate(_output_depth(workflow, connection) for connection in outputs))
+    published = "".join(
+        f"    {connection.to_port} = {NF_OUTPUTS_NAME}.filter {{ values -> values[{index}] != null }}"
+        f".map {{ values -> values[{index}] }}\n"
+        for index, connection in enumerate(outputs))
+    gathered = f"{sources[0]}.concat({', '.join(sources[1:])})" if sources[1:] else sources[0]
+    return (f"    {NF_OUTPUTS_NAME} = {gathered}.toList().map {{ items ->\n        def copies = [:]\n"
+            "        def paths = items.flatten().findAll { item -> item instanceof java.nio.file.Path }\n"
+            "        paths.findAll { path -> !paths.any { held -> path.parent.startsWith(held) } }\n"
+            f"            .each {{ path -> {NF_OUTPUT_HELPER}(path, 0, copies) }}\n"
+            f"        return [{values}]\n    }}\n\n    publish:\n{published}")
 
 
 def _render_multi_input_channel(process_name: str, sources: list[tuple[str, str, str]], method: str) -> str:
@@ -1100,12 +1169,15 @@ NF_HELPER_FUNCTIONS: Final = (
 )
 
 
-def render_nextflow(workflow: ExecutableNextflowWorkflow) -> str:
+def render_nextflow(workflow: ExecutableNextflowWorkflow, *, service: bool = False) -> str:
     """Render a supported workflow as deterministic Nextflow DSL2 source.
 
     Args:
         workflow (ExecutableNextflowWorkflow): Validated executable IR; no
             other representation is accepted.
+        service (bool): Render the service form (design §4.5), which a
+            compute service runs: containers under Singularity, after the
+            image's runscript, and every workflow output published.
 
     Returns:
         str: The complete ``workflow.nf`` text; byte-stable across calls.
@@ -1133,10 +1205,10 @@ def render_nextflow(workflow: ExecutableNextflowWorkflow) -> str:
         sections.append(NF_FLOAT_TEXT_FUNCTION)
     outputs = [connection for connection in workflow.connections if isinstance(connection, NfWorkflowOutputConnection)]
     if outputs:
-        sections.append(NF_OUTPUT_FUNCTION)
+        sections.append(NF_PUBLISH_FUNCTION if service else NF_OUTPUT_FUNCTION)
     sections.extend(
         _render_process(process, tuple(name for name, _, _ in _multi_input_sources(workflow, process)),
-                        floats[process.name])
+                        floats[process.name], service)
         for process in workflow.processes
     )
     sections.append(_render_named_workflow(workflow))
@@ -1146,8 +1218,13 @@ def render_nextflow(workflow: ExecutableNextflowWorkflow) -> str:
     unread = "".join(f"    {_checked_parameter(workflow, name)}\n" for name in sorted(workflow.params)
                      if name not in connected)
     arguments = ",\n        ".join(_parameter_expression(workflow, name) for name in connected)
-    records = "".join(_output_record(workflow, connection) for connection in outputs)
-    sections.append(f"workflow {{\n{NF_PARSER_CHECK}{unread}    {workflow.name}({arguments})\n{records}}}")
+    call = f"{NF_PARSER_CHECK}{unread}    {workflow.name}({arguments})\n"
+    if service and outputs:
+        sections.append(f"workflow {{\n    main:\n{call}{_published_outputs(workflow, outputs)}}}")
+        sections.append("output {\n" + "".join(f"    {connection.to_port} {{ }}\n" for connection in outputs) + "}")
+    else:
+        records = "".join(_output_record(workflow, connection) for connection in outputs)
+        sections.append(f"workflow {{\n{call}{records}}}")
     return "\n\n".join(sections) + "\n"
 
 
