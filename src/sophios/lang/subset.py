@@ -66,9 +66,9 @@ class Expr:
     args: tuple["Expr", ...] = ()
     value: Any = None
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self) -> dict[str, object]:
         """Serialize the node and its arguments, with a literal's or reference's value."""
-        item: dict[str, Any] = {"op": self.op}
+        item: dict[str, object] = {"op": self.op}
         if self.args:
             item["args"] = [arg.to_dict() for arg in self.args]
         if self.op in {"number", "string", "boolean", "ref"}:
@@ -76,7 +76,7 @@ class Expr:
         return item
 
 
-def is_safe_subset_text(value: Any) -> bool:
+def is_safe_subset_text(value: object) -> bool:
     """Whether a field is one whole ``$( … )`` reference the subset parser should own.
 
     A body whose parentheses are unbalanced is a template that happens to
@@ -199,7 +199,7 @@ def parse(text: str) -> Expr:
     return _Parser(match.group("body")).parse()
 
 
-def _number_literal(value: Any) -> None:
+def _number_literal(value: object) -> None:
     """Reject a number literal that is not a finite strict-mode decimal."""
     if not isinstance(value, str) or _NUMBER.fullmatch(value) is None:
         raise ValueError(f"number literal {value!r} is not a strict-mode decimal")
@@ -214,7 +214,7 @@ def _call_arity(call: str, args: tuple[Expr, ...]) -> None:
         raise ValueError(f"{call} takes {abs(arity)}{' or more' if arity < 0 else ''} arguments")
 
 
-def check(node: Expr, input_types: Mapping[str, Any]) -> str:
+def check(node: Expr, input_types: Mapping[str, object]) -> str:
     """Return the node's subset type, or raise naming the ill-typed construct.
 
     ``input_types`` maps each visible input to its CWL type. An optional
@@ -256,7 +256,7 @@ def check(node: Expr, input_types: Mapping[str, Any]) -> str:
     raise ValueError(f"unsupported construct {node.op!r}")
 
 
-def _optional_scalar(declared: Any) -> str | None:
+def _optional_scalar(declared: object) -> str | None:
     match declared:
         case list() as members if "null" in members and len(members) == 2:
             inner = next(member for member in members if member != "null")
@@ -266,7 +266,7 @@ def _optional_scalar(declared: Any) -> str | None:
     return None
 
 
-def _equality_operand(node: Expr, input_types: Mapping[str, Any]) -> str:
+def _equality_operand(node: Expr, input_types: Mapping[str, object]) -> str:
     if node.op == "ref" and _optional_scalar(input_types.get(node.value)) is not None:
         return "optional"
     return check(node, input_types)

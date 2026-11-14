@@ -9,7 +9,7 @@ import sys
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, Final, overload
+from typing import Final, overload
 
 from . import error_codes as _error_codes
 from .spans import SourceSpan
@@ -71,7 +71,7 @@ class Diagnostic:
         suffix = f' ({self.locator})' if shown else ''
         return f'{prefix}{self.severity} [{self.code}] {self.message}{suffix}'
 
-    def to_json(self) -> dict[str, Any]:
+    def to_json(self) -> dict[str, str | int | None]:
         """This diagnostic as the object `--diagnostics json` prints.
 
         Every key is always present, None where Sophios does not know the value, so a reader

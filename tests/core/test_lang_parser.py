@@ -508,6 +508,6 @@ def test_reading_writing_and_the_schema_share_no_state() -> None:
         assert len(set(pool.map(once, range(64)))) == 1, 'concurrent parses disagreed'
 
     edited, pristine = wic_schema(), wic_schema()
-    edited['$defs']['stepBody']['properties']['in']['additionalProperties']['$ref'] = 'CORRUPTED'
+    edited['$defs']['stepBody']['properties']['out']['items']['$ref'] = 'CORRUPTED'
     edited['$defs']['outputEntry']['oneOf'][0]['type'] = 'CORRUPTED'
     assert wic_schema() == pristine

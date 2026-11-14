@@ -7,7 +7,7 @@ before Link and Infer see it, so it is never emitted and inference never wires
 it, and what it declares is checked here, at compile time.
 """
 from dataclasses import dataclass, replace
-from typing import Any, Final
+from typing import Final
 
 from ..lang.diagnostics import Diagnostics, Locator, SophiosError
 from ..lang.error_codes import SophiosErrorCode
@@ -41,7 +41,7 @@ class Declaration:
     max_times: int
     interval: int
     #: A `.wic` analysis's `wic: steps:` mapping, or a tool step's own keys (`{in: ...}`).
-    config: dict[str, Any]
+    config: dict[str, OpaqueCwl]
     span: SourceSpan | None = None
 
 
@@ -92,7 +92,7 @@ def _declaration(document: str, step: StepNode, diagnostics: Diagnostics) -> Dec
                           f'real-time analysis step {step.id.name!r}: {message}', step.span,
                           Locator(step=step.id.name, index=step.id.index, port=port))
 
-    values: dict[str, Any] = {}
+    values: dict[str, OpaqueCwl] = {}
     for binding in step.bindings:
         port = str(binding.sink.port)
         if isinstance(binding.value, InlineLiteral):
@@ -118,13 +118,14 @@ def _declaration(document: str, step: StepNode, diagnostics: Diagnostics) -> Dec
     if not isinstance(values['config'], dict):
         problem('config', "config must be a mapping: the analysis's `wic: steps:` entries for a .wic, "
                 f"or the step's own keys such as `in:` for a tool; not {values['config']!r}.")
-    if len(diagnostics) > before or max_times is None or interval is None:
-        return None
-    return Declaration(document, values['cwl_tool'], values['file_pattern'], max_times, interval,
-                       values['config'], step.span)
+    match values['cwl_tool'], values['file_pattern'], values['config']:
+        case str() as tool, str() as pattern, dict() as config if (
+                len(diagnostics) == before and max_times is not None and interval is not None):
+            return Declaration(document, tool, pattern, max_times, interval, config, step.span)
+    return None
 
 
-def _plain(value: OpaqueCwl) -> Any:
+def _plain(value: OpaqueCwl) -> OpaqueCwl:
     """`value` with every `!ii` inside it, tagged or desugared, replaced by the value it carries."""
     match value:
         case InlineLiteral(value=inner):
@@ -138,7 +139,7 @@ def _plain(value: OpaqueCwl) -> Any:
     return value
 
 
-def _positive_int(value: Any) -> int | None:
+def _positive_int(value: object) -> int | None:
     """`value` as a positive int, accepting the digit strings the corpus writes; None if it is not one."""
     if isinstance(value, bool):
         return None

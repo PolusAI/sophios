@@ -9,7 +9,6 @@ from collections import Counter
 from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
 import yaml
 
@@ -215,7 +214,7 @@ def _generated_tool(step: Step, script_dir: Path) -> Tool:
     The run path names the tool as its script, which is what the emitted
     ``run:`` file is called; no such file is created here.
     """
-    args: dict[str, Any] = dict(step.inputs)
+    args = dict(step.inputs)
     script = script_dir / _text(args.pop('script', None))
     docker_pull = _text(args.pop('dockerPull', None))
     module = get_module(script.name[:-3], script, args)

@@ -285,7 +285,7 @@ def path_problems(jobs: Sequence[Job]) -> list[Diagnostic]:
     return problems
 
 
-def _unusable(path: Path, kind: str) -> str | None:
+def _unusable(path: Path, kind: object) -> str | None:
     """Why a run cannot use `path` as a File or Directory, and what to do; None when it can."""
     if not path.exists():
         return f"does not exist at {path}: correct the path, or create the {'file' if kind == 'File' else 'directory'}"

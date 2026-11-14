@@ -7,9 +7,9 @@ separate edge-inference candidate heuristic.
 """
 
 from enum import Enum
-from typing import Any
 
 from .cwl import ATOMIC_TYPES, expand_shorthand
+from .nodes import OpaqueCwl
 
 
 class TypeRelation(Enum):
@@ -20,7 +20,7 @@ class TypeRelation(Enum):
     UNKNOWN = 'unknown'
 
 
-def _kind(declared: Any) -> str | None:
+def _kind(declared: OpaqueCwl) -> str | None:
     """An atom's own name, `array` for an array, and None for what Sophios does not judge: `Any`, a record, an enum,
     a named schema. An array with no `items` is malformed, not an array: calling it one would answer `disjoint` for
     what is CWL's to reject."""
@@ -36,7 +36,7 @@ def _of_union(relations: list[TypeRelation]) -> TypeRelation:
     return TypeRelation.DISJOINT if relations and set(relations) == {TypeRelation.DISJOINT} else TypeRelation.UNKNOWN
 
 
-def reference_relation(source: Any, sink: Any, _in_source: frozenset[int] = frozenset(),
+def reference_relation(source: OpaqueCwl, sink: OpaqueCwl, _in_source: frozenset[int] = frozenset(),
                        _in_sink: frozenset[int] = frozenset()) -> TypeRelation:
     """Return the relation Sophios can prove between raw endpoint declarations.
 
@@ -52,9 +52,10 @@ def reference_relation(source: Any, sink: Any, _in_source: frozenset[int] = froz
         return _of_union([reference_relation(member, sink, _in_source | {id(source)}, _in_sink) for member in source])
     if isinstance(sink, list):
         return _of_union([reference_relation(source, member, _in_source, _in_sink | {id(sink)}) for member in sink])
+    match source, sink:
+        case {'type': 'array', 'items': source_items}, {'type': 'array', 'items': sink_items}:
+            return reference_relation(source_items, sink_items, _in_source | {id(source)}, _in_sink | {id(sink)})
     kinds = _kind(source), _kind(sink)
-    if kinds == ('array', 'array'):
-        return reference_relation(source['items'], sink['items'], _in_source | {id(source)}, _in_sink | {id(sink)})
     if None in kinds:
         return TypeRelation.UNKNOWN
     return TypeRelation.OVERLAPS if kinds[0] == kinds[1] else TypeRelation.DISJOINT

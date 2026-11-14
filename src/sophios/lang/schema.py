@@ -11,11 +11,11 @@ from collections.abc import Callable, Mapping
 from copy import deepcopy
 from dataclasses import fields
 from types import MappingProxyType
-from typing import Any, Final, final
+from typing import Final, final
 
 from .nodes import Document, OutputBinding, Shape, Step, WicSidecar, surface_of
 from .cwl import CWL_VERSIONS
-from .parser import SIDECAR_WRAPPER_KEY, Grammar
+from .parser import SIDECAR_WRAPPER_KEY, Grammar, JsonSchema
 
 
 @final
@@ -33,7 +33,7 @@ class Json:  # pylint: disable=too-few-public-methods  # a namespace, not a type
 #: How each declared shape is expressed in JSON Schema — as builders, not as
 #: fragments, so each call returns a structure nothing else holds a
 #: reference to.
-_SHAPE_SCHEMA: Final[Mapping[Shape, Callable[[], dict[str, Any]]]] = MappingProxyType({
+_SHAPE_SCHEMA: Final[Mapping[Shape, Callable[[], JsonSchema]]] = MappingProxyType({
     Shape.INPUT_BINDINGS: lambda: {
         'description': 'Input bindings. Each input may be bound only once (.wic reference §3.8).',
         'type': 'object',
@@ -59,7 +59,7 @@ _SHAPE_SCHEMA: Final[Mapping[Shape, Callable[[], dict[str, Any]]]] = MappingProx
 })
 
 
-def wic_schema() -> dict[str, Any]:
+def wic_schema() -> JsonSchema:
     """Build the JSON Schema describing a desugared Sophios document.
 
     Returned fresh each call, with nothing aliased inside, so the caller may
@@ -82,13 +82,13 @@ def wic_schema() -> dict[str, Any]:
     }
 
 
-def _object_schema(node_type: type, *, omit: frozenset[str] = frozenset()) -> dict[str, Any]:
+def _object_schema(node_type: type, *, omit: frozenset[str] = frozenset()) -> JsonSchema:
     """Turn one AST node into a JSON Schema object, field by field.
 
     Walks `dataclasses.fields` rather than a hand-written list, so a field
     without a `Surface` declaration raises rather than being silently omitted.
     """
-    properties: dict[str, Any] = {}
+    properties: dict[str, JsonSchema] = {}
     open_object = False
 
     for declared in fields(node_type):
@@ -116,7 +116,7 @@ def _object_schema(node_type: type, *, omit: frozenset[str] = frozenset()) -> di
     return {'type': 'object', 'properties': properties, 'additionalProperties': open_object}
 
 
-def _defs() -> dict[str, Any]:
+def _defs() -> dict[str, JsonSchema]:
     """The reusable shapes, each generated from the node it describes."""
     step_body = _step_body()
     return {
@@ -138,14 +138,14 @@ def _defs() -> dict[str, Any]:
     }
 
 
-def _step_body() -> dict[str, Any]:
+def _step_body() -> JsonSchema:
     """A step keyed by name. Null is legal: a step may have no body (.wic reference §2.1)."""
     # `id` is omitted: in this form the step's name is the mapping key.
     body = _object_schema(Step, omit=frozenset({'id'}))
     return {**body, 'type': ['object', 'null']}
 
 
-def _sequence_step() -> dict[str, Any]:
+def _sequence_step() -> JsonSchema:
     """A step written in a sequence, which carries its own non-empty `id:` (wic007)."""
     body = _object_schema(Step)
     identity = body['properties']['id']
@@ -157,7 +157,7 @@ def _sequence_step() -> dict[str, Any]:
     }
 
 
-def _output_entry() -> dict[str, Any]:
+def _output_entry() -> JsonSchema:
     """One `out:` entry: a bare name, or a name bound to an edge."""
     identity = _SHAPE_SCHEMA[surface_of(OutputBinding, 'name').shape]
     return {
@@ -169,12 +169,12 @@ def _output_entry() -> dict[str, Any]:
     }
 
 
-def _values_schema(values: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
+def _values_schema(values: Mapping[str, JsonSchema]) -> dict[str, JsonSchema]:
     """One property per declared `wic:` key, with the schema the parser checks its value against."""
     return {key: deepcopy(schema) for key, schema in sorted(values.items())}
 
 
-def _wic_block() -> dict[str, Any]:
+def _wic_block() -> JsonSchema:
     """The `wic:` sidecar. Null is legal: a bare `wic:` is empty (.wic reference §7)."""
     body = _object_schema(WicSidecar)
     return {
@@ -184,7 +184,7 @@ def _wic_block() -> dict[str, Any]:
     }
 
 
-def _wic_step_block() -> dict[str, Any]:
+def _wic_step_block() -> JsonSchema:
     """What a `wic: steps:` entry says about its step: a `wic:` block's
     keys, plus the ones only a step entry has."""
     body = _wic_block()
@@ -196,7 +196,7 @@ def _wic_step_block() -> dict[str, Any]:
     }
 
 
-def _wic_step_entry() -> dict[str, Any]:
+def _wic_step_entry() -> JsonSchema:
     """A `wic: steps:` entry: its keys directly, under a `wic:` wrapper, or both."""
     body = _wic_step_block()
     return {
@@ -206,7 +206,7 @@ def _wic_step_entry() -> dict[str, Any]:
     }
 
 
-def _input_value() -> dict[str, Any]:
+def _input_value() -> JsonSchema:
     """One of the five input forms (.wic reference §3.1).
 
     Unconstrained on purpose; `construct` is referenced only so editors can
@@ -219,7 +219,7 @@ def _input_value() -> dict[str, Any]:
     }
 
 
-def _construct() -> dict[str, Any]:
+def _construct() -> JsonSchema:
     """A desugared Sophios construct valid in input position: a single-key mapping.
 
     Derived from the parser's dispatch table, so a construct added there

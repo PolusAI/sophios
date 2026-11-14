@@ -10,7 +10,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from itertools import chain
 from types import MappingProxyType
-from typing import Any, Final, Iterator, Mapping, NoReturn, final, get_args
+from typing import Any, Final, Iterator, Mapping, NoReturn, TypedDict, final, get_args
 
 import yaml
 from jsonschema import Draft202012Validator
@@ -42,7 +42,18 @@ _GRAPHVIZ_STYLE: Final = ('((,\\s*)*(dashed|dotted|solid|invis|bold|tapered|fill
                           '|diagonals|rounded))+')
 #: A `graphviz: ranksame:` entry: a `wic: steps:` key, `(index, name)`.
 _RANKSAME_ENTRY: Final = '\\([0-9]+, [A-Za-z0-9_\\.]+\\)'
-_NON_EMPTY: Final = {'type': 'string', 'minLength': 1}
+
+#: The JSON Schema keywords Sophios writes: the exported schema, and the `wic:` value schemas the parser checks.
+JsonSchema = TypedDict('JsonSchema', {
+    '$schema': str, '$id': str, '$ref': str, '$defs': 'dict[str, JsonSchema]',
+    'title': str, 'description': str, 'type': 'str | list[str]', 'enum': list[str], 'pattern': str,
+    'minLength': int, 'minProperties': int, 'maxProperties': int, 'required': list[str],
+    'properties': 'dict[str, JsonSchema]', 'patternProperties': 'dict[str, JsonSchema]',
+    'additionalProperties': 'bool | JsonSchema', 'items': 'JsonSchema',
+    'oneOf': 'list[JsonSchema]', 'anyOf': 'list[JsonSchema]',
+}, total=False)
+
+_NON_EMPTY: Final[JsonSchema] = {'type': 'string', 'minLength': 1}
 
 
 @final
@@ -85,7 +96,7 @@ class Grammar:  # pylint: disable=too-few-public-methods  # a namespace, not a t
     #: value. The block is Sophios's own metadata, not passthrough CWL, so it
     #: is closed: any other key is `wic033`, and a value its schema refuses is
     #: `wic034`. The exported schema states the same table.
-    SIDECAR_VALUES: Final[Mapping[str, Mapping[str, Any]]] = MappingProxyType({
+    SIDECAR_VALUES: Final[Mapping[str, JsonSchema]] = MappingProxyType({
         'graphviz': {'type': 'object',
                      'properties': {'label': _NON_EMPTY,
                                     'style': {'type': 'string', 'pattern': _GRAPHVIZ_STYLE},
@@ -106,7 +117,7 @@ class Grammar:  # pylint: disable=too-few-public-methods  # a namespace, not a t
     #: it says about the step it names -- the step keys it may override, and
     #: that step's `inference:` rules. Siblings of the entry's own `wic:`
     #: wrapper are folded into the one block it parses to.
-    SIDECAR_STEP_VALUES: Final[Mapping[str, Mapping[str, Any]]] = MappingProxyType({
+    SIDECAR_STEP_VALUES: Final[Mapping[str, JsonSchema]] = MappingProxyType({
         **SIDECAR_VALUES,
         'in': {},
         'out': {},
@@ -181,7 +192,7 @@ class _Loader(yaml.SafeLoader):  # pylint: disable=too-many-ancestors  # SafeLoa
     yaml_constructors = dict(yaml.SafeLoader.yaml_constructors)
     yaml_multi_constructors = dict(yaml.SafeLoader.yaml_multi_constructors)
 
-    def construct_object(self, node: yaml.nodes.Node, deep: bool = False) -> Any:
+    def construct_object(self, node: yaml.nodes.Node, deep: bool = False) -> object:
         try:
             return super().construct_object(node, deep)
         except _UNREADABLE as exc:
@@ -605,7 +616,7 @@ class _Reader:
         self.error(SophiosErrorCode.EXPECTED_SCALAR, 'each out: entry must be a name or a single-key mapping', node)
         return OutputBinding('', None, span)
 
-    def _sidecar(self, node: yaml.nodes.Node, values: Mapping[str, Mapping[str, Any]] = Grammar.SIDECAR_VALUES,
+    def _sidecar(self, node: yaml.nodes.Node, values: Mapping[str, JsonSchema] = Grammar.SIDECAR_VALUES,
                  path: frozenset[int] = frozenset()) -> WicSidecar:
         """Parse a `wic:` block, normalising its `"(1, name)"` step keys.
 
@@ -656,7 +667,7 @@ class _Reader:
                 steps.append((named, self._sidecar(_unwrapped(value_node), Grammar.SIDECAR_STEP_VALUES, path)))
         return steps
 
-    def _sidecar_value(self, key: str, node: yaml.nodes.Node, schema: Mapping[str, Any]) -> OpaqueCwl:
+    def _sidecar_value(self, key: str, node: yaml.nodes.Node, schema: JsonSchema) -> OpaqueCwl:
         """Materialise one `wic:` value and check it against its schema (`wic034`).
 
         A value that already earned a diagnostic while being read is not checked
@@ -691,18 +702,19 @@ class _Reader:
         if not isinstance(node, yaml.nodes.ScalarNode):
             untagged = type(node)('', node.value, node.start_mark, node.end_mark)
             return InlineLiteral(self._read(untagged, path | {id(node)}, spent), span)
-        value: Any = node.value
+        text: str = node.value
         if node.style is not None:
-            return InlineLiteral(value, span)
+            return InlineLiteral(text, span)
+        value: OpaqueCwl = text
         try:
-            value = yaml.safe_load(value) if value else value
+            value = yaml.safe_load(text) if text else text
         except yaml.YAMLError:
             pass  # not a primitive: its text is the honest reading
         except _UNREADABLE:
-            read = yaml.compose(value, Loader=yaml.SafeLoader)
+            read = yaml.compose(text, Loader=yaml.SafeLoader)
             assert read is not None  # a non-empty scalar composes to a node
             self.error(SophiosErrorCode.UNKNOWN_TAG, f'YAML cannot read this value as {_tag_name(read.tag)}', node)
-        return InlineLiteral(value, span, None if '\n' in node.value else node.value)
+        return InlineLiteral(value, span, None if '\n' in text else text)
 
     def _opaque(self, node: yaml.nodes.Node, path: frozenset[int] = frozenset(),
                 spent: list[int] | None = None) -> OpaqueCwl:
@@ -740,8 +752,7 @@ class _Reader:
                 return [self._opaque(item, path, spent) for item in node.value]
             case _, yaml.nodes.MappingNode():
                 return {self._key_text(key): self._opaque(value, path, spent) for key, value in node.value}
-        scalar: OpaqueCwl = _resolved_scalar(node)
-        return scalar
+        return _resolved_scalar(node)
 
     def _name_text(self, node: yaml.nodes.Node) -> str:
         """Return a scalar node's literal text, reporting anything non-scalar.
@@ -827,7 +838,7 @@ def _unwrapped(node: yaml.nodes.Node) -> yaml.nodes.Node:
     return yaml.nodes.MappingNode(tag, siblings, node.start_mark, node.end_mark)
 
 
-def _refusals(schema: Mapping[str, Any], value: OpaqueCwl, node: yaml.nodes.Node,
+def _refusals(schema: JsonSchema, value: OpaqueCwl, node: yaml.nodes.Node,
               where: str) -> Iterator[tuple[str, yaml.nodes.Node]]:
     """Each way `schema` refuses `value`, which was read from `node`, with the node that holds the fault.
 
@@ -894,7 +905,7 @@ def step_key(text: str) -> StepKey | None:
 _EXPANSION_BUDGET: Final = 100_000
 
 
-def _resolved_scalar(node: yaml.nodes.Node) -> Any:
+def _resolved_scalar(node: yaml.nodes.Node) -> OpaqueCwl:
     """Convert a resolved scalar node to its Python value, exactly as `yaml.SafeLoader` would.
 
     Delegated to PyYAML's own `SafeConstructor` rather than re-implemented,
@@ -902,10 +913,12 @@ def _resolved_scalar(node: yaml.nodes.Node) -> Any:
     and sexagesimals. A fresh constructor per call, since the class carries
     per-document state and this layer is shared across threads.
     """
+    text: str = node.value
     try:
-        return yaml.constructor.SafeConstructor().construct_object(node)
+        scalar: OpaqueCwl = yaml.constructor.SafeConstructor().construct_object(node)
+        return scalar
     except (yaml.YAMLError, *_UNREADABLE):  # reported by `_load`
-        return node.value
+        return text
 
 
 def _kind(node: yaml.nodes.Node) -> str:

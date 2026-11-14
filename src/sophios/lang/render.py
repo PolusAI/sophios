@@ -11,7 +11,7 @@ collection is re-spelled rather than handed raw to the dumper.
 """
 from dataclasses import dataclass
 from datetime import date, datetime
-from typing import Any, get_args
+from typing import get_args
 
 import yaml
 
@@ -41,7 +41,7 @@ class _Tagged:
     """
 
     tag: str
-    value: Any
+    value: object
     quoted: bool = False
 
 
@@ -60,9 +60,9 @@ class _Writer:
 
     tagged: bool
 
-    def document(self, document: Document) -> dict[str, Any]:
+    def document(self, document: Document) -> dict[str, object]:
         """Key order follows the .wic reference: `wic:`, then `steps:`, then the rest."""
-        body: dict[str, Any] = {}
+        body: dict[str, object] = {}
 
         if document.sidecar is not None:
             body['wic'] = self.sidecar(document.sidecar)
@@ -85,9 +85,9 @@ class _Writer:
 
         return body
 
-    def step(self, step: Step) -> dict[str, Any]:
+    def step(self, step: Step) -> dict[str, object]:
         """One step's keys, minus its id."""
-        out: dict[str, Any] = {}
+        out: dict[str, object] = {}
         if step.inputs:
             out['in'] = {name: self.input_value(value) for name, value in step.inputs}
         if step.outputs:
@@ -96,30 +96,30 @@ class _Writer:
             out[key] = self.plain(value)
         return out
 
-    def output(self, binding: OutputBinding) -> Any:
+    def output(self, binding: OutputBinding) -> object:
         """One `out:` entry: a bare name, or a name bound to an edge, defined only here (.wic reference §3.6)."""
         if binding.edge_def is None:
             return binding.name
         return {binding.name: self.construct(Tag.ANCHOR, binding.edge_def.name)}
 
-    def construct(self, tag: str, payload: Any) -> Any:
+    def construct(self, tag: str, payload: object) -> object:
         """Spell one construct: `!tag payload`, or `{key: payload}` desugared."""
         return _Tagged(tag, payload) if self.tagged else {KEY_OF_TAG[tag]: payload}
 
-    def sidecar(self, sidecar: WicSidecar) -> Any:
+    def sidecar(self, sidecar: WicSidecar) -> object:
         """A `wic:` block, restoring its `(index, name)` step keys.
 
         Children are re-wrapped in `SIDECAR_WRAPPER_KEY`, matching the
         parser's unwrap. An empty block renders `{}`, never `None`, since
         consumers defend against a missing key with `.get(k, {})`.
         """
-        out: dict[str, Any] = {key: self.plain(value) for key, value in sidecar.entries}
+        out: dict[str, object] = {key: self.plain(value) for key, value in sidecar.entries}
         if sidecar.steps:
             out['steps'] = {str(key): {SIDECAR_WRAPPER_KEY: self.sidecar(child)}
                             for key, child in sidecar.steps}
         return out
 
-    def input_value(self, value: InputValue) -> Any:
+    def input_value(self, value: InputValue) -> object:
         """Spell one input construct in this writer's mode."""
         match value:
             case InlineLiteral():
@@ -131,7 +131,7 @@ class _Writer:
             case UnresolvedName(name=name):
                 return name
             case CwlRecord(sources=sources, fields=fields):
-                body: dict[str, Any] = {}
+                body: dict[str, object] = {}
                 if sources:
                     spelled = [self.input_value(source) for source in sources]
                     # One source stays a list beside `linkMerge`, which CWL reads as a merge of a list.
@@ -140,7 +140,7 @@ class _Writer:
                 body.update({key: self.plain(value) for key, value in fields})
                 return self.construct(Tag.RAW_CWL, body)
 
-    def _literal(self, literal: InlineLiteral) -> Any:
+    def _literal(self, literal: InlineLiteral) -> object:
         """Spell an `!ii` literal: transcribed from source text when parsed, else serialised."""
         if self.tagged and literal.text is not None:
             return _Tagged(Tag.INLINE_INPUT, literal.text)
@@ -152,7 +152,7 @@ class _Writer:
             return {Key.INLINE_INPUT: self.plain(literal.value)}
         return _spell_scalar(literal.value)
 
-    def plain(self, value: OpaqueCwl) -> Any:
+    def plain(self, value: OpaqueCwl) -> object:
         """Spell passthrough content, exhaustively over the closed `OpaqueCwl` union."""
         match value:
             case InlineLiteral() | EdgeRef() | RawCwlRef() | UnresolvedName() | CwlRecord():
@@ -172,7 +172,7 @@ class _Writer:
 # --------------------------------------------------------------------------
 
 
-def _spell_scalar(value: Any) -> _Tagged:
+def _spell_scalar(value: OpaqueCwl) -> _Tagged:
     """Return the tagged spelling that reads back as the scalar `value`.
 
     The parser reads an `!ii` scalar as YAML reads the same scalar untagged
@@ -208,7 +208,7 @@ def _represent_tagged(dumper: yaml.SafeDumper, data: _Tagged) -> yaml.nodes.Node
 class _WicDumper(yaml.SafeDumper):
     """A dumper that knows the wic tags and does not fold long lines."""
 
-    def ignore_aliases(self, data: Any) -> bool:
+    def ignore_aliases(self, data: object) -> bool:
         """Never emit YAML anchors; wic has its own edge syntax."""
         return True
 
@@ -243,7 +243,7 @@ def render(document: Document) -> str:
     return yaml.dump(body, Dumper=_WicDumper, sort_keys=False, default_flow_style=False, width=10_000)
 
 
-def to_json(document: Document) -> dict[str, Any]:
+def to_json(document: Document) -> dict[str, object]:
     """Project a document into JSON-serialisable data, desugared.
 
     This is what a consumer without YAML tags sees, and what the exported

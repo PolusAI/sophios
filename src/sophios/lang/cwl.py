@@ -4,14 +4,16 @@ The language spec pins Sophios to one CWL version; that version belongs
 here, in the language definition, not to whichever module emits a document.
 Import `CWL_VERSION` rather than writing a version literal.
 """
+from collections.abc import Mapping, Sequence
 from enum import Enum, StrEnum
 from pathlib import Path, PurePosixPath
-from typing import Any, Final, TypeAlias, TypeVar
+from typing import Any, Final, TypeAlias, TypeGuard, TypeVar
 
 from cwl_utils.parser import cwl_v1_2 as _standard
 
 from .diagnostics import SophiosError
 from .error_codes import SophiosErrorCode
+from .nodes import OpaqueCwl
 
 
 class CwlVersion(StrEnum):
@@ -53,9 +55,9 @@ PICK_VALUES: Final[frozenset[str]] = frozenset(_standard.PickValueMethodLoader.s
 PICKS_ONE: Final[frozenset[str]] = PICK_VALUES - {'all_non_null'}
 
 
-def _hold_to_the_standard(enum: type[Enum], *loaders: Any) -> None:
+def _hold_to_the_standard(enum: type[Enum], *standard: Sequence[str]) -> None:
     """Fail at import when `enum` has a member more or a member less than the standard's own enumerations."""
-    symbols = {symbol for loader in loaders for symbol in loader.symbols}
+    symbols = {symbol for each in standard for symbol in each}
     if (values := {member.value for member in enum}) != symbols:
         raise TypeError(f"{enum.__name__} is not the CWL standard's: {sorted(values ^ symbols)}")
 
@@ -83,19 +85,22 @@ class ScatterMethod(str, Enum):
     nested_crossproduct = "nested_crossproduct"
 
 
-_hold_to_the_standard(CWLAtomicType, _standard.CWLTypeLoader, _standard.AnyLoader)
-_hold_to_the_standard(ScatterMethod, _standard.ScatterMethodLoader)
+_hold_to_the_standard(CWLAtomicType, _standard.CWLTypeLoader.symbols, _standard.AnyLoader.symbols)
+_hold_to_the_standard(ScatterMethod, _standard.ScatterMethodLoader.symbols)
 
 
 #: What a tool document loads as: the standard's own classes.
 Process: TypeAlias = _standard.CommandLineTool | _standard.Workflow | _standard.ExpressionTool | _standard.Operation
+
+#: A port's type as the loader leaves it: a name, a schema of the standard's, or a union of them.
+LoadedType: TypeAlias = str | _standard.Saveable | list['LoadedType']
 
 #: What a document's sections hold: the field that names an entry, and the field a bare value in a mapping stands for.
 _NAMED: Final = {'requirements': ('class', 'value'), 'hints': ('class', 'value'),
                  'inputs': ('id', 'type'), 'outputs': ('id', 'type')}
 #: By section, the place of each requirement or hint a document wrote, in its order: the vendor's class and plain
 #: fields, or `None` for one its process holds.
-Written: TypeAlias = dict[str, dict[str, tuple[str, dict[str, Any]] | None]]
+Written: TypeAlias = dict[str, dict[str, tuple[str, dict[str, object]] | None]]
 _Requirement = TypeVar('_Requirement')
 
 
@@ -104,7 +109,7 @@ def _local(identifier: str) -> str:
     return identifier.rsplit('#', maxsplit=1)[-1].rsplit('/', maxsplit=1)[-1]
 
 
-def _listed(document: dict[str, Any], section: str) -> list[tuple[str, Any]]:
+def _listed(document: dict[str, OpaqueCwl], section: str) -> list[tuple[str, OpaqueCwl]]:
     """The entries a document wrote in a section, in the order it wrote them, each with its place (its key in a
     mapping, its index in a list) and as the list form writes it: the standard sorts a mapping's."""
     name, bare = _NAMED[section]
@@ -117,12 +122,12 @@ def _listed(document: dict[str, Any], section: str) -> list[tuple[str, Any]]:
     return []
 
 
-def _is_extension(item: Any) -> bool:
+def _is_extension(item: OpaqueCwl) -> TypeGuard[dict[str, Any]]:
     """Whether a requirement or hint is a vendor's, such as `cwltool:CUDARequirement`: the standard's have no colon."""
     return isinstance(item, dict) and ':' in str(item.get('class'))
 
 
-def _separate_read_as_false(binding: Any) -> Any:
+def _separate_read_as_false(binding: OpaqueCwl) -> OpaqueCwl:
     """A binding that writes `separate: null` and no prefix, as cwltool reads it at run: `separate: false`, which it
     refuses. The loader reads null as unset, so the refusal would be lost."""
     if isinstance(binding, dict) and binding.get('separate', True) is None and binding.get('prefix') is None:
@@ -135,7 +140,7 @@ def _refusal(error: Exception) -> SophiosError:
     return SophiosError.error(SophiosErrorCode.INVALID_TOOL, ' '.join(str(error).split()))
 
 
-def load_process(document: dict[str, Any], run_path: str) -> tuple[Process, Written]:
+def load_process(document: dict[str, OpaqueCwl], run_path: str) -> tuple[Process, Written]:
     """A tool document read once, whole, into the standard's classes, with its ports in the order it wrote them and
     its vendor's requirements and hints set aside.
 
@@ -148,17 +153,17 @@ def load_process(document: dict[str, Any], run_path: str) -> tuple[Process, Writ
     for section in _NAMED:
         if isinstance(document.get(section), (dict, list)):
             items = _listed(document, section)
-            standard[section] = [item for _, item in items if not _is_extension(item)]
+            kept = [item for _, item in items if not _is_extension(item)]
             if section == 'inputs':
-                standard[section] = [{**port, 'inputBinding': _separate_read_as_false(port['inputBinding'])}
-                                     if isinstance(port, dict) and 'inputBinding' in port else port
-                                     for port in standard[section]]
+                kept = [{**port, 'inputBinding': _separate_read_as_false(port['inputBinding'])}
+                        if isinstance(port, dict) and 'inputBinding' in port else port for port in kept]
+            standard[section] = kept
             if section in written:
                 written[section] = {
                     place: (item['class'], {key: value for key, value in item.items() if key != 'class'})
                     if _is_extension(item) else None for place, item in items}
-    if isinstance(document.get('arguments'), list):
-        standard['arguments'] = [_separate_read_as_false(argument) for argument in document['arguments']]
+    if isinstance(arguments := document.get('arguments'), list):
+        standard['arguments'] = [_separate_read_as_false(argument) for argument in arguments]
     # A base with a scheme lets a tool's own types resolve, as the standard's loader checks no link across one.
     base = PurePosixPath('/', Path(run_path).name).as_uri()
     try:
@@ -174,7 +179,7 @@ def ports_named(loaded: list[Any]) -> dict[str, Any]:
     return {_local(port.id): port for port in loaded}
 
 
-def inherited(process: Process, name: str, body: dict[str, Any]) -> Any:
+def inherited(process: Process, name: str, body: Mapping[str, object]) -> _standard.Saveable | dict[str, object]:
     """The requirement or hint `name` that a process inherits, read as the standard's class, else as the loader leaves
     a class it does not know.
 
@@ -190,7 +195,7 @@ def inherited(process: Process, name: str, body: dict[str, Any]) -> Any:
         raise _refusal(error) from error
 
 
-def expand_shorthand(declared: Any) -> Any:
+def expand_shorthand(declared: OpaqueCwl) -> OpaqueCwl:
     """One layer of CWL's type shorthand, without changing the caller's declaration: `T[]` is an array of `T`, and
     `T?` is `T` or null."""
     if not isinstance(declared, str):
@@ -202,17 +207,17 @@ def expand_shorthand(declared: Any) -> Any:
     return declared
 
 
-def canonical_type(declared: Any) -> Any:
+def canonical_type(declared: OpaqueCwl) -> OpaqueCwl:
     """A written type with its shorthand expanded at every layer, through an array's items."""
-    match expand_shorthand(declared) if isinstance(declared, str) else declared:
+    match expand_shorthand(declared):
         case ['null', inner] if isinstance(declared, str):
             return ['null', canonical_type(inner)]
-        case {'type': 'array', 'items': inner} as array:
-            return {**array, 'items': canonical_type(inner)}
+        case dict() as array if array.get('type') == 'array' and 'items' in array:
+            return {**array, 'items': canonical_type(array['items'])}
     return declared
 
 
-def canonical(type_: Any) -> Any:
+def canonical(type_: LoadedType) -> OpaqueCwl:
     """A loaded port type as `PortType.canonical` spells one, so a tool's types and a workflow's read alike: a union
     is a list, an array `{type: array, items}`, and any other schema as the standard writes it."""
     match type_:
@@ -226,7 +231,7 @@ def canonical(type_: Any) -> Any:
     return type_.save(top=False, relative_uris=not str(getattr(type_, 'name', '')).startswith('_:'))
 
 
-def required(type_: Any) -> tuple[Any, bool]:
+def required(type_: OpaqueCwl) -> tuple[OpaqueCwl, bool]:
     """A port's type without its `null`, and whether it had one: the one type that remains, or the list of the
     several."""
     if not isinstance(type_, list) or 'null' not in type_:

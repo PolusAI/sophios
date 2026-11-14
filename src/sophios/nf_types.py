@@ -30,7 +30,7 @@ NF_INTERNAL_IDENTIFIERS = frozenset({
     NF_SCATTER_INDEX_NAME, NF_NEST_HELPER, NF_INPUT_HELPER, NF_STEP_INPUT_HELPER, NF_FLOAT_TEXT_HELPER,
     NF_OUTPUT_HELPER,
 })
-PATH_KINDS = {"File": "file", "Directory": "directory"}
+PATH_KINDS: Mapping[object, str] = {"File": "file", "Directory": "directory"}
 # A workflow parameter's declared type, which the generated pipeline checks
 # its value against when it starts: an item type, `[]` for an array of it,
 # and `?` when the parameter is optional.

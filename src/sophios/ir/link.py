@@ -1,9 +1,8 @@
 """Pure composition and reference linking over workflow graphs."""
 from collections.abc import Iterator
 from dataclasses import replace
-from typing import Any
 
-from ..lang import CwlRecord, SophiosErrorCode
+from ..lang import CwlRecord, OpaqueCwl, SophiosErrorCode
 from ..lang.compatibility import TypeRelation, reference_relation
 from ..lang.diagnostics import Diagnostics, Locator
 from .declarations import boundary_declaration, delivered, input_rank, layered, output_rank
@@ -211,7 +210,7 @@ def _call_edges(graph: WorkflowGraph) -> Iterator[tuple[PortId, Edge]]:
         yield from _call_edges(child)
 
 
-def _effective_type(graph: WorkflowGraph, port: PortId, *, producing: bool) -> Any:
+def _effective_type(graph: WorkflowGraph, port: PortId, *, producing: bool) -> OpaqueCwl:
     return layered(_port(graph, port).type, _rank(graph, port, producing=producing)).canonical
 
 

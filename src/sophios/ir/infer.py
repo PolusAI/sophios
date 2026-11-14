@@ -1,9 +1,8 @@
 """Pure fixed-point edge inference over a linked workflow graph."""
 from collections import Counter
 from dataclasses import dataclass, replace
-from typing import Any
 
-from ..lang import SophiosErrorCode
+from ..lang import OpaqueCwl, SophiosErrorCode
 from ..lang.diagnostics import Diagnostics, Locator
 from .complete import call_interfaces, promote_outputs
 from .declarations import feeding_declaration, input_rank, layered, output_rank, required
@@ -82,7 +81,7 @@ def infer(graph: WorkflowGraph, policy: InferencePolicy = InferencePolicy(),
     return PhaseResult(None, diagnostics)
 
 
-def types_match(in_type: Any, out_type: Any) -> bool:
+def types_match(in_type: OpaqueCwl, out_type: OpaqueCwl) -> bool:
     """Legacy inferred-candidate relation, intentionally not a rejection judge."""
     if in_type == out_type:
         return True
@@ -413,15 +412,15 @@ def _insert(graph: WorkflowGraph, position: int, insertion: Insertion,
     return replace(graph, steps=(*graph.steps[:position], inserted, *graph.steps[position:]))
 
 
-def _formats(declaration: PortDeclaration | None) -> tuple[Any, ...]:
+def _formats(declaration: PortDeclaration | None) -> tuple[OpaqueCwl, ...]:
     if declaration is None or not declaration.has_format:
         return ()
     value = declaration.format
     return tuple(value) if isinstance(value, list) else (value,)
 
 
-def _formats_match(sink: tuple[Any, ...], source: tuple[Any, ...],
-                   source_type: Any) -> bool:
+def _formats_match(sink: tuple[OpaqueCwl, ...], source: tuple[OpaqueCwl, ...],
+                   source_type: OpaqueCwl) -> bool:
     if not sink:
         return True
     if not source:
@@ -429,7 +428,7 @@ def _formats_match(sink: tuple[Any, ...], source: tuple[Any, ...],
     return any(value in sink for value in source)
 
 
-def _type_permits_format(cwl_type: Any) -> bool:
+def _type_permits_format(cwl_type: OpaqueCwl) -> bool:
     if cwl_type == 'File':
         return True
     if isinstance(cwl_type, dict) and cwl_type.get('type') == 'array':
