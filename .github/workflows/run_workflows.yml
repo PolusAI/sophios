@@ -75,6 +75,12 @@ jobs:
     runs-on: [self-hosted, linux]
 
     steps:
+    - name: Keep the lane's scratch in the runner's temp directory
+      shell: bash {0}
+      # The runner empties RUNNER_TEMP when the job ends, however it ended: pytest's, cwltool's and Toil's scratch
+      # (each Nextflow run's work directory among it) goes with this job, and no other job's is touched.
+      run: echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
+
     - name: Checkout sophios
       uses: actions/checkout@v5
       with:
@@ -129,11 +135,11 @@ jobs:
       shell: bash {0}
       # What the pytest worker count below is sized against, and how full the
       # disks the corpus writes to are (its outputs and cache in the workspace,
-      # cwltool's scratch in /tmp); both read from the log when a step is slow.
+      # cwltool's scratch in TMPDIR); both read from the log when a step is slow.
       run: |
         nproc
         free -g | head -2
-        df -h "$GITHUB_WORKSPACE" /tmp
+        df -h "$GITHUB_WORKSPACE" "$TMPDIR"
         docker system df | tail -4
 
     - name: Remove old global config
