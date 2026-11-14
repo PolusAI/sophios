@@ -9,7 +9,6 @@ import hashlib
 import json
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import Any
 
 from cwl_utils.errors import SubstitutionError
 from cwl_utils.expression import scanner
@@ -115,18 +114,20 @@ def tolerant_tool(document: Cwl, policy: RunPolicy) -> Cwl:
     return tool
 
 
-def _type(entry: Any) -> Any:
+def _type(entry: OpaqueCwl) -> OpaqueCwl:
     """The type an output declares, written alone or as its mapping's `type`."""
     return entry.get('type') if isinstance(entry, dict) else entry
 
 
-def _captured(entry: Any) -> Any:
+def _captured(entry: OpaqueCwl) -> str | None:
     """The stream an output captures, if it says so as CWL lets it: without a binding of its own."""
-    declared = _type(entry)
-    return declared if declared in _STREAMS and not (isinstance(entry, dict) and 'outputBinding' in entry) else None
+    match _type(entry):
+        case str() as declared if declared in _STREAMS and not (isinstance(entry, dict) and 'outputBinding' in entry):
+            return declared
+    return None
 
 
-def _tolerant_output(entry: Any, tool: Cwl) -> Any:
+def _tolerant_output(entry: OpaqueCwl, tool: Cwl) -> OpaqueCwl:
     """One output of `tool`, as it accepts `null`. A stream output with a binding of its own is no CWL, and is
     left for cwltool to refuse."""
     declared = _type(entry)
@@ -137,7 +138,7 @@ def _tolerant_output(entry: Any, tool: Cwl) -> Any:
         return entry
     match declared:
         case str():
-            tolerant: Any = f'{declared}?'
+            tolerant: OpaqueCwl = f'{declared}?'
         case list():
             tolerant = ['null', *declared]
         case _:

@@ -20,7 +20,6 @@ are spelled by the same entry.
 """
 from copy import deepcopy
 from dataclasses import replace
-from typing import Any
 
 from ..lang import CWL_VERSION, CwlRecord
 from ..lang.nodes import OpaqueCwl
@@ -136,7 +135,7 @@ def emit(graph: EmissionDocument, names: Names) -> Cwl:
     argument type, so nothing is checked here.
     """
     ins = step_inputs(graph)
-    known: dict[str, Any] = {
+    known: dict[str, OpaqueCwl] = {
         'steps': [_emit_step(step, ins[step.id], names) for step in graph.steps],
         'cwlVersion': CWL_VERSION,
         'class': 'Workflow',
@@ -160,11 +159,11 @@ def emit_job_inputs(graph: EmissionDocument, names: Names) -> Cwl:
 
 
 def _emit_step(node: StepNode, ins: tuple[tuple[PortName, EmittedValue], ...],
-               names: Names) -> dict[str, Any]:
+               names: Names) -> dict[str, OpaqueCwl]:
     """Render one structured step descriptor in canonical order. A call's ports are its child's boundary,
     in the child's order, so `out:` is the step's outputs whatever it runs."""
     interpreted = dict(node.interpreted)
-    known: dict[str, Any] = {
+    known: dict[str, OpaqueCwl] = {
         'id': names.step(node.id),
         'in': {names.port(name): _emit_binding(value, names) for name, value in ins},
         # The file the step's process is written to, beside every other document of the tree.
@@ -181,11 +180,11 @@ def _emit_step(node: StepNode, ins: tuple[tuple[PortName, EmittedValue], ...],
     return known
 
 
-def _emit_binding(value: EmittedValue, names: Names) -> str | dict[str, Any]:
+def _emit_binding(value: EmittedValue, names: Names) -> str | dict[str, OpaqueCwl]:
     """One `in:` entry, in the spelling its value asks for.
 
-    Returns `str | dict[str, Any]` rather than `Any` so mypy checks this
-    `match` covers the union instead of a missed arm silently falling through.
+    Returns `str | dict[str, OpaqueCwl]` so mypy checks this `match` covers the
+    union instead of a missed arm silently falling through.
     """
     match value:
         case Source(ref=ref, shorthand=True):
@@ -195,21 +194,21 @@ def _emit_binding(value: EmittedValue, names: Names) -> str | dict[str, Any]:
         case Expression(text=text):
             return text
         case Record(sources=sources, fields=fields):
-            known: dict[str, Any] = {}
+            known: dict[str, OpaqueCwl] = {}
             if sources:
-                spelled = [names.source(source) for source in sources]
+                spelled: list[OpaqueCwl] = [names.source(source) for source in sources]
                 # One source stays a list beside `linkMerge`, which merges a list.
                 known['source'] = spelled if len(spelled) > 1 or 'linkMerge' in dict(fields) else spelled[0]
             known.update({key: deepcopy(field) for key, field in fields})
             return known
 
 
-def _emit_port(port: WorkflowPort, names: Names) -> Any:
+def _emit_port(port: WorkflowPort, names: Names) -> OpaqueCwl:
     """Render a workflow port without assigning meaning to opaque fields."""
     declaration = port.declaration
     if declaration.shorthand:
         return deepcopy(declaration.type.declared)
-    known: dict[str, Any] = {'type': deepcopy(declaration.type.declared)}
+    known: dict[str, OpaqueCwl] = {'type': deepcopy(declaration.type.declared)}
     if declaration.has_format:
         known['format'] = deepcopy(declaration.format)
     if declaration.has_default:

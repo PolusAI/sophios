@@ -6,13 +6,13 @@ it; once that document is rewritten somewhere else, it is written absolute.
 import copy
 from collections.abc import Iterator
 from pathlib import Path, PurePath
-from typing import Any
 from urllib.parse import urlparse
 
+from ..lang.nodes import OpaqueCwl
 from ..wic_types import Yaml
 
 
-def relative_local_path(written: Any) -> str | None:
+def relative_local_path(written: object) -> str | None:
     """`written` when it names a local file or directory by a relative path; None for anything else.
 
     Not relative: a non-string, a URI (`file:`, `https:`, ...) and an absolute path. A one-letter scheme
@@ -23,7 +23,7 @@ def relative_local_path(written: Any) -> str | None:
     return written
 
 
-def input_paths(values: Yaml) -> Iterator[tuple[str, dict[str, Any]]]:
+def input_paths(values: Yaml) -> Iterator[tuple[str, dict[str, OpaqueCwl]]]:
     """Every File and Directory object in a job, with the input it is under, in written order.
 
     Found in lists, in records, in a File's `secondaryFiles` and in a Directory's `listing`.

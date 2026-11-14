@@ -10,7 +10,7 @@ from pathlib import Path
 import posixpath
 import re
 from types import MappingProxyType
-from typing import Any, Final, TypeVar
+from typing import Any, Final, TypeGuard, TypeVar
 
 from cwl_utils.parser import cwl_v1_2 as standard
 
@@ -28,6 +28,7 @@ from .lang.cwl import (
 )
 from .lang.diagnostics import Diagnostic, Locator, Severity, SophiosError
 from .lang.error_codes import SophiosErrorCode
+from .lang.nodes import OpaqueCwl
 from .lang.subset import Expr, is_safe_subset_text, references
 from .nf_support import FIELDS, REQUIREMENT_CLASSES, Row, consumed
 from .nf_symbols import normalize_nextflow_identifier
@@ -246,7 +247,7 @@ def _number_type_findings(cwl_type: Any, *, path: str) -> list[_Finding]:
     ]
 
 
-def _is_array_type(cwl_type: Any) -> bool:
+def _is_array_type(cwl_type: Any) -> TypeGuard[Mapping[str, OpaqueCwl]]:
     """Return whether a (non-optional-wrapped) CWL type is the array mapping form."""
     return isinstance(cwl_type, Mapping) and cwl_type.get("type") == "array"
 

@@ -2,7 +2,7 @@
 from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import replace
-from typing import Any, Final
+from typing import Final
 
 from ..lang.cwl import PICKS_ONE
 from ..lang.nodes import OpaqueCwl
@@ -23,7 +23,7 @@ _INPUT_BOUNDARY_FIELDS: Final = _OUTPUT_BOUNDARY_FIELDS | {'loadContents', 'load
 _EXPRESSION_MARKERS: Final = ('$(', '${')
 
 
-def port_declaration(raw: Any, *, output: bool = False) -> PortDeclaration:
+def port_declaration(raw: OpaqueCwl, *, output: bool = False) -> PortDeclaration:
     """Preserve one CWL port declaration and expose its recognized fields."""
     if not isinstance(raw, dict):
         return PortDeclaration(PortType(deepcopy(raw)), shorthand=True)
@@ -71,7 +71,7 @@ def layered(port_type: PortType, rank: int) -> PortType:
     return PortType(raw)
 
 
-def delivered(produced: Any, *, sources: int, link_merge: OpaqueCwl, pick_value: OpaqueCwl) -> Any:
+def delivered(produced: OpaqueCwl, *, sources: int, link_merge: OpaqueCwl, pick_value: OpaqueCwl) -> OpaqueCwl:
     """The type a step-input record delivers from sources of type `produced`: the list CWL's `linkMerge` makes of
     them (a merged array stays flat; one source with no `linkMerge` is not wrapped) or, for a `pickValue` that picks
     one value, one element of it. `Any` where a pick has no array to take an element of, so nothing is proved
@@ -81,6 +81,7 @@ def delivered(produced: Any, *, sources: int, link_merge: OpaqueCwl, pick_value:
             flat = True
         case _:
             flat = False
+    merged: OpaqueCwl
     if sources == 1 and link_merge is None:
         merged = produced
     elif link_merge == 'merge_flattened' and flat:

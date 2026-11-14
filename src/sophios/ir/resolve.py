@@ -407,7 +407,7 @@ def _select_implementation(document: Document,
     return source.parsed.document, diagnostics
 
 
-def _input_identity(value: InputValue) -> Any:
+def _input_identity(value: InputValue) -> tuple[object, ...]:
     match value:
         case InlineLiteral(value=literal):
             return ('literal', literal)
@@ -421,13 +421,13 @@ def _input_identity(value: InputValue) -> Any:
             return ('record', [_input_identity(source) for source in sources], fields)
 
 
-def process_ports(raw: Any, *, output: bool) -> tuple[ResolvedPort, ...]:
+def process_ports(raw: object, *, output: bool) -> tuple[ResolvedPort, ...]:
     """The ports a process declares under its `inputs:` or its `outputs:`, in CWL's map or list form."""
     return tuple(ResolvedPort(name, port_declaration(declaration, output=output))
                  for name, declaration in _named_entries(raw))
 
 
-def _named_entries(raw: Any) -> tuple[tuple[str, Any], ...]:
+def _named_entries(raw: object) -> tuple[tuple[str, OpaqueCwl], ...]:
     """CWL's map form (`{name: decl}`) or its `id`-keyed list form."""
     match raw:
         case dict():

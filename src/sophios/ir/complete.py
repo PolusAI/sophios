@@ -11,11 +11,12 @@ import datetime
 import difflib
 import json
 import re
+from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass, replace
 from typing import Any, Final
 
-from ..lang.nodes import CwlRecord, InlineLiteral, UnresolvedName
+from ..lang.nodes import CwlRecord, InlineLiteral, OpaqueCwl, UnresolvedName
 from ..lang.diagnostics import Locator, SophiosError
 from ..lang.spans import SourceSpan
 from ..lang.error_codes import SophiosErrorCode
@@ -86,7 +87,7 @@ def _lift_values(graph: WorkflowGraph) -> WorkflowGraph:
     input_mapping = list(graph.input_mapping)
     shorthand_relays = list(graph.shorthand_relays)
 
-    def lift(step: StepNode, port: Port, value: Any, span: SourceSpan | None) -> DerivedName:
+    def lift(step: StepNode, port: Port, value: OpaqueCwl, span: SourceSpan | None) -> DerivedName:
         name = DerivedName(step.id, port.id.port)
         declaration = feeding_declaration(step, port)
         workflow_inputs.append(WorkflowPort(name, declaration))
@@ -211,8 +212,8 @@ def _as_text(value: Any) -> Any:
 
 
 # pylint: disable-next=too-many-arguments,too-many-positional-arguments
-def coerce_job_value(name: PortName, declaration: PortDeclaration, value: Any, *, scatter_rank: int = 0,
-                     span: SourceSpan | None = None, locator: Locator | None = None) -> Any:
+def coerce_job_value(name: PortName, declaration: PortDeclaration, value: OpaqueCwl, *, scatter_rank: int = 0,
+                     span: SourceSpan | None = None, locator: Locator | None = None) -> OpaqueCwl:
     """`value` in the one plain-JSON form a job document holds for `declaration`.
 
     A projection: a value already in that form (a lifted child job value, an
@@ -255,11 +256,11 @@ def coerce_job_value(name: PortName, declaration: PortDeclaration, value: Any, *
 class _Mismatch(Exception):
     """A literal that is not of the scalar type its port declares."""
 
-    raw: Any
-    value: Any
+    raw: OpaqueCwl
+    value: OpaqueCwl
 
 
-def _coerce_type(raw: Any, value: Any, fmt: Any) -> Any:
+def _coerce_type(raw: OpaqueCwl, value: OpaqueCwl, fmt: OpaqueCwl) -> OpaqueCwl:
     if isinstance(raw, list):
         non_null = [item for item in raw if item != 'null']
         arrays = [item for item in non_null if isinstance(item, dict)
@@ -278,7 +279,7 @@ def _coerce_type(raw: Any, value: Any, fmt: Any) -> Any:
     return _coerce_scalar(raw, value, fmt)
 
 
-def _scalar_member_for(members: list[Any], value: Any) -> Any:
+def _scalar_member_for(members: list[OpaqueCwl], value: OpaqueCwl) -> str | None:
     """The scalar member of a union whose type `value` already is, or None.
 
     A bool is a `boolean`, an int an `int` or `long`, a float a `float` or
@@ -293,7 +294,7 @@ def _scalar_member_for(members: list[Any], value: Any) -> Any:
     return None
 
 
-def _plain(value: Any) -> Any:
+def _plain(value: OpaqueCwl) -> OpaqueCwl:
     """Return `value` with any nested `InlineLiteral` replaced by its data."""
     if isinstance(value, InlineLiteral):
         return _plain(value.value)
@@ -304,7 +305,7 @@ def _plain(value: Any) -> Any:
     return value
 
 
-def _coerce_scalar(raw: Any, value: Any, fmt: Any) -> Any:
+def _coerce_scalar(raw: OpaqueCwl, value: OpaqueCwl, fmt: OpaqueCwl) -> OpaqueCwl:
     if raw in ('File', 'Directory'):
         if isinstance(value, str):
             value = {'class': raw, 'location': value}
@@ -329,7 +330,7 @@ def _coerce_scalar(raw: Any, value: Any, fmt: Any) -> Any:
     return deepcopy(value)
 
 
-def _coerce_string(value: Any) -> str:
+def _coerce_string(value: OpaqueCwl) -> str:
     """The text of a scalar literal, or of a mapping or list as JSON.
 
     The one conversion kept besides an int into a float: `!ii 20` cannot be
@@ -348,7 +349,7 @@ def _coerce_string(value: Any) -> str:
     raise _Mismatch('string', value)
 
 
-def _coerce_float(raw: Any, value: Any) -> float:
+def _coerce_float(raw: OpaqueCwl, value: OpaqueCwl) -> float:
     """A float as it is, or an int the float holds exactly."""
     if isinstance(value, float):
         return float(value)
@@ -370,11 +371,11 @@ _KINDS: Final = {str: 'text', bool: 'a boolean', int: 'an int', float: 'a float'
                  list: 'a list', dict: 'a mapping', type(None): 'null'}
 
 #: The Python type each scalar port type is, named when a value of another type is passed.
-_PYTHON_TYPE: Final = {'int': int, 'long': int, 'float': float, 'double': float,
-                       'boolean': bool, 'string': str}
+_PYTHON_TYPE: Final[Mapping[object, type]] = {
+    'int': int, 'long': int, 'float': float, 'double': float, 'boolean': bool, 'string': str}
 
 
-def _what_is_wrong(raw: Any, value: Any) -> str:
+def _what_is_wrong(raw: OpaqueCwl, value: OpaqueCwl) -> str:
     """What `value` is, for a message; for a float port, the cause and the fix."""
     if raw in ('float', 'double'):
         if isinstance(value, int) and not isinstance(value, bool):
