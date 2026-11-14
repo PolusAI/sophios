@@ -67,7 +67,7 @@ Diagnostics identify the user's file and line, the step, the rejected construct,
 
 ```text
 Python Workflow or .wic
-  -> Sophios compilation (once): WorkflowGraph and the CWL artifact tree
+  -> Sophios compilation (once): WorkflowGraph and the tool each step runs
   -> resolved view: the graph, each tool step's document, the run's values, the outputs kept
   -> closed-world capability analysis over view constructs and tool documents
   -> semantic lowering
@@ -76,7 +76,7 @@ Python Workflow or .wic
   -> JSON IR, workflow.nf, nextflow.config, nextflow_params.json
 ```
 
-Unsupported input exits through structured diagnostics before executable IR or artifacts exist. From the artifact tree the view takes only each tool step's document, which the CWL target writes for that step; no pass reads a workflow's emitted CWL.
+Unsupported input exits through structured diagnostics before executable IR or artifacts exist. The view takes each tool step's document from the compile's tools; the compile emits nothing, and no pass reads a workflow's emitted CWL.
 
 ### 4.2 Import
 

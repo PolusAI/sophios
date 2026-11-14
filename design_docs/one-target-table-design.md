@@ -57,7 +57,7 @@ given) and `backend()` finds the backend of a runner. Its runners are those of `
 | | CWL | Nextflow |
 |---|---|---|
 | `lower` refuses | nothing | every nf-s code, and `wic012`, `wic056` as errors (§5) |
-| `lower` builds | `result.artifact`, as the compile emitted it; notes `compiler.cwl_notes(view)` | `utils_nf.NEXTFLOW.lower(view)` |
+| `lower` builds | the artifact tree `ir.emit.artifact_tree` emits from the view; notes `compiler.cwl_notes(view)` | `utils_nf.NEXTFLOW.lower(view)` |
 | `write` | `write_artifacts_to_disk` and the analyses beside it | the four files; a compile writes no analysis |
 | `clear` | nothing | the four files |
 | runners (`sophios.runners`) | `Cwltool` (default), `Toil` | `Nextflow` |
@@ -84,8 +84,9 @@ which it did silently before.
 **Lowered once, from one view.** Every target is given the same view of a compilation: on the command line, the
 graph's values and every output; from Python, `_view(workflow, result)`, the values bound on the workflow and the
 outputs it declares (for CWL too, where C built a bare view; `cwl_notes` reads only each step's authored `when`, so
-its notes are unchanged by values and kept outputs). A run first reads the view's relative paths against its root
-(`run_setup.absolute_view`, as `NextflowBackend.prepare` did inside), lowers once, and `prepare` writes that model.
+its notes are unchanged by values and kept outputs). A run first gives the view the values its target's runner reads
+(`Target.run_values`) with each relative path read against its root (`targets.for_run`, for every target), lowers
+once, and `prepare` writes that model.
 
 `flow.run(target="wdl")` used to compile and run cwltool; now every method raises `ValueError: unknown target
 'wdl'; the targets are cwl, nextflow` before compiling. `sophios.targets` joins `run_setup`, `backends` and
@@ -93,13 +94,12 @@ its notes are unchanged by values and kept outputs). A run first reads the view'
 
 ## 3. CWL answers the same contract
 
-`Target` moved from `sophios.ir.resolved` to `sophios.targets`, and `lower` takes the compilation beside its view.
-It could not stay view-only in `ir.resolved`: CWL's model is `result.artifact`, which the view does not hold and
-`ir.resolved` may not reach. The Nextflow row passes only the view to `utils_nf.NEXTFLOW.lower`, so "The Nextflow
-target reads the resolved view, never emitted CWL" stands. `NextflowTarget.refusals` had no caller and went.
+`Target` moved from `sophios.ir.resolved` to `sophios.targets`; `lower` takes the view and nothing else, for every
+target, so "The Nextflow target reads the resolved view, never emitted CWL" stands. `NextflowTarget.refusals` had no caller and went.
 
 - **Refusals:** none; `CWL.lower` never raises `NotLowered`.
-- **Lowering:** today's emitter, unchanged: the artifact the compile emitted. Emitted CWL is byte-identical (§7).
+- **Lowering:** `ir.emit.artifact_tree(view)`, run here, not in the compile: the same document the graph emitter
+  wrote, from the view alone. Emitted CWL is byte-identical (§7).
 - **Notes:** `wic056` from the shared `when` check, `compiler.cwl_notes(view)`, which now takes the view it is
   given instead of building its own.
 

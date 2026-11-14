@@ -38,20 +38,21 @@ outputs, each tool step's inherited requirements, and the run policy. Five rules
    CWL v1.2 says, and cwltool is the reference to test against. What Sophios invented (edge inference, the
    names it makes with `~` and `@`, anchors `!&`/`!*`) is resolved before the view exists; the view holds only
    the result, as references.
-2. **The CWL target is unchanged.** The CWL target's output, the inliner behind `--cwl_inline_subworkflows`
+2. **The CWL target's output is unchanged.** The CWL target's output, the inliner behind `--cwl_inline_subworkflows`
    (`post_compile.flatten_subworkflows`, `post_compile.py:333-405`) and every CWL rewriting flag
    (`main.py:125-126`) are unchanged by this design, with one exception. Where today's output contradicts what
-   the author wrote, P fixes it: partial failure (§2). Otherwise emission stays on the graph, and the view is
-   never written as CWL. The inliner asks whether a CWL document can be rewritten without changing its meaning;
+   the author wrote, P fixes it: partial failure (§2). Otherwise the CWL target emits, in its `lower` after the compile, from the view alone: the view holds what the
+   author wrote and the compiler decided, and `ir.emit` spells it as CWL; a compile emits nothing for any target. The inliner asks whether a CWL document can be rewritten without changing its meaning;
    the Nextflow target asks how to express a nested call at all. They are different questions and share no
    rule.
-3. **The Nextflow target reads the view, never emitted CWL.** Tools stay CWL: the view carries each tool's
-   document, and a target reads it itself. Tool lowering does not change.
+3. **The Nextflow target reads the view, never emitted CWL.** Tools stay CWL: the view carries each tool as the compile ends
+   with it, the registry's tool packed where it refers to files beside it, unedited. A target reads and edits its own
+   copy; the partial-failure edit (`tolerant_tool`) is CWL's. Tool lowering does not change.
 4. **A refusal is at the user's line.** It names the file and line, the step and the construct (§7).
 5. **Additive.** No Python API, command-line or `.wic` change other than additions. Internal signatures may
    change. No compatibility shims.
 
-Out of scope: drawing stays on the graph; plain CWL into the view is a separate item; nested-input defaults
+Out of scope: drawing, which is no target, stays on the graph; plain CWL into the view is a separate item; nested-input defaults
 and conditional or scattered calls stay refused on Nextflow, as today.
 
 ## 2. Partial failure as a policy (PR P)
@@ -84,11 +85,11 @@ data case that fails at the baseline for its own reason.
 
 - **Input.** The codes are computed once from the two success-code flags with today's expression, 0, the codes
   given and `range(lo, hi)`; A records the policy as `CompilationResult.policy`, where the view reads it (§4).
-- **Lowered at emission, in one place.** `_artifact_tree` writes `effective_when` and applies `tolerant_tool`
-  to each tool document. Nothing rewrites the artifact after the compile, so a real-time analysis gets it too.
+- **Lowered at emission, in one place.** `ir.emit.artifact_tree`, run by the CWL target, writes `effective_when` and applies
+  `tolerant_tool` to each tool document. Nothing rewrites the artifact after the compile, so a real-time analysis gets it too.
 
 **`effective_when`.** Let G be `inputs["<name>"] != null` for each input that the step's tool or nested workflow
-declares and `required` counts, joined by ` && `, as `ir/emit.py:48-51` spells it. A step-only input is not in
+declares and `required` counts, joined by ` && `, as `ir.policy.effective_when` spells it from the step's `required_inputs`. A step-only input is not in
 G. The change is local to G: `required` keeps its meaning. Its only other caller, inference
 (`ir/infer.py:159`), never reaches a step-only port, since such a port exists only where a record binds it
 (`ir/lower.py:202-206`, `:236-241`) and so is already bound (`ir/infer.py:279-285`).
@@ -148,12 +149,23 @@ What the representation decides; `ir/resolved.py` holds the fields:
   order, and the compilation's `RunPolicy`, the same object at every depth.
 - A step's `run` is a `ResolvedTool`, the tool's file and the document the CWL target writes for it, or a
   `ResolvedWorkflow`.
-- A `StepInput` keeps `linkMerge`, `pickValue`, `default` and `valueFrom` as written. `declared is None` marks
-  a step-only input, and `type` is the type it delivers (§5).
+- A `StepInput` holds what its `in:` entry says once, as `value`: `Bare` (one source written as the bare string),
+  `Raw` (text CWL reads as the source or expression it is, a name `--allow_raw_cwl` lets through) or `Entry` (its
+  sources and every other field, `written`, in the order the author wrote them). `sources`, `written`, `expression`,
+  `link_merge`, `pick_value`, `default`, `has_default` and `value_from` are derived from it, so no fact is held
+  twice and the CWL target spells the entry back as it was written. `declared is None` marks a step-only input,
+  and `type` is the type it delivers (§5).
+- A step holds the keys it did not interpret as `passthrough`, in written order, with `requirements` and `fields`
+  derived from it, and `required_inputs`, the inputs its process must be given a value for, which the CWL target
+  guards a partial-failure `when` with. A workflow holds the same for the document: `namespaces`, `schemas`,
+  `requirement_map` (the `requirements:` mapping as written), `passthrough` and `inlineable`. What is implied
+  (requirements, the EDAM namespace, the guarded `when`, `run:` file names) is not in the view: the CWL target
+  computes it.
 - A `Condition` keeps the authored `when` with its subset tree, the tree's type and the subset's problem; the
   policy's checks are never folded in.
-- `fields` keep every other key verbatim, a `scatterMethod` with no `scatter` among them.
-- `WorkflowInput.made_from` names the step and input whose written value a made input holds.
+- `passthrough` keeps every other key verbatim, a `scatterMethod` with no `scatter` first among a step's.
+- A `WorkflowInput` holds its declaration and, on the root, this run's job value (`has_value`); `ResolvedWorkflow.values`
+  gives them by name. `made_from` names the step and input whose written value a made input holds.
 
 `Expr` and the subset's parser and type checker move from `nf_expr` to `sophios.lang.subset`; the Groovy
 rendering and reading stay in `nf_expr` (`nf_expr.py:393-626`). PR B adds `ResolvedStep.inherited`, a tool
@@ -177,16 +189,16 @@ Invariants, checked where they are cheap (`__post_init__`) and otherwise by the 
 
 ## 4. The builder
 
-`resolve(graph, tools, *, policy, values, outputs)` builds the view:
+`resolve(graph, tools, *, policy)` builds the view, and `bind(view, *, values, outputs)` gives it a run's:
 - `graph` is a finished compilation's `CompilationResult.graph`: linked, inferred and completed.
-- `tools` holds every tool step at any depth: the document the CWL target writes for it, its child artifact.
+- `tools` holds every tool step at any depth: the tool it runs, packed where it refers to files beside it.
 - `policy` is the compilation's (§2).
-- `values` are this run's job values by root input, as the job spells it, each replacing the graph's binding;
-  `None` keeps the graph's. A key naming no root input is a `ValueError`, the caller's mistake, not the user's.
-- `outputs` names the root outputs to keep, `None` all of them; a name naming none is a `ValueError` too.
+- `bind`'s `values` are this run's job values by root input, as the job spells it, each replacing the graph's
+  binding; `None` keeps the graph's. A key naming no root input is a `ValueError`, the caller's mistake, not the
+  user's. Its `outputs` names the root outputs to keep, `None` all of them; a name naming none is a `ValueError` too.
 
-`compiler.resolved_view(result, *, values=None, outputs=None)` pairs each tool step with its child artifact and
-calls `resolve` with `result.policy`, so nothing below `compiler` reads the artifact tree.
+`compiler.resolved_view(result)` calls `resolve` with `result.tools`, the tool each tool step runs, and
+`result.policy`, so the view never reads an emitted document.
 
 Each step input's sources come from `stepin.step_inputs`, the level-local resolution CWL emission spells, so a
 source in the view is what the emitted `in:` says, by construction.
@@ -194,9 +206,9 @@ source in the view is what the emitted `in:` says, by construction.
 It never reads a workflow's emitted CWL and never imports `ir.emit` (§11). It refuses nothing: refusing is a
 target's job (§7).
 
-**Who passes what.** The Python API passes its bound values and declared outputs as `values` and `outputs`
-instead of editing CWL dicts. The run backend lowers `Settings.view`, where `None` is the compilation's own
-view. The command line passes neither.
+**Who passes what.** The Python API binds its values and declared outputs (`api.python._workflow_runtime._view`)
+instead of editing CWL dicts. A local run of any target binds the values its runner reads, each relative path made
+absolute (`targets.for_run`, from `Target.run_values`). The command line binds nothing else.
 
 ## 5. What each construct means
 
@@ -262,10 +274,10 @@ any refusal. It also turns every error that its own lowering or the model's vali
 the step being lowered (today `utils_nf.py:3418-3421`, `:3453-3454`). On success it returns the model and the
 notes the lowering made (`wic046`, `utils_nf.py:1036-1047`).
 
-The Nextflow target is `sophios.utils_nf.NEXTFLOW`; in A, B and C the CWL target is not one: it emits from the graph
+The Nextflow target is `sophios.utils_nf.NEXTFLOW`; in A, B and C the CWL target is not one: it emits from the view
 (rule 2) and refuses nothing, and the `target=` dispatch stays where it is (`api/python/workflow.py:1141-1147`,
 `main.py:406-410`). D replaces both: one table of targets that every entry point reads, in which CWL answers the
-same contract, refusing nothing and lowering with today's emitter (`design_docs/one-target-table-design.md` §2-§3).
+same contract, refusing nothing and lowering the view with `ir.emit` (`design_docs/one-target-table-design.md` §2-§3).
 
 `Construct` names the eleven constructs a refusal can be about, from `workflow` to `policy`. A `Refusal` carries
 its construct, its subject (for `TOOL` the tool's file and the field's path in it), the root workflow, the
@@ -279,7 +291,7 @@ qualified step, a span and the reason. `NotLowered` holds every refusal.
 - a field below the construct comes first in the reason, as in `workflow input 'n': type: long is not
   supported`, unless the reason names it first.
 
-`Construct`, `Refusal` and `NotLowered` live in `sophios.ir.resolved`, beside the view they name.
+`Construct`, `Refusal` and `NotLowered` live in `sophios.ir.refusals`: a target refuses, the view does not.
 `nf_support.CONSTRUCTS` joins each construct, by its value, to the `FIELDS` rows it stands for.
 
 **Where a workflow input or output is.** A workflow port gains a span: the parser records each entry of
@@ -633,7 +645,7 @@ compiler's own tests. The Python builders that rewrote emitted CWL become `subtr
 
 | PR | Delivers | Deletes | Gate |
 |---|---|---|---|
-| **P** `fix`: partial failure is a policy | `sophios.ir.policy` (`RunPolicy`, `effective_when`, `tolerant_tool`), `CompilerOptions.partial_failure_success_codes`, and `surface` and `_artifact_tree` lowering the policy, with each fix of §2. One data file of partial-failure cases, `tests/core/data/partial_failure.yaml`, one row per fix, each failing at the baseline for its own reason, read by one driver. The driver replaces `test_partial_failure_takes_ordered_success_codes_and_makes_outputs_optional`, whose two rows become rows of it. `docs/partial-failures.md` rewritten. | The post-compile rewrite in `main.py`. `plugins.cwl_update_outputs_optional_artifact`. `plugins.cwl_update_outputs_optional`, whose rewrite moves into `tolerant_tool`. The `when` overwrite in `ir/emit.py`. Its description in `docs/dev/architecture.md`, rewritten. | **The three partial-failure modes:** byte-identical except the three changes §2 lists. Every other mode byte-identical. The fragments of §2 compiled. **cwltool:** compiled with the flag, the cookbook `when` gives `null` with `loud` false. |
+| **P** `fix`: partial failure is a policy | `sophios.ir.policy` (`RunPolicy`, `effective_when`, `tolerant_tool`), `CompilerOptions.partial_failure_success_codes`, and `ir.emit.artifact_tree` lowering the policy, with each fix of §2. One data file of partial-failure cases, `tests/core/data/partial_failure.yaml`, one row per fix, each failing at the baseline for its own reason, read by one driver. The driver replaces `test_partial_failure_takes_ordered_success_codes_and_makes_outputs_optional`, whose two rows become rows of it. `docs/partial-failures.md` rewritten. | The post-compile rewrite in `main.py`. `plugins.cwl_update_outputs_optional_artifact`. `plugins.cwl_update_outputs_optional`, whose rewrite moves into `tolerant_tool`. The `when` overwrite in `ir/emit.py`. Its description in `docs/dev/architecture.md`, rewritten. | **The three partial-failure modes:** byte-identical except the three changes §2 lists. Every other mode byte-identical. The fragments of §2 compiled. **cwltool:** compiled with the flag, the cookbook `when` gives `null` with `loud` false. |
 | **A** `refactor`: Nextflow lowers from a resolved view of the graph | 1 `design:` this document and the backend revision. 2 `lang.subset`: the subset's parse, type check, canonical form and source text leave `nf_expr`. 3 `testkit` compiles each case through `compile_source`; the cases are re-spelled as above. 4 `ir.resolved`, `resolve`, `compiler.resolved_view` and `CompilationResult.policy`, and `tool_steps`. 5 Nextflow lowers from the view: every workflow-level analysis is over view constructs, run values and kept outputs are passed as §4 says, and tool lowering is unchanged. 6 Refusals at the user's line (§7): `WorkflowPort.span` and `Document.port_spans`, every expectation string that names a CWL path re-spelled in the printed form, and `nf_support.CONSTRUCTS`. That last is a second table joining each `Construct` to the `FIELDS` rows it stands for; `FIELDS` stays keyed by CWL class, so `docs/conf.py` and `tests/core/nextflow/test_support_table.py` keep working, and both gain the join. 7 Deletions and the import-linter contracts. | `CompiledNextflowSource`, `compilation_result_source` and its helpers. The CWL-dict versions of the workflow-level analysis. `testkit.synthetic_source` and `workflow_doc`. | **Byte-identical** in every mode, all four Nextflow files included. **Refusals:** only their text changes. The cases the core refuses leave the Nextflow data. The test count does not grow. |
 | **B** `feat(nextflow)`: step-only inputs and inherited requirements | Carried inputs (§9), `NfProcess.step_only_inputs`, `NfPort.scalar_type`, schema 21, the `WorkflowStepInput` carrier, the reader and `import_nextflow` reading output with and without it, and `when` typed by delivered type. Inherited requirements and the four feature classes (§8). The runtime differential (§9), with the §8 cases among its examples. | `_undeclared_inputs`, `_named_sources`, `_undeclared_input_findings` and `_declared_inputs_only` in their view form from A (today `utils_nf.py:1895-1962`). The rule that a conditional step's tool declares an input (`:1974-1978`). The `when`'s typing against the tool (`:2994-3012`). The three requirement and hint refusals A kept (§8). | `workflow.nf`, `nextflow.config` and `nextflow_params.json` byte-identical over the gate set. `nextflow_workflow.json` differs only as §9 says. Every CWL mode byte-identical. Fixed point over the old cases and the new ones. A pipeline written by A imports. The differential passes. The gate set gains no refusal (§9, Measured). |
 | **C** `feat`: checks before anything is written | The shared `when` check (§10), `wic056` as a note on the CWL target, `Workflow.check(target=...)`, the three exports from `sophios.api.python.nextflow`, and `policy=` on `compile`, `run`, `start`, `run_async` and `check`. | The Nextflow target's own boolean test of a `when`, which reads the shared check from here on. | Every mode byte-identical. No gate-set workflow gets a `wic056` note. Nextflow refusals unchanged. `check()` returns its notes without printing them, raises what `compile()` raises, and leaves the working directory and base path as it found them. `policy=` writes, for a Python workflow, the CWL the flags write for its `.wic` twin. |

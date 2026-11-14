@@ -2,7 +2,7 @@
 
 How is a workflow turned into CWL inside the compiler, and which decisions are
 made where? Compilation is a one-way typed pipeline from a parsed document to
-an artifact tree. This page names the phases, the names the output carries,
+its graph and the tools its steps run. This page names the phases, the names the output carries,
 how references are placed, how inference works inside, and what the adapters
 around the compiler do.
 
@@ -12,7 +12,7 @@ around the compiler do.
 point. It takes a `SourceBundle`, the parsed root document, the registry of
 every parsed workflow and tool it reaches, and their version pins, plus
 its `CompileSettings`, and returns a `CompilationResult`: the final graph, the
-artifact tree, the diagnostics, the resolved language version and the
+tools each step runs, the diagnostics, the resolved language version and the
 real-time declarations.
 
 1. **Parse** (`sophios.lang`) turns YAML into the versioned AST. Unknown CWL
@@ -36,8 +36,9 @@ real-time declarations.
    CURIEs of its promoted ports need, reading the registry as Resolve does,
    and reports `wic031` where a prefix is bound two ways by the sources that
    count.
-7. **Emit** projects the final graph to CWL v1.2 documents and job inputs. It
-   does not reopen source, consult registries, or revisit a decision.
+7. **Emit** projects the resolved view of the final graph to CWL v1.2 documents and job inputs. The
+   CWL target runs it after the compile (`ir.emit.artifact_tree`); a compile
+   emits for no target. It does not reopen source, consult registries, or revisit a decision.
 
 A completion step, run once before Link, gives each workflow the boundary its
 steps already determine (an input for each written value, an output for each
@@ -140,12 +141,12 @@ semantics.
 
 Partial failure is no rewrite. `--partial_failure_enable` and its success
 codes are compile input, a `RunPolicy` (`sophios.ir.policy`), and
-`compiler._artifact_tree` writes for it: each step's `when` through
+`ir.emit.artifact_tree`, run by the CWL target, writes for it: each step's `when` through
 `effective_when` and each tool through `tolerant_tool`. A real-time
 analysis, compiled under the same options, is written for it too.
 
 Each process an artifact carries is a description, never data. When
-`compiler._artifact_tree` emits a step, a tool whose text refers to a file
+the compile reads a step's tool, a tool whose text refers to a file
 relative to itself (`$include`, `$import`, a relative `location`) is packed by
 cwltool where it was read (`utils_cwl.packed`), once per tool per compile; a
 tool cwltool cannot read is `wic057` at the step, before it is packed. Inference and Link have already read
