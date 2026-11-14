@@ -1,9 +1,10 @@
 """The targets a workflow compiles to: one table, which every entry point reads.
 
 A row is a target's whole contract: how it lowers a compilation, refusing what it cannot run with a `NotLowered`
-whose diagnostics carry their codes; how it writes what it lowered; and the runners that run it. The command line,
-`Workflow.compile`, `check`, `run`, `start` and `run_async`, and the run path find a target here, by the name
-`--target` and `target=` give it, and nowhere else (design_docs/one-target-table-design.md §2).
+whose diagnostics carry their codes; and how it writes what it lowered; its runners are those of
+`sophios.runners`. The command line, `Workflow.compile`, `check`, `run`, `start` and `run_async`, and the run path
+find a target here, by the name `--target` and `target=` give it, and nowhere else
+(design_docs/one-target-table-design.md §2).
 
 The names alone are `wic_types.TargetName`, which the command line's parser reads without importing a target.
 """
@@ -19,6 +20,7 @@ from .ir.artifacts import CompilationArtifact, CompilationResult
 from .ir.resolved import ResolvedWorkflow
 from .nf_types import ExecutableNextflowWorkflow
 from .run_setup import Lowered
+from .runners import RUNNERS, Cwltool, Nextflow, Runner, Toil, build, named
 from .runtime_inputs import output_target_inputs
 from .utils_nf import NEXTFLOW as _NEXTFLOW_LOWERING
 
@@ -31,19 +33,6 @@ class Target(Protocol[ModelT]):
     @property
     def name(self) -> str:
         """As `--target` and `target=` name it."""
-
-    @property
-    def runners(self) -> Mapping[str, Backend]:
-        """Its runners by name, the default first."""
-
-    @property
-    def runner_option(self) -> str | None:
-        """The run argument that picks the runner, `--<option>` on the command line and a `run_args_dict` key in
-        Python; None for a target with one runner."""
-
-    @property
-    def run_defaults(self) -> Mapping[str, str]:
-        """A Python run's `run_args_dict` defaults, which the call's own keys win over."""
 
     @property
     def takes_plain_cwl(self) -> bool:
@@ -74,10 +63,6 @@ class _Cwl:
     """CWL: it refuses nothing, and its model is the CWL the compile emitted, as it emitted it."""
 
     name = 'cwl'
-    runners: Mapping[str, Backend] = MappingProxyType({'cwltool': CwltoolBackend(), 'toil-cwl-runner': ToilBackend()})
-    runner_option = 'cwl_runner'
-    run_defaults: Mapping[str, str] = MappingProxyType({
-        'cwl_runner': 'cwltool', 'container_engine': 'docker', 'pull_dir': str(Path().cwd()), 'quiet': 'yes'})
     write_option = 'generate_cwl_workflow'
     takes_plain_cwl = True
 
@@ -100,9 +85,6 @@ class _Nextflow:
     """Nextflow DSL2: the resolved view, lowered to the executable model (design_docs/sophios_nextflow_backend.md)."""
 
     name = 'nextflow'
-    runners: Mapping[str, Backend] = MappingProxyType({'nextflow': NextflowBackend()})
-    runner_option = None
-    run_defaults: Mapping[str, str] = MappingProxyType({})
     write_option = None
     takes_plain_cwl = False
 
@@ -141,16 +123,26 @@ def target(name: str) -> Target[Any]:
         raise ValueError(f"unknown target {name!r}; the targets are {', '.join(TARGETS)}") from None
 
 
-def backend(name: str, runner: str | None = None) -> Backend:
-    """The backend that runs the target `name` with `runner`, its default when None.
+#: The backend of each runner, by its name.
+_BACKENDS: Final[Mapping[str, Backend]] = MappingProxyType({
+    Cwltool.name: CwltoolBackend(), Toil.name: ToilBackend(), Nextflow.name: NextflowBackend()})
+
+
+def resolve(name: str, runner: Runner | None) -> Runner:
+    """`runner`, or when None the default runner of the target `name`: the one place a runner is chosen for a target.
 
     Raises:
-        ValueError: No target has that name, or none of its runners is `runner`.
+        ValueError: No target has that name, or `runner` does not run it.
     """
     row = target(name)
-    chosen = runner if runner is not None else next(iter(row.runners))
-    try:
-        return row.runners[chosen]
-    except KeyError:
-        raise ValueError(f"No backend runs {name} with {chosen!r}; the runners are "
-                         f"{', '.join(row.runners)}.") from None
+    if runner is None:
+        return build(row.name, None, ())
+    if not isinstance(runner, RUNNERS):
+        raise ValueError(f"runner= takes a value such as Cwltool(...), Toil(...) or Nextflow(...), not {runner!r}")
+    named(row.name, runner.name)
+    return runner
+
+
+def backend(runner: Runner) -> Backend:
+    """The backend that runs a workflow with `runner`."""
+    return _BACKENDS[runner.name]

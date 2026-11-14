@@ -25,16 +25,16 @@ import yaml
 import sophios.api.python._workflow_runtime as python_runtime
 import sophios.plugins
 import sophios.post_compile
-from sophios import preflight
-from sophios import run_local
+from sophios import preflight, run_local
 from sophios.backends import RunRequest
 from sophios.api.python import nextflow
 from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
-from sophios.api.python.workflow import (InvalidInputValueError, InvalidLinkError, InvalidStepError, RunPolicy,
-                                         RunResult, RunState, RunStatus, SophiosError, Step, StepInput, Workflow,
-                                         WorkflowRunError)
+from sophios.api.python.workflow import (Cwltool, InvalidInputValueError, InvalidLinkError, InvalidStepError,
+                                         Nextflow, RunPolicy, RunResult, RunState, RunStatus, SophiosError, Step,
+                                         StepInput, Toil, Workflow, WorkflowRunError)
 from sophios.lang.diagnostics import lines as printed_lines
 from sophios.python_cwl_adapter import import_python_file
+from sophios.runners import RunSettings
 from sophios.wic_types import Json, Tools
 
 from .budgets import budget
@@ -420,17 +420,15 @@ def test_run_writes_what_compile_returns_and_hands_the_runner_its_own_flags(monk
     workflow = Workflow([by_file, by_value, by_default, adapter_step('touch', filename='empty.txt'),
                          Step(clt_path=PYTHON_API / 'hinted.cwl')], 'exact')
     workflow.outputs.printed = by_file.outputs.out
-    prepared: list[tuple[list[Path], preflight.RunSettings]] = []
+    prepared: list[tuple[list[Path], RunSettings]] = []
     monkeypatch.setattr(python_runtime.preflight, 'ready',
                         lambda documents, settings, jobs=(), **_: prepared.append((documents, settings)))
     monkeypatch.setattr(sophios.post_compile.docker, 'from_env',
                         lambda: SimpleNamespace(images=SimpleNamespace(list=lambda: [])))
-    for quiet, spelled in ((None, 'yes'), ('yes', 'true'), ('true', '1'), (True, 'on'), ('no', True), (False, 'yes')):
-        run_args: dict[str, Any] = {'generate_run_script': spelled, 'docker_remove_entrypoints': 'yes'}
-        workflow.run(basepath='base', run_args_dict=run_args | ({} if quiet is None else {'quiet': quiet}))
+    for quiet in (True, False):
+        workflow.run(basepath='base', runner=Cwltool(remove_entrypoints=True), generate_run_script=True, quiet=quiet)
         command = (tmp_path / 'run.sh').read_text(encoding='utf-8').splitlines()[-1].split()
-        assert ('--quiet' in command) is (quiet in (None, 'yes', 'true', True))
-        assert not {'yes', 'no', 'true', 'false', 'True', 'False'} & set(command)
+        assert ('--quiet' in command) is quiet
 
     compiled = workflow.compile()
     assert sorted(path.name for path in (tmp_path / 'base').iterdir()) == ['exact.cwl', 'exact_inputs.yml']
@@ -444,8 +442,8 @@ def test_run_writes_what_compile_returns_and_hands_the_runner_its_own_flags(monk
     assert written['steps'][2]['in']['f']['default'] == here
     assert yaml.safe_load((tmp_path / 'base' / 'exact_inputs.yml').read_text(encoding='utf-8')) == {
         **compiled.cwl_job_inputs, 'cat~f': here, 'read~f': here}
-    assert {(tuple(path.resolve() for path in documents), settings.container_engine, settings.ignore_install)
-            for documents, settings in prepared} == {(((tmp_path / 'base' / 'exact.cwl').resolve(),), 'docker', False)}
+    assert {(tuple(path.resolve() for path in documents), run.runner.container_engine, run.runner.ignore_install)
+            for documents, run in prepared} == {(((tmp_path / 'base' / 'exact.cwl').resolve(),), 'docker', False)}
 
     requests: list[RunRequest] = []
 
@@ -453,11 +451,42 @@ def test_run_writes_what_compile_returns_and_hands_the_runner_its_own_flags(monk
         requests.append(request)
         return 0
     monkeypatch.setattr(python_runtime.run_local, 'run', run)
-    workflow.run(basepath=str(tmp_path), run_args_dict={'generate_run_script': 'yes', 'logLevel': 'INFO',
-                                                        'outdir': str(tmp_path / 'workflow_output')})
+    workflow.run(basepath=str(tmp_path), runner=Cwltool('--logLevel', 'INFO'), generate_run_script=True,
+                 outdir=str(tmp_path / 'workflow_output'))
     (request,) = requests
-    assert (request.passthrough_args, request.generate_run_script, request.outdir, request.workflow_name,
+    assert (request.run.runner.flags, request.run.generate_run_script, request.run.outdir, request.workflow_name,
             request.basepath) == (('--logLevel', 'INFO'), True, str(tmp_path / 'workflow_output'), 'exact', tmp_path)
+
+
+@pytest.mark.fast
+def test_run_args_dict_means_its_typed_spelling_and_no_run_is_made_of_what_no_runner_reads(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A `run_args_dict` warns and builds the run its typed spelling builds, a key no run reads and its `target`
+    dropped. What no runner can be given is refused before anything is written."""
+    monkeypatch.chdir(tmp_path)
+    checked: list[RunSettings] = []
+    monkeypatch.setattr(python_runtime.preflight, 'ready', lambda _documents, run, *_a, **_k: checked.append(run))
+    monkeypatch.setattr(python_runtime.run_local, 'start', lambda *_args, **_kwargs: pytest.fail('ran'))
+    monkeypatch.setattr(sophios.post_compile.docker, 'from_env',
+                        lambda: SimpleNamespace(images=SimpleNamespace(list=lambda: [])))
+    workflow = Workflow([adapter_step('echo', message='hello')], 'wf')
+    for refused in (lambda: workflow.start(run_args_dict={'generate_run_script': 'yes'}),
+                    lambda: workflow.run(target='nextflow', run_args_dict={'cachedir': 'cache', 'resume': ''}),
+                    lambda: workflow.run(target='wdl', run_args_dict={'logLevel': 'INFO'}),  # type: ignore[arg-type]
+                    lambda: workflow.run(target='nextflow', outdir='results'),
+                    lambda: workflow.run(runner=Nextflow()),
+                    lambda: workflow.run(runner=Toil),  # type: ignore[arg-type]
+                    lambda: workflow.run(runner=Cwltool(), run_args_dict={'quiet': 'no'})):
+        with pytest.raises(ValueError):
+            refused()
+    assert not list(tmp_path.iterdir())
+    workflow.run(generate_run_script=True, quiet=False, runner=Cwltool(
+        '--logLevel', 'INFO', provenance=False, remove_entrypoints=True, ignore_install=True, ignore_processes=True))
+    with pytest.warns(DeprecationWarning):
+        workflow.run(generate_run_script=True, run_args_dict={
+            'quiet': 'no', 'no_provenance': '1', 'docker_remove_entrypoints': 'true', 'ignore_docker_install': 'yes',
+            'ignore_docker_processes': 'on', 'logLevel': 'INFO', 'parallel': 'yes', 'target': 'nextflow'})
+    assert checked[-1] == checked[-2]
 
 
 def _missing_paths(monkeypatch: pytest.MonkeyPatch, workflow: Workflow) -> list[str]:
@@ -500,7 +529,7 @@ def test_the_pre_flight_checks_exactly_the_paths_the_runner_reads(
         return
     start = Mock(return_value=_Ended())
     monkeypatch.setattr(python_runtime.run_local, "start", start)
-    Workflow([step], "wf").run(run_args_dict={"inputs_file": inputs_file} if inputs_file else {})
+    Workflow([step], "wf").run(inputs_file=inputs_file or '')
     start.assert_called_once()
     assert not Path("result.outDir").exists(), "an output directory is the step's to make, not the run's"
     if "outDir" in bound:

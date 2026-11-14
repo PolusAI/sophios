@@ -7,7 +7,14 @@ from . import __version__
 from .compiler import CompileSettings
 from .ir.policy import RunPolicy
 from .lang.error_codes import SophiosErrorCode
+from . import runners
+from .runners import Cwltool, RunSettings, runners_of
 from .wic_types import DEFAULT_BASEPATH, TARGET_NAMES, GraphSettings
+
+
+# Each default and choice below that a run reads is the typed value's: the parser states none of them again.
+_CWL = Cwltool()
+_RUN = RunSettings(_CWL)
 
 
 def _config_file(path: str) -> Path:
@@ -91,7 +98,7 @@ neutral.add_argument('--diagnostics', choices=['text', 'json'], default='text',
                      for programs and agents (see docs/error_codes.md)''')
 # What to do with the workflow. --generate_cwl_workflow, declared with the CWL options, excludes these too.
 group_run = neutral.add_mutually_exclusive_group()
-group_run.add_argument('--generate_run_script', default=False, action="store_true",
+group_run.add_argument('--generate_run_script', default=_RUN.generate_run_script, action="store_true",
                        help='Just generates run.sh, the runner command, and exits. Does not actually invoke ./run.sh')
 group_run.add_argument('--check', default=False, action="store_true",
                        help='''Compile the workflow and check that this machine can run it (the container engine
@@ -111,13 +118,13 @@ neutral.add_argument('--basepath', type=str, required=False, default=DEFAULT_BAS
                      'the real-time plans, provenance, the drawings, the schema and the default --outdir. '
                      'Workflow.run(basepath=) in Python is the same')
 
-cwl.add_argument('--inputs_file', type=str, required=False, default='',
+cwl.add_argument('--inputs_file', type=str, required=False, default=_RUN.inputs_file,
                  help='Additional inputs Yaml file. For a plain CWL workflow under --allow_raw_cwl, '
                  'its job file, given to the runner as it is')
-cwl.add_argument('--pull_dir', type=str, required=False, default=str(Path().cwd()),
+cwl.add_argument('--pull_dir', type=str, required=False, default=_CWL.pull_dir,
                  help='''The user specified pull directory for (singularity) image pull.
                  The default is the current working directory i.e. `pwd`''')
-cwl.add_argument('--no_provenance', default=False, action="store_true",
+cwl.add_argument('--no_provenance', default=not _CWL.provenance, action="store_true",
                  help='''Do not use the --provenance feature of CWL.
                  (You should only disable provenance if absolutely necessary.)''')
 cwl.add_argument('--cwl_inline_runtag', default=False, action="store_true",
@@ -126,16 +133,17 @@ cwl.add_argument('--cwl_inline_runtag', default=False, action="store_true",
 cwl.add_argument('--parallel', default=False, action="store_true",
                  help='''When running locally, execute independent steps in parallel.
                  \nThis may cause issues with hanging (particularly when scattering).''')
-cwl.add_argument('--cwl_runner', type=str, required=False, default='cwltool', choices=['cwltool', 'toil-cwl-runner'],
+cwl.add_argument('--cwl_runner', type=str, required=False, default=runners_of('cwl')[0].name,
+                 choices=[runner.name for runner in runners_of('cwl')],
                  help='The CWL runner to use for running workflows locally.')
-cwl.add_argument('--ignore_docker_install', default=False, action="store_true",
+cwl.add_argument('--ignore_docker_install', default=_CWL.ignore_install, action="store_true",
                  help='''Do not check whether docker is installed before running workflows.
                  \n--ignore_docker_install does NOT change whether or not any step in your workflow uses docker!''')
-cwl.add_argument('--ignore_docker_processes', default=False, action="store_true",
+cwl.add_argument('--ignore_docker_processes', default=_CWL.ignore_processes, action="store_true",
                  help='Do not check whether there are too many running docker processes before running workflows.')
-cwl.add_argument('--container_engine', default='docker',
+cwl.add_argument('--container_engine', default=_CWL.container_engine,
                  help='Specify which command to use to run OCI containers.')
-cwl.add_argument('--docker_remove_entrypoints', default=False, action="store_true",
+cwl.add_argument('--docker_remove_entrypoints', default=_CWL.remove_entrypoints, action="store_true",
                  help='''Remove entrypoints from docker images before running workflows.
                  See https://cwl.discourse.group/t/override-docker-entrypoint-in-command-line-tool/695/2
                  If your CWL CommandLineTools rely on non-portable docker entrypoints
@@ -155,6 +163,7 @@ cwl.add_argument('--partial_failure_success_codes_range', nargs=2, type=int, def
 group_run._group_actions.append(  # pylint: disable=protected-access
     cwl.add_argument('--generate_cwl_workflow', required=False, default=False, action="store_true",
                      help='Compile the workflow without pulling the docker image'))
+# Off unless given, where `RunSettings.quiet` is on: the command line shows cwltool's log, Python hides it.
 cwl.add_argument('--quiet', default=False, action="store_true",
                  help='''With --run_local or --generate_run_script: hide cwltool's own log (cwltool is
                  given --quiet). Each tool's own messages still print as the run goes.
@@ -164,10 +173,10 @@ cwl.add_argument('--cwl_inline_subworkflows', default=False, action="store_true"
                  subworkflow's own steps. Tools stay separate files. A subworkflow call that has
                  scatter, when or any other key besides in and out, or that is marked
                  inlineable: false, stays a subworkflow, and each one is named on stderr.''')
-cwl.add_argument('--cachedir', type=str, required=False, default='',
+cwl.add_argument('--cachedir', type=str, required=False, default=_CWL.cachedir,
                  help='''With --run_local and cwltool, the directory cwltool caches each step's outputs in:
                  a step whose tool and inputs are unchanged reuses them. No cache unless given.''')
-cwl.add_argument('--outdir', type=str, required=False, default='',
+cwl.add_argument('--outdir', type=str, required=False, default=_RUN.outdir,
                  help='Workflow output directory passed to the CWL runner.')
 cwl.add_argument('--graphviz', default=False, action="store_true",
                  help='Generate a DAG using graphviz.')
@@ -205,36 +214,16 @@ def validate_success_code_range(args: argparse.Namespace) -> None:
         parser.error(f'--partial_failure_success_codes_range {low} {high}: the lower bound is above the upper')
 
 
-def _argv(yaml_path: str = '', suppliedargs: list[str] | None = None) -> list[str]:
-    """The arguments, without a program name, that `get_args` and `get_known_and_unknown_args` parse."""
-    return ['--yaml', yaml_path] + (suppliedargs or [])
-
-
 def get_args(yaml_path: str = '', suppliedargs: list[str] | None = None) -> argparse.Namespace:
     """This is used to get mock command line arguments, default + suppled args
 
     Returns:
         argparse.Namespace: The mocked command line arguments
     """
-    args = parser.parse_args(_argv(yaml_path, suppliedargs))
+    args = parser.parse_args(['--yaml', yaml_path] + (suppliedargs or []))
     validate_target_args(args)
     validate_success_code_range(args)
     return args
-
-
-def get_known_and_unknown_args(
-    yaml_path: str = '', suppliedargs: list[str] | None = None
-) -> tuple[argparse.Namespace, list[str]]:
-    """This is used to get mock command line arguments, default + suppled args
-
-    Returns:
-        tuple[argparse.Namespace, list[str]]: The mocked, recognized command line arguments,
-            and the list of remaining unrecognized argument strings.
-    """
-    args, unknown = parser.parse_known_args(_argv(yaml_path, suppliedargs))
-    validate_target_args(args)
-    validate_success_code_range(args)
-    return args, unknown
 
 
 def settings_from_args(args: argparse.Namespace) -> tuple[CompileSettings, GraphSettings]:
@@ -261,3 +250,15 @@ def settings_from_args(args: argparse.Namespace) -> tuple[CompileSettings, Graph
         'graph_show_inputs': args.graph_show_inputs,
     }
     return (settings, graph_settings)
+
+
+def run_settings_from_args(args: argparse.Namespace, unknown_args: list[str]) -> RunSettings:
+    """The run the parsed arguments ask for, and `unknown_args` as its runner's flags: the one conversion from an
+    `argparse.Namespace` to the value the run path takes, as `Workflow.run` builds it from its keywords."""
+    # Only a CWL target has a choice of runner; each runner reads the settings it has.
+    runner = runners.build(args.target, args.cwl_runner if args.target == 'cwl' else None, unknown_args,
+                           container_engine=args.container_engine, pull_dir=args.pull_dir,
+                           ignore_install=args.ignore_docker_install, ignore_processes=args.ignore_docker_processes,
+                           provenance=not args.no_provenance, remove_entrypoints=args.docker_remove_entrypoints,
+                           cachedir=args.cachedir)
+    return RunSettings(runner, args.outdir, args.inputs_file, args.quiet, args.generate_run_script)

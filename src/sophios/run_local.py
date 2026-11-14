@@ -194,7 +194,7 @@ class RunHandle:  # pylint: disable=too-many-instance-attributes
         """
         print('Running ' + shlex.join(self._launch.argv), flush=True)
         if self._analysis is not None:
-            self._watching = realtime.watching(self._plans, Path(self._request.cachedir), self._analysis,
+            self._watching = realtime.watching(self._plans, Path(self._request.run.runner.cachedir), self._analysis,
                                                env=self._launch.env)
             self._watching.__enter__()  # pylint: disable=unnecessary-dunder-call
         started_at = datetime.now()
@@ -458,7 +458,7 @@ def _realtime(request: RunRequest, backend: Backend) -> tuple[RunRequest, realti
     why and no analyses. With analyses and no cachedir, cwltool caches in `cachedir/`."""
     if not request.realtime_plans:
         return request, None
-    if request.generate_run_script:
+    if request.run.generate_run_script:
         print('Real-time analysis runs only with --run_local; run.sh runs the workflow without it.',
               file=sys.stderr)
         return replace(request, realtime_plans=()), None
@@ -466,9 +466,10 @@ def _realtime(request: RunRequest, backend: Backend) -> tuple[RunRequest, realti
     if isinstance(command, str):
         print(command, file=sys.stderr)
         return replace(request, realtime_plans=()), None
-    if not request.cachedir:
-        request = replace(request, cachedir='cachedir')
-        print(f"Real-time analysis watches the runner's cache, so cwltool caches in {request.cachedir}/")
+    if not request.run.runner.cachedir:
+        runner = request.run.runner.evolve(cachedir='cachedir')
+        request = replace(request, run=replace(request.run, runner=runner))
+        print(f"Real-time analysis watches the runner's cache, so cwltool caches in {runner.cachedir}/")
     return request, command
 
 
@@ -476,11 +477,11 @@ def start(request: RunRequest) -> RunHandle:
     """Start the run `request` describes, and return its handle once the runner has started.
 
     Raises:
-        ValueError: No backend runs the request's target with its runner, or it asks for a run script.
+        ValueError: The request asks for a run script.
     """
-    if request.generate_run_script:
+    if request.run.generate_run_script:
         raise ValueError('a run script is written by run(), not started')
-    backend = targets.backend(request.target, request.runner)
+    backend = targets.backend(request.run.runner)
     request, analysis = _realtime(request, backend)
     return RunHandle(request, backend, backend.launch(request), request.realtime_plans, analysis)
 
@@ -493,10 +494,9 @@ def run(request: RunRequest) -> int:
 
     Raises:
         KeyboardInterrupt: On Ctrl-C, after the runner was stopped.
-        ValueError: No backend runs the request's target with its runner.
     """
-    backend = targets.backend(request.target, request.runner)
-    if request.generate_run_script:
+    backend = targets.backend(request.run.runner)
+    if request.run.generate_run_script:
         _realtime(request, backend)
         generate_run_script(shlex.join(backend.launch(request).argv))
         return 0  # Do not actually run

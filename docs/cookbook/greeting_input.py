@@ -22,4 +22,4 @@ def workflow() -> Workflow:
 
 
 if __name__ == '__main__':
-    workflow().run(run_args_dict={'inputs_file': 'job.yml'})
+    workflow().run(inputs_file='job.yml')

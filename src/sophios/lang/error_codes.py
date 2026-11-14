@@ -154,7 +154,7 @@ class SophiosErrorCode(StrEnum):
         'the working directory unless `--basepath` or `Workflow.run(basepath=)` names another), `--outdir`, '
         "or an `outdir` given to `Workflow.run()`.",
         'Name a directory you can write to with `--basepath` and `--outdir`; from Python, '
-        '`run(basepath=...)` and `run_args_dict={"outdir": ...}` take another.',
+        '`run(basepath=...)` and `run(outdir=...)` take another.',
         kind=Kind.MACHINE)
     FIXED_POINT_NOT_REACHED = _explained(
         'wic022',

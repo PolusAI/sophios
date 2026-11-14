@@ -93,7 +93,7 @@ def test_a_plain_cwl_workflow_is_what_the_runner_is_given(sophios: Callable[...,
     given: list[tuple[Any, ...]] = []
 
     def run(request: RunRequest) -> int:
-        given.append((request.cachedir, request.realtime_plans))
+        given.append((request.run.runner.cachedir, request.realtime_plans))
         return 0
     monkeypatch.setattr(cli.run_local, 'run', run)
     capsys.readouterr()

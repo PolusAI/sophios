@@ -19,6 +19,7 @@ from sophios.ir.resolved import NotLowered
 from . import input_output as io
 from . import post_compile as pc
 from . import backends, cli, compiler, drawing, plugins, preflight, realtime, run_local, run_setup, targets
+from .runners import RunSettings
 from .ir import frontdoor
 from .ir.frontdoor import SourceBundle
 from .wic_types import Json, Tools
@@ -177,54 +178,20 @@ def _is_local_run(args: argparse.Namespace) -> bool:
     return bool(args.run_local or args.generate_run_script or args.check)
 
 
-def _preflight(args: argparse.Namespace, documents: list[Path], jobs: tuple[preflight.Job, ...]) -> bool:
-    """Check what a local run of `documents` needs from this machine, and pull its images.
-
-    Returns:
-        bool: Whether the run goes on. `--check` stops after the checks, having pulled nothing.
-    """
-    settings = _run_settings(args)
-    if not args.check:
-        preflight.ready(documents, settings, jobs)
-        return True
-    targets.backend(args.target, _runner(args)).check(documents, jobs, settings)
-    _checked(documents[0])
-    return False
-
-
 def _checked(name: Path | str) -> None:
     """Say that `--check` found nothing in the way of running `name`."""
     print(f'Checked {name}: nothing in the way of a local run on this machine. '
           'Nothing was written, pulled or run.')
 
 
-def _run_settings(args: argparse.Namespace) -> preflight.RunSettings:
-    """The pre-flight's view of the run the arguments ask for."""
-    writes = ((Path(args.outdir), "the run's outputs", 'give --outdir a directory you can write to'),) \
-        if args.outdir else ()
-    return preflight.RunSettings(args.container_engine, args.pull_dir, ignore_install=args.ignore_docker_install,
-                                 ignore_processes=args.ignore_docker_processes, runner=_runner(args),
-                                 run_script=args.generate_run_script, writes=writes)
-
-
-def _runner(args: argparse.Namespace) -> str:
-    """The program that runs the workflow: the target's runner option, `--cwl_runner`, or its one runner."""
-    row = targets.target(args.target)
-    return getattr(args, row.runner_option) if row.runner_option is not None else next(iter(row.runners))
-
-
-def _run(args: argparse.Namespace, unknown_args: list[str], workflow_name: str,
+def _run(args: argparse.Namespace, run: RunSettings, workflow_name: str,
          documents: tuple[str, ...] | None = None,
          realtime_plans: tuple[realtime.Plan, ...] = ()) -> None:
     """Run the workflow, or write run.sh for it, with `args.basepath` as the base path, and its real-time analyses.
 
     Exits with the runner's exit code when it is not 0, and with 130 on Ctrl-C.
     """
-    request = backends.RunRequest(
-        workflow_name, Path(args.basepath), runner=_runner(args), target=args.target, documents=documents,
-        container_engine=args.container_engine, cachedir=args.cachedir, outdir=args.outdir, quiet=args.quiet,
-        provenance=not args.no_provenance, passthrough_args=tuple(unknown_args), realtime_plans=realtime_plans,
-        generate_run_script=args.generate_run_script)
+    request = backends.RunRequest(workflow_name, Path(args.basepath), run, documents, realtime_plans=realtime_plans)
     try:
         retval = run_local.run(request)
     except KeyboardInterrupt:
@@ -234,7 +201,7 @@ def _run(args: argparse.Namespace, unknown_args: list[str], workflow_name: str,
         sys.exit(retval)
 
 
-def _pass_through(args: argparse.Namespace, unknown_args: list[str]) -> None:
+def _pass_through(args: argparse.Namespace, run: RunSettings) -> None:
     """Use a plain CWL workflow as it is: the `--yaml` file is the artifact.
 
     Nothing is parsed, compiled, copied or written. The runner is given the
@@ -253,10 +220,13 @@ def _pass_through(args: argparse.Namespace, unknown_args: list[str]) -> None:
         report(_draw(None, str(workflow), workflow.stem, Path(args.basepath)), args.diagnostics)
     if _is_local_run(args):
         extra = run_setup.inputs_job(args.inputs_file, '--inputs_file')
-        if not _preflight(args, [workflow], (extra,) if extra else ()):
+        # `--check` stops after the checks, having pulled nothing.
+        preflight.ready([workflow], run, (extra,) if extra else (), pulling=not args.check)
+        if args.check:
+            _checked(workflow)
             return
         Path(args.basepath).mkdir(parents=True, exist_ok=True)
-        _run(args, unknown_args, workflow.stem, documents=(str(workflow), *job))
+        _run(args, run, workflow.stem, documents=(str(workflow), *job))
     elif args.generate_cwl_workflow:
         print(f'{args.yaml} is a CWL workflow; with --allow_raw_cwl it is used as it is, and nothing is written')
     else:
@@ -343,9 +313,10 @@ def _main(args: argparse.Namespace, unknown_args: list[str]) -> None:
     if args.check and args.graphviz:
         cli.parser.error('--graphviz writes drawings and --check writes nothing: '
                          'draw with --generate_cwl_workflow --graphviz')
+    run = cli.run_settings_from_args(args, unknown_args)
     if args.allow_raw_cwl and _is_plain_cwl_workflow(Path(args.yaml)):
         if targets.target(args.target).takes_plain_cwl:
-            _pass_through(args, unknown_args)
+            _pass_through(args, run)
             return
         print(f'--allow_raw_cwl: --target {args.target} does not take a plain CWL workflow as it is, so {args.yaml} '
               'is compiled as a Sophios document', file=sys.stderr)
@@ -393,15 +364,13 @@ def _main(args: argparse.Namespace, unknown_args: list[str]) -> None:
             report(_draw(drawing_graph, str(basepath / f'{yaml_stem}.cwl'), yaml_stem, basepath), args.diagnostics)
 
     if _is_local_run(args):
-        prepared = targets.backend(args.target, _runner(args)).prepare(
-            lowered, analyses, basepath,
-            run_setup.Settings(_run_settings(args), root_dir, args.inputs_file, check=args.check,
-                               remove_entrypoints=args.docker_remove_entrypoints))
+        prepared = targets.backend(run.runner).prepare(lowered, analyses, basepath,
+                                                       run_setup.Settings(run, root_dir, check=args.check))
         draw_after_write()
         if args.check:
             _checked(prepared.name)
             return
-        _run(args, unknown_args, prepared.name, realtime_plans=prepared.plans)
+        _run(args, run, prepared.name, realtime_plans=prepared.plans)
     elif target.write_option is None or getattr(args, target.write_option):
         target.write(lowered, analyses, basepath, inputs_file=args.inputs_file, root_dir=root_dir)
         draw_after_write()

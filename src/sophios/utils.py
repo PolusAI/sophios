@@ -1,7 +1,5 @@
 from typing import Any
 
-from .wic_types import Yaml
-
 
 def recursively_delete_dict_key(key: str, obj: Any) -> Any:
     """Recursively deletes any dict entries with the given key.
@@ -22,31 +20,3 @@ def recursively_delete_dict_key(key: str, obj: Any) -> Any:
                 new_dict[key_] = recursively_delete_dict_key(key, obj[key_])
         return new_dict
     return obj
-
-
-def convert_args_dict_to_args_list(
-    args_dict: dict[str, Any],
-    boolean_flags: set[str] | None = None,
-) -> list[str]:
-    """Convert an argument dictionary into CLI-style tokens.
-
-    Args:
-        args_dict: A dictionary containing args and values
-        boolean_flags: Keys that should be emitted as store-true CLI flags.
-
-    Returns:
-        list[str]: A syntactically correct list of arguments (CLI flags) and values
-    """
-    args_list: list[str] = []
-    boolean_flags = set(boolean_flags or ())
-    for arg_name, arg_value in args_dict.items():
-        flag = '--' + arg_name
-        if arg_name in boolean_flags:
-            normalized = str(arg_value).strip().lower()
-            if normalized in {'1', 'true', 'yes', 'on'}:
-                args_list.append(flag)
-            elif normalized not in {'0', 'false', 'no', 'off', ''}:
-                args_list += [flag, str(arg_value)]
-            continue
-        args_list += [flag, str(arg_value)]
-    return args_list

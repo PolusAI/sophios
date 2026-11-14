@@ -141,7 +141,7 @@ def test_a_tool_that_refers_to_files_beside_it_is_written_packed_by_every_door(
     no_preflight(monkeypatch)
     relcat = TOOLS / 'relcat.cwl'
     compiled = Workflow([Step(clt_path=relcat)], 'py').compile().cwl_workflow
-    Workflow([Step(clt_path=relcat)], 'py').run(basepath='ran', run_args_dict={'generate_run_script': 'yes'})
+    Workflow([Step(clt_path=relcat)], 'py').run(basepath='ran', generate_run_script=True)
     ran = yaml.safe_load(Path('ran/py.cwl').read_text(encoding='utf-8'))
     assert run_cli(monkeypatch, '--yaml', PROJECT / 'live.wic', '--config_file', config,
                    '--generate_cwl_workflow') is None

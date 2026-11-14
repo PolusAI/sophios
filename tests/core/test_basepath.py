@@ -10,7 +10,7 @@ from typing import Final
 import pytest
 
 import sophios.plugins
-from sophios import run_local
+from sophios import run_local, runners
 from sophios.api.python.workflow import Step, Workflow
 
 from .cases import DATA
@@ -107,8 +107,8 @@ def test_the_cli_and_python_write_a_run_to_the_same_places(project: Path, monkey
                                                            tmp_path: Path, runner: str) -> None:
     """The same workflow run with the same base path leaves its root and job there and a runner command that
     writes provenance, the summary and the outputs there, from `--basepath` and from `run(basepath=)`. The
-    command line writes the tree beside the root; Python, one document. `--no_provenance`, and `no_provenance: yes`
-    in `run()`'s run arguments, give the runner no `--provenance`; without them it has one."""
+    command line writes the tree beside the root; Python, one document. `--no_provenance`, and `provenance=False`
+    on `run()`'s runner, give the runner no `--provenance`; without them it has one."""
     commands: list[str] = []
     monkeypatch.setattr(run_local, 'generate_run_script', commands.append)
     cli_base, python_base = tmp_path / 'cli out', tmp_path / 'python out'
@@ -121,10 +121,9 @@ def test_the_cli_and_python_write_a_run_to_the_same_places(project: Path, monkey
                      *no_provenance)
         else:
             monkeypatch.chdir(project / 'python')
-            run_args = {'generate_run_script': 'yes', 'cwl_runner': runner}
-            if no_provenance:
-                run_args['no_provenance'] = 'yes'
-            Workflow([Step(clt_path=project / 'noop.cwl')], 'w').run(basepath=str(base), run_args_dict=run_args)
+            Workflow([Step(clt_path=project / 'noop.cwl')], 'w').run(
+                basepath=str(base), runner=runners.build('cwl', runner, (), provenance=not no_provenance),
+                generate_run_script=True)
         return shlex.split(commands[-1])
 
     for entry, base in (('cli', cli_base), ('python', python_base)):

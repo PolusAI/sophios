@@ -31,6 +31,7 @@ import requests
 from .ir.locations import input_paths
 from .lang.diagnostics import Diagnostic, Severity, SophiosError
 from .lang.error_codes import SophiosErrorCode
+from .runners import RunSettings
 from .wic_types import Yaml
 
 #: Engines `<engine> info` reaches: it needs the engine's daemon or machine, and no container or network.
@@ -49,22 +50,6 @@ class Job:
     base: Path
     #: How a message names where the values came from: 'the workflow', '--inputs_file'.
     origin: str
-
-
-@dataclass(frozen=True, slots=True)
-class RunSettings:
-    """What a run was asked to do, as far as this machine is concerned."""
-
-    container_engine: str
-    pull_dir: str
-    ignore_install: bool = False
-    ignore_processes: bool = False
-    #: The runner the run uses: `cwltool` or `toil-cwl-runner`, or `nextflow` for the target `nextflow`.
-    runner: str = 'cwltool'
-    #: Whether the run only writes `run.sh`, which calls the runner as a program.
-    run_script: bool = False
-    #: Each directory the run writes into: the path, what it holds, what to do instead (see `unwritable`).
-    writes: tuple[tuple[Path, str, str], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,23 +104,24 @@ def _declared(node: Any) -> list[cwl.DockerRequirement]:
             if isinstance(requirement, cwl.DockerRequirementTypes)]
 
 
-def check(found: Needs, settings: RunSettings) -> None:
+def check(found: Needs, run: RunSettings) -> None:
     """Raise every problem a run would hit on this machine, before anything is pulled.
 
     Raises:
         SophiosError: One diagnostic per problem.
     """
     problems = path_problems(found.jobs)
-    problems += [problem for directory, holds, remedy in settings.writes
-                 if (problem := unwritable(directory, holds, remedy)) is not None]
-    problems += _program_problems(found, settings)
+    if run.outdir and (problem := unwritable(Path(run.outdir), "the run's outputs",
+                                             'give outdir a directory you can write to')) is not None:
+        problems.append(problem)
+    problems += _program_problems(found, run)
     if found.containers:
-        problems += engine_problems(_image_names(found), settings)
+        problems += engine_problems(_image_names(found), run)
     if problems:
         raise SophiosError(problems)
 
 
-def pull(found: Needs, settings: RunSettings) -> None:
+def pull(found: Needs, run: RunSettings) -> None:
     """Make every image the run uses available: pulled, and for docker and podman also loaded or imported.
 
     Raises:
@@ -148,10 +134,10 @@ def pull(found: Needs, settings: RunSettings) -> None:
     # workflows, and if there is a local image available,
     # `docker run` will NOT query the remote repository for the latest image!
     # cwltool has a --force-docker-pull option, but this may cause multiple pulls in parallel.
-    engine = settings.container_engine
+    engine = run.runner.container_engine
     for document in found.documents:
         if engine == 'singularity':
-            cmd = ['cwl-docker-extract', '-s', '--dir', settings.pull_dir, str(document)]
+            cmd = ['cwl-docker-extract', '-s', '--dir', run.runner.pull_dir or str(Path.cwd()), str(document)]
         else:
             cmd = ['cwl-docker-extract', '--force-download', '--container-engine', engine, str(document)]
         _fetch(cmd, f'pull {_images(_image_names(found))}', engine)
@@ -231,7 +217,7 @@ def _unavailable(message: str) -> Diagnostic:
                       'then run again.')
 
 
-def ready(documents: Sequence[Path], settings: RunSettings, jobs: Sequence[Job] = (), *, pulling: bool = True) -> None:
+def ready(documents: Sequence[Path], run: RunSettings, jobs: Sequence[Job] = (), *, pulling: bool = True) -> None:
     """Check what running `documents` with `jobs` needs from this machine, then, with `pulling`, pull their images.
 
     The one call every local run makes before it starts: the CLI's compiled and plain-CWL runs, `--check`
@@ -241,9 +227,9 @@ def ready(documents: Sequence[Path], settings: RunSettings, jobs: Sequence[Job] 
         SophiosError: Every problem found, before anything is pulled.
     """
     found = needs(documents, jobs)
-    check(found, settings)
+    check(found, run)
     if pulling:
-        pull(found, settings)
+        pull(found, run)
 
 
 def unwritable(directory: Path, holds: str, remedy: str) -> Diagnostic | None:
@@ -330,31 +316,26 @@ def runner_program(name: str) -> str | None:
                                                     os.environ.get('PATH', os.defpath)]))
 
 
-#: How to install each program a run may call.
-_INSTALL: Final = {
-    'cwltool_filterlog': 'install Sophios in this environment (pip install sophios), which provides it',
-    'toil-cwl-runner': 'install Toil (pip install "toil[cwl]")',
-    'cwl-docker-extract': 'install cwl-utils (pip install cwl-utils)',
-    'nextflow': 'install Nextflow (https://www.nextflow.io/docs/latest/install.html)',
-}
+#: How to install the program that pulls a run's images.
+_EXTRACT_INSTALL: Final = 'install cwl-utils (pip install cwl-utils)'
 
 
-def _program_problems(found: Needs, settings: RunSettings) -> list[Diagnostic]:
+def _program_problems(found: Needs, run: RunSettings) -> list[Diagnostic]:
     """A program the run calls that is not here, or a runner that cannot run on this platform."""
     problems = []
-    script = 'cwltool_filterlog' if settings.runner == 'cwltool' else settings.runner
-    if settings.run_script:
-        if shutil.which(script) is None:
-            problems.append(_missing(f'run.sh calls {script}, which is not on PATH: {_INSTALL[script]}'))
+    runner = run.runner
+    if run.generate_run_script:
+        if shutil.which(runner.program) is None:
+            problems.append(_missing(f'run.sh calls {runner.program}, which is not on PATH: {runner.install}'))
     elif PLATFORM_LACKS_RUNNERS is not None:
-        problems.append(_missing(f'{settings.runner} cannot run here ({PLATFORM_LACKS_RUNNERS}): run '
+        problems.append(_missing(f'{runner.name} cannot run here ({PLATFORM_LACKS_RUNNERS}): run '
                                  'Sophios inside WSL (https://learn.microsoft.com/windows/wsl/install)'))
-    elif runner_program(script) is None:
-        problems.append(_missing(f'the run calls {script}, which is neither in this Python environment nor on '
-                                 f'PATH: {_INSTALL[script]}'))
+    elif runner_program(runner.program) is None:
+        problems.append(_missing(f'the run calls {runner.program}, which is neither in this Python environment nor '
+                                 f'on PATH: {runner.install}'))
     if found.containers and shutil.which('cwl-docker-extract') is None:
-        problems.append(_missing(f'pulling the images for {settings.container_engine} needs cwl-docker-extract, '
-                                 f"which is not on PATH: {_INSTALL['cwl-docker-extract']}"))
+        problems.append(_missing(f'pulling the images for {runner.container_engine} needs cwl-docker-extract, '
+                                 f'which is not on PATH: {_EXTRACT_INSTALL}'))
     return problems
 
 
@@ -362,23 +343,24 @@ def _program_problems(found: Needs, settings: RunSettings) -> list[Diagnostic]:
 _CONTROL: Final = re.compile(r'\x1b(?:\[[0-9;]*[A-Za-z]|\([A-Z0-9])')
 
 
-def nextflow_problems(settings: RunSettings) -> list[Diagnostic]:
+def nextflow_problems(run: RunSettings) -> list[Diagnostic]:
     """A `wic029` when a run cannot start `nextflow`: it is not here, or `nextflow -version` fails, as it does
     without a Java it can run, or Sophios cannot run it on this platform. The first line it printed is quoted.
 
     As `_program_problems` finds a CWL runner: `run.sh` calls the `nextflow` on PATH, and a run Sophios conducts
     the one `runner_program` finds.
     """
-    if settings.run_script:
-        program, missing = shutil.which('nextflow'), 'run.sh calls nextflow, which is not on PATH'
+    runner = run.runner
+    if run.generate_run_script:
+        program, missing = shutil.which(runner.program), f'run.sh calls {runner.program}, which is not on PATH'
     elif PLATFORM_LACKS_RUNNERS is not None:
         return [_missing('nextflow cannot run here (Nextflow needs a POSIX system, which Windows is not): run '
                          'Sophios inside WSL (https://learn.microsoft.com/windows/wsl/install)')]
     else:
-        program = runner_program('nextflow')
-        missing = 'the run calls nextflow, which is neither in this Python environment nor on PATH'
+        program = runner_program(runner.program)
+        missing = f'the run calls {runner.program}, which is neither in this Python environment nor on PATH'
     if program is None:
-        return [_missing(f"{missing}: {_INSTALL['nextflow']}")]
+        return [_missing(f'{missing}: {runner.install}')]
     proc = sub.run([program, '-version'], check=False, stdout=sub.PIPE, stderr=sub.STDOUT, text=True, errors='replace')
     if proc.returncode == 0:
         return []
@@ -392,30 +374,31 @@ def _missing(message: str) -> Diagnostic:
     return Diagnostic(Severity.ERROR, SophiosErrorCode.PROGRAM_MISSING, f'{message}.')
 
 
-def engine_problems(images: Sequence[str], settings: RunSettings) -> list[Diagnostic]:
+def engine_problems(images: Sequence[str], run: RunSettings) -> list[Diagnostic]:
     """What stops the engine running the containers of `images`, the images a run uses; one diagnostic each.
 
     Only signals that do not depend on wording are classified: whether the engine
     program exists, the exit status of `<engine> info`, and whether the socket it
     would use exists and is accessible. What the engine said is quoted, never read.
     """
-    engine = settings.container_engine
+    runner = run.runner
+    engine = runner.container_engine
     # The options that name another engine or skip a check are a CWL run's; a Nextflow run's configuration
     # enables Docker.
-    cwl_run = settings.runner != 'nextflow'
+    cwl_run = runner.target == 'cwl'
     probe = [engine, 'info'] if engine in DOCKER_LIKE else [engine, '--version']
     try:
         proc = sub.run(probe, check=False, stdout=sub.DEVNULL, stderr=sub.PIPE)
     except FileNotFoundError:
-        if settings.ignore_install:
+        if runner.ignore_install:
             return []
         return [_engine_error(f'{engine} is not installed (it is not on PATH), and this workflow runs tools in '
                               f'containers ({_images(images)}): install {engine}'
                               + (', or name an installed engine with --container_engine' if cwl_run else ''))]
     problems = []
-    if proc.returncode != 0 and not settings.ignore_install:
+    if proc.returncode != 0 and not runner.ignore_install:
         problems.append(_unusable_engine(engine, proc.returncode, proc.stderr.decode('utf-8', errors='replace')))
-    if engine in DOCKER_LIKE and sys.platform != 'win32' and not settings.ignore_processes:
+    if engine in DOCKER_LIKE and sys.platform != 'win32' and not runner.ignore_processes:
         count = _docker_processes()
         if count > MAX_DOCKER_PROCESSES:
             problems.append(_engine_error(

@@ -30,6 +30,7 @@ from .ir.artifacts import CompilationArtifact
 from .lang.diagnostics import Diagnostic, SophiosError
 from .nf_reader import read_nextflow
 from .nf_types import ExecutableNextflowWorkflow
+from .runners import RunSettings
 from .runtime_inputs import output_target_inputs
 from .utils_nf import nextflow_names
 from .wic_types import Json
@@ -51,26 +52,18 @@ def _check_env_var_names(env_vars: Mapping[str, str]) -> None:
 
 
 @dataclass(frozen=True, slots=True)
-class RunRequest:  # pylint: disable=too-many-instance-attributes
+class RunRequest:
     """One local run of a workflow, as every front door describes it.
 
     Attributes:
         workflow_name: The workflow's name: its files are `<name>.cwl`, `output_<name>.json`, ...
         basepath: The directory the workflow was written to, and the run's files go.
-        runner: `cwltool`, `toil-cwl-runner`, or `nextflow` for the target `nextflow`.
-        target: The language the runner is given the workflow in: `cwl` or `nextflow`.
+        run: The runner, with its settings and flags, and what is given to the job.
         documents: The workflow, then its job file if it has one, as a CWL runner is given them.
             None: the files `prepare` wrote, `<basepath>/<name>.cwl` and `<basepath>/<name>_inputs.yml`.
             Nextflow is always given the files `prepare` wrote.
-        container_engine: `docker`, `podman`, `singularity`, or another docker-compatible command.
-        cachedir: Where cwltool caches a job whose tool and inputs are unchanged; '' for no cache.
-        outdir: The runner's output directory; '' for `<basepath>/outdir_<runner>_<name>_<time>`.
-        quiet: Pass `--quiet` to cwltool (never to Toil), which hides its own log.
-        provenance: Have the runner write its record of the run under `<basepath>/provenance/<name>`.
-        passthrough_args: Arguments for the runner, unchecked, before the documents.
         env: Environment variables the runner gets on top of this process's.
         realtime_plans: The real-time analyses to run beside the workflow.
-        generate_run_script: Write `run.sh` with the runner's command instead of running it.
         diagnostics: The notes compiling and preparing the run made, which the run's result carries.
 
     Raises:
@@ -79,18 +72,10 @@ class RunRequest:  # pylint: disable=too-many-instance-attributes
 
     workflow_name: str
     basepath: Path
-    runner: str = 'cwltool'
-    target: str = 'cwl'
+    run: RunSettings
     documents: tuple[str, ...] | None = None
-    container_engine: str = 'docker'
-    cachedir: str = ''
-    outdir: str = ''
-    quiet: bool = True
-    provenance: bool = True
-    passthrough_args: tuple[str, ...] = ()
     env: Mapping[str, str] = field(default_factory=dict)
     realtime_plans: tuple[realtime.Plan, ...] = ()
-    generate_run_script: bool = False
     diagnostics: tuple[Diagnostic, ...] = ()
 
     def __post_init__(self) -> None:
@@ -130,7 +115,7 @@ class Backend(Protocol):
     """The questions a run asks of the program that runs it. Nothing here starts a process."""
 
     def check(self, documents: Sequence[Path], jobs: Sequence[preflight.Job],
-              settings: preflight.RunSettings) -> None:
+              settings: RunSettings) -> None:
         """Raise every problem running `documents` with `jobs` would hit on this machine."""
 
     def prepare(self, lowered: run_setup.Lowered[Any], analyses: tuple[realtime.Analysis, ...], basepath: Path,
@@ -164,8 +149,8 @@ def _runner_outdir(basepath: str, request: RunRequest, runner_name: str) -> str:
     summary, the job store), so two workflows started in the same second from one basepath never
     share it.
     """
-    if request.outdir:
-        return str(Path(request.outdir).absolute().resolve())
+    if request.run.outdir:
+        return str(Path(request.run.outdir).absolute().resolve())
     date_time = datetime.now().strftime('%Y_%m_%d_%H.%M.%S')
     return f'{basepath}/outdir_{runner_name}_{request.workflow_name}_{date_time}'
 
@@ -177,7 +162,7 @@ def _documents(basepath: str, request: RunRequest) -> list[str]:
 
 
 def _provenance_flags(basepath: str, request: RunRequest) -> list[str]:
-    return ['--provenance', f'{basepath}/provenance/{request.workflow_name}'] if request.provenance else []
+    return ['--provenance', f'{basepath}/provenance/{request.workflow_name}'] if request.run.runner.provenance else []
 
 
 def _environment(request: RunRequest) -> dict[str, str]:
@@ -225,7 +210,7 @@ class _Cwl:
     """What every CWL runner shares: the pre-flight checks the machine, `run_setup` writes the files."""
 
     def check(self, documents: Sequence[Path], jobs: Sequence[preflight.Job],
-              settings: preflight.RunSettings) -> None:
+              settings: RunSettings) -> None:
         """The pre-flight's checks: paths, programs and the container engine."""
         preflight.ready(documents, settings, jobs, pulling=False)
 
@@ -248,13 +233,14 @@ class CwltoolBackend(_Cwl):
         # --skip-schemas: cwltool would download each $schemas file on every run, and a firewall or VPN
         # turns each download into a ~30 s timeout.
         # --disable-pull: the pre-flight pulled every image (cwl-docker-extract).
-        argv = ['cwltool_filterlog', '--disable-pull', *(['--quiet'] if request.quiet else []),
-                *_provenance_flags(basepath, request), *_container_flags(request.container_engine),
+        runner = request.run.runner
+        argv = [runner.program, '--disable-pull', *(['--quiet'] if request.run.quiet else []),
+                *_provenance_flags(basepath, request), *_container_flags(runner.container_engine),
                 '--write-summary', f'{basepath}/output_{request.workflow_name}.json',
                 '--skip-schemas', '--relax-path-checks', '--move-outputs', '--enable-ext', '--outdir', outdir]
-        if request.cachedir:
-            argv += ['--cachedir', str(Path(request.cachedir).absolute())]
-        argv += [*request.passthrough_args, *_documents(basepath, request)]
+        if runner.cachedir:
+            argv += ['--cachedir', str(Path(runner.cachedir).absolute())]
+        argv += [*runner.flags, *_documents(basepath, request)]
         return Launch(tuple(argv), _environment(request), Path.cwd(), outdir)
 
     # pylint: disable-next=unused-argument
@@ -272,7 +258,7 @@ class CwltoolBackend(_Cwl):
         Its images were pulled with the workflow's, so it does not pull; it keeps no provenance.
         This interpreter's cwltool, and not `python -m cwltool`, which exits 0 whatever happened.
         """
-        engine = request.container_engine
+        engine = request.run.runner.container_engine
 
         def command(cwl: Path, job: Path, outdir: Path, cachedir: Path) -> list[str]:
             return [sys.executable, '-c', 'import sys, cwltool.main; sys.exit(cwltool.main.run())',
@@ -289,17 +275,18 @@ class ToilBackend(_Cwl):
         """`toil-cwl-runner` with a job store per workflow under the base path, then the documents."""
         basepath = str(request.basepath.absolute().resolve())
         outdir = _runner_outdir(basepath, request, 'toil')
-        argv = ['toil-cwl-runner', *_container_flags(request.container_engine), '--relax-path-checks']
+        runner = request.run.runner
+        argv = [runner.program, *_container_flags(runner.container_engine), '--relax-path-checks']
         # Toil writes no provenance under Slurm: an argument that is exactly `slurm` (as in
         # `--batchSystem slurm`) drops the provenance flags.
-        if 'slurm' not in request.passthrough_args:
+        if 'slurm' not in runner.flags:
             argv += _provenance_flags(basepath, request)
         argv += ['--outdir', outdir,
                  # Toil's equivalent of cwltool's --cachedir.
                  '--jobStore', f'file:{basepath}/jobStore_{request.workflow_name}',
                  '--clean', 'always', '--noLinkImports',
                  '--disableProgress',  # no progress bar in the terminal
-                 *request.passthrough_args, *_documents(basepath, request)]
+                 *runner.flags, *_documents(basepath, request)]
         return Launch(tuple(argv), _environment(request), Path.cwd(), outdir)
 
     def outcome(self, request: RunRequest, exit_code: int, stdout: str, log: Path) -> Outcome:
@@ -323,7 +310,7 @@ class ToilBackend(_Cwl):
 
 def _without_cwltool(request: RunRequest) -> str:
     """The line that says a run's real-time analyses do not run, since its runner is not cwltool."""
-    return f'Real-time analysis needs cwltool; {request.runner} runs the workflow without it.'
+    return f'Real-time analysis needs cwltool; {request.run.runner.name} runs the workflow without it.'
 
 
 def _last_json_object(text: str) -> Json | None:
@@ -404,7 +391,7 @@ class NextflowBackend:
     """Nextflow, which runs the pipeline the Nextflow target lowers the workflow to."""
 
     def check(self, documents: Sequence[Path], jobs: Sequence[preflight.Job],
-              settings: preflight.RunSettings) -> None:
+              settings: RunSettings) -> None:
         """The paths `jobs` name, `nextflow`, starting with a Java it can run, and the container engine when a
         process has a container.
 
@@ -471,9 +458,10 @@ class NextflowBackend:
         """
         directory = nextflow_directory(request.basepath.absolute().resolve(), request.workflow_name)
         workdir = str(directory / 'work')
-        argv = ['nextflow', '-C', str(directory / io_nf.NEXTFLOW_CONFIG), 'run',
+        runner = request.run.runner
+        argv = [runner.program, '-C', str(directory / io_nf.NEXTFLOW_CONFIG), 'run',
                 str(directory / io_nf.NEXTFLOW_SCRIPT), '-params-file', str(directory / io_nf.NEXTFLOW_PARAMS),
-                '-work-dir', workdir, '-ansi-log', 'false', *request.passthrough_args]
+                '-work-dir', workdir, '-ansi-log', 'false', *runner.flags]
         return Launch(tuple(argv), {**_environment(request), 'NXF_SYNTAX_PARSER': 'v2'}, directory, workdir)
 
     def outcome(self, request: RunRequest, exit_code: int, stdout: str, log: Path) -> Outcome:
