@@ -48,12 +48,11 @@ support table.
 ## 2. The table
 
 `sophios.targets` (`targets.py`) is the one module that names every target. A row has a `name`, as `--target` and
-`target=` give it; `runners`, the default first; `runner_option`, the run argument that picks the runner
-(`cwl_runner`, or None for one runner); `run_defaults`, a Python run's `run_args_dict` defaults (was
-`_api_config.DEFAULT_RUN_ARGS`); `write_option`, the flag that asks it to write (`generate_cwl_workflow`, or None:
+`target=` give it; `write_option`, the flag that asks it to write (`generate_cwl_workflow`, or None:
 always); `takes_plain_cwl`; and `lower`, which returns the model, its notes and the view it read, or raises
 `NotLowered`, `clear`, which removes what an earlier write left, and `write`. `target()` is the one place an unknown
-target is reported; `backend()` replaces `backends.backend`.
+target is reported; `resolve()` chooses a target's runner (the first of `runners.runners_of(target)` unless one is
+given) and `backend()` finds the backend of a runner. Its runners are those of `sophios.runners`.
 
 | | CWL | Nextflow |
 |---|---|---|
@@ -61,7 +60,7 @@ target is reported; `backend()` replaces `backends.backend`.
 | `lower` builds | `result.artifact`, as the compile emitted it; notes `compiler.cwl_notes(view)` | `utils_nf.NEXTFLOW.lower(view)` |
 | `write` | `write_artifacts_to_disk` and the analyses beside it | the four files; a compile writes no analysis |
 | `clear` | nothing | the four files |
-| `runners` | `cwltool` (default), `toil-cwl-runner` | `nextflow` |
+| runners (`sophios.runners`) | `Cwltool` (default), `Toil` | `Nextflow` |
 
 **The names alone are cheap.** `wic_types.TargetName = Literal['cwl', 'nextflow']` and `TARGET_NAMES`: the command
 line's parser builds one option group per name and offers them to `--target` without importing a target, so
@@ -74,10 +73,8 @@ Every entry point looks its target up first, and `Backend.prepare` takes the low
 
 **What stays keyed by name outside the table**, each because it is the Python API's own surface, which the table
 may not import: `_workflow_runtime._COMPILED`, the object `compile()` returns for each target (`CompiledWorkflow`,
-`CompiledNextflowWorkflow`, as its overloads say), and `_REQUESTS`, how each target's run takes `run_args_dict`
-(CWL's `--<key> <value>` to the runner, Nextflow's `-<key> <value>`, and refusing a CWL-only key). Both are keyed by
-the row's name and reached only after `targets.target`; rows that built the API's objects would put the Python API
-inside the run path. Two command-line options act on CWL's model and are already refused for other targets by
+`CompiledNextflowWorkflow`, as its overloads say). It is keyed by the row's name and reached only after
+`targets.target`; rows that built the API's objects would put the Python API inside the run path. Two command-line options act on CWL's model and are already refused for other targets by
 `validate_target_args`: `--cwl_inline_subworkflows` and `--cwl_inline_runtag` rewrite it between `lower` and
 `write`. `--allow_raw_cwl` asks the row: CWL `takes_plain_cwl` and passes a plain CWL workflow through before any
 compile, as before; Nextflow does not, and the command line says so on stderr (`--allow_raw_cwl: --target nextflow

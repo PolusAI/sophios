@@ -109,30 +109,31 @@ The four rewriting flags (`--cwl_inline_subworkflows`, `--cwl_inline_runtag`,
 
 ## The same options from Python
 
-`Workflow.run(run_args_dict={...})`, and `Workflow.start()` and
-`Workflow.run_async()` with the same arguments
-([Follow a run from Python](running.md#follow-a-run-from-python)), take the running options
-by flag name without the dashes, as strings:
-`{'cwl_runner': 'toil-cwl-runner', 'outdir': 'results', 'quiet': 'no'}`.
-Only `quiet`, `no_provenance`, `generate_run_script` and
-`docker_remove_entrypoints` are yes/no switches (`yes`, `true`, `1` or `on`
-turn one on); `quiet` is on unless you turn it off.
-`inputs_file`, `cachedir`, `outdir`, `container_engine`, `pull_dir`,
-`cwl_runner`, `generate_run_script`, `docker_remove_entrypoints`, `quiet`
-and `no_provenance` are read by Sophios. Any other key becomes `--key value` on a command line
-that Sophios parses first, so a Sophios flag name is consumed there and has no
-effect on the run. Currently, for a switch such as `ignore_docker_install`,
-the value is left over and reaches the runner as a stray `yes`. For a flag that
-takes a value, such as `graph_inline_depth`, the flag and its
-value are both dropped without a message. For a flag with fixed choices, an
-invalid value such as `{'diagnostics': 'x'}` exits the process with status 2
-and `main: error: argument --diagnostics: invalid choice`, after the workflow
-has been written. `Workflow.compile()`
+`Workflow.run()`, and `Workflow.start()` and `Workflow.run_async()` with the same arguments
+([Follow a run from Python](running.md#follow-a-run-from-python)), take the running options as values: the runner
+is `runner=Cwltool(...)`, `Toil(...)` or `Nextflow(...)`, whose positional arguments reach the runner as they
+are, and the rest is `outdir=`, `inputs_file=`, `quiet=` and `generate_run_script=`.
+
+| Flag | Python |
+|---|---|
+| `--cwl_runner` | the runner: `Cwltool` or `Toil` |
+| `--container_engine`, `--pull_dir` | the runner's `container_engine=`, `pull_dir=` |
+| `--cachedir` | `Cwltool(cachedir=)`; Toil has none |
+| `--no_provenance` | the runner's `provenance=False` |
+| `--docker_remove_entrypoints` | the runner's `remove_entrypoints=True` |
+| `--ignore_docker_install`, `--ignore_docker_processes` | the runner's `ignore_install=`, `ignore_processes=` |
+| `--passthrough_flags yes` and the flags | the runner's positional arguments |
+| `--outdir`, `--inputs_file`, `--generate_run_script` | `outdir=`, `inputs_file=`, `generate_run_script=` |
+| `--quiet` | `quiet=`; the command line is not quiet unless asked, Python is |
+
+`Nextflow` takes no settings but its flags, and `outdir=` and `inputs_file=` are refused with
+`target='nextflow'`; so is a runner the target does not have. `Cwltool(...)` and `Toil(...)` take
+`container_engine='docker'` unless told otherwise, as the command line does. `Workflow.compile()`
 takes `target=`, `lang_version=`, `tool_registry=`, `inference=` and `policy=`, and nothing else.
 The partial-failure flags map onto `RunPolicy(partial_failure=, success_codes=)`
 ([Partial failures](partial-failures.md#in-python)), and the inference flags onto `Inference(enabled=, strict=, naming_conventions=, insert_steps=)`, and the
 configuration file's `renaming_conventions` and `inference_rules` onto its `renamings=` and `format_rules=`, where Python starts from the three renamings Sophios ships and has no format rules unless passed, as it reads no configuration file;
 `Workflow.run()`, `start()` and `run_async()` take the same `inference=` and `policy=`, and `target='nextflow'` to run the
-[Nextflow](nextflow.md#running-on-the-nextflow-target) pipeline instead, where the CWL defaults above do not apply,
-an option only a CWL run reads is refused, and any other key becomes `-<key> <value>` for Nextflow. The rewriting options are command-line only;
+[Nextflow](nextflow.md#running-on-the-nextflow-target) pipeline instead, where an option only a CWL run reads is refused.
+The rewriting options are command-line only;
 `Workflow.draw()` takes the drawing ones ([Drawing](drawing.md)).
