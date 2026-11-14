@@ -185,7 +185,7 @@ def _preflight(args: argparse.Namespace, documents: list[Path], jobs: tuple[pref
     """
     settings = _run_settings(args)
     if not args.check:
-        preflight.prepare(documents, settings, jobs)
+        preflight.ready(documents, settings, jobs)
         return True
     targets.backend(args.target, _runner(args)).check(documents, jobs, settings)
     _checked(documents[0])
@@ -252,9 +252,8 @@ def _pass_through(args: argparse.Namespace, unknown_args: list[str]) -> None:
         Path(args.basepath).mkdir(parents=True, exist_ok=True)
         report(_draw(None, str(workflow), workflow.stem, Path(args.basepath)), args.diagnostics)
     if _is_local_run(args):
-        jobs = (preflight.Job(io.read_inputs_file(args.inputs_file), Path(args.inputs_file).parent.absolute(),
-                              '--inputs_file'),) if args.inputs_file else ()
-        if not _preflight(args, [workflow], jobs):
+        extra = run_setup.inputs_job(args.inputs_file, '--inputs_file')
+        if not _preflight(args, [workflow], (extra,) if extra else ()):
             return
         Path(args.basepath).mkdir(parents=True, exist_ok=True)
         _run(args, unknown_args, workflow.stem, documents=(str(workflow), *job))

@@ -96,6 +96,15 @@ def prepare(artifact: CompilationArtifact, analyses: tuple[realtime.Analysis, ..
         return _prepare(artifact, analyses, Path(scratch), settings, output_targets)
 
 
+def inputs_job(inputs_file: str, named: str, output_targets: Collection[str] = ()) -> preflight.Job | None:
+    """The values of `inputs_file`, as the runner gets them (`output_targets` as names to create), with the
+    directory their relative paths are read from; None without one. `named` is how the user named the file."""
+    if not inputs_file:
+        return None
+    return preflight.Job(runner_job_inputs(input_output.read_inputs_file(inputs_file), output_targets),
+                         Path(inputs_file).parent.absolute(), named)
+
+
 def _prepare(artifact: CompilationArtifact, analyses: tuple[realtime.Analysis, ...], basepath: Path,
              settings: Settings, output_targets: Collection[str]) -> Prepared:
     """`prepare`, writing under `basepath`."""
@@ -107,21 +116,13 @@ def _prepare(artifact: CompilationArtifact, analyses: tuple[realtime.Analysis, .
     plans = realtime.write(analyses, basepath, artifact.name, settings.root_dir)
     # The pre-flight reads the CWL the runner will get, so it runs after the write.
     documents = (basepath / f'{artifact.name}.cwl', *realtime.documents(analyses, basepath))
-    inputs_file = settings.inputs_file
-    extra = runner_job_inputs(input_output.read_inputs_file(inputs_file), output_targets) if inputs_file else {}
+    extra = inputs_job(settings.inputs_file, settings.inputs_file_named, output_targets)
     # The inputs file wins over a value bound in the workflow for the same input when the job is written.
-    jobs = (preflight.Job({key: value for key, value in bound.items() if key not in extra},
-                          settings.root_dir, 'the workflow'),
-            *((preflight.Job(extra, Path(inputs_file).parent.absolute(), settings.inputs_file_named),)
-              if inputs_file else ()))
+    jobs = (preflight.Job({key: value for key, value in bound.items() if extra is None or key not in extra.values},
+                          settings.root_dir, 'the workflow'), *((extra,) if extra else ()))
+    preflight.ready(documents, settings.run, jobs, pulling=settings.pull and not settings.check)
     if settings.check:
-        preflight.check(preflight.needs(list(documents), jobs), settings.run)
         return Prepared(artifact.name, plans, documents)
-    if settings.pull:
-        # The real-time analyses' images too: they run with --disable-pull.
-        preflight.prepare(list(documents), settings.run, jobs)
-    else:
-        preflight.check(preflight.needs(list(documents), jobs), settings.run)
     if settings.remove_entrypoints:
         artifact = post_compile.remove_artifact_entrypoints(settings.run.container_engine, artifact)
         # The images are built from the ones the pre-flight pulled, so the rewrite is written over the first write.

@@ -421,8 +421,8 @@ def test_run_writes_what_compile_returns_and_hands_the_runner_its_own_flags(monk
                          Step(clt_path=PYTHON_API / 'hinted.cwl')], 'exact')
     workflow.outputs.printed = by_file.outputs.out
     prepared: list[tuple[list[Path], preflight.RunSettings]] = []
-    monkeypatch.setattr(python_runtime.preflight, 'prepare',
-                        lambda documents, settings, jobs=(): prepared.append((documents, settings)))
+    monkeypatch.setattr(python_runtime.preflight, 'ready',
+                        lambda documents, settings, jobs=(), **_: prepared.append((documents, settings)))
     monkeypatch.setattr(sophios.post_compile.docker, 'from_env',
                         lambda: SimpleNamespace(images=SimpleNamespace(list=lambda: [])))
     for quiet, spelled in ((None, 'yes'), ('yes', 'true'), ('true', '1'), (True, 'on'), ('no', True), (False, 'yes')):

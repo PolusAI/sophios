@@ -274,7 +274,7 @@ _STARTS_AND_EXITS = '''
 import time
 from pathlib import Path
 from sophios import preflight
-preflight.prepare = lambda *_a, **_k: None
+preflight.ready = lambda *_a, **_k: None
 preflight.runner_program = lambda _name: {program!r}
 from sophios.api.python.workflow import Step, Workflow
 echo = Step(clt_path=Path({echo!r}))
