@@ -46,6 +46,7 @@ from .lang.error_codes import SophiosErrorCode
 from .lang.spans import SourceSpan
 from .nf_expr import GROOVY_IDENTIFIER, GROOVY_LITERAL, groovy_unescape, read_groovy
 from .nf_types import (
+    ABSENT_PATH_TYPES,
     NF_ENTRY_STAGING_PREFIX,
     PARAM_TYPES,
     ExecutableNextflowWorkflow,
@@ -740,7 +741,7 @@ def _written(name: str, declared: str, value: Any) -> bool:
     """Whether ``value`` is what a compile writes for a parameter of type ``declared``: a job value its coercion
     keeps as it is, and ``[]`` for an absent optional other than a File or Directory, which has no lowering.
     Compared as JSON, where an int is not the float it equals."""
-    absent = declared.endswith("?") and value == [] and declared not in ("File?", "Directory?")
+    absent = declared.endswith("?") and value == [] and declared not in ABSENT_PATH_TYPES
     try:
         kept = coerce_job_value(AuthoredName(name), PortDeclaration(PortType(declared)), None if absent else value)
     except SophiosError:
