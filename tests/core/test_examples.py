@@ -17,6 +17,7 @@ import networkx as nx
 from networkx.algorithms import isomorphism
 from mergedeep import merge, Strategy
 
+import sophios.cli
 import sophios.compiler
 import sophios.input_output
 import sophios.run_local
@@ -24,6 +25,7 @@ import sophios.utils
 from sophios.ir import frontdoor
 from sophios import backends, post_compile, preflight, realtime, run_setup, targets
 from sophios.cli import get_args
+from sophios.runners import RunSettings
 from sophios.utils_yaml import Key
 from sophios.post_compile import apply_inline_options, inline_artifact_runs
 from sophios.lang import parse
@@ -215,22 +217,19 @@ def run_workflows(
     since an artifact is named for its workflow and the weekly job runs several steps in one directory."""
     Path(basepath).mkdir(parents=True, exist_ok=True)
     compilation = _compiled(yml_path, args, registry)
-    backend = targets.backend('cwl', cwl_runner)
-    settings = preflight.RunSettings(args.container_engine, args.pull_dir, ignore_install=args.ignore_docker_install,
-                                     ignore_processes=args.ignore_docker_processes, runner=cwl_runner)
+    run = sophios.cli.run_settings_from_args(argparse.Namespace(**vars(args) | {'cwl_runner': cwl_runner}), [])
+    backend = targets.backend(run.runner)
     # As the CLI prepares it: a relative path is read beside the workflow. The pull lane pulls; the run
     # lanes run on the images it pulled.
     # The view is read from the compiled tree, before the inline flags reshape it.
     lowered = targets.target('cwl').lower(compilation, sophios.compiler.resolved_view(compilation))
     lowered = replace(lowered, model=_inlined(lowered.model, args))
     prepared = backend.prepare(lowered, (), Path(basepath), run_setup.Settings(
-        settings, Path(args.yaml).parent.absolute(), args.inputs_file, pull=docker_pull_only,
-        remove_entrypoints=args.docker_remove_entrypoints))
+        run, Path(args.yaml).parent.absolute(), pull=docker_pull_only))
     if docker_pull_only:
         return
     # NOTE: Do not use --cachedir; we want to actually test everything.
-    retval = sophios.run_local.run(backends.RunRequest(prepared.name, Path(basepath), runner=cwl_runner,
-                                                       container_engine=args.container_engine))
+    retval = sophios.run_local.run(backends.RunRequest(prepared.name, Path(basepath), RunSettings(run.runner)))
     assert retval == 0, retval
 
 

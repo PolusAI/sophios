@@ -12,6 +12,7 @@ import sophios.cli
 import sophios.compiler
 import sophios.drawing
 import sophios.main
+from sophios.runners import Cwltool, Nextflow, RunSettings, Toil
 from sophios.wic_types import GraphSettings
 
 from .cases import DATA
@@ -110,3 +111,20 @@ def test_every_setting_reaches_the_compiler(monkeypatch: pytest.MonkeyPatch) -> 
             f'--{name} was set on the command line but {_RECEIVERS[index][1]} received '
             f'{value!r} instead of {expected!r}'
         )
+
+
+@pytest.mark.fast
+def test_the_command_line_builds_the_run_python_spells() -> None:
+    """The command line's options for a run are the one value `run()`'s keywords spell."""
+    def run(*flags: str) -> RunSettings:
+        return sophios.cli.run_settings_from_args(*sophios.cli.parser.parse_known_args(['--yaml', 'w.wic', *flags]))
+    assert run('--quiet', '--cwl_runner', 'toil-cwl-runner', '--container_engine', 'podman', '--no_provenance',
+               '--outdir', 'out', '--inputs_file', 'job.yml', '--generate_run_script', '--passthrough_flags', 'yes',
+               '--batchSystem', 'slurm', '--cachedir', 'cache') == RunSettings(
+        Toil('--batchSystem', 'slurm', container_engine='podman', provenance=False), 'out', 'job.yml', True, True)
+    assert run('--quiet', '--cachedir', 'cache', '--docker_remove_entrypoints', '--ignore_docker_install',
+               '--ignore_docker_processes', '--passthrough_flags', 'yes', '--logLevel', 'INFO') == RunSettings(
+        Cwltool('--logLevel', 'INFO', cachedir='cache', remove_entrypoints=True, ignore_install=True,
+                ignore_processes=True), quiet=True)
+    assert run('--target', 'nextflow', '--run_local', '--passthrough_flags', 'yes', '-resume') == RunSettings(
+        Nextflow('-resume'), '', '', False, False)

@@ -1,4 +1,4 @@
-"""`--quiet` and `run(run_args_dict={'quiet': ...})` hide cwltool's own log and nothing else: the compiled CWL is
+"""`--quiet` and `run(quiet=...)` hide cwltool's own log and nothing else: the compiled CWL is
 unchanged, each tool's messages print as the run goes, and a failed step is named with how it ended. The project is
 tests/core/data/quiet."""
 import shlex
@@ -10,6 +10,7 @@ import pytest
 import yaml
 
 from sophios import run_local
+from sophios.runners import named
 from sophios.api.python.workflow import Step, Workflow
 
 from .cases import DATA
@@ -60,8 +61,7 @@ def test_quiet_changes_only_what_cwltool_is_told(project: Path, monkeypatch: pyt
             assert run_cli(monkeypatch, '--yaml', 'w.wic', '--config_file', 'config.json', mode, *flags,
                            '--cwl_runner', runner, '--basepath', f'{base}_{quiet}') is None
         workflow = Workflow([say, own, inline], 'w')
-        workflow.run(basepath=f'py_{quiet}', run_args_dict={'generate_run_script': 'yes', 'cwl_runner': runner,
-                                                            'quiet': 'yes' if quiet else 'no'})
+        workflow.run(basepath=f'py_{quiet}', runner=named('cwl', runner)(), generate_run_script=True, quiet=quiet)
         assert _read(project / f'py_{quiet}' / 'w.cwl') == workflow.compile().cwl_workflow
         assert {address: tool.get('stdout') for address, tool in _tools(_read(project / f'py_{quiet}' / 'w.cwl'))} \
             == {'say': None, 'own': 'own.txt', 'inline': None}

@@ -80,11 +80,15 @@ def live_workflow(name: str, cwl_tool: str = 'touch', config: Any = None) -> Wor
 
 
 def no_preflight(monkeypatch: pytest.MonkeyPatch) -> list[list[Path]]:
-    """Replace the container-engine preflight with a recorder of the documents it was asked to prepare."""
+    """Replace the container-engine pull of a run with a recorder of the documents it was asked to prepare."""
     prepared: list[list[Path]] = []
+    ready = sophios.preflight.ready
 
-    def recorder(documents: Iterable[Path], *_settings_and_jobs: Any, **_: Any) -> None:
-        prepared.append(list(documents))
+    def recorder(documents: Iterable[Path], *run_and_jobs: Any, pulling: bool = True) -> None:
+        if pulling:
+            prepared.append(list(documents))
+        else:
+            ready(list(documents), *run_and_jobs, pulling=False)
 
     monkeypatch.setattr(sophios.preflight, 'ready', recorder)
     return prepared

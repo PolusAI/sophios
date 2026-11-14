@@ -60,19 +60,21 @@ def _provoke_script_argument_mismatch() -> None:
 
 def _provoke_container_engine_unavailable() -> None:
     from sophios import preflight
+    from sophios.runners import Cwltool, RunSettings
 
     tool = Path(__file__).resolve().parents[2] / 'cwl_adapters' / 'touch.cwl'
     with tempfile.TemporaryDirectory() as root, \
             mock.patch.object(preflight.sub, 'run', side_effect=FileNotFoundError('docker')):
-        preflight.check(preflight.needs([tool]), preflight.RunSettings('docker', root))
+        preflight.check(preflight.needs([tool]), RunSettings(Cwltool()))
 
 
 def _provoke_missing_input_file() -> None:
     from sophios import preflight
+    from sophios.runners import Cwltool, RunSettings
 
     with tempfile.TemporaryDirectory() as root:
         job = preflight.Job({'f': {'class': 'File', 'location': 'definitely_absent.txt'}}, Path(root), 'the workflow')
-        preflight.check(preflight.Needs((Path(root) / 'none.cwl',), (), (job,)), preflight.RunSettings('docker', root))
+        preflight.check(preflight.Needs((Path(root) / 'none.cwl',), (), (job,)), RunSettings(Cwltool()))
 
 
 def _provoke_directory_not_writable() -> None:
@@ -218,21 +220,23 @@ def _provoke_no_python_spelling() -> None:
 
 def _provoke_program_missing() -> None:
     from sophios import preflight
+    from sophios.runners import Cwltool, RunSettings
 
     with tempfile.TemporaryDirectory() as root, mock.patch.object(preflight.shutil, 'which', return_value=None):
         preflight.check(preflight.Needs((Path(root) / 'none.cwl',), ()),
-                        preflight.RunSettings('docker', root, run_script=True))
+                        RunSettings(Cwltool(), generate_run_script=True))
 
 
 def _provoke_image_unavailable() -> None:
     from cwl_utils.parser.cwl_v1_2 import DockerRequirement
 
     from sophios import preflight
+    from sophios.runners import Cwltool, RunSettings
 
     failed = subprocess.CompletedProcess([], 1, stderr='pull access denied')
     with mock.patch.object(preflight.sub, 'run', return_value=failed):
         preflight.pull(preflight.Needs((Path('w.cwl'),), (DockerRequirement(dockerPull='x/y:1'),)),
-                       preflight.RunSettings('docker', '.'))
+                       RunSettings(Cwltool(pull_dir='.')))
 
 
 def _provoke_unchecked_cuda_field() -> None:
