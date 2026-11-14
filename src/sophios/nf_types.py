@@ -1,6 +1,6 @@
 """Validated executable intermediate-representation types for Nextflow DSL2."""
 
-from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence, Sized
 from dataclasses import dataclass, field, fields, replace
 from graphlib import CycleError, TopologicalSorter
 import json
@@ -235,6 +235,17 @@ class NfTemplate(_Model):
         object.__setattr__(self, "segments", tuple(canonical))
 
 
+def blank_prefix(prefix: object) -> bool:
+    """Whether `prefix` is not the non-blank text a binding's prefix is: cwltool skips a blank one."""
+    return not isinstance(prefix, str) or not prefix.strip()
+
+
+def lacks_prefix(prefix: str | None, separate: bool | None) -> bool:
+    """Whether a binding has `separate` false and no prefix: false joins the prefix to the value, and cwltool
+    refuses it whatever the type."""
+    return separate is False and prefix is None
+
+
 @dataclass(frozen=True, slots=True)
 class NfFlag(_Model):
     """Conditional command-line flag contributed by a boolean input.
@@ -248,7 +259,7 @@ class NfFlag(_Model):
 
     def __post_init__(self) -> None:
         _validate_ir_identifier(self.name, field_name="flag input reference")
-        if not isinstance(self.prefix, str) or not self.prefix.strip():
+        if blank_prefix(self.prefix):
             raise ValueError("flag prefix must be a non-empty string")
 
 
@@ -268,7 +279,7 @@ class NfArrayBinding(_Model):
 
     def __post_init__(self) -> None:
         _validate_ir_identifier(self.name, field_name="array binding input reference")
-        if self.prefix is not None and (not isinstance(self.prefix, str) or not self.prefix.strip()):
+        if self.prefix is not None and blank_prefix(self.prefix):
             raise ValueError("array binding prefix must be a non-empty string or None")
 
 
@@ -289,11 +300,11 @@ class NfOptionalBinding(_Model):
 
     def __post_init__(self) -> None:
         _validate_ir_identifier(self.name, field_name="optional binding input reference")
-        if self.prefix is not None and (not isinstance(self.prefix, str) or not self.prefix.strip()):
+        if self.prefix is not None and blank_prefix(self.prefix):
             raise ValueError("optional binding prefix must be a non-empty string or None")
         if not isinstance(self.separate, bool):
             raise TypeError("optional binding separate must be a bool")
-        if not self.separate and self.prefix is None:
+        if lacks_prefix(self.prefix, self.separate):
             raise ValueError("an optional binding with separate false needs a prefix")
 
 
@@ -436,6 +447,17 @@ class NfResources(_Model):
 
 
 GLOB_WILDCARDS = frozenset("*?[")
+
+
+def wildcard_problem(glob: str) -> str | None:
+    """Why a capture marker cannot take this glob: a wildcard makes the match set larger than one."""
+    if wildcards := sorted(GLOB_WILDCARDS.intersection(glob)):
+        return (f"a capture requires a glob with no wildcard character, but {glob!r} contains "
+                f"{', '.join(repr(character) for character in wildcards)}; projecting the first match would make "
+                "CWL and Nextflow glob match ordering load-bearing, which is unproven")
+    return None
+
+
 # CWL glob metacharacters; a CWL glob has no brace expansion.
 _GLOB_METACHARACTERS = frozenset("*?[]")
 
@@ -649,11 +671,8 @@ class NfPort(_Model):  # pylint: disable=too-many-instance-attributes
                     raise ValueError(
                         "a capture marker requires a single-literal glob with no input reference"
                     )
-            if wildcards := sorted(GLOB_WILDCARDS.intersection(literal.value)):
-                raise ValueError(
-                    "a capture marker requires a glob with no wildcard character; "
-                    f"found {', '.join(repr(character) for character in wildcards)}"
-                )
+            if problem := wildcard_problem(literal.value):
+                raise ValueError(problem)
 
     @property
     def literal_glob(self) -> bool:
@@ -1003,8 +1022,8 @@ class NfStepInputConnection(_Model):
 
     @property
     def gives_list(self) -> bool:
-        """Whether the idioms give a list: every linkMerge does, unless a pickValue picks one value."""
-        return self.pick_value not in PICKS_ONE
+        """Whether the idioms give a list."""
+        return gives_list(self.pick_value)
 
 
 #: A connection into a process input.
@@ -1155,12 +1174,32 @@ def topological_order(
     return ordered
 
 
+#: The parameter types whose absent value has no lowering: no path parameter takes the `[]` sentinel.
+ABSENT_PATH_TYPES: Final = ("File?", "Directory?")
+
+
+def gives_list(pick_value: object) -> bool:
+    """Whether a step input's idioms give a list: every linkMerge does, unless a pickValue picks one value."""
+    return pick_value not in PICKS_ONE
+
+
+def merge_of(link_merge: _T | None, sources: Sized) -> _T | str | None:
+    """How a step input's sources are joined: as written, and as `merge_nested` where several are given no way."""
+    return link_merge if link_merge is not None else ("merge_nested" if len(sources) > 1 else None)
+
+
+def text_stays_out(capture: str | None, conditional: bool) -> bool:
+    """Whether an output's captured file text may reach only a workflow output: it may, as a conditional step's,
+    reach a later step (design §6, Topology)."""
+    return capture == "text" and not conditional
+
+
 def absent_path_problems(params: Mapping[str, Any], param_types: Mapping[str, str]) -> list[str]:
     """Each parameter that holds the absent sentinel for a File? or a Directory?: no path parameter has a lowering of an
     absent value."""
     return [f"workflow input {name!r} is an absent optional {declared}, which has no lowering; give it a value"
             for name, declared in sorted(param_types.items())
-            if declared in ("File?", "Directory?") and isinstance(params.get(name), (list, tuple)) and not params[name]]
+            if declared in ABSENT_PATH_TYPES and isinstance(params.get(name), (list, tuple)) and not params[name]]
 
 
 def optional_output_problems(processes: Sequence[NfProcess], connections: Sequence["NfConnection"]) -> list[str]:
@@ -1383,7 +1422,7 @@ class ExecutableNextflowWorkflow(_Model):
                                 and (to_process, to_port) not in carried:
                             raise ValueError(f"{where} joins a {source.path_kind or 'value'} output to a "
                                              f"{destination.path_kind or 'value'} input")
-                        if source.capture == "text" and process_by_name[from_process].condition is None:
+                        if text_stays_out(source.capture, process_by_name[from_process].condition is not None):
                             # The qualifier axis still has no general agreement
                             # check for process edges, because every process
                             # output carried the path qualifier until this one; a

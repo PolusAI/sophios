@@ -23,7 +23,7 @@ from .ir.resolved import (
 )
 from .ir.types import AuthoredName, PortDeclaration, PortType
 from .lang.cwl import (
-    LINK_MERGES, PICK_VALUES, PICKS_ONE, SCATTER_METHODS, Process, Written, canonical, fields_set, inherited,
+    LINK_MERGES, PICK_VALUES, SCATTER_METHODS, Process, Written, canonical, fields_set, inherited,
     ports_named, required, requirement as requirement_of,
 )
 from .lang.diagnostics import Diagnostic, Locator, Severity, SophiosError
@@ -33,7 +33,6 @@ from .nf_support import FIELDS, REQUIREMENT_CLASSES, Row, consumed
 from .nf_symbols import normalize_nextflow_identifier
 from .nf_types import (
     ExecutableNextflowWorkflow,
-    GLOB_WILDCARDS,
     PATH_KINDS,
     NF_INTERNAL_IDENTIFIERS,
     PARAM_TYPES,
@@ -60,22 +59,28 @@ from .nf_types import (
     NfWorkflowOutputConnection,
     ARRAY_REFERENCE,
     absent_path_problems,
+    blank_prefix,
     condition_without_inputs,
     endpoint_problems,
     incoming_connections,
     inputs_read,
     entryname_problem,
     environment_name_problem,
+    gives_list,
     json_value_problem,
+    lacks_prefix,
     link_refusal,
     linked_reference,
     literal_problem,
+    merge_of,
     optional_output_problems,
     process_dependencies,
     reference_problems,
     staged_write_problems,
     template_segments,
+    text_stays_out,
     topological_order,
+    wildcard_problem,
     with_scalar_types,
 )
 from .wic_types import Tool
@@ -117,9 +122,11 @@ def _computed_or_invalid(value: Any, computed: SophiosErrorCode) -> SophiosError
 
 def _prefix(raw_name: Any, binding: standard.CommandLineBinding) -> str | None:
     """A binding's prefix, or None for none: text that is not empty or blank, which cwltool skips."""
-    if binding.prefix is not None and not binding.prefix.strip():
+    if binding.prefix is not None and blank_prefix(binding.prefix):
         raise _Unsupported(SophiosErrorCode.NF_EMPTY_PREFIX,
                            f"CWL command prefix for {raw_name!r} must be a non-empty string")
+    if lacks_prefix(binding.prefix, binding.separate):
+        raise _Unsupported(SophiosErrorCode.NF_INVALID_CWL, "CWL separate cannot be specified without a prefix")
     return binding.prefix
 
 
@@ -377,11 +384,10 @@ def _position(value: int | str | None, *, default: int) -> int:
 
 
 def _binding_tokens(prefix: str | None, value: NfTemplate, *, separate: bool | None) -> tuple[NfTemplate, ...]:
+    if lacks_prefix(prefix, separate):
+        raise _Unsupported(SophiosErrorCode.NF_INVALID_CWL, "CWL separate cannot be specified without a prefix")
     match prefix:
         case None:
-            if separate is False:
-                # cwltool raises for separate without prefix, type-independently.
-                raise _Unsupported(SophiosErrorCode.NF_INVALID_CWL, "CWL separate cannot be specified without a prefix")
             return (value,)
         case str() as text:
             prefix_template = NfTemplate((_literal(text),))
@@ -415,7 +421,7 @@ def _shell_literal_value(
             SophiosErrorCode.NF_SHELL_QUOTE, f"shellQuote false for {raw_name!r} does not support a prefix; "
             "the raw literal must be the binding's whole value"
         )
-    if binding.separate is False:
+    if lacks_prefix(binding.prefix, binding.separate):
         raise _Unsupported(SophiosErrorCode.NF_INVALID_CWL, "CWL separate cannot be specified without a prefix")
     value_from = binding.valueFrom
     if value_from is None:
@@ -539,10 +545,7 @@ _OPTIONAL_BINDING_TYPES = frozenset({"string", "int", "float"})
 
 def _optional_binding(raw_name: Any, name: str, binding: standard.CommandLineBinding) -> NfOptionalBinding:
     """Lower an optional string, int or float input's own binding: nothing when the input is absent."""
-    prefix, separate = _prefix(raw_name, binding), binding.separate is not False
-    if prefix is None and not separate:
-        raise _Unsupported(SophiosErrorCode.NF_INVALID_CWL, "CWL separate cannot be specified without a prefix")
-    return NfOptionalBinding(name, prefix, separate)
+    return NfOptionalBinding(name, _prefix(raw_name, binding), binding.separate is not False)
 
 
 _IWDR_ENTRY_PATTERN = re.compile(r"^\$\(\s*inputs\.([A-Za-z_][A-Za-z0-9_]*)\s*\)$")
@@ -728,10 +731,7 @@ def _input_binding_items(
             # binding already carries, so it renders identically.
             if value_from is not None:
                 _boolean_flag_reference(raw_name, name, value_from)
-            prefix = _prefix(raw_name, binding)
-            if prefix is None and binding.separate is False:
-                raise _Unsupported(SophiosErrorCode.NF_INVALID_CWL, "CWL separate cannot be specified without a prefix")
-            tokens = _flag_tokens(name, prefix)
+            tokens = _flag_tokens(name, _prefix(raw_name, binding))
         elif flag := _boolean_value_from(value_from, tool):
             if optional:
                 # CWL omits the whole binding for an absent input; a flag renders whatever it is.
@@ -1068,13 +1068,8 @@ def _output_capture(raw_name: Any, port: standard.CommandOutputParameter) -> str
             SophiosErrorCode.NF_CAPTURE, f"outputEval {text!r} requires a glob with no input reference; a "
             "reference's runtime value cannot be shown wildcard-free at compile time"
         )
-    if wildcards := sorted(GLOB_WILDCARDS.intersection(literal)):
-        found = ", ".join(repr(character) for character in wildcards)
-        raise _Unsupported(
-            SophiosErrorCode.NF_CAPTURE, f"outputEval {text!r} requires a glob with no wildcard character, but "
-            f"{literal!r} contains {found}; projecting the first match would make "
-            "CWL and Nextflow glob match ordering load-bearing, which is unproven"
-        )
+    if problem := wildcard_problem(literal):
+        raise _Unsupported(SophiosErrorCode.NF_CAPTURE, f"outputEval {text!r}: {problem}")
     return capture
 
 
@@ -1931,7 +1926,7 @@ def _step_input_findings(workflow: ResolvedWorkflow, steps: tuple[_Step, ...]) -
         if port.name in step.scattered:
             yield SophiosErrorCode.NF_SCATTER_SOURCE, "", "a scattered input takes its one source as it is"
             return
-        merges = link_merge if link_merge is not None else ("merge_nested" if len(sources) > 1 else None)
+        merges = merge_of(link_merge, sources)
         if link_merge is not None and link_merge not in LINK_MERGES:
             yield SophiosErrorCode.NF_INVALID_CWL, ".linkMerge", f"unsupported linkMerge {link_merge!r}"
             return
@@ -1969,9 +1964,9 @@ def _step_input_findings(workflow: ResolvedWorkflow, steps: tuple[_Step, ...]) -
         if merges is not None and pick_value is None and (nullable := [s for s in sources if may_be_null(s)]):
             yield (SophiosErrorCode.NF_JOIN, "", f"{nullable[0]!r} may be null, and a joined list has no lowering of "
                    "a null element; pick from it with pickValue")
-        gives_list = pick_value not in PICKS_ONE
-        if merges is not None and port.declared is not None and gives_list != _lists(declared_type):
-            yield (SophiosErrorCode.NF_JOIN, "", f"the step input gives {'a list' if gives_list else 'one value'}, "
+        gives = gives_list(pick_value)
+        if merges is not None and port.declared is not None and gives != _lists(declared_type):
+            yield (SophiosErrorCode.NF_JOIN, "", f"the step input gives {'a list' if gives else 'one value'}, "
                    f"but its tool input declares {declared_type!r}")
 
     return [_Finding(code, f".in.{port.name}{field}", text, step.node)
@@ -2134,17 +2129,13 @@ def _text_capture_endpoints(steps: tuple[_Step, ...]) -> set[str]:
     """Every ``<step>/<port>`` source that captures file text."""
     endpoints: set[str] = set()
     for step in steps:
-        if step.node.condition is not None:
-            # A conditional step's captured-text output is the one proven exception (design §6, Topology):
-            # _conditional_consumer_findings already governs its downstream sinks with the admission rules a
-            # possibly-null value requires.
-            continue
         for raw_port, produced in step.tool.outputs.items():
             try:
                 capture = _output_capture(raw_port, produced)
             except ValueError:
                 continue
-            if capture == "text":
+            # A conditional step's is the exception: _conditional_consumer_findings governs its downstream sinks.
+            if text_stays_out(capture, step.node.condition is not None):
                 endpoints.add(f"{step.node.name}/{raw_port}")
     return endpoints
 
@@ -2169,7 +2160,7 @@ def _literal_outputs(tool: _Tool) -> dict[str, str]:
     names: dict[str, str] = {}
     for raw_port, port in tool.outputs.items():
         glob = _literal_text(port.outputBinding.glob) if port.outputBinding is not None else None
-        if glob and not GLOB_WILDCARDS & set(glob):
+        if glob and not wildcard_problem(glob):
             names[raw_port] = glob
     return names
 
@@ -2377,8 +2368,7 @@ def _step_connections(
                         (scatter_method if destination_port in scattered else "gather") if gathers else None,
                     ))
             # Capability analysis admitted only the step inputs the idioms lower.
-            link_merge = port.link_merge if port.link_merge is not None else (
-                "merge_nested" if len(sources) > 1 else None)
+            link_merge = merge_of(port.link_merge, sources)
             pick_value = port.pick_value
             if sources and port.has_default:
                 # The default takes the place of a null source: the first value that is not null.
