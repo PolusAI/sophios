@@ -227,6 +227,23 @@ class StepKey:
 
 
 @dataclass(frozen=True, slots=True)
+class GraphvizEntry:
+    """A `wic: graphviz:` mapping as the parser admits it (`Grammar.SIDECAR_VALUES`): a cluster's or box's label and
+    style, and the steps that share a rank (None when the mapping has no `ranksame:`). A `ranksame` entry that is
+    no step key was refused when parsing."""
+
+    label: str | None = None
+    style: str | None = None
+    ranksame: tuple[StepKey, ...] | None = None
+
+    def merged_over(self, own: 'GraphvizEntry') -> 'GraphvizEntry':
+        """`own` with what this entry says over it, key by key."""
+        return GraphvizEntry(self.label if self.label is not None else own.label,
+                             self.style if self.style is not None else own.style,
+                             self.ranksame if self.ranksame is not None else own.ranksame)
+
+
+@dataclass(frozen=True, slots=True)
 class WicSidecar:
     """The `wic:` metadata block.
 
@@ -241,6 +258,8 @@ class WicSidecar:
     #: the bodies stay in `entries` and are spelled from there, so rendering
     #: is unchanged.
     implementations: tuple[tuple[str, 'Document'], ...] = surface(Shape.INTERNAL, default=())
+    #: The `graphviz` entry, read once by the parser; it stays in `entries` too, from which it is spelled.
+    graphviz: GraphvizEntry = surface(Shape.INTERNAL, default=GraphvizEntry())
     span: SourceSpan | None = surface(Shape.INTERNAL, default=None)
 
 

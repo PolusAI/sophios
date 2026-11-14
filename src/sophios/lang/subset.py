@@ -11,7 +11,7 @@ Nextflow target's Groovy rendering and reading are ``sophios.nf_expr``.
 from dataclasses import dataclass
 import math
 import re
-from typing import Any, Mapping
+from typing import Mapping, TypeAlias
 
 NUMBER = "number"
 BOOLEAN = "boolean"
@@ -59,21 +59,76 @@ _TOKEN = re.compile(
 
 
 @dataclass(frozen=True, slots=True)
-class Expr:
-    """One typed node: ``op`` is a literal tag, ``ref``, an operator, or a call."""
+class Number:
+    """A number literal, kept as written: the text is checked to be a finite strict-mode decimal."""
+
+    text: str
+
+    def to_dict(self) -> dict[str, object]:
+        """The node as JSON."""
+        return {"op": "number", "value": self.text}
+
+
+@dataclass(frozen=True, slots=True)
+class Text:
+    """A string literal."""
+
+    value: str
+
+    def to_dict(self) -> dict[str, object]:
+        """The node as JSON."""
+        return {"op": "string", "value": self.value}
+
+
+@dataclass(frozen=True, slots=True)
+class Boolean:
+    """``true`` or ``false``."""
+
+    value: bool
+
+    def to_dict(self) -> dict[str, object]:
+        """The node as JSON."""
+        return {"op": "boolean", "value": self.value}
+
+
+@dataclass(frozen=True, slots=True)
+class Null:
+    """``null``."""
+
+    def to_dict(self) -> dict[str, object]:
+        """The node as JSON."""
+        return {"op": "null"}
+
+
+@dataclass(frozen=True, slots=True)
+class Ref:
+    """``inputs.<name>``."""
+
+    name: str
+
+    def to_dict(self) -> dict[str, object]:
+        """The node as JSON."""
+        return {"op": "ref", "value": self.name}
+
+
+@dataclass(frozen=True, slots=True)
+class Op:
+    """An operator or a call applied to its arguments: ``op`` is the operator, or ``u`` and the operator of a
+    unary one, or the call's name."""
 
     op: str
     args: tuple["Expr", ...] = ()
-    value: Any = None
 
     def to_dict(self) -> dict[str, object]:
-        """Serialize the node and its arguments, with a literal's or reference's value."""
+        """The node and its arguments as JSON."""
         item: dict[str, object] = {"op": self.op}
         if self.args:
             item["args"] = [arg.to_dict() for arg in self.args]
-        if self.op in {"number", "string", "boolean", "ref"}:
-            item["value"] = self.value
         return item
+
+
+#: One typed node of the subset.
+Expr: TypeAlias = Number | Text | Boolean | Null | Ref | Op
 
 
 def is_safe_subset_text(value: object) -> bool:
@@ -145,13 +200,13 @@ class _Parser:
         node = self.binary(level + 1)
         while (current := self.peek()) is not None and current[0] == "op" and current[1] in _BINARY_LEVELS[level]:
             self.index += 1
-            node = Expr(current[1], (node, self.binary(level + 1)))
+            node = Op(current[1], (node, self.binary(level + 1)))
         return node
 
     def unary(self) -> Expr:
         if (current := self.peek()) is not None and current[0] == "op" and current[1] in _UNARY:
             self.index += 1
-            return Expr(f"u{current[1]}", (self.unary(),))
+            return Op(f"u{current[1]}", (self.unary(),))
         return self.primary()
 
     def primary(self) -> Expr:
@@ -162,9 +217,9 @@ class _Parser:
         self.index += 1
         match kind:
             case "number":
-                return Expr("number", value=text)
+                return Number(text)
             case "string":
-                return Expr("string", value=text[1:-1])
+                return Text(text[1:-1])
             case "name":
                 return self.name(text)
             case "op" if text == "(":
@@ -176,18 +231,18 @@ class _Parser:
     def name(self, text: str) -> Expr:
         match text.split("."):
             case ["true"] | ["false"]:
-                return Expr("boolean", value=text == "true")
+                return Boolean(text == "true")
             case ["null"]:
-                return Expr("null")
+                return Null()
             case ["inputs", name]:
-                return Expr("ref", value=name)
+                return Ref(name)
             case _ if text in CALLS:
                 self.expect("(")
                 args = [self.binary(0)]
                 while self.take(","):
                     args.append(self.binary(0))
                 self.expect(")")
-                return Expr(text, tuple(args))
+                return Op(text, tuple(args))
         raise ValueError(f"unsupported construct {text!r}")
 
 
@@ -199,12 +254,12 @@ def parse(text: str) -> Expr:
     return _Parser(match.group("body")).parse()
 
 
-def _number_literal(value: object) -> None:
+def _number_literal(text: str) -> None:
     """Reject a number literal that is not a finite strict-mode decimal."""
-    if not isinstance(value, str) or _NUMBER.fullmatch(value) is None:
-        raise ValueError(f"number literal {value!r} is not a strict-mode decimal")
-    if not math.isfinite(float(value)):
-        raise ValueError(f"number literal {value} is not finite")
+    if _NUMBER.fullmatch(text) is None:
+        raise ValueError(f"number literal {text!r} is not a strict-mode decimal")
+    if not math.isfinite(float(text)):
+        raise ValueError(f"number literal {text} is not finite")
 
 
 def _call_arity(call: str, args: tuple[Expr, ...]) -> None:
@@ -214,6 +269,9 @@ def _call_arity(call: str, args: tuple[Expr, ...]) -> None:
         raise ValueError(f"{call} takes {abs(arity)}{' or more' if arity < 0 else ''} arguments")
 
 
+_LITERAL_TYPES = {Text: STRING, Boolean: BOOLEAN, Null: NULL}
+
+
 def check(node: Expr, input_types: Mapping[str, object]) -> str:
     """Return the node's subset type, or raise naming the ill-typed construct.
 
@@ -221,39 +279,40 @@ def check(node: Expr, input_types: Mapping[str, object]) -> str:
     input may appear only beside ``null`` in an equality, because
     JavaScript arithmetic would coerce its absence to 0.
     """
-    match node.op:
-        case "number":
-            _number_literal(node.value)
+    match node:
+        case Number(text=text):
+            _number_literal(text)
             return NUMBER
-        case "string" | "boolean" | "null":
-            return node.op
-        case "ref":
-            declared = input_types.get(node.value)
-            if node.value not in input_types:
-                raise ValueError(f"inputs.{node.value} is not an input of this tool")
+        case Text() | Boolean() | Null():
+            return _LITERAL_TYPES[type(node)]
+        case Ref(name=name):
+            declared = input_types.get(name)
+            if name not in input_types:
+                raise ValueError(f"inputs.{name} is not an input of this tool")
             if _optional_scalar(declared) is not None:
-                raise ValueError(f"optional inputs.{node.value} may only be compared with null")
+                raise ValueError(f"optional inputs.{name} may only be compared with null")
             if not isinstance(declared, str) or declared not in _SCALAR_TYPES:
-                raise ValueError(f"inputs.{node.value} has type {declared!r}; only scalar inputs are admitted")
+                raise ValueError(f"inputs.{name} has type {declared!r}; only scalar inputs are admitted")
             return _SCALAR_TYPES[declared]
-        case "==" | "!=" | "===" | "!==":
-            left, right = (_equality_operand(child, input_types) for child in node.args)
+        case Op(op="==" | "!=" | "===" | "!==" as op, args=args):
+            left, right = (_equality_operand(child, input_types) for child in args)
             if NULL in (left, right):
                 if {left, right} != {NULL, "optional"}:
-                    raise ValueError(f"{node.op} with null requires an optional input on the other side")
+                    raise ValueError(f"{op} with null requires an optional input on the other side")
                 return BOOLEAN
             if left != right or "optional" in (left, right):
-                raise ValueError(f"{node.op} requires two operands of the same type, not {left} and {right}")
+                raise ValueError(f"{op} requires two operands of the same type, not {left} and {right}")
             return BOOLEAN
-        case op if op in _SIGNATURES:
+        case Op(op=op, args=args) if op in _SIGNATURES:
             if op in CALLS:
-                _call_arity(op, node.args)
+                _call_arity(op, args)
             expected, result = _SIGNATURES[op]
-            for child in node.args:
+            for child in args:
                 if (actual := check(child, input_types)) != expected:
                     raise ValueError(f"{op.removeprefix('u')} requires {expected} operands, not {actual}")
             return result
-    raise ValueError(f"unsupported construct {node.op!r}")
+        case Op(op=op):
+            raise ValueError(f"unsupported construct {op!r}")
 
 
 def _optional_scalar(declared: object) -> str | None:
@@ -267,7 +326,7 @@ def _optional_scalar(declared: object) -> str | None:
 
 
 def _equality_operand(node: Expr, input_types: Mapping[str, object]) -> str:
-    if node.op == "ref" and _optional_scalar(input_types.get(node.value)) is not None:
+    if isinstance(node, Ref) and _optional_scalar(input_types.get(node.name)) is not None:
         return "optional"
     return check(node, input_types)
 
@@ -280,49 +339,42 @@ def validate(node: Expr) -> None:
     process re-checks each operator against the closed set, each arity, and
     each literal.
     """
-    match node.op:
-        case "number":
-            _number_literal(node.value)
-            if node.args:
-                raise ValueError("a number literal takes no arguments")
-        case "string":
-            if not isinstance(node.value, str) or not re.fullmatch(r"[ -~]*", node.value) or "\\" in node.value:
-                raise ValueError(f"string literal {node.value!r} is outside the admitted alphabet")
-            if node.args:
-                raise ValueError("a string literal takes no arguments")
-        case "boolean":
-            if not isinstance(node.value, bool):
-                raise ValueError("a boolean literal must be true or false")
-            if node.args:
-                raise ValueError("a boolean literal takes no arguments")
-        case "null":
-            if node.args or node.value is not None:
-                raise ValueError("null takes no arguments and no value")
-        case "ref":
-            if not isinstance(node.value, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", node.value):
-                raise ValueError(f"input reference {node.value!r} is not an identifier")
-            if node.args:
-                raise ValueError("an input reference takes no arguments")
-        case "u!" | "u-" | "u+":
-            if len(node.args) != 1:
-                raise ValueError(f"{node.op[1]} takes one operand")
-        case op if op in _BINARY:
-            if len(node.args) != 2:
+    match node:
+        case Number(text=text):
+            _number_literal(text)
+        case Text(value=value):
+            if not re.fullmatch(r"[ -~]*", value) or "\\" in value:
+                raise ValueError(f"string literal {value!r} is outside the admitted alphabet")
+        case Boolean(value=bool()) | Null():
+            pass
+        case Boolean(value=value):
+            raise ValueError(f"a boolean literal must be true or false, not {value!r}")
+        case Ref(name=name):
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
+                raise ValueError(f"input reference {name!r} is not an identifier")
+        case Op(op="u!" | "u-" | "u+" as op, args=args):
+            if len(args) != 1:
+                raise ValueError(f"{op[1]} takes one operand")
+        case Op(op=op, args=args) if op in _BINARY:
+            if len(args) != 2:
                 raise ValueError(f"{op} takes two operands")
-        case call if call in CALLS:
-            _call_arity(call, node.args)
-        case _:
-            raise ValueError(f"unsupported construct {node.op!r}")
-    for arg in node.args:
-        validate(arg)
+        case Op(op=call, args=args) if call in CALLS:
+            _call_arity(call, args)
+        case Op(op=op):
+            raise ValueError(f"unsupported construct {op!r}")
+    if isinstance(node, Op):
+        for arg in node.args:
+            validate(arg)
 
 
 def references(node: Expr) -> set[str]:
     """Every input name the tree reads."""
-    found = {node.value} if node.op == "ref" else set()
-    for arg in node.args:
-        found |= references(arg)
-    return found
+    match node:
+        case Ref(name=name):
+            return {name}
+        case Op(args=args):
+            return {name for arg in args for name in references(arg)}
+    return set()
 
 
 _SPELLINGS = {"===": "==", "!==": "!="}
@@ -335,34 +387,39 @@ def canonical(node: Expr) -> Expr:
     ``==`` and ``!=``, a unary ``+`` changes no number, ``null`` sits on the
     right of an equality, and ``!(x == null)`` is ``x != null``.
     """
-    args = tuple(canonical(arg) for arg in node.args)
-    op = _SPELLINGS.get(node.op, node.op)
-    if op == "u+":
-        return args[0]
-    if op in ("==", "!=") and args[0].op == "null":
-        args = (args[1], args[0])
-    if op == "u!" and args[0].op == "==" and args[0].args[1].op == "null":
-        return Expr("!=", args[0].args)
-    return Expr(op, args, node.value)
+    match node:
+        case Op(op=named, args=children):
+            args = tuple(canonical(arg) for arg in children)
+            op = _SPELLINGS.get(named, named)
+            if op == "u+":
+                return args[0]
+            if op in ("==", "!=") and isinstance(args[0], Null):
+                args = (args[1], args[0])
+            if op == "u!" and isinstance(args[0], Op) and args[0].op == "==" and isinstance(args[0].args[1], Null):
+                return Op("!=", args[0].args)
+            return Op(op, args)
+    return node
 
 
 def source_text(node: Expr) -> str:
     """Canonical JavaScript text of a node, used only in diagnostics."""
-    match node.op:
-        case "number":
-            return str(node.value)
-        case "string":
-            return repr(node.value)
-        case "boolean":
-            return "true" if node.value else "false"
-        case "null":
+    match node:
+        case Number(text=text):
+            return text
+        case Text(value=value):
+            return repr(value)
+        case Boolean(value=value):
+            return "true" if value else "false"
+        case Null():
             return "null"
-        case "ref":
-            return f"inputs.{node.value}"
-        case op if op.startswith("u"):
+        case Ref(name=name):
+            return f"inputs.{name}"
+        case Op(op=op, args=args) if op.startswith("u"):
             # A unary operand of a unary is parenthesized: `--x` is a decrement.
-            operand = source_text(node.args[0])
-            return f"{op[1]}({operand})" if node.args[0].op.startswith("u") else f"{op[1]}{operand}"
-        case op if op in CALLS:
-            return f"{op}({', '.join(source_text(arg) for arg in node.args)})"
-    return f"({source_text(node.args[0])} {node.op} {source_text(node.args[1])})"
+            operand = source_text(args[0])
+            return f"{op[1]}({operand})" if isinstance(args[0], Op) and args[0].op.startswith("u") \
+                else f"{op[1]}{operand}"
+        case Op(op=op, args=args) if op in CALLS:
+            return f"{op}({', '.join(source_text(arg) for arg in args)})"
+        case Op(op=op, args=args):
+            return f"({source_text(args[0])} {op} {source_text(args[1])})"

@@ -13,7 +13,7 @@ import pytest
 
 from sophios.api.python.workflow import CompiledWorkflow
 from sophios.input_output_nf import render_nextflow
-from sophios.lang.subset import Expr, parse
+from sophios.lang.subset import Expr, Number, Op, Ref, Text, parse
 from sophios.nf_symbols import (
     NEXTFLOW_SCRIPT_DECLARED_NAMES, NEXTFLOW_SCRIPT_NAMES, is_nextflow_identifier, normalize_nextflow_identifier,
 )
@@ -310,11 +310,11 @@ UNREPRESENTABLE: dict[str, tuple[Callable[[], Any], Any]] = {
         NfProcess, "P", [NfPort("s", "val", scalar_type="boolean?")], [], command("true"),
         condition=parse("$(inputs.s)")), "optional inputs.s may only be compared with null"),
     "NfProcess-condition-false": (partial(_conditional, False), (_EITHER, "condition must be a typed Expr")),
-    "NfProcess-condition-string": (partial(_conditional, Expr("string", value="false")),
+    "NfProcess-condition-string": (partial(_conditional, Text("false")),
                                    (_EITHER, "condition must compute a boolean")),
-    "NfProcess-condition-unknown-op": (partial(_conditional, Expr("bogus")),
+    "NfProcess-condition-unknown-op": (partial(_conditional, Op("bogus")),
                                        (_EITHER, "unsupported construct 'bogus'")),
-    "NfProcess-condition-wrong-arity": (partial(_conditional, Expr(">", (Expr("ref", value="a"),))),
+    "NfProcess-condition-wrong-arity": (partial(_conditional, Op(">", (Ref("a"),))),
                                         (_EITHER, "> takes two operands")),
     **{f"NfProcess-is-array-{value!r}": (partial(_conditional, is_array=value), (_EITHER, "is_array must be a bool"))
        for value in ("false", 0)},
@@ -604,10 +604,10 @@ CONSTRUCTIONS: dict[str, tuple[Callable[[], Any], Any]] = {
        for declared in ("File?", "Directory?")},
     # A tree built without parsing, as the import builds one, is checked when its process is built.
     **{f"condition-built-with-{name}": (partial(replace, _CONDITION, condition=replace(
-        cast(Expr, _CONDITION.condition), args=(node, *cast(Expr, _CONDITION.condition).args[1:]))), pattern)
+        cast(Op, _CONDITION.condition), args=(node, *cast(Op, _CONDITION.condition).args[1:]))), pattern)
        for name, node, pattern in (
-           ("a-call", Expr("Runtime.getRuntime().exec", (Expr("ref", value="a"),)), "unsupported construct"),
-           ("a-literal", Expr("number", value="010"), "not a strict-mode decimal"))},
+           ("a-call", Op("Runtime.getRuntime().exec", (Ref("a"),)), "unsupported construct"),
+           ("a-literal", Number("010"), "not a strict-mode decimal"))},
 }
 
 

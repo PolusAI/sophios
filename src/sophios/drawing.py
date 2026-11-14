@@ -11,7 +11,7 @@ import graphviz
 from .ir.artifacts import CompilationResult
 from .ir.frontdoor import SourceBundle
 from .ir.names import Names
-from .ir.resolve import RegistrySnapshot, called_document, graphviz_entry, ranksame, step_sidecar
+from .ir.resolve import RegistrySnapshot, called_document, graphviz_entry, step_sidecar
 from .ir.types import EdgeOrigin, Namespace, StepNode, WorkflowGraph
 from .lang import StepKey, WicSidecar
 from .wic_types import GraphSettings
@@ -92,10 +92,10 @@ def _cluster(graph: WorkflowGraph, sidecars: _Sidecars, names: Names, settings: 
     look = graphviz_entry(sidecar)
     call = graph.namespace.parts[-1] if graph.namespace.parts else None
     cluster = graphviz.Digraph(name=f'cluster_{names.qualified(call) if call else root}')
-    cluster.attr(label=look.get('label', call.name if call else root))
+    cluster.attr(label=look.label if look.label is not None else (call.name if call else root))
     cluster.attr(color='lightblue')  # color of cluster subgraph outline
-    if 'style' in look:
-        cluster.attr(style=look['style'])
+    if look.style is not None:
+        cluster.attr(style=look.style)
     for step in graph.steps:
         cluster.node(names.qualified(step.id), **_box(graph, step, sidecars, names, settings))
     _edges(cluster, graph, names, settings)
@@ -104,7 +104,7 @@ def _cluster(graph: WorkflowGraph, sidecars: _Sidecars, names: Names, settings: 
             cluster.subgraph(_cluster(child, sidecars, names, settings, root))
     authored = {StepKey(step.id.index, step.id.name): step.id for step in graph.steps if not step.synthesized}
     # An entry that addresses no step was reported when the workflow was compiled.
-    same = [f'"{names.qualified(authored[key])}"' for key in ranksame(sidecar) if key in authored]
+    same = [f'"{names.qualified(authored[key])}"' for key in look.ranksame or () if key in authored]
     if len(same) > 1:
         cluster.body.append(f'\t{{rank=same; {"; ".join(same)}}}\n')
     return cluster
@@ -120,11 +120,11 @@ def _box(graph: WorkflowGraph, step: StepNode, sidecars: _Sidecars, names: Names
     style = 'rounded'
     if graph.child(step.id) is not None:
         called = graphviz_entry(sidecars[graph.namespace.child(step.id)])
-        style += ', invis' if 'invis' in called.get('style', '') else ''
+        style += ', invis' if 'invis' in (called.style or '') else ''
     else:
         look = graphviz_entry(_entry(graph, sidecars[graph.namespace], step))
-        label = label if settings['graph_label_stepname'] else look.get('label', label)
-        style += f", {look['style']}" if 'style' in look else ''
+        label = label if settings['graph_label_stepname'] or look.label is None else look.label
+        style += f", {look.style}" if look.style is not None else ''
     return {'label': label, 'shape': 'box', 'style': style,
             'color': _foreground(settings), 'fontcolor': _foreground(settings)}
 

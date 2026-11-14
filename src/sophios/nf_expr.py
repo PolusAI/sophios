@@ -9,7 +9,7 @@ takes back exactly what the renderer writes (design §4.2).
 import re
 from typing import Mapping
 
-from .lang.subset import CALLS, Expr, canonical, source_text
+from .lang.subset import CALLS, Boolean, Expr, Null, Number, Op, Ref, Text, canonical, source_text
 
 NF_FINITE_HELPER = "__sophios_finite_9f72e"
 NF_ROUND_HELPER = "__sophios_round_9f72e"
@@ -67,23 +67,22 @@ def read_groovy(text: str, variables: Mapping[str, str]) -> Expr:
         at = found.end()
         return groovy_unescape(found.group()[1:-1])
 
-    def reference() -> Expr:
+    def reference() -> Ref:
         nonlocal at
         if (found := GROOVY_IDENTIFIER.match(text, at)) is None or found.group() not in variables:
             raise ValueError(f"expected an input at {text[at:at + 40]!r}")
         at = found.end()
-        return Expr("ref", value=variables[found.group()])
+        return Ref(variables[found.group()])
 
     def operand() -> Expr:
         nonlocal at
         if take("Double.valueOf("):
             number = literal()
             expect(")")
-            return Expr("number", value=number)
+            return Number(number)
         if text.startswith("'", at):
-            return Expr("string", value=literal())
-        for word, constant in (("true", Expr("boolean", value=True)), ("false", Expr("boolean", value=False)),
-                               ("null", Expr("null"))):
+            return Text(literal())
+        for word, constant in (("true", Boolean(True)), ("false", Boolean(False)), ("null", Null())):
             if take(word):
                 return constant
         if take(f"{NF_FINITE_HELPER}("):
@@ -103,13 +102,13 @@ def read_groovy(text: str, variables: Mapping[str, str]) -> Expr:
         if take("(!"):
             node = operand()
             expect(")")
-            return Expr("u!", (node,))
+            return Op("u!", (node,))
         if take("("):
             left = operand()
             if take(" == null || "):
                 operand()
                 expect(" == [])")
-                return Expr("==", (left, Expr("null")))
+                return Op("==", (left, Null()))
             return binary(left, _COMPARISONS)
         return reference()
 
@@ -118,7 +117,7 @@ def read_groovy(text: str, variables: Mapping[str, str]) -> Expr:
             if take(operator):
                 right = operand()
                 expect(")")
-                return Expr(operator.strip(), (left, right))
+                return Op(operator.strip(), (left, right))
         raise ValueError(f"expected an operator at {text[at:at + 40]!r}")
 
     def folded(call: str) -> list[Expr]:
@@ -137,10 +136,10 @@ def read_groovy(text: str, variables: Mapping[str, str]) -> Expr:
         if take("(-"):
             node = operand()
             expect(")")
-            return Expr("u-", (node,))
+            return Op("u-", (node,))
         for call in ("Math.min", "Math.max"):
             if text.startswith(f"{call}(", at):
-                return Expr(call, tuple(folded(call)))
+                return Op(call, tuple(folded(call)))
         for spelling, call in ((f"{NF_ROUND_HELPER}(", "Math.round"), ("StrictMath.pow(", "Math.pow"),
                                *((f"{name}(", name) for name in ("Math.abs", "Math.sqrt", "Math.floor", "Math.ceil"))):
             if take(spelling):
@@ -148,7 +147,7 @@ def read_groovy(text: str, variables: Mapping[str, str]) -> Expr:
                 while take(", "):
                     args.append(operand())
                 expect(")")
-                return Expr(call, tuple(args))
+                return Op(call, tuple(args))
         expect("(")
         return binary(operand(), (" + ", " - ", " * ", " / ", " % "))
 
@@ -166,26 +165,28 @@ def render_groovy(node: Expr, *, where: str, inputs: str, variables: Mapping[str
     and the ``inputs`` map expression. ``variables`` maps an input to the
     Groovy variable that holds it, when that is not the input's own name.
     """
-    def numeric(expression: str, child: Expr) -> str:
+    def numeric(expression: str, child: Op) -> str:
         return (
             f"{NF_FINITE_HELPER}({expression}, {groovy_literal(where)}, "
             f"{groovy_literal(source_text(child))}, {inputs})"
         )
 
     def go(child: Expr) -> str:
-        args = [go(arg) for arg in child.args]
-        match child.op:
-            case "number":
-                return f"Double.valueOf({groovy_literal(str(child.value))})"
-            case "string":
-                return groovy_literal(child.value)
-            case "boolean":
-                return "true" if child.value else "false"
-            case "null":
-                return "null"
-            case "ref":
-                name = (variables or {}).get(child.value, child.value)
-                return f"(({name}) as double)" if child in _numeric_refs else name
+        match child:
+            case Number(text=text):
+                return f"Double.valueOf({groovy_literal(text)})"
+            case Text(value=value):
+                return groovy_literal(value)
+            case Boolean() | Null():
+                return source_text(child)
+            case Ref(name=name):
+                spelled = (variables or {}).get(name, name)
+                return f"(({spelled}) as double)" if child in _numeric_refs else spelled
+            case Op(op=op, args=operands):
+                return operation(child, op, operands, [go(arg) for arg in operands])
+
+    def operation(child: Op, op: str, operands: tuple[Expr, ...], args: list[str]) -> str:
+        match op:
             case "u!":
                 return f"(!{args[0]})"
             case "u-":
@@ -193,19 +194,19 @@ def render_groovy(node: Expr, *, where: str, inputs: str, variables: Mapping[str
             case "u+":
                 return args[0]
             case "&&" | "||" | "<" | "<=" | ">" | ">=":
-                return f"({args[0]} {child.op} {args[1]})"
-            case "==" | "===" | "!=" | "!==" if any(arg.op == "null" for arg in child.args):
+                return f"({args[0]} {op} {args[1]})"
+            case "==" | "===" | "!=" | "!==" if any(isinstance(arg, Null) for arg in operands):
                 # An absent optional value arrives as the reserved [] sentinel
                 # (design §6, Inputs and channels), so a null check tests for it.
-                other = args[1] if child.args[0].op == "null" else args[0]
+                other = args[1] if isinstance(operands[0], Null) else args[0]
                 absent = f"({other} == null || {other} == [])"
-                return absent if child.op in {"==", "==="} else f"(!{absent})"
+                return absent if op in {"==", "==="} else f"(!{absent})"
             case "==" | "===":
                 return f"({args[0]} == {args[1]})"
             case "!=" | "!==":
                 return f"({args[0]} != {args[1]})"
             case "+" | "-" | "*" | "/" | "%":
-                return numeric(f"({args[0]} {child.op} {args[1]})", child)
+                return numeric(f"({args[0]} {op} {args[1]})", child)
             case "Math.round":
                 return numeric(f"{NF_ROUND_HELPER}({args[0]})", child)
             case "Math.pow":
@@ -213,25 +214,26 @@ def render_groovy(node: Expr, *, where: str, inputs: str, variables: Mapping[str
             case "Math.min" | "Math.max":
                 folded = args[0]
                 for arg in args[1:]:
-                    folded = f"{child.op}({folded}, {arg})"
+                    folded = f"{op}({folded}, {arg})"
                 return numeric(folded, child)
             case call if call in CALLS:
                 return numeric(f"{call}({', '.join(args)})", child)
             case _:
-                raise ValueError(f"unsupported construct {child.op!r}")
+                raise ValueError(f"unsupported construct {op!r}")
 
     _numeric_refs = _numeric_ref_nodes(node)
     return go(node)
 
 
-def _numeric_ref_nodes(node: Expr) -> set[Expr]:
+def _numeric_ref_nodes(node: Expr) -> set[Ref]:
     """References used as numbers: operands of arithmetic, comparison, or calls."""
     numeric_ops = {"u-", "u+", "<", "<=", ">", ">=", "+", "-", "*", "/", "%", *CALLS}
-    found: set[Expr] = set()
-    if node.op in numeric_ops:
-        found.update(arg for arg in node.args if arg.op == "ref")
-    for arg in node.args:
-        found |= _numeric_ref_nodes(arg)
+    found: set[Ref] = set()
+    if isinstance(node, Op):
+        if node.op in numeric_ops:
+            found.update(arg for arg in node.args if isinstance(arg, Ref))
+        for arg in node.args:
+            found |= _numeric_ref_nodes(arg)
     return found
 
 

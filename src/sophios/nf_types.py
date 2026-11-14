@@ -127,9 +127,9 @@ def json_value_problem(value: Any) -> str | None:
 
 
 def _thaw_json(value: Any) -> Any:
+    if isinstance(value, _Model | Expr):
+        return value.to_dict()
     match value:
-        case _Model() | Expr():
-            return value.to_dict()
         case Mapping() as mapping:
             return {str(key): _thaw_json(item) for key, item in mapping.items()}
         case list() | tuple() as items:

@@ -6,7 +6,7 @@ subset differential's; here, which texts the subset admits and how it reads them
 from hypothesis import example, given, strategies as st
 import pytest
 
-from sophios.lang.subset import canonical, check, parse, source_text
+from sophios.lang.subset import Boolean, canonical, check, parse, source_text, validate
 from sophios.nf_expr import render_groovy
 
 from ..budgets import budget
@@ -55,3 +55,10 @@ def test_an_expression_with_text_outside_the_subset_is_refused(admitted: str, ou
     assert check(parse(frame.format(admitted, "1")), _TYPES) == "boolean"
     with pytest.raises(ValueError):
         check(parse(frame.format(admitted, outside)), _TYPES)
+
+
+@pytest.mark.fast
+def test_a_hand_built_boolean_that_is_not_a_bool_is_refused() -> None:
+    """`Boolean("false")` is truthy: written as it is, it would render as `true`."""
+    with pytest.raises(ValueError):
+        validate(Boolean("false"))  # type: ignore[arg-type]

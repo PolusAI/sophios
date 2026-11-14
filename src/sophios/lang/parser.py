@@ -23,6 +23,7 @@ from .nodes import (
     Document,
     EdgeDef,
     EdgeRef,
+    GraphvizEntry,
     InlineLiteral,
     InputValue,
     OpaqueCwl,
@@ -626,6 +627,7 @@ class _Reader:
         steps: list[tuple[StepKey, WicSidecar]] = []
         entries: list[tuple[str, OpaqueCwl]] = []
         implementations: list[tuple[str, Document]] = []
+        graphviz = GraphvizEntry()
         if id(node) in path:
             self.error(SophiosErrorCode.RECURSIVE_ALIAS, 'alias cycle: a wic: block contains itself', node)
         elif node.tag == 'tag:yaml.org,2002:null':
@@ -645,13 +647,15 @@ class _Reader:
                     steps = self._sidecar_steps(value_node, path | {id(node)})
                 elif key in values:
                     entries.append((key, self._sidecar_value(key, value_node, values[key])))
+                    if key == 'graphviz':
+                        graphviz = _graphviz(entries[-1][1])
                     if key == 'implementations' and isinstance(value_node, yaml.nodes.MappingNode):
                         # Each body is the document it is, with its spans. An empty one defers to whatever supplies
                         # the implementation: an empty document for it would shadow that supplier with nothing.
                         implementations = [(self._key_text(name), self.document(body))
                                            for name, body in value_node.value
                                            if isinstance(body, yaml.nodes.MappingNode) and body.value]
-        return WicSidecar(tuple(steps), tuple(entries), tuple(implementations), self.span(node))
+        return WicSidecar(tuple(steps), tuple(entries), tuple(implementations), graphviz, self.span(node))
 
     def _sidecar_steps(self, node: yaml.nodes.Node, path: frozenset[int]) -> list[tuple[StepKey, WicSidecar]]:
         """Parse `wic: steps:`, each entry what the block says about the step its key names."""
@@ -883,6 +887,17 @@ def _found(value: OpaqueCwl) -> str:
         case None | bool() | int() | float() | str():
             return repr(value)
     return f'a {type(value).__name__}'
+
+
+def _graphviz(value: OpaqueCwl) -> GraphvizEntry:
+    """The `graphviz:` value as an entry. A value its schema refused (`wic034`) was reported, and reads as far as it
+    is well formed."""
+    if not isinstance(value, dict):
+        return GraphvizEntry()
+    label, style, same = value.get('label'), value.get('style'), value.get('ranksame')
+    keys = None if not isinstance(same, list) else tuple(
+        key for item in same if isinstance(item, str) and (key := step_key(item)) is not None)
+    return GraphvizEntry(label if isinstance(label, str) else None, style if isinstance(style, str) else None, keys)
 
 
 def step_key(text: str) -> StepKey | None:

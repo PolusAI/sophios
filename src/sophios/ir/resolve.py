@@ -15,7 +15,7 @@ import json
 import os
 from pathlib import Path
 import sys
-from typing import Any, Iterable, Mapping
+from typing import Iterable, Mapping
 
 from ..lang import (
     CWL_VERSION,
@@ -34,10 +34,9 @@ from ..lang import (
     UnresolvedName,
     WicSidecar,
     resolve_lang_version,
-    step_key,
 )
 from ..lang.diagnostics import Diagnostic, Diagnostics, Locator
-from ..lang.nodes import InputValue, OpaqueCwl, Step
+from ..lang.nodes import GraphvizEntry, InputValue, OpaqueCwl, Step
 from ..wic_types import Cwl, Tools
 from .declarations import port_declaration
 from .types import PortDeclaration, RegistryKey
@@ -543,7 +542,7 @@ def _inherit_parameters(document: Document, sidecar: WicSidecar | None) -> Docum
     return replace(document, sidecar=_merged_sidecar(
         document.sidecar, WicSidecar(sidecar.steps, entries,
                                      implementations=sidecar.implementations,
-                                     span=sidecar.span),
+                                     graphviz=sidecar.graphviz, span=sidecar.span),
         [step.id for step in document.steps]))
 
 
@@ -571,7 +570,7 @@ def _merged_sidecar(own: WicSidecar | None, contributed: WicSidecar,
         entries[name] = _merged_value(entries.get(name), value)
     return WicSidecar(tuple(steps.items()), tuple(entries.items()),
                       implementations=own.implementations or contributed.implementations,
-                      span=own.span)
+                      graphviz=contributed.graphviz.merged_over(own.graphviz), span=own.span)
 
 
 def _inherited_step(steps: dict[StepKey, WicSidecar], key: StepKey,
@@ -644,15 +643,9 @@ def _stale_key_reason(key: StepKey, ids: Sequence[str]) -> str | None:
     return f'step {key.index} is {actual!r}; write ({key.index}, {actual})'
 
 
-def graphviz_entry(sidecar: WicSidecar | None) -> dict[str, Any]:
-    """`sidecar`'s `graphviz:` entry, or nothing."""
-    drawn = dict(sidecar.entries).get('graphviz') if sidecar is not None else None
-    return drawn if isinstance(drawn, dict) else {}
-
-
-def ranksame(sidecar: WicSidecar | None) -> tuple[StepKey, ...]:
-    """The steps `sidecar`'s `graphviz: ranksame:` list names; the parser checked each is a step key."""
-    return tuple(key for key in map(step_key, graphviz_entry(sidecar).get('ranksame', ())) if key is not None)
+def graphviz_entry(sidecar: WicSidecar | None) -> GraphvizEntry:
+    """`sidecar`'s `graphviz:` entry, or an empty one."""
+    return sidecar.graphviz if sidecar is not None else GraphvizEntry()
 
 
 def _report_stale_keys(sidecar: WicSidecar | None, document: Document, name: str,
@@ -663,7 +656,7 @@ def _report_stale_keys(sidecar: WicSidecar | None, document: Document, name: str
         return
     ids = [step.id for step in document.steps]
     addresses = [('wic: steps:', 'key', key, child.span) for key, child in sidecar.steps]
-    addresses += [('wic: graphviz: ranksame', 'entry', key, None) for key in ranksame(sidecar)]
+    addresses += [('wic: graphviz: ranksame', 'entry', key, None) for key in graphviz_entry(sidecar).ranksame or ()]
     for where, noun, key, span in addresses:
         reason = _stale_key_reason(key, ids)
         if reason is None:

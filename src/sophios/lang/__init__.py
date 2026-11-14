@@ -23,7 +23,7 @@ from .nodes import (
     WicSidecar,
 )
 from ..utils_yaml import Key
-from .parser import Grammar, ParseResult, parse, step_key
+from .parser import Grammar, ParseResult, parse
 from .render import render, to_json
 from .versions import KNOWN_VERSIONS, resolve as resolve_lang_version
 from .schema import wic_schema
@@ -60,7 +60,6 @@ __all__ = [
     'parse',
     'render',
     'resolve_lang_version',
-    'step_key',
     'to_json',
     'wic_schema',
 ]
