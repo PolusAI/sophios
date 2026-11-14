@@ -16,7 +16,6 @@ from sophios.ir.names import Names
 from sophios.ir.pipeline import front_end
 from sophios.ir.types import EdgeOrigin, WorkflowGraph
 from sophios.lang.diagnostics import Diagnostics, SophiosError
-from sophios.utils_cwl import desugar_into_canonical_normal_form
 
 from .cases import DATA, diagnostic, match
 from .helpers import stated
@@ -24,8 +23,8 @@ from .synthetic_tools import registered
 
 
 def _tools(*directories: Path) -> Any:
-    """The synthetic tools, and each tool in `directories`, the later winning, desugared as discovery desugars them."""
-    return registered({path.stem: desugar_into_canonical_normal_form(yaml.safe_load(path.read_text(encoding='utf-8')))
+    """The synthetic tools, and each tool in `directories`, the later winning, as discovery reads them."""
+    return registered({path.stem: yaml.safe_load(path.read_text(encoding='utf-8'))
                        for directory in directories for path in sorted(directory.glob('*.cwl'))})
 
 

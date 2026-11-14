@@ -1,0 +1,6 @@
+# Two tools cwltool refuses, and one it does not: each refused tool is reported at its step, in one compile.
+steps:
+- id: misspelled_type
+- id: mk_file
+  in: {name: !ii a}
+- id: missing_import

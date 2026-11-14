@@ -24,7 +24,6 @@ steps:
   in: {word: out_dir}
 - id: colliding_ports
 - id: runtime_glob
-- id: classless
 - id: wide_numbers
   in: {a_long: a_long, a_double: a_double}
 - id: resources

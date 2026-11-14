@@ -317,9 +317,9 @@ def _noted(_directory: Path) -> Workflow:
 
 
 def _on_a_gpu(_directory: Path) -> Workflow:
-    """A CUDA field the Nextflow target does not check, which its lowering notes (`wic046`)."""
+    """The CUDA fields the Nextflow target does not check, which its lowering notes (`wic046` each)."""
     gpu = (CommandLineTool('gpu_tool', Inputs(), Outputs(file=Output(cwl.file, glob='out.txt')))
-           .base_command('touch', 'out.txt').gpu(cuda_version_min='11.4'))
+           .base_command('touch', 'out.txt').gpu(cuda_version_min='11.4', compute_capability='3.0'))
     return Workflow([Step(gpu, step_name='gpu')], 'noted')
 
 
@@ -349,7 +349,7 @@ def _reading_an_absent_file(directory: Path) -> Workflow:
 @pytest.mark.fast
 @pytest.mark.parametrize('build, target, policy, codes, refused, compiled', [
     (_noted, 'cwl', RunPolicy(), ['wic043', 'wic056', 'wic056'], False, None),
-    (_on_a_gpu, 'nextflow', RunPolicy(), ['wic046'], False, None),
+    (_on_a_gpu, 'nextflow', RunPolicy(), ['wic046', 'wic046'], False, None),
     (_comparing_strings, 'nextflow', RunPolicy(), ['nf-s010'], False, nextflow.NotLowered),
     (_on_a_gpu, 'nextflow', RunPolicy(partial_failure=True), ['nf-s001'], False, nextflow.NotLowered),
     (_ambiguous, 'nextflow', RunPolicy(), ['wic055'], True, SophiosError),

@@ -9,7 +9,7 @@ separate edge-inference candidate heuristic.
 from enum import Enum
 from typing import Any
 
-from .cwl import ATOMIC_TYPES
+from .cwl import ATOMIC_TYPES, expand_shorthand
 
 
 class TypeRelation(Enum):
@@ -18,17 +18,6 @@ class TypeRelation(Enum):
     OVERLAPS = 'overlaps'
     DISJOINT = 'disjoint'
     UNKNOWN = 'unknown'
-
-
-def _expand_shorthand(declared: Any) -> Any:
-    """Expand one suffix layer without changing the caller's declaration."""
-    if not isinstance(declared, str):
-        return declared
-    if declared.endswith('[]') and len(declared) > 2:
-        return {'type': 'array', 'items': declared[:-2]}
-    if declared.endswith('?') and len(declared) > 1:
-        return ['null', declared[:-1]]
-    return declared
 
 
 def _kind(declared: Any) -> str | None:
@@ -56,7 +45,7 @@ def reference_relation(source: Any, sink: Any, _in_source: frozenset[int] = froz
     validation of the emitted CWL document. A declaration that holds itself
     is unknown where it comes round again.
     """
-    source, sink = _expand_shorthand(source), _expand_shorthand(sink)
+    source, sink = expand_shorthand(source), expand_shorthand(sink)
     if id(source) in _in_source or id(sink) in _in_sink:
         return TypeRelation.UNKNOWN
     if isinstance(source, list):

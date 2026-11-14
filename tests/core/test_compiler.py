@@ -16,7 +16,6 @@ from sophios.ir.frontdoor import bundle_from_disk
 from sophios.ir.resolved import NotLowered
 from sophios.lang.diagnostics import SophiosError
 from sophios.runtime_inputs import output_target_inputs
-from sophios.utils_cwl import desugar_into_canonical_normal_form
 from sophios.utils_nf import NEXTFLOW
 from sophios.wic_types import StepId, Tool, Tools, Yaml
 
@@ -64,10 +63,11 @@ def test_an_example_runs_under_cwltool_as_stated(folder: Path, tmp_path: Path,
 
 def _tools(directory: Path) -> Tools:
     """The synthetic tools, each tool beside the example under its stem, and each in a folder beside it under that
-    folder's name as its namespace, desugared as discovery desugars them."""
+    folder's name as its namespace, read from its file as discovery reads it."""
     return {**SYNTHETIC_TOOLS, **{
         StepId(path.stem, SYNTHETIC_NS if path.parent == directory else path.parent.name): Tool(
-            str(path), desugar_into_canonical_normal_form(yaml.safe_load(path.read_text(encoding='utf-8'))))
+            str(path), yaml.safe_load(path.read_text(encoding='utf-8')),
+            from_file=True)
         for path in [*directory.glob('*.cwl'), *directory.glob('*/*.cwl')]}}
 
 

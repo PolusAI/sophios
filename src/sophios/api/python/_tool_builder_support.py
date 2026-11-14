@@ -11,9 +11,7 @@ import tempfile
 import warnings
 from typing import Any
 
-from cwltool import load_tool
-from cwltool.context import LoadingContext
-
+from sophios import utils_cwl
 from sophios.input_output import dump_wic_yaml
 
 
@@ -120,15 +118,8 @@ def validate_cwl_document(
 
 def _validate_path(path: Path) -> ValidationResult:
     try:
-        # cwltool.workflow needs the Unix-only `pwd` module, so it is imported where a tool is validated and not
-        # with this module: on Windows Sophios compiles and does not run.
-        from cwltool.workflow import default_make_tool  # pylint: disable=import-outside-toplevel
-        # The ontologies under `$schemas` are not loaded, as a local run does not load them: cwltool fetches each
-        # one, uncached, on every load.
-        context = LoadingContext({"skip_schemas": True, "construct_tool_object": default_make_tool})
-        context, document, uri = load_tool.fetch_document(str(path), context)
-        context, uri = load_tool.resolve_and_validate_document(context, document, uri)
-        process = load_tool.make_tool(uri, context)
+        uri = path.absolute().as_uri()
+        process = utils_cwl.make_tool(uri)
     except Exception as exc:  # pylint: disable=W0718:broad-exception-caught
         raise ToolBuilderValidationError(f"Generated CommandLineTool failed validation: {path}") from exc
     return ValidationResult(path=path, uri=uri, process=process)

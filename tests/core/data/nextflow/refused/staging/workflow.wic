@@ -4,7 +4,6 @@ steps:
 - id: entries
   in: {a: !ii in.txt, b: !ii in.txt, c: !ii in.txt, d: !ii in.txt, e: !ii in.txt, f: !ii in.txt, g: !ii in.txt,
        h: !ii in.txt, flag: !ii true, name: !ii n, files: !ii [in.txt]}
-- id: listing_not_a_list
 - id: renamed_entries
   in: {twice: !ii in.txt, bare: !ii in.txt, first: !ii in.txt, second: !ii in.txt}
 - id: directory_fields
@@ -56,5 +55,3 @@ steps:
   in: {src: !* emitted_directory}
 - id: sort_an_entry
   in: {src: !* emitted}
-- id: entry_of_a_number       # the listing alone is refused
-  in: {f: !* emitted}

@@ -43,6 +43,12 @@ def _tool(artifact: CompilationArtifact, step: str) -> dict[str, Any]:
     return child.cwl
 
 
+def _port(tool: dict[str, Any], section: str, name: str) -> Any:
+    """A packed tool's port: cwltool packs `inputs` and `outputs` as lists."""
+    port, = (port for port in tool[section] if port['id'] == name)
+    return port
+
+
 def _requirement(tool: dict[str, Any], section: str, name: str) -> Any:
     """A requirement or hint by its class, whether the section is written as a mapping or as a list."""
     entries = tool[section]
@@ -71,7 +77,7 @@ def test_a_tool_that_refers_to_files_beside_it_is_written_packed_by_every_door(
     artifact = _compile(PROJECT / 'relcat.wic', registry)
     assert [_entry(child.cwl) for child in artifact.children] == [SCRIPT] * 3
     written = artifact.children[0].cwl
-    assert written['inputs']['extra']['default'] == {'class': 'File', 'location': (TOOLS / 'data.txt').as_uri()}
+    assert _port(written, 'inputs', 'extra')['default'] == {'class': 'File', 'location': (TOOLS / 'data.txt').as_uri()}
     assert written['cwlVersion'] == 'v1.2'
     assert _entry(registry[StepId('relcat', 'global')].cwl) == {'$include': 's.sh'}
 
@@ -83,7 +89,7 @@ def test_a_tool_that_refers_to_files_beside_it_is_written_packed_by_every_door(
     artifact = _compile(PROJECT / 'make_use.wic')
     use, = (step for step in artifact.cwl['steps'] if step['id'] == 'use')
     assert use['in'] == {'file': 'make/out'} and not artifact.cwl['inputs']
-    assert _tool(artifact, 'make')['inputs']['seed']['default']['location'] == (TOOLS / 'seed.txt').as_uri()
+    assert _port(_tool(artifact, 'make'), 'inputs', 'seed')['default']['location'] == (TOOLS / 'seed.txt').as_uri()
 
     broken = get_tools_cwl({'search_paths_cwl': {'global': [str(PROJECT / 'broken')]}})
     artifact = _compile(PROJECT / 'broken' / 'unused.wic', broken)
@@ -93,7 +99,7 @@ def test_a_tool_that_refers_to_files_beside_it_is_written_packed_by_every_door(
     with pytest.raises(SophiosError) as raised:
         _compile(PROJECT / 'broken' / 'used.wic', broken)
     diagnostic, = raised.value.diagnostics
-    assert diagnostic.code is SophiosErrorCode.SUBWORKFLOW_INVALID
+    assert diagnostic.code is SophiosErrorCode.TOOL_REFUSED
     assert diagnostic.locator is not None and (diagnostic.locator.step, diagnostic.locator.index) == ('broken', 2)
     assert diagnostic.span is not None and diagnostic.span.start_line == 3
     assert str(PROJECT / 'broken' / 'broken.cwl') in diagnostic.message
@@ -109,6 +115,12 @@ def test_a_tool_that_refers_to_files_beside_it_is_written_packed_by_every_door(
         fetched.append(url)
         return fetch_text(self, url, content_types)
     monkeypatch.setattr(DefaultFetcher, 'fetch_text', spy)
+    check_exists = DefaultFetcher.check_exists
+
+    def ask(self: DefaultFetcher, url: str) -> bool:
+        fetched.append(url)
+        return check_exists(self, url)
+    monkeypatch.setattr(DefaultFetcher, 'check_exists', ask)
     artifact = _compile(PROJECT / 'ontology.wic', get_tools_cwl({'search_paths_cwl': {'global': [str(TOOLS)]}}))
     assert _tool(artifact, 'ontology')['$schemas'] == ['http://schemas.invalid/ontology.owl']
     assert not [url for url in fetched if 'schemas.invalid' in url]
@@ -137,7 +149,7 @@ def test_a_tool_that_refers_to_files_beside_it_is_written_packed_by_every_door(
     for where, written in (('compile()', compiled['steps'][0]['run']), ('run()', ran['steps'][0]['run']),
                            ('analysis', yaml.safe_load(analysis.read_text(encoding='utf-8')))):
         assert _entry(written) == SCRIPT, where
-        assert written['inputs']['extra']['default']['location'] == (TOOLS / 'data.txt').as_uri(), where
+        assert _port(written, 'inputs', 'extra')['default']['location'] == (TOOLS / 'data.txt').as_uri(), where
 
 
 def _produced() -> list[str]:
@@ -173,7 +185,7 @@ def test_a_packed_project_runs_under_cwltool_and_changes_nothing_beside_it(tmp_p
     embedded = yaml.safe_load(Path('embedded/one.cwl').read_text(encoding='utf-8'))['steps'][0]['run']
     for written in (tree, embedded):
         assert _entry(written) == SCRIPT
-        assert written['outputs']['out']['type'] == 'File?'
+        assert _port(written, 'outputs', 'out')['type'] == 'File?'
         assert written['successCodes'] == [0, 1]
 
     assert run_cli(monkeypatch, '--yaml', PROJECT / 'schemadef.wic', '--generate_cwl_workflow', '--basepath',

@@ -8,9 +8,12 @@ from pathlib import PurePath
 import re
 from typing import Any
 
+from cwl_utils.parser.cwl_v1_2 import Dirent, InitialWorkDirRequirement
+
 from sophios.edam import resolve_file_format
-from sophios.ir.resolved import InputRef, ResolvedTool, ResolvedWorkflow, Through, tool_steps
-from sophios.wic_types import Json
+from sophios.ir.resolved import InputRef, ResolvedWorkflow, Through, tool_steps
+from sophios.lang.cwl import ports_named, required, requirement
+from sophios.wic_types import Json, Tool
 
 
 _INPUT_REFERENCE = re.compile(r"\binputs\.([A-Za-z_][A-Za-z0-9_-]*)")
@@ -37,9 +40,9 @@ def output_target_inputs(view: ResolvedWorkflow) -> set[str]:
     names: set[str] = set()
     for found in tool_steps(view):
         run = found.step.run
-        if not isinstance(run, ResolvedTool) or not isinstance(run.document, Mapping):
+        if not isinstance(run, Tool):
             continue
-        targets = _output_target_inputs(run.document)
+        targets = _output_target_inputs(run)
         for port, sources in zip(found.step.inputs, found.sources, strict=True):
             if port.name in targets:
                 names.update(source.ref.name for source in sources
@@ -71,60 +74,34 @@ def _normalize_file_formats(value: Any) -> None:
                 _normalize_file_formats(item)
 
 
-def _output_target_inputs(run: Mapping[str, Any]) -> set[str]:
-    inputs = _parameter_mapping(run.get("inputs"))
-    outputs = _parameter_mapping(run.get("outputs"))
+def _output_target_inputs(run: Tool) -> set[str]:
+    process, _ = run.loaded
+    inputs = ports_named(process.inputs)
     writable_inputs = _writable_initial_workdir_inputs(run)
-    if not inputs or not outputs or not writable_inputs:
-        return set()
-
     target_inputs: set[str] = set()
-    for output in outputs.values():
-        match output:
-            case Mapping() as output_mapping if _type_includes(output_mapping.get("type"), "Directory"):
-                glob_value = _output_glob(output_mapping)
-                for input_name in _referenced_inputs(glob_value):
-                    definition = inputs.get(input_name)
-                    # `outDir: Directory` is a type, not a mapping that has one.
-                    declared = definition.get("type") if isinstance(definition, Mapping) else definition
-                    if input_name in writable_inputs and _type_includes(declared, "Directory"):
-                        target_inputs.add(input_name)
+    for output in process.outputs:
+        if _is_directory(output.type_) and (binding := getattr(output, "outputBinding", None)) is not None:
+            for input_name in _referenced_inputs(binding.glob):
+                if input_name in writable_inputs and input_name in inputs and _is_directory(inputs[input_name].type_):
+                    target_inputs.add(input_name)
     return target_inputs
 
 
-def _parameter_mapping(parameters: Any) -> dict[str, Any]:
-    match parameters:
-        case Mapping() as parameter_map:
-            return dict(parameter_map)
-        case list() as parameter_list:
-            result = {}
-            for parameter in parameter_list:
-                match parameter:
-                    case {"id": parameter_id}:
-                        result[_local_id(parameter_id)] = parameter
-            return result
-        case _:
-            return {}
+def _writable_initial_workdir_inputs(run: Tool) -> set[str]:
+    """The inputs a tool stages writable. Only for a tool that writes the requirement in a mapping: one that lists it,
+    as `tool_builder` does, has never been read here, and `examples/scripts/ichnaea_integrated.py` writes in place
+    through an absolute path because of it."""
+    if not any(isinstance(section, Mapping) and "InitialWorkDirRequirement" in section
+               for section in (run.cwl.get("requirements"), run.cwl.get("hints"))):
+        return set()
+    listing = getattr(requirement(run.loaded[0], InitialWorkDirRequirement), "listing", None)
+    return {name for entry in listing if isinstance(entry, Dirent) and entry.writable is True
+            for name in _referenced_inputs(entry.entry)} if isinstance(listing, list) else set()
 
 
-def _writable_initial_workdir_inputs(run: Mapping[str, Any]) -> set[str]:
-    inputs: set[str] = set()
-    for requirement in (run.get("requirements"), run.get("hints")):
-        match requirement:
-            case {"InitialWorkDirRequirement": {"listing": listing}}:
-                for entry in _as_list(listing):
-                    match entry:
-                        case {"writable": True, "entry": entry_value}:
-                            inputs.update(_referenced_inputs(entry_value))
-    return inputs
-
-
-def _output_glob(output: Mapping[str, Any]) -> Any:
-    match output.get("outputBinding"):
-        case Mapping() as output_binding:
-            return output_binding.get("glob")
-        case _:
-            return None
+def _is_directory(cwl_type: Any) -> bool:
+    inner, _ = required(cwl_type)
+    return inner == "Directory" or isinstance(inner, list) and "Directory" in inner
 
 
 def _output_target_directory(value: Any, source_key: str) -> Any:
@@ -167,27 +144,3 @@ def _referenced_inputs(value: Any) -> set[str]:
             return set().union(*(_referenced_inputs(item) for item in mapping.values()))
         case _:
             return set()
-
-
-def _type_includes(cwl_type: Any, type_name: str) -> bool:
-    match cwl_type:
-        case str() as type_value:
-            return type_value.rstrip("?") == type_name
-        case list() as type_list:
-            return any(_type_includes(item, type_name) for item in type_list)
-        case Mapping() as type_mapping:
-            return bool(type_mapping.get("type") == type_name)
-        case _:
-            return False
-
-
-def _local_id(value: Any) -> str:
-    return str(value).rsplit("/", 1)[-1].rsplit("#", 1)[-1]
-
-
-def _as_list(value: Any) -> list[Any]:
-    match value:
-        case list() as items:
-            return items
-        case _:
-            return []

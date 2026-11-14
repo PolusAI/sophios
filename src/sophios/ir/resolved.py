@@ -18,6 +18,7 @@ from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import NamedTuple, TypeAlias
 
+from ..lang.cwl import required
 from ..lang.diagnostics import Diagnostic, Diagnostics, Locator, Severity, lines
 from ..lang.error_codes import SophiosErrorCode
 from ..lang.nodes import OpaqueCwl
@@ -27,6 +28,7 @@ from .declarations import delivered, layered, output_rank, written_order
 from .names import Names
 from .policy import RunPolicy, one_expression
 from .stepin import step_inputs
+from ..wic_types import Tool
 from .types import (
     DerivedName, EmittedValue, Expression, PortDeclaration, PortName, PortType, Record, Source, StepId,
     StepNode, StepOutputRef, WorkflowGraph,
@@ -85,15 +87,6 @@ class WorkflowOutput:
 
 
 @dataclass(frozen=True, slots=True)
-class ResolvedTool:
-    """The tool a step runs: the file the registry read it from and the document the CWL target writes for the
-    step."""
-
-    path: str
-    document: OpaqueCwl
-
-
-@dataclass(frozen=True, slots=True)
 class StepInput:  # pylint: disable=too-many-instance-attributes
     """One entry of a step's `in:`, in the order the CWL target writes it."""
 
@@ -143,7 +136,7 @@ class ResolvedStep:  # pylint: disable=too-many-instance-attributes
     local: str
     #: Its qualified id, outer~inner: what messages print.
     name: str
-    run: 'ResolvedTool | ResolvedWorkflow'
+    run: 'Tool | ResolvedWorkflow'
     inputs: tuple[StepInput, ...]
     #: Its outputs' names, as its out: lists them.
     outputs: tuple[str, ...]
@@ -195,14 +188,14 @@ class ResolvedWorkflow:  # pylint: disable=too-many-instance-attributes
                 raise ValueError(f'{ref} names nothing in workflow {self.name!r}')
 
 
-def resolve(graph: WorkflowGraph, tools: Mapping[StepId, ResolvedTool], *, policy: RunPolicy = RunPolicy(),
+def resolve(graph: WorkflowGraph, tools: Mapping[StepId, Tool], *, policy: RunPolicy = RunPolicy(),
             values: Mapping[str, OpaqueCwl] | None = None,
             outputs: Collection[str] | None = None) -> ResolvedWorkflow:
     """The view of a finished compilation's graph.
 
     Args:
         graph (WorkflowGraph): `CompilationResult.graph`: linked, inferred and completed.
-        tools (Mapping[StepId, ResolvedTool]): The tool every tool step runs, at any depth.
+        tools (Mapping[StepId, Tool]): The tool every tool step runs, at any depth.
         policy (RunPolicy): The compilation's run policy.
         values (Mapping[str, OpaqueCwl] | None): This run's values, by root input as the job spells it, each in
             place of the value the graph binds; `None` keeps the graph's.
@@ -297,7 +290,7 @@ class _Level:
     outermost first."""
 
     names: Names
-    tools: Mapping[StepId, ResolvedTool]
+    tools: Mapping[StepId, Tool]
     policy: RunPolicy
     everything: Mapping[StepId, StepNode]
     graph: WorkflowGraph
@@ -325,7 +318,7 @@ def _step(step: StepNode, child: WorkflowGraph | None, ins: tuple[tuple[PortName
     inputs = tuple(_step_input(name, value, step, called, level) for name, value in ins)
     requirements, fields = _requirements(step.passthrough)
     within = replace(level, outside=(*level.outside, *requirements))
-    run: ResolvedTool | ResolvedWorkflow = (
+    run: Tool | ResolvedWorkflow = (
         _workflow(child, within, {port.name: port.type for port in inputs}) if child is not None
         else level.tools[step.id])
     outputs = tuple(names.port(port.id.port) for port in step.outputs)
@@ -338,7 +331,7 @@ def _step(step: StepNode, child: WorkflowGraph | None, ins: tuple[tuple[PortName
         fields = (('scatterMethod', interpreted['scatterMethod']), *fields)
     return ResolvedStep(names.step(step.id), names.qualified(step.id), run, inputs, outputs, scatter,
                         condition, requirements, fields, step.span,
-                        _inherited(within.outside) if isinstance(run, ResolvedTool) else ())
+                        _inherited(within.outside) if isinstance(run, Tool) else ())
 
 
 # pylint: disable-next=too-many-locals
@@ -416,10 +409,7 @@ def _delivered_type(produced: list[OpaqueCwl], fields: Mapping[str, OpaqueCwl],
     alike = all(item == produced[0] for item in produced)
     merged: OpaqueCwl = delivered(produced[0] if alike else 'Any', sources=len(produced),
                                   link_merge=fields.get('linkMerge'), pick_value=fields.get('pickValue'))
-    if 'default' in fields and isinstance(merged, list) and 'null' in merged:
-        rest = [member for member in merged if member != 'null']
-        return rest[0] if len(rest) == 1 else rest
-    return merged
+    return required(merged)[0] if 'default' in fields else merged
 
 
 def _seen(port: StepInput, scatter: Scatter | None) -> OpaqueCwl:
@@ -549,7 +539,7 @@ class _Flattened:  # pylint: disable=too-few-public-methods
                 # The env lacks only an input the enclosing call leaves unbound, with no default.
                 return env[ref.name] if ref.name in env else _Found((), ((calls[-1].name, ref.name),))
             producer = local[ref.step]
-            if isinstance(producer.run, ResolvedTool):
+            if isinstance(producer.run, Tool):
                 return _Found((Through(OutputRef(producer.name, ref.port)),))
             source = next(port.source for port in producer.run.outputs if port.name == ref.port)
             if not isinstance(source, (InputRef, OutputRef)):
@@ -557,7 +547,7 @@ class _Flattened:  # pylint: disable=too-few-public-methods
             return inner[producer.local](source)
 
         for step in workflow.steps:
-            if isinstance(step.run, ResolvedTool):
+            if isinstance(step.run, Tool):
                 self._found.append(ToolStep(step, calls, tuple(
                     tuple(found for ref in port.sources for found in through(ref).sources) for port in step.inputs)))
                 continue

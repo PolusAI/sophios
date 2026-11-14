@@ -148,8 +148,8 @@ Each process an artifact carries is a description, never data. When
 `compiler._artifact_tree` emits a step, a tool whose text refers to a file
 relative to itself (`$include`, `$import`, a relative `location`) is packed by
 cwltool where it was read (`utils_cwl.packed`), once per tool per compile; a
-pack error is `wic013` at the step. Inference and Link have already read the
-tool as written. Lower writes a relative `location` in a `.wic` `default:`
+tool cwltool cannot read is `wic057` at the step, before it is packed. Inference and Link have already read
+the tool as written. Lower writes a relative `location` in a `.wic` `default:`
 absolute against the `.wic`'s directory, and the Python adapter does the same
 for a `StepInput` default against the working directory.
 

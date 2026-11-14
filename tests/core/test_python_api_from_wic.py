@@ -19,7 +19,7 @@ from sophios.ir.frontdoor import bundle_from_disk
 from sophios.ir.artifacts import CompilationResult
 from sophios.post_compile import inline_artifact_runs
 from sophios.runtime_inputs import output_target_inputs, runner_job_inputs
-from sophios.utils_cwl import canonicalize_type
+from sophios.lang.cwl import canonical_type
 from sophios.lang import Document, render
 from sophios.wic_types import Json, StepId, Tool, Tools
 
@@ -40,7 +40,7 @@ WorkflowPaths = dict[str, dict[str, Path]]
 
 def _canonical_ports(cwl: Any) -> Any:
     """`cwl` with every Workflow document's port declarations in CWL's long form: a bare `T` as
-    `{type: T}`, and every type through `canonicalize_type` (`T?` and `T[]` are CWL's shorthand)."""
+    `{type: T}`, and every type through `canonical_type` (`T?` and `T[]` are CWL's shorthand)."""
     match cwl:
         case {'class': 'Workflow'}:
             canonical = {key: _canonical_ports(value) for key, value in cwl.items()}
@@ -60,7 +60,7 @@ def _canonical_ports(cwl: Any) -> Any:
 def _long_form(spec: Any) -> Any:
     declared = dict(spec) if isinstance(spec, dict) else {'type': spec}
     if 'type' in declared:
-        declared['type'] = canonicalize_type(declared['type'])
+        declared['type'] = canonical_type(declared['type'])
     return declared
 
 
@@ -108,11 +108,11 @@ TOOLS: Final[Tools] = {
     StepId('pair_src', SYNTHETIC_NS): Tool('/synthetic/pair_src.cwl', clt(
         {'name': {'type': 'string', 'inputBinding': {'position': 1}}},
         {'edr_x': {'type': 'File', 'outputBinding': {'glob': '$(inputs.name)'}},
-         'edr_y': {'type': 'File', 'outputBinding': {'glob': '$(inputs.name)'}}}, canonical=True)),
+         'edr_y': {'type': 'File', 'outputBinding': {'glob': '$(inputs.name)'}}})),
     StepId('pair_sink', SYNTHETIC_NS): Tool('/synthetic/pair_sink.cwl', clt(
         {'energy_x': {'type': 'File', 'inputBinding': {'position': 1}},
          'energy_y': {'type': 'File', 'inputBinding': {'position': 2}}},
-        {'out': {'type': 'File', 'outputBinding': {'glob': 'out.txt'}}}, canonical=True))}
+        {'out': {'type': 'File', 'outputBinding': {'glob': 'out.txt'}}}))}
 
 
 def _held_today(document: Document) -> bool:

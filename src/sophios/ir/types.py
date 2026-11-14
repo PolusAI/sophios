@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import NewType, TypeAlias
 
+from ..lang.cwl import expand_shorthand, required
 from ..lang.diagnostics import Diagnostics
 from ..lang.nodes import InputValue, OpaqueCwl
 from ..lang.spans import SourceSpan
@@ -137,7 +138,7 @@ class PortType:
     @property
     def optional(self) -> bool:
         """Whether the port accepts `null` itself, not merely in its items."""
-        return isinstance(self.canonical, list) and 'null' in self.canonical
+        return required(self.canonical)[1]
 
 
 def _canonical(raw: OpaqueCwl) -> OpaqueCwl:
@@ -147,10 +148,8 @@ def _canonical(raw: OpaqueCwl) -> OpaqueCwl:
         # CommandLineTool port may say it; a workflow boundary promoted from
         # one must say `File`, which is what cwltool makes of it.
         return 'File'
-    if isinstance(raw, str) and raw.endswith('?'):
-        return ['null', _canonical(raw[:-1])]
-    if isinstance(raw, str) and raw.endswith('[]'):
-        return {'type': 'array', 'items': _canonical(raw[:-2])}
+    if isinstance(raw, str) and (layer := expand_shorthand(raw)) is not raw:
+        return _canonical(layer)
     if isinstance(raw, dict) and raw.get('type') == 'array' and 'items' in raw:
         return {**raw, 'items': _canonical(raw['items'])}
     if isinstance(raw, list):

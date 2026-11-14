@@ -1,2 +1,2 @@
 why: two steps with the same id and different inline bodies each run their own
-steps: [{baseCommand: echo, inputs: {a: {type: string}}}, {baseCommand: rm, inputs: {a: {type: string}}}]
+steps: [{baseCommand: echo, inputs: {a: string}}, {baseCommand: rm, inputs: {a: string}}]

@@ -1,4 +1,8 @@
+from dataclasses import dataclass
+from functools import cached_property
 from typing import Any, Final, Literal, NamedTuple, TypeAlias, TypedDict, get_args
+
+from .lang.cwl import Process, Written, load_process
 
 # See https://mypy.readthedocs.io/en/stable/kinds_of_types.html#type-aliases
 
@@ -22,9 +26,22 @@ Yaml: TypeAlias = dict[str, Any]
 # See https://mypy.readthedocs.io/en/stable/kinds_of_types.html#named-tuples
 
 
-class Tool(NamedTuple):
+@dataclass(frozen=True)
+class Tool:
     run_path: str
     cwl: Cwl
+    #: Whether the file at `run_path` is the tool, read from it, and not a path a tool written elsewhere is named by.
+    from_file: bool = False
+
+    @cached_property
+    def loaded(self) -> tuple[Process, Written]:
+        """The tool read once into the standard's classes, shared by every reader of it and edited by none (a reader
+        that needs a variant copies it).
+
+        Raises:
+            SophiosError: `api004` with the loader's own message, for a document that is not a CWL process.
+        """
+        return load_process(self.cwl, self.run_path)
 
 
 class StepId(NamedTuple):

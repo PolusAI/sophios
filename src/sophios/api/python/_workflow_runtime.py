@@ -225,7 +225,7 @@ def load_clt(clt_path: Path, tool_registry: Tools) -> tuple[CWLCommandLineTool, 
             raise
         except Exception as exc:
             raise InvalidCLTError(f"invalid cwl file: {clt_path}") from exc
-        tool_registry[stepid] = Tool(str(clt_path), yaml_file)
+        tool_registry[stepid] = Tool(str(clt_path), yaml_file, from_file=True)
         return clt, yaml_file
 
     if stepid in tool_registry:

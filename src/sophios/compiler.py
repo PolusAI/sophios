@@ -21,17 +21,17 @@ from .ir.namespaces import declare_namespaces
 from .ir.frontdoor import SourceBundle
 from .ir.pipeline import front_end
 from .ir.realtime import extract
-from .ir.resolve import RegistrySnapshot, ToolDefinition
+from .ir.resolve import RegistrySnapshot, ToolCheck, ToolDefinition
 from .ir.names import NAMESPACE_SEPARATOR, Names
 from .ir.policy import RunPolicy, tolerant_tool
-from .ir.resolved import ResolvedTool, ResolvedWorkflow, non_boolean_whens, resolve
+from .ir.resolved import ResolvedWorkflow, non_boolean_whens, resolve
 from .ir.types import RegistryKey, StepId, StepNode, WorkflowGraph
 from .lang import versions
 from .lang.diagnostics import Diagnostic, Diagnostics, Locator, Severity, SophiosError
 from .lang.nodes import CwlRecord, OpaqueCwl, UnresolvedName
 from .lang.parser import Grammar
 from .lang.error_codes import SophiosErrorCode
-from .wic_types import Cwl
+from .wic_types import Cwl, Tool
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,7 +61,7 @@ def compile_source(bundle: SourceBundle,
         print(' starting compilation of', bundle.name)
     selected_version = versions.resolve(settings.lang_version, bundle.lang_version_pins)
     front = front_end(bundle.parsed, bundle.registry, name=bundle.name,
-                      lang_version=selected_version)
+                      lang_version=selected_version, check=_tool_check())
     if front.graph is None:
         raise SophiosError(front.diagnostics)
     if not front.graph.steps:
@@ -89,6 +89,22 @@ def compile_source(bundle: SourceBundle,
     return CompilationResult(graph, artifact, diagnostics, realtime, policy=settings.policy)
 
 
+def _tool_check() -> ToolCheck:
+    """What a compile asks of each tool a step runs: cwltool's validator, once per tool however many steps run it."""
+    refusals: dict[RegistryKey, str | None] = {}
+
+    def check(tool: ToolDefinition) -> str | None:
+        if tool.key not in refusals:
+            try:
+                utils_cwl.validate(tool.run_path, None if tool.from_file else tool.cwl)
+                refusals[tool.key] = None
+            except utils_cwl.InvalidTool as refused:
+                refusals[tool.key] = str(refused)
+        return refusals[tool.key]
+
+    return check
+
+
 def resolved_view(result: CompilationResult, *, values: Mapping[str, OpaqueCwl] | None = None,
                   outputs: Collection[str] | None = None) -> ResolvedWorkflow:
     """The resolved view of `result`'s graph, with `result.policy`, for a target to lower
@@ -112,12 +128,12 @@ def cwl_notes(view: ResolvedWorkflow) -> tuple[Diagnostic, ...]:
         for step, problem in non_boolean_whens(view))
 
 
-def _tools(graph: WorkflowGraph, artifact: CompilationArtifact) -> Iterator[tuple[StepId, ResolvedTool]]:
+def _tools(graph: WorkflowGraph, artifact: CompilationArtifact) -> Iterator[tuple[StepId, Tool]]:
     """Every tool step at any depth, with the tool its child artifact writes for it."""
     for step, child in zip(graph.steps, artifact.children, strict=True):
         called = graph.child(step.id)
         if called is None:
-            yield step.id, ResolvedTool(child.run_path, child.cwl)
+            yield step.id, Tool(child.run_path, child.cwl)
         else:
             yield from _tools(called, child)
 

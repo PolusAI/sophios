@@ -243,9 +243,17 @@ def _provoke_unchecked_cuda_field() -> None:
     from sophios.compiler import resolved_view
     from sophios.utils_nf import NEXTFLOW
 
-    gpu = CommandLineTool('gpu', Inputs(), Outputs(out=Output(cwl.file, glob='out'))).gpu(cuda_version_min='11.4')
+    gpu = CommandLineTool('gpu', Inputs(), Outputs(out=Output(cwl.file, glob='out'))).gpu(cuda_version_min='11.4',
+                                                                                          compute_capability='3.0')
     _, notes = NEXTFLOW.lower(resolved_view(compile_workflow_result(Workflow([Step(gpu)], 'provoke'))))
     raise SophiosError(notes)
+
+
+def _provoke_tool_refused() -> None:
+    """The workflow of tests/core/data/compiler/refused that runs tools cwltool's validator refuses."""
+    from .nextflow.testkit import refusal_of
+
+    refusal_of(DOCUMENTS.parent / 'compiler' / 'refused' / 'invalid_tools.wic')
 
 
 def _provoke_when_not_boolean() -> None:
@@ -377,6 +385,7 @@ COMPILED: Final[dict[SophiosErrorCode, Callable[[], object]]] = {
     SophiosErrorCode.IMAGE_UNAVAILABLE: _provoke_image_unavailable,
     SophiosErrorCode.UNCHECKED_CUDA_FIELD: _provoke_unchecked_cuda_field,
     SophiosErrorCode.WHEN_NOT_BOOLEAN: _provoke_when_not_boolean,
+    SophiosErrorCode.TOOL_REFUSED: _provoke_tool_refused,
     **{code: partial(_import_edited, code) for code in IMPORT_EDITS},
 }
 

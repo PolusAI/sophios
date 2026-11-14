@@ -11,7 +11,6 @@ import yaml
 
 from sophios import compiler
 from sophios import input_output
-from sophios import utils_cwl
 from sophios.post_compile import inline_artifact_runs
 from sophios.runtime_inputs import output_target_inputs, runner_job_inputs
 from sophios.wic_types import Json, Tools
@@ -64,9 +63,6 @@ async def compile_wf(request: Request) -> Json:
     workflow_temp = converter.wfb_to_wic(wfb_payload, req["plugins"])
     wkflw_name = "workflow_"
 
-    # Build canonical workflow object
-    workflow_can = utils_cwl.desugar_into_canonical_normal_form(workflow_temp)
-
     # ========= BUILD WIC COMPILE INPUT =========
     # Build a list of CLTs
     # The default list
@@ -78,7 +74,7 @@ async def compile_wf(request: Request) -> Json:
 
     # ========= COMPILE WORKFLOW ================
     bundle = frontdoor.bundle_from_source(
-        yaml.safe_dump(workflow_can, sort_keys=False), wkflw_name, {}, tools_cwl)
+        yaml.safe_dump(workflow_temp, sort_keys=False), wkflw_name, {}, tools_cwl)
     result = compiler.compile_source(bundle, settings, quiet=False)
     if result.realtime:
         analyses = ', '.join(declaration.analysis for declaration in result.realtime)
