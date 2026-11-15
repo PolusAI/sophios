@@ -1,6 +1,7 @@
 # pylint: disable=logging-fstring-interpolation,too-many-lines,protected-access
 """Python API for building Sophios workflows that compile to CWL."""
 
+import inspect
 import logging
 import sys
 import warnings
@@ -35,7 +36,6 @@ from ._errors import (
 from ._ports import (
     InputParameter,
     InputBinding,
-    OutputSourceBinding,
     OutputParameter,
     ParameterNamespace,
     ParameterStore,
@@ -58,7 +58,6 @@ from ._workflow_runtime import (
     Runner,
     Toil,
     check_workflow as _check_workflow,
-    coerce_path as _coerce_path,
     compiled as _compiled,
     draw_workflow as _draw_workflow,
     load_clt_document as _load_clt_document,
@@ -69,7 +68,6 @@ from ._workflow_runtime import (
     run_settings as _run_settings,
     run_workflow as _run_workflow,
     run_workflow_async as _run_workflow_async,
-    silence_autodiscovery_logging as _silence_autodiscovery_logging,
     start_workflow as _start_workflow,
     step_run as _step_run,
     validate_step_assignment as _validate_step_assignment,
@@ -78,7 +76,6 @@ from ._workflow_runtime import (
 
 
 logger = logging.getLogger("Sophios Python API")
-_silence_autodiscovery_logging()
 
 
 StrPath = str | Path
@@ -332,16 +329,13 @@ def _bind_workflow_output(workflow: "Workflow", output_name: str, value: Any) ->
     output_parameter = workflow._add_output(output_name, implicit=True)
     span = _caller_span()
     match value:
-        case OutputParameter(parent_obj=Step(process_name=process_name) | Workflow(process_name=process_name),
-                             name=name) as source:
+        case OutputParameter(parent_obj=Step() | Workflow()) as source:
             _check_declared_type(
                 output_parameter,
                 source.effective_type(),
                 context=f"{workflow.process_name}.outputs.{output_name}",
             )
-            output_parameter.bind_source(OutputSourceBinding(process_name, name), source_parameter=source,
-                                         span=span)
-            source.linked = True
+            output_parameter.bind_source(source, span=span)
         case WorkflowInputReference(workflow=source_workflow, name=name, implicit=implicit) \
                 if source_workflow is workflow:
             input_parameter = workflow._ensure_input(name, implicit=implicit)
@@ -350,8 +344,7 @@ def _bind_workflow_output(workflow: "Workflow", output_name: str, value: Any) ->
                 input_parameter.cwl_type(),
                 context=f"{workflow.process_name}.outputs.{output_name}",
             )
-            output_parameter.bind_source(OutputSourceBinding(None, name), source_parameter=input_parameter,
-                                         span=span)
+            output_parameter.bind_source(input_parameter, span=span)
         case _:
             raise InvalidLinkError(
                 "workflow outputs must be bound to a step output or a workflow input reference", span=span)
@@ -360,8 +353,13 @@ def _bind_workflow_output(workflow: "Workflow", output_name: str, value: Any) ->
 class _ProcessBase:  # pylint: disable=too-few-public-methods
     """Shared helpers for `Step`/`Workflow`; not meant to grow public surface of its own."""
 
+    _SYSTEM_ATTRS: ClassVar[frozenset[str]] = frozenset()
     process_name: str
     _inputs: ParameterStore[InputParameter]
+
+    def __init_subclass__(cls) -> None:
+        """The attributes a class declares are its own: assigning any other name binds the input of that name."""
+        cls._SYSTEM_ATTRS |= frozenset(inspect.get_annotations(cls))
 
     def _bound_inputs(self) -> tuple[tuple[str, InputValue], ...]:
         return tuple((port.name, port._binding.to_input_value())
@@ -380,24 +378,6 @@ class Step(_ProcessBase):
     ``step.inputs.*`` and leave through ``step.outputs.*``. Attribute sugar
     (``step.x = ...``) binds the input of that name; there is no string-keyed method.
     """
-
-    _SYSTEM_ATTRS: ClassVar[set[str]] = {
-        "clt",
-        "clt_path",
-        "process_name",
-        "cwl_version",
-        "yaml",
-        "cfg_yaml",
-        "_tool_registry",
-        "_inputs",
-        "_outputs",
-        "_span",
-        "inputs",
-        "outputs",
-        "scatter",
-        "scatterMethod",
-        "when",
-    }
 
     clt: CWLCommandLineTool
     clt_path: Path
@@ -494,11 +474,9 @@ class Step(_ProcessBase):
 
         match source:
             case str() | Path() as path:
-                clt_path_ = _coerce_path(path, field_name="clt_path")
-                step_inputs_file_ = _coerce_path(step_inputs_file, field_name="step_inputs_file", allow_none=True)
-                assert clt_path_ is not None
+                clt_path_ = Path(path)
                 clt, yaml_file = _load_clt(clt_path_, resolved_registry)
-                cfg_yaml = _load_yaml(step_inputs_file_) if step_inputs_file_ is not None else {}
+                cfg_yaml = _load_yaml(Path(step_inputs_file)) if step_inputs_file is not None else {}
 
                 self._initialize_loaded_tool(
                     clt=clt,
@@ -566,9 +544,7 @@ class Step(_ProcessBase):
         tool_registry: Tools | None,
     ) -> None:
         """Populate a step from an in-memory tool document: the one door a document or a built tool comes through."""
-        clt_path = _coerce_path(run_path or f"{process_name or document.get('id') or 'in_memory_tool'}.cwl",
-                                field_name="run_path")
-        assert clt_path is not None
+        clt_path = Path(run_path or f"{process_name or document.get('id') or 'in_memory_tool'}.cwl")
         clt, yaml_file = _load_clt_document(document, run_path=clt_path)
         self._initialize_loaded_tool(
             clt=clt,
@@ -606,13 +582,8 @@ class Step(_ProcessBase):
         # This proxy is the main bit of API "magic": it supports both
         # list-style access (`step.inputs[0]`) and named attribute access
         # (`step.inputs.message`) without duplicating wrapper classes.
-        self.inputs = ParameterNamespace(self._inputs, self._get_input, self._bind_input, read_only_error="")
-        self.outputs = ParameterNamespace(
-            self._outputs,
-            self._get_output,
-            None,
-            read_only_error="Step outputs are read-only; cannot set {name!r}",
-        )
+        self.inputs = ParameterNamespace(self._inputs, self._get_input, self._bind_input)
+        self.outputs = ParameterNamespace(self._outputs, self._get_output, None)
         self.scatter = []
         self.scatterMethod = ""
         self.when = ""
@@ -733,17 +704,6 @@ class Step(_ProcessBase):
 class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
     """A Sophios workflow composed from ``Step`` objects and nested ``Workflow`` objects."""
 
-    _SYSTEM_ATTRS: ClassVar[set[str]] = {
-        "steps",
-        "process_name",
-        "_inputs",
-        "_outputs",
-        "_span",
-        "inputs",
-        "outputs",
-        "yml_path",
-    }
-
     steps: "list[Step | Workflow]"
     process_name: str
     _inputs: ParameterStore[InputParameter]
@@ -778,13 +738,11 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
             self._inputs,
             self._input_reference,
             self._bind_input_from_namespace,
-            read_only_error="",
         )
         self.outputs = ParameterNamespace(
             self._outputs,
             self._read_output,
             self._bind_output_from_namespace,
-            read_only_error="",
         )
         self.yml_path = None
 
@@ -994,9 +952,7 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
         Returns:
             Workflow: The workflow the file describes.
         """
-        root = _coerce_path(path, field_name="path")
-        assert root is not None
-        return _workflow_from_wic(root, tool_registry or {}, workflow_paths or {})
+        return _workflow_from_wic(Path(path), tool_registry or {}, workflow_paths or {})
 
     def _flatten_steps(self) -> list[Step]:
         """Return every concrete step in this workflow tree."""

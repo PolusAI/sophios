@@ -1,9 +1,4 @@
-"""Internal runtime helpers for the Python workflow API.
-
-This module keeps filesystem loading, compilation, and execution details out
-of the public workflow module so `Step` and `Workflow` stay focused on
-Python-facing workflow authoring.
-"""
+"""Internal runtime helpers for the Python workflow API: loading, compiling and running, kept out of `workflow`."""
 
 # pylint: disable=protected-access
 # This module is the private adapter layer between workflow objects and the
@@ -17,7 +12,7 @@ import warnings
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePath
-from typing import TYPE_CHECKING, Any, Final, NamedTuple, Protocol, TypeVar
+from typing import TYPE_CHECKING, Any, Final, NamedTuple, TypeVar
 
 import graphviz
 import yaml
@@ -41,7 +36,7 @@ from sophios.ir.refusals import NotLowered
 from sophios.ir.resolved import ResolvedWorkflow, bind
 from sophios.ir.types import AuthoredName
 from sophios.lang import CwlRecord, Diagnostic, Diagnostics, Document, ParseResult, Severity, SophiosError, render
-from sophios.lang.cwl import SCATTER_METHODS
+from sophios.lang.cwl import SCATTER_METHODS, ports_named
 from sophios.lang.diagnostics import report
 from sophios.lang import Step as LangStep
 from sophios.lang.error_codes import SophiosErrorCode
@@ -69,38 +64,6 @@ ParameterT = TypeVar("ParameterT")
 RUN_DEFAULTS: Final = RunSettings(Cwltool())
 
 
-def silence_autodiscovery_logging() -> None:
-    """Suppress noisy autodiscovery logs during Python API imports."""
-    logging.getLogger("wicautodiscovery").disabled = True
-
-
-class _CWLParameterDefinition(Protocol):  # pylint: disable=too-few-public-methods
-    """Minimal structural type shared by parsed CWL input/output parameters."""
-
-    id: Any
-    type_: Any
-
-
-def _parameter_name(parameter_id: Any) -> str:
-    """The public name of a CWL parameter id (its last `#` or `/` segment)."""
-    return str(parameter_id).rsplit("#", maxsplit=1)[-1].rsplit("/", maxsplit=1)[-1]
-
-
-def coerce_path(value: str | Path | None, *, field_name: str, allow_none: bool = False) -> Path | None:
-    """Normalize string-like path input to `Path`. `field_name` names the
-    parameter in the `TypeError` the last branch raises."""
-    match value:
-        case Path() as path:
-            return path
-        case str() as path_str:
-            return Path(path_str)
-        case None if allow_none:
-            return None
-        case _:
-            allowed = "Path or str, or None" if allow_none else "Path or str"
-            raise TypeError(f"{field_name} must be a {allowed}")
-
-
 def normalize_workflow_name(workflow_name: str) -> str:
     """Convert a user-facing workflow name into a filesystem-safe id."""
     normalized_name = workflow_name.lstrip("/").lstrip(" ")
@@ -123,14 +86,12 @@ def lookup_parameter(
         raise AttributeError(f"{owner_name!r} has no {kind} named {name!r}") from exc
 
 
-def _validate_scatter(items: list[Any], owner: Any | None) -> None:
+def _validate_scatter(items: list[Any], owner: Any) -> None:
     """Raise unless `items` are distinct, bound, array-valued inputs of `owner`."""
     if not all(isinstance(item, InputParameter) for item in items):
         raise TypeError("all scatter inputs must be InputParameter type")
     if len({id(item) for item in items}) != len(items):
         raise ValueError("scatter inputs must be unique")
-    if owner is None:
-        return
     for item in items:
         if item.parent_obj is not owner:
             raise ValueError("scatter inputs must belong to the same step")
@@ -140,7 +101,7 @@ def _validate_scatter(items: list[Any], owner: Any | None) -> None:
             raise ValueError("scatter inputs must be bound to array-valued data")
 
 
-def validate_step_assignment(name: str, value: Any, *, owner: Any | None = None) -> None:
+def validate_step_assignment(name: str, value: Any, *, owner: Any) -> None:
     """Validate assignments to special step attributes.
 
     Raises:
@@ -164,15 +125,15 @@ def validate_step_assignment(name: str, value: Any, *, owner: Any | None = None)
 
 
 def populate_parameters(
-    cwl_parameters: list[_CWLParameterDefinition],
+    cwl_parameters: list[Any],
     store: ParameterStore[Any],
     parameter_cls: type[InputParameter] | type[OutputParameter],
     *,
     parent: Any,
 ) -> None:
     """Populate a parameter store from CWL input or output declarations."""
-    for parameter in cwl_parameters:
-        store.add(parameter_cls(_parameter_name(parameter.id), parameter.type_, parent_obj=parent))
+    for name, parameter in ports_named(cwl_parameters).items():
+        store.add(parameter_cls(name, parameter.type_, parent_obj=parent))
 
 
 def load_clt(clt_path: Path, tool_registry: Tools) -> tuple[CWLCommandLineTool, dict[str, Any]]:
@@ -216,14 +177,9 @@ def load_clt_document(
     """Load an in-memory CWL CommandLineTool document.
 
     Raises:
-        TypeError: If `document` does not normalize to a mapping.
         InvalidCLTError: If the CWL document cannot be parsed.
     """
-    match yaml.safe_load(yaml.safe_dump(dict(document), sort_keys=False)):
-        case dict() as loaded:
-            yaml_file = tool_process(loaded, str(run_path))
-        case _:
-            raise TypeError("document must be a mapping of CWL fields")
+    yaml_file = tool_process(yaml.safe_load(yaml.safe_dump(dict(document), sort_keys=False)), str(run_path))
     try:
         clt = load_document_by_yaml(yaml_file, str(run_path))
     except Exception as exc:
@@ -249,7 +205,7 @@ def workflow_document(workflow: "Workflow") -> Document:
             )
         workflow_inputs[parameter.name] = {"type": cwl_type}
 
-    workflow_outputs: dict[str, Any] = {parameter.name: parameter.to_workflow_output(workflow.steps)
+    workflow_outputs: dict[str, Any] = {parameter.name: parameter.to_workflow_output()
                                         for parameter in workflow._outputs}
     return Document(
         steps=tuple(_with_defaults_resolved(step._as_workflow_step(), Path.cwd()) for step in workflow.steps),

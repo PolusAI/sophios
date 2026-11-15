@@ -3,7 +3,7 @@
 import functools
 import inspect
 import keyword
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from pathlib import Path
@@ -15,11 +15,6 @@ from sophios.lang.cwl import CWLAtomicType, canonical_type, required
 from sophios.lang.spans import SourceSpan
 
 _PACKAGE_ROOT: Final = Path(__file__).resolve().parents[2]
-
-
-def normalize_parameter_name(cwl_id: str) -> str:
-    """Return the local parameter name from a CWL id."""
-    return cwl_id.split("#")[-1]
 
 
 def validate_python_identifier_name(name: str, *, context: str = "parameter name") -> str:
@@ -46,8 +41,6 @@ def contains_any_type(type_obj: Any) -> bool:
     match type_obj:
         case CWLAtomicType.ANY:
             return True
-        case str() as type_name:
-            return type_name == CWLAtomicType.ANY.value
         case list() | tuple() as type_options:
             return any(contains_any_type(type_option) for type_option in type_options)
         case dict() as type_dict:
@@ -78,42 +71,6 @@ def serialize_value(value: Any) -> Any:
             return {key: serialize_value(item) for key, item in items.items()}
         case _:
             return value
-
-
-def _infer_array_parameter_type(items: Sequence[Any]) -> Any:
-    """Infer a CWL array type from a homogeneous list/tuple literal, or `None` if it isn't one."""
-    item_types = [infer_literal_parameter_type(item) for item in items]
-    if not item_types or None in item_types or any(item_type != item_types[0] for item_type in item_types):
-        return None
-    return {"type": "array", "items": item_types[0]}
-
-
-def infer_literal_parameter_type(value: Any) -> Any:  # pylint: disable=too-many-return-statements
-    """Infer a CWL type expression from a Python literal when practical.
-
-    Not from a `Path`: whether it names a File or a Directory is for the input's declared type to say,
-    not the disk this runs on.
-
-    One `return` per atomic CWL type keeps this dispatch table-like and easy
-    to scan; collapsing cases to reduce the count would hurt readability.
-    """
-    match value:
-        case None:
-            return CWLAtomicType.NULL.value
-        case bool():
-            return CWLAtomicType.BOOLEAN.value
-        case int():
-            return CWLAtomicType.INT.value
-        case float():
-            return CWLAtomicType.FLOAT.value
-        case str():
-            return CWLAtomicType.STRING.value
-        case list() | tuple() as items:
-            return _infer_array_parameter_type(items)
-        case {"class": "File" | "Directory" as class_name}:
-            return class_name
-        case _:
-            return None
 
 
 def load_yaml(path: Path) -> dict[str, Any]:

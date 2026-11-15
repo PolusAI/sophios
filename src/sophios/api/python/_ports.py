@@ -1,6 +1,6 @@
 """Parameter and namespace helpers for the Python workflow API."""
 
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast
 
@@ -10,12 +10,9 @@ from sophios.lang import CwlRecord, EdgeRef, InlineLiteral, InputValue, Unresolv
 from sophios.lang.cwl import PICKS_ONE
 from sophios.lang.spans import SourceSpan
 
-from ._errors import InvalidLinkError
 from ._utils import (contains_any_type,
-                     infer_literal_parameter_type,
                      is_array_type,
                      is_reserved_name,
-                     normalize_parameter_name,
                      normalize_parameter_type,
                      serialize_value,
                      validate_python_identifier_name)
@@ -66,38 +63,6 @@ class InputBinding:
                 return UnresolvedName(self.value, self.span)
 
 
-@dataclass(frozen=True, slots=True)
-class OutputSourceBinding:
-    """Source exposed as a formal workflow output."""
-
-    step_id: str | None
-    source_name: str
-
-    def to_output_source(self, steps: Sequence[Any], source_parameter: Any = None) -> str:
-        """Render the authored `outputSource`: `<owner step>/<port>`, or the input name.
-
-        Resolution goes through the source parameter's live owner rather than
-        `step_id`, which is a snapshot of a mutable display name: renaming a
-        step after binding an output leaves the snapshot stale while the object
-        graph stays valid. `step_id` is retained because it is what the user
-        wrote, and it names the step in the error below. Step names are unique
-        within a workflow, so the owner's name is its address.
-
-        Raises:
-            InvalidLinkError: If the source is not one of the workflow's steps.
-        """
-        if self.step_id is None:
-            return self.source_name
-        owner = getattr(source_parameter, "parent_obj", None)
-        if owner is None or not any(owner is step for step in steps):
-            raise InvalidLinkError(
-                f"workflow output source {self.step_id}/{self.source_name} is not one of this "
-                "workflow's steps; bind it to a step the workflow was constructed with"
-            )
-        step = f"{owner.process_name}.wic" if type(owner).__name__ == "Workflow" else owner.process_name
-        return f"{step}/{self.source_name}"
-
-
 @dataclass(slots=True)
 class ParameterStore(Generic[ParameterT]):
     """Ordered name -> parameter mapping.
@@ -131,9 +96,7 @@ class ParameterStore(Generic[ParameterT]):
     def __len__(self) -> int:
         return len(self.parameters)
 
-    def __getitem__(self, index: object) -> ParameterT:
-        if not isinstance(index, int):
-            raise TypeError("parameter collections support integer indexing only; use attribute access for names")
+    def __getitem__(self, index: int) -> ParameterT:
         return tuple(self.parameters.values())[index]
 
     def __repr__(self) -> str:
@@ -148,15 +111,11 @@ class _ParameterBase:
     parameter_type: Any
     parent_obj: Any = None
     required: bool = field(init=False)
-    linked: bool = field(default=False, init=False)
 
     def __post_init__(self) -> None:
         self.set_parameter_type(self.parameter_type)
         self.name = _validate_namespace_name(
-            validate_python_identifier_name(
-                normalize_parameter_name(self.name),
-                context="CWL parameter name",
-            ),
+            validate_python_identifier_name(self.name, context="CWL parameter name"),
             context="CWL parameter name",
         )
 
@@ -171,8 +130,6 @@ class _ParameterBase:
         if self.required:
             return serialize_value(self.parameter_type)
         match self.parameter_type:
-            case list() as options if "null" in options:
-                return serialize_value(options)
             case list() as options:
                 return ["null", *serialize_value(options)]
             case _:
@@ -204,7 +161,6 @@ class InputParameter(_ParameterBase):
 
     def _set_binding(self, binding: InputBinding | None) -> None:
         self._binding = binding
-        self.linked = False if binding is None else binding.linked
 
     def record_sources(self) -> tuple[Any, ...]:
         """The port objects a record binding names; none for any other binding."""
@@ -224,29 +180,21 @@ class InputParameter(_ParameterBase):
             case _:
                 return ()
 
-    def effective_source_type(self) -> Any:
-        """The type the bound value carries when the workflow runs, computed now, not
-        at bind time: a source step scattered after the bind lifts it an array level
-        per layer, as its owner's `_output_rank()` says."""
-        if self._binding is None:
-            return None
-        match self._binding.kind:
-            case "inline":
-                return infer_literal_parameter_type(self._binding.value)
-            case "alias":
-                return self._binding.source.effective_type()
-            case "record":
-                return _record_type(self._binding.value, self._binding.source)
-            case _:
-                return self._binding.source.parameter_type
-
     def is_scatterable(self) -> bool:
-        """Whether the bound value is array-valued when the workflow runs."""
-        if self._binding is None:
+        """Whether the bound value is array-valued when the workflow runs, computed now, not at bind time: a source
+        step scattered after the bind lifts it an array level per layer, as its owner's `_output_rank()` says."""
+        binding = self._binding
+        if binding is None:
             return False
-        if self._binding.kind == "inline" and isinstance(self._binding.value, (list, tuple)):
-            return True
-        effective = self.effective_source_type()
+        match binding.kind:
+            case "inline":
+                return isinstance(binding.value, (list, tuple))
+            case "alias":
+                effective = binding.source.effective_type()
+            case "record":
+                effective = _record_type(binding.value, binding.source)
+            case _:
+                effective = binding.source.parameter_type
         return is_array_type(effective) or contains_any_type(effective)
 
     def is_bound(self) -> bool:
@@ -262,7 +210,6 @@ class OutputParameter(_ParameterBase):
     """
 
     _anchor_name: str | None = field(default=None, init=False, repr=False)
-    _source: OutputSourceBinding | None = field(default=None, init=False, repr=False)
     _source_parameter: Any = field(default=None, init=False, repr=False)
     _span: SourceSpan | None = field(default=None, init=False, repr=False)
 
@@ -275,20 +222,16 @@ class OutputParameter(_ParameterBase):
         """Return this output's anchor name, assigning `suggested_name` if none exists yet."""
         if self._anchor_name is None:
             self._anchor_name = suggested_name
-        self.linked = True
         return self._anchor_name
 
-    def bind_source(self, source: OutputSourceBinding, source_parameter: Any = None,
-                    span: SourceSpan | None = None) -> None:
-        """Bind this output to an upstream source, at the Python line `span`, and mark it as linked."""
-        self._source = source
+    def bind_source(self, source_parameter: Any, span: SourceSpan | None = None) -> None:
+        """Bind this output to an upstream source, at the Python line `span`."""
         self._source_parameter = source_parameter
         self._span = span
-        self.linked = True
 
     def has_source(self) -> bool:
         """Return whether this output is bound to a source."""
-        return self._source is not None
+        return self._source_parameter is not None
 
     def effective_type(self) -> Any:
         """The type this output carries when the workflow runs, computed now, not at
@@ -307,21 +250,22 @@ class OutputParameter(_ParameterBase):
         rank = self.parent_obj._output_rank()  # pylint: disable=protected-access
         return layered(PortType(declared), rank).canonical
 
-    def to_workflow_output(self, steps: Sequence[Any]) -> dict[str, Any]:
-        """Serialize this workflow output parameter to CWL.
+    def to_workflow_output(self) -> dict[str, Any]:
+        """Serialize this workflow output parameter to CWL. The `outputSource` is addressed through the source's live
+        owner, so a step renamed after the output was bound is named as it is now.
 
         Raises:
-            ValueError: If the output has no source or no resolved type.
+            ValueError: If the output has no resolved type.
         """
-        if self._source is None:
-            raise ValueError(f"workflow output {self.name!r} has no source binding")
+        source = self._source_parameter
         cwl_type = self.effective_type()
         if cwl_type is None:
             raise ValueError(f"workflow output {self.name!r} has no resolved type")
-        return {
-            "type": cwl_type,
-            "outputSource": self._source.to_output_source(steps, self._source_parameter),
-        }
+        if not isinstance(source, OutputParameter):
+            return {"type": cwl_type, "outputSource": source.name}
+        owner = source.parent_obj
+        step = f"{owner.process_name}.wic" if type(owner).__name__ == "Workflow" else owner.process_name
+        return {"type": cwl_type, "outputSource": f"{step}/{source.name}"}
 
 
 def _produced_type(source: Any) -> Any:
@@ -378,24 +322,20 @@ class ParameterNamespace(Generic[ParameterT, ViewT]):
     near-duplicate wrapper classes.
     """
 
-    __slots__ = ("_store", "_getter", "_setter", "_read_only_error")
+    __slots__ = ("_store", "_getter", "_setter")
     _store: ParameterStore[ParameterT]
     _getter: Callable[[str], ViewT]
     _setter: Callable[[str, Any], None] | None
-    _read_only_error: str
 
     def __init__(
         self,
         store: ParameterStore[ParameterT],
         getter: Callable[[str], ViewT],
         setter: Callable[[str, Any], None] | None,
-        *,
-        read_only_error: str,
     ) -> None:
         object.__setattr__(self, "_store", store)
         object.__setattr__(self, "_getter", getter)
         object.__setattr__(self, "_setter", setter)
-        object.__setattr__(self, "_read_only_error", read_only_error)
 
     def __iter__(self) -> Iterator[ParameterT]:
         return iter(self._store)
@@ -413,7 +353,7 @@ class ParameterNamespace(Generic[ParameterT, ViewT]):
 
     def __setattr__(self, name: str, value: Any) -> None:
         if self._setter is None:
-            raise AttributeError(self._read_only_error.format(name=name))
+            raise AttributeError(f"Step outputs are read-only; cannot set {name!r}")
         self._setter(name, value)
 
     def __repr__(self) -> str:

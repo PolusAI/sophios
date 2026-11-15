@@ -1,9 +1,4 @@
-"""Private support code for the public Tool Builder façade.
-
-The public module deliberately keeps the visible API small. This helper module
-holds the repetitive rendering, validation, and sanitization logic so the
-main `tool_builder.py` file can stay focused on the user-facing surface.
-"""
+"""Private support code for the public Tool Builder: rendering, validation and sanitization."""
 
 from dataclasses import dataclass
 from pathlib import Path
@@ -51,12 +46,10 @@ def _contains_expression(value: Any) -> bool:
     match value:
         case str():
             return "$(" in value or "${" in value
-        case list() | tuple():
+        case list():
             return any(map(_contains_expression, value))
         case dict():
             return any(map(_contains_expression, value.values()))
-        case _ if hasattr(value, "to_dict") and callable(value.to_dict):
-            return _contains_expression(value.to_dict())
         case _:
             return False
 
