@@ -339,19 +339,6 @@ def compile_workflow_result(  # pylint: disable=too-many-arguments
     quiet: bool = False,
 ) -> CompilationResult:
     """Compile a Python API workflow to the graph-derived internal result."""
-    return _compile_bundle(workflow, tool_registry, lang_version, inference, policy, quiet=quiet)[1]
-
-
-def _compile_bundle(  # pylint: disable=too-many-arguments
-    workflow: "Workflow",
-    tool_registry: Tools | None,
-    lang_version: str | None,
-    inference: Inference,
-    policy: RunPolicy = RunPolicy(),
-    *,
-    quiet: bool = False,
-) -> tuple[SourceBundle, CompilationResult]:
-    """The documents `workflow` is compiled from, and the result of compiling them under `policy`."""
     workflow._validate()
 
     merged_tools = _merged_known_tools(workflow, tool_registry)
@@ -363,7 +350,7 @@ def _compile_bundle(  # pylint: disable=too-many-arguments
         RegistrySnapshot.from_tools(merged_tools, workflows=_nested_documents(workflow)))
     result = compiler.compile_source(bundle, settings, quiet=quiet)
     _bound_values(workflow, compiler.resolved_view(result))  # refuses a value that does not coerce
-    return bundle, result
+    return result
 
 
 def _bound_values(workflow: "Workflow", view: ResolvedWorkflow) -> dict[str, Any]:
@@ -402,7 +389,8 @@ def draw_workflow(
     lang_version: str | None,
 ) -> graphviz.Digraph:
     """Compile `workflow` once and draw the result: see `Workflow.draw`."""
-    bundle, result = _compile_bundle(workflow, tool_registry, lang_version, inference)
+    result = compile_workflow_result(workflow, tool_registry=tool_registry, lang_version=lang_version,
+                                     inference=inference)
     settings: GraphSettings = {
         "graph_dark_theme": dark,
         "graph_inline_depth": inline_depth,
@@ -412,7 +400,7 @@ def draw_workflow(
         "graph_show_outputs": False,
     }
     background = _DARK_BACKGROUND if dark else _LIGHT_BACKGROUND
-    return drawing.draw(result, bundle, settings, bundle.name, background=background)
+    return drawing.draw(result, settings, result.graph.name, background=background)
 
 
 class ServiceDocument(NamedTuple):

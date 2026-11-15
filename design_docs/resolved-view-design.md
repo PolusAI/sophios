@@ -157,8 +157,8 @@ What the representation decides; `ir/resolved.py` holds the fields:
   and `type` is the type it delivers (§5).
 - A step holds the keys it did not interpret as `passthrough`, in written order, with `requirements` and `fields`
   derived from it, and `required_inputs`, the inputs its process must be given a value for, which the CWL target
-  guards a partial-failure `when` with. A workflow holds the same for the document: `namespaces`, `schemas`,
-  `requirement_map` (the `requirements:` mapping as written), `passthrough` and `inlineable`. What is implied
+  guards a partial-failure `when` with. A workflow holds the same for the document: `namespaces`,
+  `passthrough` (the sections as written, `requirements:` included) and `inlineable`. What is implied
   (requirements, the EDAM namespace, the guarded `when`, `run:` file names) is not in the view: the CWL target
   computes it.
 - A `Condition` keeps the authored `when` with its subset tree, the tree's type and the subset's problem; the
@@ -171,7 +171,8 @@ What the representation decides; `ir/resolved.py` holds the fields:
 rendering and reading stay in `nf_expr` (`nf_expr.py:393-626`). PR B adds `ResolvedStep.inherited`, a tool
 step's requirements from outside its tool (§8), with the inheritance that computes it.
 
-Invariants, checked where they are cheap (`__post_init__`) and otherwise by the builder:
+Invariants, held by the builder (`resolve()` builds every reference from an input or step of the same workflow; the
+emitted CWL, validated by cwltool in `test_emit_validates_as_cwl_v1_2`, would show a dangling one):
 
 - Every graph step is one `ResolvedStep`: `run` is a `ResolvedWorkflow` exactly when its `ProcessRun.child` is
   set (`ir/types.py:267-280`).

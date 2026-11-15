@@ -20,9 +20,8 @@ real-time declarations.
    file once, follows the steps to the files they reach, registers inline
    `run:` bodies and `run:` paths, and builds the bundle. The Python API
    builds its bundle from the `Document` it constructs, with no parse.
-2. **Resolve** selects the language version and pairs each step with its
-   process (a tool, a workflow, an implementation, an inline body) from an
-   immutable registry snapshot, applying `wic: steps:` contributions. It
+2. **Resolve** pairs each step with its process (a tool, a workflow, an
+   implementation, an inline body) from an immutable registry snapshot, applying `wic: steps:` contributions. It
    discovers nothing and parses nothing.
 3. **Lower** builds an immutable `WorkflowGraph`: steps with complete port
    declarations, authored bindings, the workflow boundary, child graphs for

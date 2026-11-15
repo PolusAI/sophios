@@ -280,11 +280,7 @@ class ResolvedWorkflow:  # pylint: disable=too-many-instance-attributes
     steps: tuple[ResolvedStep, ...]
     #: `$namespaces`.
     namespaces: tuple[tuple[str, OpaqueCwl], ...]
-    #: `$schemas`.
-    schemas: tuple[OpaqueCwl, ...]
-    #: The `requirements:` mapping the author wrote, as Lower takes it out of the document.
-    requirement_map: tuple[tuple[str, OpaqueCwl], ...]
-    #: Every other top-level key, verbatim and in written order: doc, hints, ...
+    #: Every other top-level key, verbatim and in written order: requirements, hints, `$schemas`, doc, ...
     passthrough: tuple[tuple[str, OpaqueCwl], ...]
     #: The compilation's; the same object at every depth.
     policy: RunPolicy
@@ -300,33 +296,12 @@ class ResolvedWorkflow:  # pylint: disable=too-many-instance-attributes
     @property
     def requirements(self) -> tuple[Requirement, ...]:
         """This document's own requirements, then its hints."""
-        return _requirements(self.passthrough, self.requirement_map)[0]
+        return _requirements(self.passthrough)[0]
 
     @property
     def fields(self) -> tuple[tuple[str, OpaqueCwl], ...]:
-        """Every other top-level key, verbatim: `$namespaces`, `$schemas`, doc, ..."""
-        documents: tuple[tuple[str, OpaqueCwl], ...] = (('$namespaces', dict(self.namespaces)),) \
-            if self.namespaces else ()
-        documents += (('$schemas', list(self.schemas)),) if self.schemas else ()
-        return documents + _requirements(self.passthrough, self.requirement_map)[1]
-
-    def __post_init__(self) -> None:
-        """Reject a reference to anything outside this workflow."""
-        inputs = {port.name for port in self.inputs}
-        outputs = {step.local: set(step.outputs) for step in self.steps}
-
-        def known(ref: Ref) -> bool:
-            match ref:
-                case InputRef(name=name):
-                    return name in inputs
-                case OutputRef(step=step, port=port):
-                    return port in outputs.get(step, ())
-            return False
-
-        for ref in [*(source for step in self.steps for port in step.inputs for source in port.sources),
-                    *(port.source for port in self.outputs if isinstance(port.source, (InputRef, OutputRef)))]:
-            if not known(ref):
-                raise ValueError(f'{ref} names nothing in workflow {self.name!r}')
+        """Every other top-level key, verbatim: `$schemas`, doc, ..."""
+        return _requirements(self.passthrough)[1]
 
 
 def resolve(graph: WorkflowGraph, tools: Mapping[StepId, Tool], *, policy: RunPolicy = RunPolicy()) -> ResolvedWorkflow:
@@ -375,9 +350,9 @@ def _workflow(graph: WorkflowGraph, outer: '_Level', given: Mapping[str, OpaqueC
     """A workflow's view, inside the level `outer` of the call that runs it, or of nothing for the root; `given` is
     the type each input the call binds holds, which is what its sources deliver (§5)."""
     names = outer.names
-    requirements = _requirements(graph.passthrough, graph.requirements)[0]
+    requirements = _requirements(graph.passthrough)[0]
     order = written_order(graph)
-    jobs = {names.port(binding.name): binding.value for binding in graph.job_bindings}
+    jobs = {names.port(name): value for name, value in graph.job_bindings}
     inputs = tuple(WorkflowInput(names.port(port.name), port.declaration, jobs.get(names.port(port.name)),
                                  names.port(port.name) in jobs, made_from=_made_from(port.name, names),
                                  span=port.span or graph.span)
@@ -390,8 +365,8 @@ def _workflow(graph: WorkflowGraph, outer: '_Level', given: Mapping[str, OpaqueC
     outputs = tuple(WorkflowOutput(names.port(port.name), port.declaration, _output_source(port, level.inputs, names),
                                    port.span or graph.span)
                     for port in graph.workflow_outputs)
-    return ResolvedWorkflow(graph.name, inputs, outputs, steps, graph.namespaces, graph.schemas, graph.requirements,
-                            graph.passthrough, level.policy, graph.inlineable, graph.span)
+    return ResolvedWorkflow(graph.name, inputs, outputs, steps, graph.namespaces, graph.passthrough, level.policy,
+                            graph.inlineable, graph.span)
 
 
 def _made_from(name: PortName, names: Names) -> tuple[str, str] | None:
@@ -414,12 +389,11 @@ def _output_source(port: WorkflowPort, inputs: Collection[str], names: Names) ->
     return Verbatim(port.output_source)
 
 
-def _requirements(passthrough: tuple[tuple[str, OpaqueCwl], ...],
-                  requirements: tuple[tuple[str, OpaqueCwl], ...] = ()) -> tuple[
-                      tuple[Requirement, ...], tuple[tuple[str, OpaqueCwl], ...]]:
+def _requirements(passthrough: tuple[tuple[str, OpaqueCwl], ...]) -> tuple[
+        tuple[Requirement, ...], tuple[tuple[str, OpaqueCwl], ...]]:
     """The requirements, then the hints, written as a mapping; and every other key, a section of another shape
     among them."""
-    found = [Requirement(str(cls), body, False) for cls, body in requirements]
+    found: list[Requirement] = []
     fields: list[tuple[str, OpaqueCwl]] = []
     for key, value in passthrough:
         if key in ('requirements', 'hints') and isinstance(value, dict):

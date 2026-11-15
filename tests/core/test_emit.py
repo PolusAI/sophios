@@ -29,7 +29,7 @@ from sophios.ir.policy import RunPolicy
 from sophios.ir.resolve import RegistrySnapshot, resolve
 from sophios.ir.resolved import (Entry, InputRef, OutputRef, ResolvedStep, ResolvedWorkflow, StepInput, WorkflowInput,
                                  WorkflowOutput, resolve as resolve_view)
-from sophios.ir.types import AuthoredName, EdgeOrigin, PortDeclaration, PortType, WorkflowGraph
+from sophios.ir.types import AuthoredName, PortDeclaration, PortType, WorkflowGraph
 from sophios.lang.cwl import CWL_VERSION
 from sophios.lang.diagnostics import SophiosError
 from sophios.wic_types import StepId as LegacyStepId, Tool, Yaml
@@ -118,7 +118,7 @@ def test_a_drawn_workflow_compiles_by_every_law(workflow: Yaml) -> None:  # pyli
     assert inferred.graph is not None, list(inferred.diagnostics)
     for graph in _graphs(inferred.graph):
         original = next(item for item in _graphs(linked.graph) if item.namespace == graph.namespace)
-        for edge in (edge for edge in graph.linked_edges if edge.origin is EdgeOrigin.INFERRED):
+        for edge in (edge for edge in graph.linked_edges if edge.inferred):
             position = next(index for index, step in enumerate(original.steps) if step.id == edge.sink.step)
             sink = next(port for port in original.steps[position].inputs if port.id.port == edge.sink.port)
             assert inference_choice(original.steps, position, sink) == edge.source
@@ -163,7 +163,7 @@ def test_a_hand_built_view_emits_without_a_compiler_adapter() -> None:
     view = ResolvedWorkflow(
         'handmade', (WorkflowInput('message', message, 'hello', True),),
         (WorkflowOutput('file', file, OutputRef('write', 'file'), None),), (step,),
-        (), (), (), (), RunPolicy(), True, None)
+        (), (), RunPolicy(), True, None)
     artifact = artifact_tree(view)
     assert artifact.cwl == {
         'steps': [{'id': 'write', 'in': {'message': {'source': 'message'}},
@@ -184,7 +184,7 @@ def test_a_scatter_method_with_nothing_to_scatter_is_written_only_when_it_says_s
     """The method of a step with no `scatter` is a key as written, and `null` writes no key."""
     step = ResolvedStep('write', 'write', Tool('write.cwl', {'class': 'CommandLineTool'}), (), (), None, None,
                         (('scatterMethod', method), ('label', 'hi')), (), None)
-    view = ResolvedWorkflow('handmade', (), (), (step,), (), (), (), (), RunPolicy(), True, None)
+    view = ResolvedWorkflow('handmade', (), (), (step,), (), (), RunPolicy(), True, None)
     assert artifact_tree(view).cwl['steps'][0] == {
         'id': 'write', 'in': {}, 'run': 'handmade~write.cwl', 'out': [], **written, 'label': 'hi'}
 

@@ -14,7 +14,6 @@ from .types import (
     DerivedName,
     Direction,
     Edge,
-    EdgeOrigin,
     PhaseResult,
     Port,
     PortDeclaration,
@@ -64,7 +63,7 @@ class InsertionCatalog:
             Insertion(tool.key, process_ports(tool.cwl.get('inputs'), output=False),
                       process_ports(tool.cwl.get('outputs'), output=True))
             for tool in registry.tools
-            if tool.key.name.startswith('insert_steps_automatically_') and isinstance(tool.cwl, dict))))
+            if tool.key.name.startswith('insert_steps_automatically_'))))
 
 
 def infer(graph: WorkflowGraph, policy: InferencePolicy = InferencePolicy(),
@@ -129,7 +128,7 @@ def _infer_local(graph: WorkflowGraph, policy: InferencePolicy, catalog: Inserti
                 continue
             source, alternatives, attempted = _candidate(graph.steps, position, port, policy)
             if source is not None:
-                linked_edges.append(Edge(source, port.id, port.span, origin=EdgeOrigin.INFERRED))
+                linked_edges.append(Edge(source, port.id, port.span, inferred=True))
                 if alternatives:
                     choices.append((step, port, source, alternatives))
                 continue
@@ -175,13 +174,13 @@ def _refuse_duplicates(graph: WorkflowGraph, edges: list[Edge],
             groups.setdefault((leaf, source), []).append((ports[local], edge))
     refused: set[Edge] = set()
     for members in groups.values():
-        if len(members) < 2 or all(edge.origin is not EdgeOrigin.INFERRED for _, edge in members):
+        if len(members) < 2 or not any(edge.inferred for _, edge in members):
             continue
         output_formats = {value for _, edge in members if edge.source in ports
                           for value in _formats(ports[edge.source].declaration)}
         if all(output_formats & set(_formats(sink.declaration)) for sink, _ in members):
             continue
-        inferred = [(sink, edge) for sink, edge in members if edge.origin is EdgeOrigin.INFERRED]
+        inferred = [(sink, edge) for sink, edge in members if edge.inferred]
         if refused.issuperset(edge for _, edge in inferred):
             continue
         refused.update(edge for _, edge in inferred)

@@ -6,13 +6,13 @@ from .types import PhaseResult
 
 
 def front_end(parsed: ParseResult, registry: RegistrySnapshot, *, name: str = 'workflow',
-              lang_version: str | None = None, check: ToolCheck | None = None) -> PhaseResult:
+              check: ToolCheck | None = None) -> PhaseResult:
     """Run the direct typed chain from a root already parsed; no mapping or
     text adapter sits within it. The graph, when every phase succeeded, and
     the diagnostics of the furthest phase reached."""
     if parsed.document is None or parsed.diagnostics.has_errors:
         return PhaseResult(None, parsed.diagnostics)
-    resolved = resolve(parsed.document, registry, name=name, lang_version=lang_version, check=check)
+    resolved = resolve(parsed.document, registry, name=name, check=check)
     if resolved.document is None:
         return PhaseResult(None, resolved.diagnostics)
     return lower(resolved.document)

@@ -14,7 +14,7 @@ from sophios.ir.infer import InferencePolicy, InsertionCatalog, infer
 from sophios.ir.link import link
 from sophios.ir.names import Names
 from sophios.ir.pipeline import front_end
-from sophios.ir.types import EdgeOrigin, WorkflowGraph
+from sophios.ir.types import WorkflowGraph
 from sophios.lang.diagnostics import Diagnostics, SophiosError
 
 from .cases import DATA, diagnostic, match
@@ -65,7 +65,7 @@ def test_inference_decides_each_case_as_its_theme_states(theme: Path) -> None:
         names = Names.of(graph)
         edges = {f'{e.sink.step.name}@{e.sink.step.index}.{names.port(e.sink.port)}':
                  f'{e.source.step.name}@{e.source.step.index}.{names.port(e.source.port)}'
-                 for e in graph.linked_edges if e.origin is EdgeOrigin.INFERRED}
+                 for e in graph.linked_edges if e.inferred}
         assert match(expected.get('edges', edges), edges), name
         assert match(expected.get('inputs', [names.port(port.name) for port in graph.workflow_inputs]),
                      [names.port(port.name) for port in graph.workflow_inputs]), name

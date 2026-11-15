@@ -1,9 +1,7 @@
 """The types a compiled workflow is made of.
 
 Each names something the compiler already manipulates, so the checker can
-verify what it means rather than only what it computes. Frozen and slotted,
-holding no mutable container that any invariant depends on: a check in
-`__post_init__` is worth having only if it cannot be invalidated afterwards.
+verify what it means rather than only what it computes. Frozen and slotted.
 """
 from copy import deepcopy
 from dataclasses import dataclass, field
@@ -12,7 +10,7 @@ from typing import NewType, TypeAlias
 
 from ..lang.cwl import expand_shorthand, required
 from ..lang.diagnostics import Diagnostics
-from ..lang.nodes import InputValue, OpaqueCwl
+from ..lang.nodes import GraphvizEntry, InputValue, OpaqueCwl
 from ..lang.spans import SourceSpan
 
 
@@ -112,11 +110,6 @@ class PortId:
     direction: Direction
     port: PortName
 
-    def __post_init__(self) -> None:
-        """Reject a port with no name, which a tool may declare."""
-        if not self.port:
-            raise ValueError('a port must have a name')
-
 
 @dataclass(frozen=True, slots=True)
 class PortType:
@@ -200,14 +193,6 @@ class WorkflowPort:
 
 
 @dataclass(frozen=True, slots=True)
-class JobBinding:
-    """One concrete value in the job input document projected from a graph."""
-
-    name: PortName
-    value: OpaqueCwl
-
-
-@dataclass(frozen=True, slots=True)
 class StepOutputRef:
     """An output of a step in the same document: CWL's `step/port`."""
 
@@ -259,33 +244,20 @@ class Port:
     span: SourceSpan | None = None
 
 
-class EdgeOrigin(StrEnum):
-    """How an edge stored on `WorkflowGraph` was placed there. `stepin`
-    reads this to decide `shorthand`: an inferred edge was never authored,
-    so it must emit as one; a composed edge stands for something the
-    document itself said, so it must not.
-    """
-
-    COMPOSED = 'composed'
-    INFERRED = 'inferred'
-
-
 @dataclass(frozen=True, slots=True)
 class Edge:
     """A value flowing from one port to another.
 
     Between *ports*, not steps: two edges into one step are different bindings,
     and a step pair would lose which input each satisfies.
-
-    `origin` is `None` for an edge that lives in `Binding.resolution`: a
-    binding is already provenance, an authored `in:` entry, so nothing reads
-    its origin.
     """
 
     source: PortId
     sink: PortId
     span: SourceSpan | None = None
-    origin: EdgeOrigin | None = None
+    #: Whether Infer added it. An inferred edge was never authored, so it is emitted in shorthand; any other
+    #: stands for something the document itself said, and is not.
+    inferred: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -342,6 +314,8 @@ class StepNode:  # pylint: disable=too-many-instance-attributes
     scatter_ports: tuple[PortName, ...] = ()
     inference_rules: tuple[tuple[str, str], ...] = ()
     synthesized: bool = False
+    #: Its own `wic: steps:` entry's `graphviz:`, which only a drawing reads.
+    graphviz: GraphvizEntry = GraphvizEntry()
 
 
 #: The three mappings the compiler threads through its recursion, as pairs
@@ -370,16 +344,13 @@ class WorkflowGraph:  # pylint: disable=too-many-instance-attributes
     passthrough: tuple[tuple[str, OpaqueCwl], ...] = ()
     span: SourceSpan | None = None
     name: str = ''
-    lang_version: str = ''
     workflow_inputs: tuple[WorkflowPort, ...] = ()
     workflow_outputs: tuple[WorkflowPort, ...] = ()
-    job_bindings: tuple[JobBinding, ...] = ()
-    requirements: tuple[tuple[str, OpaqueCwl], ...] = ()
+    #: Each value of the job input document, by the workflow input it is for.
+    job_bindings: tuple[tuple[PortName, OpaqueCwl], ...] = ()
     namespaces: tuple[tuple[str, OpaqueCwl], ...] = ()
-    schemas: tuple[OpaqueCwl, ...] = ()
     children: tuple['WorkflowGraph', ...] = ()
-    #: Every edge Link or Infer placed here (not a binding's own resolution),
-    #: distinguished by `Edge.origin`.
+    #: Every edge Link or Infer placed here (not a binding's own resolution).
     linked_edges: tuple[Edge, ...] = ()
     #: `input_mapping` names emitted in shorthand: a step's own lifted input,
     #: recorded where Complete or Infer creates it (a name cannot tell).
@@ -388,45 +359,8 @@ class WorkflowGraph:  # pylint: disable=too-many-instance-attributes
     #: at the call site (read from the child's sidecar once call-site keys are folded
     #: in): a caller asking to flatten its calls keeps this one nested.
     inlineable: bool = True
-
-    def __post_init__(self) -> None:
-        """Reject a graph naming a port no step of its tree declares, checked over every
-        reference the graph holds, not only its edges.
-        """
-        for step in self.steps:
-            if step.id.namespace != self.namespace:
-                raise ValueError(
-                    f'{step.id} sits in {step.id.namespace.parts}, not this graph\'s '
-                    f'{self.namespace.parts}')
-        known = self.port_ids
-        for where, name, port_id in self._references():
-            if port_id not in known:
-                # Spelled only on failure: a derived name's repr prints every
-                # step id it was exposed through, and each of those prints its
-                # own namespace, so writing it out for every reference is the
-                # cost that made nesting exponential.
-                label = where if name is None else f'{where} {name!r}'
-                raise ValueError(f'{label} names a port no step declares: {port_id}')
-        recursive_steps = [step.id for step in self.all_steps]
-        if len(recursive_steps) != len(set(recursive_steps)):
-            raise ValueError('step identities must be injective across a composed graph')
-
-    def _references(self) -> tuple[tuple[str, str | PortName | None, PortId], ...]:
-        """Every port identity this graph holds, with where it came from and
-        the name it is held under there, when it is held under one."""
-        found: list[tuple[str, str | PortName | None, PortId]] = []
-        for step in self.steps:
-            for binding in step.bindings:
-                found.append(('a binding', None, binding.sink))
-        for edge in self.edges:
-            found += [('an edge', None, edge.source), ('an edge', None, edge.sink)]
-        for name, port_id in self.explicit_edge_defs:
-            found.append(('mapping', name, port_id))
-        for _name, port_id in self.output_mapping:
-            found.append(('an output mapping', None, port_id))
-        for boundary, port_ids in self.input_mapping:
-            found.extend(('input mapping', boundary, port_id) for port_id in port_ids)
-        return tuple(found)
+    #: The `wic: graphviz:` of its document, the calling step's entry merged in; only a drawing reads it.
+    graphviz: GraphvizEntry = GraphvizEntry()
 
     @property
     def edges(self) -> tuple[Edge, ...]:
@@ -448,11 +382,6 @@ class WorkflowGraph:  # pylint: disable=too-many-instance-attributes
     def all_steps(self) -> tuple[StepNode, ...]:
         """Every step in this graph tree, preserving authored traversal order."""
         return self.steps + tuple(step for child in self.children for step in child.all_steps)
-
-    @property
-    def port_ids(self) -> frozenset[PortId]:
-        """Every port identity in this graph tree."""
-        return frozenset(port.id for step in self.all_steps for port in step.inputs + step.outputs)
 
     def child(self, step: StepId) -> 'WorkflowGraph | None':
         """The graph of the workflow `step` calls, or None for a step that runs a tool.

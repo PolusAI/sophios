@@ -33,7 +33,7 @@ class _Delivered(BaseException):
 
 #: Where each settings value is handed over, by its index in `_settings_fields`: the function, and
 #: the position of the value among its arguments. The drawing is made only with `--graphviz`.
-_RECEIVERS: Final = ((sophios.compiler, 'compile_source', 1, ()), (sophios.drawing, 'draw', 2, ('--graphviz',)))
+_RECEIVERS: Final = ((sophios.compiler, 'compile_source', 1, ()), (sophios.drawing, 'draw', 1, ('--graphviz',)))
 
 
 def _settings_from_cli(monkeypatch: pytest.MonkeyPatch, workflow: Path, index: int, *flags: str) -> Any:

@@ -12,7 +12,6 @@ from .types import (
     DeferredObligation,
     DerivedName,
     Edge,
-    EdgeOrigin,
     Namespace,
     PhaseResult,
     Port,
@@ -291,8 +290,7 @@ def _placed(graph: WorkflowGraph, edges: tuple[Edge, ...]) -> WorkflowGraph:
             mappings[name] = (*mappings.get(name, ()), edge.sink)
     return replace(
         current, workflow_inputs=tuple(inputs), input_mapping=tuple(mappings.items()),
-        linked_edges=graph.linked_edges + tuple(replace(edge, origin=EdgeOrigin.COMPOSED) for edge in edges
-                                                if _owner_namespace(edge) == graph.namespace),
+        linked_edges=graph.linked_edges + tuple(edge for edge in edges if _owner_namespace(edge) == graph.namespace),
         output_mapping=tuple((name, _concrete_output(current, port)) for name, port in graph.output_mapping))
 
 
