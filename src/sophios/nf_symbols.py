@@ -253,4 +253,4 @@ def normalize_nextflow_identifier(value: str, *, variable: bool = True) -> str:
         or not variable and identifier in NEXTFLOW_SCRIPT_DECLARED_NAMES
     ):
         identifier = f"_{identifier}"
-    return validate_nextflow_identifier(identifier, field_name="normalized identifier")
+    return identifier
