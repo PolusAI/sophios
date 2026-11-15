@@ -63,7 +63,7 @@ class InsertionCatalog:
             Insertion(tool.key, process_ports(tool.cwl.get('inputs'), output=False),
                       process_ports(tool.cwl.get('outputs'), output=True))
             for tool in registry.tools
-            if tool.key.name.startswith('insert_steps_automatically_'))))
+            if tool.key.name.startswith('insert_steps_automatically_') and isinstance(tool.cwl, dict))))
 
 
 def infer(graph: WorkflowGraph, policy: InferencePolicy = InferencePolicy(),

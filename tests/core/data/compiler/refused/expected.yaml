@@ -43,3 +43,4 @@ invalid_tools.wic:
      message: {contains: [missing_import.cwl, refuses, missing_types.yml, "No such file or directory"]}}
   - {code: TOOL_REFUSED, severity: error, step: inputs_not_a_mapping, index: 4,
      message: {contains: [inputs_not_a_mapping.cwl, refuses]}}
+  - {code: TOOL_REFUSED, severity: error, step: not_a_mapping, index: 5, message: {contains: [must be a dict]}}

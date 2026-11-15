@@ -40,6 +40,8 @@ def tool_process(cwl: Yaml, source: str) -> Yaml:
     Raises:
         SophiosError: ``SUBWORKFLOW_INVALID`` for a ``$graph`` with no ``main``.
     """
+    if not isinstance(cwl, dict):
+        return cwl  # not a CWL document: cwltool refuses it at the step that runs it
     graph = cwl.get('$graph')
     if not isinstance(graph, list):
         return _as_main(cwl) if cwl.get('id') in ('main', '#main') else cwl
