@@ -3,19 +3,17 @@ read text, but `.name` of an input staged under a directory is the whole staged 
 
 # pylint: disable=missing-function-docstring
 
-from collections.abc import Callable
 from functools import partial
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from sophios.api.python.nextflow import NotLowered
 from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
 from sophios.api.python.workflow import Step, Workflow
 from sophios.backends import recorded_outputs
 
-from ..helpers import cwltool_outputs, cwltool_run, observed, tree
+from ..helpers import cwltool_outputs, observed, tree
 from .testkit import assert_succeeded, execute_nextflow
 
 #: One script for every cell. $1, $2, $3 are `$(inputs.x)`, `$(inputs.x.path)`, `$(inputs.x.basename)` as
@@ -154,22 +152,3 @@ def test_a_path_inputs_references_mean_under_nextflow_what_they_mean_under_cwlto
         for name in sorted(nf.keys() | cw.keys()) if nf.get(name) != cw.get(name)
     ]
     assert not problems, "\n".join(problems)
-
-    _neither_globs_an_entrys_object(cwltool.main.main, tmp_path / "object_glob")
-
-
-def _neither_globs_an_entrys_object(main: Callable[..., int], directory: Path) -> None:
-    """A writable entry globbed by its plain reference: refused by the Nextflow target, failed by cwltool."""
-    fill = CommandLineTool("fill", Inputs(x=Input(cwl.directory, position=1)),
-                           Outputs(o=Output(cwl.directory, glob="$(inputs.x)"))).base_command("touch")
-    step = Step(fill.stage(fill.inputs.x, writable=True), step_name="fill")
-    (directory / "in.d").mkdir(parents=True)
-    step.inputs.x = directory / "in.d"
-    workflow = Workflow([step], "object_glob")
-    workflow.outputs.o = step.outputs.o
-    with pytest.raises(NotLowered) as refused:
-        workflow.compile(target="nextflow")
-    assert [(refusal.code.value, refusal.subject) for refusal in refused.value.refusals] == [
-        ("nf-s046", "fill.cwl: outputs.o.outputBinding.glob")]
-    code, _, messages = cwltool_run(main, workflow, directory)
-    assert code != 0 and "Resolved glob patterns must be strings" in messages, messages

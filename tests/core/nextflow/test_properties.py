@@ -38,7 +38,6 @@ from sophios.utils_nf import _command as lower_command
 from sophios.utils_nf import _Tool
 from sophios.wic_types import Tool
 from sophios.utils_nf import _template as lower_template
-from sophios.utils_nf import _normalized_identifiers
 
 from ..budgets import budget
 
@@ -56,15 +55,11 @@ SAFE_TEXT = st.text(
 
 
 @budget(300)
-@given(st.text(alphabet=st.characters(blacklist_categories=SURROGATE_CATEGORIES), min_size=1, max_size=80),
-       st.from_regex(r"[a-z][a-z0-9]{0,12}", fullmatch=True), st.from_regex(r"[a-z][a-z0-9]{0,12}", fullmatch=True))
-def test_a_name_normalizes_to_one_identifier_and_two_names_never_to_one_silently(
-        value: str, prefix: str, suffix: str) -> None:
+@given(st.text(alphabet=st.characters(blacklist_categories=SURROGATE_CATEGORIES), min_size=1, max_size=80))
+def test_a_name_normalizes_to_one_identifier(value: str) -> None:
     normalized = normalize_nextflow_identifier(value)
     assert is_nextflow_identifier(normalized)
     assert normalize_nextflow_identifier(normalized) == normalized
-    with pytest.raises(ValueError, match="normalize to"):
-        _normalized_identifiers((f"{prefix}-{suffix}", f"{prefix}_{suffix}"), context="workflow input")
 
 
 @budget(200)

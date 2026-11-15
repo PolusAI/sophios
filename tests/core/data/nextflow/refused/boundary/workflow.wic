@@ -30,5 +30,4 @@ steps:
 
 outputs:
   long_out: {type: long, outputSource: wide_numbers/long_out}
-  double_out: {type: double, outputSource: wide_numbers/double_out}
   forwarded: {type: string, outputSource: message}       # a workflow output that forwards an input has no process

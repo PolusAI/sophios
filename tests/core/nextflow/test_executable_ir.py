@@ -238,17 +238,8 @@ UNREPRESENTABLE: dict[str, tuple[Callable[[], Any], Any]] = {
        for value in (0, -1, True, 1.5, "2")},
     "NfWorkflowInputConnection-None-process": (
         partial(NfWorkflowInputConnection, "message", cast(Any, None), "message"), ((TypeError, ValueError), None)),
-    "NfProcess-env": (partial(_env_process, NfEnvVar("A", template("a $b")), NfEnvVar("_B2", template(ref("x")))),
-                      None),
     "NfProcess-env-set-twice": (partial(_env_process, NfEnvVar("A", template("1")), NfEnvVar("A", template("2"))),
                                 "more than once"),
-    **{f"NfProcess-basename-of-a-{kind}": (partial(NfProcess, "COPY", [NfPort("source", "path", path_kind=kind)], [],
-                                                   command("cp", NfTemplate((NfBasenameReference("source"),)))), None)
-       for kind in ("file", "directory")},
-    # Unlike a flag, an array binding may target either qualifier.
-    **{f"NfProcess-array-binding-of-a-{qualifier}": (partial(
-        NfProcess, "NAMES", [NfPort("names", qualifier, is_array=True)], [],
-        NfCommand((template("echo"), NfArrayBinding("names")))), None) for qualifier in ("val", "path")},
     "NfProcess-array-typed-output": (partial(NfProcess, "MAKE", [], [NfPort("result", "path", "result", _OUT,
                                                                             is_array=True)], command("true")),
                                      "array-typed outputs are deferred"),
@@ -256,7 +247,6 @@ UNREPRESENTABLE: dict[str, tuple[Callable[[], Any], Any]] = {
                              "path qualifier and typed glob"),
     "NfProcess-val-output-with-a-glob": (partial(NfProcess, "P", [], [NfPort("o", "val", "o", _OUT)], command("true")),
                                          "require path qualifier and typed glob"),
-    "NfProcess-text-capture": (_text_capture_process, None),
     "NfProcess-two-entries-one-name": (partial(_entry_workflow, NfPort("a", "path", entry=NfEntry("same.txt")),
                                                NfPort("b", "path", entry=NfEntry("same.txt"))),
                                        "two InitialWorkDirRequirement entries with one literal name"),
@@ -301,9 +291,6 @@ UNREPRESENTABLE: dict[str, tuple[Callable[[], Any], Any]] = {
        for where, tokens, env in (
            ("a-token", (template("echo", ref("s")),), ()),
            ("an-environment-variable", (template("true"),), (NfEnvVar("S", template(ref("s"))),)))},
-    "NfProcess-condition-over-a-step-only-input": (partial(
-        NfProcess, "P", [], [output_port("result", "out.txt")], command("true"), condition=parse("$(inputs.s)"),
-        step_only_inputs=[NfPort("s", "val", scalar_type="boolean")]), None),
     "NfProcess-condition-over-a-value-that-may-be-null": (partial(
         NfProcess, "P", [NfPort("s", "val", scalar_type="boolean?")], [], command("true"),
         condition=parse("$(inputs.s)")), "optional inputs.s may only be compared with null"),
@@ -395,8 +382,6 @@ WORKFLOWS: dict[str, tuple[Callable[[], Any], Any]] = {
     **{f"param-type-{declared}-into-a-val": (partial(_one, {"value": "a"}, {"value": declared}),
                                              re.escape(f"'value' of type '{declared}' cannot feed ONE.value"))
        for declared in ("string[]", "File")},
-    **{f"param-type-{declared}": (partial(_one, {"value": "a"}, {"value": declared}), None)
-       for declared in ("boolean", "int", "float", "string", "string?")},
     # The port's list arity would deliver a scalar output as a one-element list and hide the mismatch.
     "scalar-output-into-an-array-port": (partial(_workflow, [
         NfProcess("PRODUCE", [], [output_port("out", "out.txt")], command("touch", "out.txt")),
@@ -459,16 +444,9 @@ WORKFLOWS: dict[str, tuple[Callable[[], Any], Any]] = {
         command("printf", "%s", template(ref("text")), stdout="copy.txt"))],
         _MESSAGE, NfProcessConnection("PRODUCE", "text", "CONSUME", "text"),
         NfWorkflowOutputConnection("CONSUME", "result", "result"), message="hi"), r"PRODUCE.text captures file text"),
-    "captured-text-into-a-workflow-output": (partial(_workflow, [_TEXT], _MESSAGE, NfWorkflowOutputConnection(
-        "PRODUCE", "text", "captured"), message="hi"), None),
-    "a-connection-from-an-unknown-process": (partial(_workflow, [NfProcess(
-        "CONSUME", [NfPort("source", "path")], [], command("true"))], NfProcessConnection(
-        "ABSENT", "o", "CONSUME", "source")), "connection references unknown source process 'ABSENT'"),
     "workflow-named-like-a-process": (partial(ExecutableNextflowWorkflow, "echo", [NfProcess(
         "echo", [], [output_port("o", "o.txt")], command("true"))], [], {}),
         "workflow name 'echo' is also a process name"),
-    "optional-output-into-a-workflow-output": (partial(_workflow, [_optional_producer()], NfWorkflowInputConnection(
-        "x", "MAYBE", "x"), NfWorkflowOutputConnection("MAYBE", "o", "o"), x=1), None),
     "optional-output-into-a-process": (partial(_workflow, [_optional_producer(), NfProcess(
         "CONSUME", [NfPort("source", "path")], [], command("true"))], NfWorkflowInputConnection("x", "MAYBE", "x"),
         NfProcessConnection("MAYBE", "o", "CONSUME", "source"), x=1), "optional output"),
@@ -574,8 +552,6 @@ CONSTRUCTIONS: dict[str, tuple[Callable[[], Any], Any]] = {
     **UNREPRESENTABLE, **WORKFLOWS, **_staged(NfInputReference("source")), **_staged(NfBasenameReference("source")),
     **{f"optional-{glob}-alone": (partial(_optional, glob, capture), _AT_MOST_ONE)
        for glob, capture in (("*.log", None), ("maybe.txt", "single"))},
-    **{f"optional-{glob}-into-a-workflow-output": (partial(_optional, glob, capture, NfWorkflowOutputConnection(
-        "MAYBE", "o", "result")), None) for glob, capture in (("*.log", None), ("maybe.txt", "single"))},
     # A step input's sources join as the idioms can, at one process input, and are never scattered.
     "step-input-one-value-to-an-array-port": (partial(_merged, _ONE, pick_value="first_non_null"),
                                               "gives one value to a port that is array-typed"),

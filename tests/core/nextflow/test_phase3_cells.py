@@ -4,30 +4,8 @@ tests/core/data/examples and nextflow/stops; A10 has no runtime test (rejected).
 
 # pylint: disable=missing-function-docstring
 
-from typing import Any
-
 from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
 from sophios.api.python.workflow import Step, Workflow
-
-
-def _text_output() -> Output:
-    """A string output holding the contents of out.txt."""
-    return Output(cwl.string, glob="out.txt", load_contents=True, output_eval="$(self[0].contents)")
-
-
-def _printf(name: str, *ports: str) -> CommandLineTool:
-    """printf the hyphen-joined ports, captured as the step's text output."""
-    declared = {port: Input(cwl.string, position=index) for index, port in enumerate(ports, start=1)}
-    tool = CommandLineTool(name, Inputs(**declared), Outputs(line=_text_output()))
-    return tool.base_command("printf").stdout("out.txt").argument("-".join(["%s"] * len(ports)), position=0)
-
-
-def _scatter_step(name: str, method: str, values: dict[str, Any]) -> Step:
-    step = Step(_printf(name, *values), step_name=name.lower())
-    for port, value in values.items():
-        setattr(step.inputs, port, value)
-    step.scatter_on(*(getattr(step.inputs, port) for port in values if isinstance(values[port], list)), method=method)
-    return step
 
 
 # A1-A9 -------------------------------------------------------------------
