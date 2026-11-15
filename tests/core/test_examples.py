@@ -460,7 +460,6 @@ def _tool_defaults(path: Path) -> Counter[tuple[str, str, Any, Any]]:
 
 @pytest.mark.cwl_corpus
 @pytest.mark.needs_cwltool
-@pytest.mark.serial
 @pytest.mark.parametrize('yml_path_str, yml_path', CHECKED)
 def test_corpus_validates_in_cwltool_in_every_form(yml_path_str: str, yml_path: Path, tmp_path: Path,
                                                    corpus_registry: CorpusRegistry) -> None:

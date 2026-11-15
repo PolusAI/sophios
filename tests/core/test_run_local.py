@@ -157,7 +157,6 @@ def _interrupt_once_started(fake: FakeRunner) -> threading.Thread:
 
 
 @pytest.mark.fast
-@pytest.mark.serial
 @pytest.mark.parametrize(('runner', 'behaviour', 'flags', 'code'), [
     ('cwltool', {'exit_code': 3}, [], 3),
     ('cwltool', {'sleep': 60}, [], 130),
@@ -403,7 +402,6 @@ def test_a_started_run_is_followed_by_its_handle_to_how_it_ended(
 
 
 @pytest.mark.fast
-@pytest.mark.serial
 @pytest.mark.usefixtures('offline')
 @pytest.mark.parametrize('how', ['here', 'from-another-thread', 'ignoring-sigterm'])
 def test_a_cancelled_run_stays_cancelled(monkeypatch: pytest.MonkeyPatch, tmp_path: Path,

@@ -43,7 +43,6 @@ def test_an_example_compiles_to_the_cwl_it_states(folder: Path, tmp_path: Path,
 
 
 @pytest.mark.needs_cwltool
-@pytest.mark.serial
 @pytest.mark.parametrize('folder', [example for example in examples()
                                     if stated(example.values[0]).get('reference') != 'none'])
 def test_an_example_runs_under_cwltool_as_stated(folder: Path, tmp_path: Path,
