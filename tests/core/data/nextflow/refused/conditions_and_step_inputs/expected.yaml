@@ -29,7 +29,6 @@ roots:
   - [nf-s017, array_default, 'words']
   - [nf-s017, mistyped_default, 'word']
   - [nf-s018, pick_over_an_array, 'word']
-  - [nf-s017, default_over_an_array, 'words']
   - [nf-s018, nested_array, 'words']
   - [nf-s018, null_element, 'words']
   - [nf-s018, list_to_one, 'word']

@@ -36,49 +36,20 @@ from .testkit import assert_succeeded, execute_nextflow
 @pytest.mark.nextflow
 @pytest.mark.serial
 def test_symbol_contract_matches_actual_v2_parser(tmp_path: Path) -> None:
-    accepted = [name for name, valid in NAMES if valid]
-    process_blocks = "\n".join(
-        f'process {name} {{\n    script:\n    \"\"\"\n    true\n    \"\"\"\n}}'
-        for name in accepted
-    )
-    calls = "\n".join(f"    {name}()" for name in accepted)
-    source = f"nextflow.enable.dsl=2\n{process_blocks}\nworkflow {{\n{calls}\n}}\n"
-    script = tmp_path / "symbols.nf"
-    script.write_text(source, encoding="utf-8")
-    run_env = dict(os.environ)
-    run_env.update({
-        "NXF_ANSI_LOG": "false",
-        "NXF_HOME": str(tmp_path / ".nxf-home"),
-        "NXF_OFFLINE": "true",
-        "NXF_SYNTAX_PARSER": "v2",
-    })
-    accepted_result = subprocess.run(
-        ["nextflow", "run", "-preview", script.name],
-        cwd=tmp_path,
-        env=run_env,
-        text=True,
-        capture_output=True,
-        timeout=30,
-        check=False,
-    )
-    assert accepted_result.returncode == 0, accepted_result.stderr
+    """Nextflow's v2 parser takes every name NAMES calls an identifier as a process name, and no other."""
+    def previewed(*names: str) -> "subprocess.CompletedProcess[str]":
+        blocks = "\n".join(f'process {name} {{\n    script:\n    """\n    true\n    """\n}}' for name in names)
+        calls = "\n".join(f"    {name}()" for name in names)
+        (tmp_path / "symbols.nf").write_text(f"nextflow.enable.dsl=2\n{blocks}\nworkflow {{\n{calls}\n}}\n", "utf-8")
+        env = {**os.environ, "NXF_ANSI_LOG": "false", "NXF_HOME": str(tmp_path / ".nxf-home"), "NXF_OFFLINE": "true",
+               "NXF_SYNTAX_PARSER": "v2"}
+        return subprocess.run(["nextflow", "run", "-preview", "symbols.nf"], cwd=tmp_path, env=env, text=True,
+                              capture_output=True, timeout=30, check=False)
 
+    accepted = previewed(*(name for name, valid in NAMES if valid))
+    assert accepted.returncode == 0, accepted.stderr
     for invalid in (name for name, valid in NAMES if not valid):
-        script.write_text(
-            f'nextflow.enable.dsl=2\nprocess {invalid} {{\nscript:\n\"\"\"\ntrue\n\"\"\"\n}}\n'
-            f'workflow {{\n    {invalid}()\n}}\n',
-            encoding="utf-8",
-        )
-        rejected = subprocess.run(
-            ["nextflow", "run", "-preview", script.name],
-            cwd=tmp_path,
-            env=run_env,
-            text=True,
-            capture_output=True,
-            timeout=15,
-            check=False,
-        )
-        assert rejected.returncode != 0, f"actual parser unexpectedly accepted {invalid!r}"
+        assert previewed(invalid).returncode != 0, f"actual parser unexpectedly accepted {invalid!r}"
 
 
 def _sophios_cli(home: Path, workflow: Path, cwl_dir: Path, *flags: str, cwd: Path | None = None,

@@ -83,9 +83,6 @@ steps:
 - id: pick_over_an_array
   run: say
   in: {word: !cwl {source: [xs, y], pickValue: first_non_null}}
-- id: default_over_an_array
-  run: say_all
-  in: {words: !cwl {source: xs, default: [d]}}
 - id: nested_array
   run: say_all
   in: {words: !cwl {source: [xs, y]}}

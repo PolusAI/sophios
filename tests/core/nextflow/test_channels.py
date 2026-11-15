@@ -5,7 +5,6 @@
 import json
 import math
 from pathlib import Path
-import subprocess
 from typing import Any
 
 import pytest
@@ -13,24 +12,17 @@ import pytest
 from sophios.api.python._workflow_runtime import compile_workflow_result
 from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
 from sophios.api.python.workflow import Step, Workflow
+from sophios.backends import recorded_outputs
 from sophios.input_output_nf import NF_INPUT_FUNCTION, NF_PARSER_MESSAGE, NF_STUB_MESSAGE, write_nextflow_artifacts
 from sophios.nf_types import NF_INPUT_HELPER, ExecutableNextflowWorkflow, NfWorkflowInputConnection
 
 from ..helpers import write_tree
-from .testkit import execute_nextflow, lowered, run_observed, runtime_workflow
+from .testkit import execute_nextflow, lowered, runtime_workflow
 
 
 def _lower(flow: Workflow, params: dict[str, Any] | None = None) -> ExecutableNextflowWorkflow:
     """Lower ``flow``, with ``params`` among its workflow input values."""
     return lowered(compile_workflow_result(flow), params)
-
-
-def _run(
-    flow: Workflow | ExecutableNextflowWorkflow, directory: Path, *arguments: str, params: dict[str, Any] | None = None
-) -> tuple["subprocess.CompletedProcess[str]", dict[str, list[str]]]:
-    """Lower `flow` with `params` as its workflow input values, run it, and read each workflow output (run_observed)."""
-    workflow = flow if isinstance(flow, ExecutableNextflowWorkflow) else _lower(flow, params)
-    return run_observed(workflow, directory, *arguments)
 
 
 class _JsonNumber(str):
@@ -72,7 +64,7 @@ _ENTRY_CASES: list[tuple[Any, str, Any]] = [
 
 _WHEN = "$(inputs.n == 10)"
 #: A value given on the command line, and the line the run writes or the value the check stops it at.
-_COMMAND_LINE = [(None, ("trim", "false"), ["hi\n"], None), (_WHEN, ("n", "10"), ["hi"], None),
+_COMMAND_LINE = [(None, ("trim", "false"), "hi\n", None), (_WHEN, ("n", "10"), "hi", None),
                  (_WHEN, ("n", "ten"), None, "ten")]
 
 
@@ -123,13 +115,15 @@ workflow {{
         _given_on_the_command_line(tmp_path / f"argv{index}", *case)
 
 
-def _given_on_the_command_line(directory: Path, when: str | None, argv: tuple[str, str], line: list[str] | None,
+def _given_on_the_command_line(directory: Path, when: str | None, argv: tuple[str, str], line: str | None,
                                stops: str | None) -> None:
     """The echo flow run with `argv` on the command line writes `line`, or the check stops it at `stops`."""
     workflow = _lower(_echo_flow(when))
-    result, observed = _run(workflow, directory, f"--{_param(workflow, argv[0])}", argv[1])
+    write_nextflow_artifacts(workflow, directory)
+    result = execute_nextflow(directory, f"--{_param(workflow, argv[0])}", argv[1])
     if stops is None:
-        assert result.returncode == 0 and observed["line"] == line, result.stdout + result.stderr
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert Path(dict(recorded_outputs(result.stdout))["line"]["path"]).read_text(encoding="utf-8") == line
     else:
         assert result.returncode != 0
         assert f"Sophios workflow input '{_param(workflow, 'n')}' must be int, not '{stops}'" in (
@@ -171,6 +165,7 @@ def test_a_run_nextflow_cannot_run_as_cwl_does_stops_before_any_task(
     assert result.returncode == 1 and NF_STUB_MESSAGE in result.stdout + result.stderr, result.stdout + result.stderr
     assert not list((tmp_path / "dry" / "work").rglob("*.txt"))
     monkeypatch.setenv("NXF_SYNTAX_PARSER", "v1")
-    result, _ = _run(_echo_flow(), tmp_path / "v1")
+    write_nextflow_artifacts(_lower(_echo_flow()), tmp_path / "v1")
+    result = execute_nextflow(tmp_path / "v1")
     assert result.returncode != 0 and NF_PARSER_MESSAGE in result.stdout + result.stderr
     assert not (tmp_path / "v1" / "work").exists() or not list((tmp_path / "v1" / "work").glob("*/*"))

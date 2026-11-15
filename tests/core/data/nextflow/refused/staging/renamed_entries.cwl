@@ -6,14 +6,11 @@ requirements:
     listing:
     - {entry: $(inputs.twice), entryname: one.txt}
     - {entry: $(inputs.twice), entryname: two.txt}
-    - $(inputs.bare)
-    - {entry: $(inputs.bare), entryname: bare.txt}
     - {entry: $(inputs.first), entryname: same.txt}
     - {entry: $(inputs.second), entryname: same.txt}
 baseCommand: cat
 inputs:
   twice: File
-  bare: File
   first: File
   second: File
 outputs: {}

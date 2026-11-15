@@ -10,7 +10,6 @@ from typing import Any
 import yaml
 
 from sophios.compiler import CompileSettings, compile_source, resolved_view
-from sophios.input_output_nf import write_nextflow_artifacts
 from sophios.ir.artifacts import CompilationResult
 from sophios.ir.frontdoor import bundle_from_disk
 from sophios.ir.refusals import NotLowered
@@ -204,27 +203,3 @@ def execute_nextflow(
          "-work-dir", str(directory / "work"), *arguments],
         cwd=directory, env=env, text=True, capture_output=True, timeout=timeout, check=False,
     )
-
-
-def run_observed(
-    workflow: ExecutableNextflowWorkflow, directory: Path, *arguments: str, emits: Sequence[str] | None = None
-) -> tuple["subprocess.CompletedProcess[str]", dict[str, list[str]]]:
-    """Write and run `workflow`, observing each of `emits` (default all) in arrival order (collectFile loses it):
-    a value's text, a path's contents, joined on U+0001 as a value may hold a newline."""
-    write_nextflow_artifacts(workflow, directory)
-    names = (list(emits) if emits is not None
-             else [c.to_port for c in workflow.connections if isinstance(c, NfWorkflowOutputConnection)])
-    script = directory / "workflow.nf"
-    text = script.read_text(encoding="utf-8")
-    assert text.endswith("}\n")  # the entry workflow's closing brace: sinks go before it, where `.out` is in scope
-    sinks = "".join(
-        f"\n    {workflow.name}.out.{emit}.toList().subscribe {{ list -> new File('{emit}.sink').text = "
-        f"list.collect {{ it instanceof java.nio.file.Path ? it.text : it.toString() }}.join('\\u0001') }}\n"
-        for emit in names
-    )
-    script.write_text(text[:-2] + sinks + "}\n", encoding="utf-8")
-    result = execute_nextflow(directory, *arguments)
-    return result, {
-        emit: (directory / f"{emit}.sink").read_text(encoding="utf-8").split("\x01")
-        for emit in names if (directory / f"{emit}.sink").exists()
-    }

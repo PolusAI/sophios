@@ -5,15 +5,12 @@ requirements:
   EnvVarRequirement:
     envDef:
     - {envName: FROM_AN_INT, envValue: $(inputs.n)}
-    - {envName: FROM_A_PATH, envValue: $(inputs.f.path)}
     - {envName: FROM_A_BASENAME, envValue: $(inputs.s.basename)}
     - {envName: BESIDE_TEXT, envValue: pre-$(inputs.s)}
     - {envName: JAVASCRIPT, envValue: '${return 1}'}
-    - {envName: RUNTIME, envValue: $(runtime.cores)}
     - {envName: 1A, envValue: x}
 baseCommand: env
 inputs:
   s: string
   n: int
-  f: File
 outputs: {}

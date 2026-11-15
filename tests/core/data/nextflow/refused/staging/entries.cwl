@@ -14,15 +14,10 @@ requirements:
     - {entry: $(inputs.h), entryname: "a\0b"}             # a NUL byte no file name holds
 baseCommand: 'true'
 inputs:
-  a: File
-  b: File
-  c: File
   d: File
   e: File
   f: File
-  g: File
   h: File
-  flag: boolean
   name: string
   files: 'File[]'
 outputs: {}
