@@ -114,20 +114,6 @@ def _write_documents(artifact: CompilationArtifact, path: Path) -> None:
         _write_documents(child, path)
 
 
-def write_config_to_disk(config: Json, config_file: Path) -> None:
-    """Writes config json object to config_file
-
-    Args:
-        config (Json): The json object that is to be written to disk
-        config_file (Path): The file path where it is to be written
-    """
-    config_dir = Path(config_file).parent
-    # make the full path if it doesn't exist
-    config_dir.mkdir(parents=True, exist_ok=True)
-    with open(config_file, 'w', encoding='utf-8') as f:
-        json.dump(config, f, indent=4, sort_keys=True)
-
-
 #: The renamings Sophios ships, read from the packaged configuration.
 SHIPPED_RENAMINGS: tuple[tuple[str, str], ...] = tuple(
     (before, after) for before, after in
@@ -156,8 +142,11 @@ def generate_config(homedir: Path) -> Json:
     Returns:
         Json: The config json object with absolute filepaths
     """
-    config = get_basic_config(homedir)
-    write_config_to_disk(config, default_config_file(homedir))
+    # The packaged config names no domain search paths (mm-workflows and the like); its paths are read against homedir.
+    config = read_config_from_disk(Path(__file__).parent / 'config_basic.json', base_dir=homedir)
+    config_file = default_config_file(homedir)
+    config_file.parent.mkdir(parents=True, exist_ok=True)
+    config_file.write_text(json.dumps(config, indent=4, sort_keys=True), encoding='utf-8')
     move_adapters_and_examples(config)
     return config
 
@@ -237,22 +226,3 @@ def read_config_from_disk(config_file: Path, base_dir: Path | None = None) -> Js
             sub_config[ns] = [str(base_dir / path) for path in sub_config[ns]]
         config[tag] = sub_config
     return config
-
-
-def get_basic_config(homedir: Path | None = None) -> Json:
-    """Returns the (default) basic config with absolute paths
-
-    Args:
-        homedir (Path | None): Base for the packaged search paths; defaults to the process home
-
-    Returns:
-        Json: The config json object with absolute filepaths
-    """
-    # basic config doesn't contain mm-workflows or other
-    # domain cwl or wic files search paths
-    src_dir = Path(__file__).parent
-    basic_config: Json = {}
-    # read_config_from_disk handles converting them to absolute paths
-    basic_config = read_config_from_disk(
-        src_dir/'config_basic.json', base_dir=Path.home() if homedir is None else homedir)
-    return basic_config

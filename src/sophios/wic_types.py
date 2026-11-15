@@ -50,9 +50,6 @@ class StepId(NamedTuple):
 
 Tools: TypeAlias = dict[StepId, Tool]
 
-# NOTE: Please read the Names section of docs/dev/architecture.md !!!
-Namespace: TypeAlias = str
-
 
 class GraphSettings(TypedDict):
     """Settings dict for graphviz graph generation."""

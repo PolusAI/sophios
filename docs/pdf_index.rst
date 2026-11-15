@@ -80,7 +80,6 @@ Sophios documentation
    validation
    dev/codingstandards
    dev/gitetiquette
-   dev/api
 
 .. toctree::
    :maxdepth: 2

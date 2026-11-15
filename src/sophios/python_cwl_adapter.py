@@ -82,7 +82,7 @@ def get_main_args(module_: ModuleType) -> dict[str, Any]:
     return anns
 
 
-def check_args_match_inputs(module_: ModuleType, args: dict[str, Any], check: bool = False) -> None:
+def check_args_match_inputs(module_: ModuleType, args: dict[str, Any]) -> None:
     """Checks that the keys (only) of the args dict match the keys of the top-level inputs attribute.
 
     Args:
@@ -91,10 +91,6 @@ def check_args_match_inputs(module_: ModuleType, args: dict[str, Any], check: bo
     """
     problems = [f'Error! wic argument {arg} not in python arguments {module_.inputs}'
                 for arg in args if arg not in module_.inputs]
-    # Wait until after inference
-    if check:
-        problems += [f'Error! Python argument {arg} not in wic arguments {args}'
-                     for arg in module_.inputs if arg not in args]
     if problems:
         raise SophiosError.error(SophiosErrorCode.SCRIPT_ARGUMENT_MISMATCH, *problems)
 

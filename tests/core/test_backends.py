@@ -310,7 +310,7 @@ def test_a_nextflow_run_is_checked_prepared_and_read_back_by_its_sophios_names(
     monkeypatch.setattr(preflight, 'nextflow_problems', lambda _settings: [])
     root = tmp_path / 'root'
     root.mkdir()
-    backend = targets.backend(Nextflow())
+    backend = backends.NextflowBackend()
     with pytest.raises(SophiosError) as raised:
         _prepared(_write_into(), root, tmp_path / 'base', check=True)
     (missing,) = raised.value.diagnostics
