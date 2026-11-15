@@ -245,7 +245,6 @@ dev/language_spec
 validation
 dev/codingstandards
 dev/gitetiquette
-dev/api
 ```
 
 ```{toctree}

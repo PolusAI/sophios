@@ -9,31 +9,12 @@ the Python API takes from the configuration and what it is given directly.
 
 ## The file
 
-```json
-{
-    "search_paths_cwl": {
-        "global": ["/home/you/wic/cwl_adapters"],
-        "gpu": []
-    },
-    "search_paths_wic": {
-        "global": ["/home/you/wic/examples"]
-    },
-    "renaming_conventions": [
-        ["energy_", "edr_"],
-        ["structure_", "tpr_"],
-        ["traj_", "trr_"]
-    ],
-    "inference_rules": {
-        "edam:format_3881": "continue",
-        "edam:format_3987": "continue",
-        "edam:format_3878": "break",
-        "edam:format_2033": "break"
-    }
-}
+```{literalinclude} ../src/sophios/config_basic.json
+:language: json
 ```
 
-This is what `sophios --generate_config` writes, and what the first `sophios`
-command writes when the file does not exist yet, after copying the tools and
+This is the file Sophios ships. `sophios --generate_config` writes it with the two search paths under your home
+directory, and so does the first `sophios` command when the file does not exist yet, after copying the tools and
 example workflows that ship with Sophios to `~/wic/cwl_adapters` and
 `~/wic/examples`. From a source checkout the copies come from the checkout's
 `cwl_adapters/` and `docs/tutorials/`. An existing file is never overwritten;

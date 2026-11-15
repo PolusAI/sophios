@@ -9,7 +9,7 @@ shapes. [Configuration](configuration.md) explains what each is for.
 |---|---|
 | `--config_file FILE` | read as given; must exist, never written |
 | `--homedir DIR` | the default becomes `DIR/wic/global_config.json` |
-| neither | `~/wic/global_config.json`; written when missing, together with `~/wic/cwl_adapters/` and `~/wic/examples/` |
+| neither | `~/wic/global_config.json`; written when missing, together with `~/wic/cwl_adapters/` and `~/wic/examples/`: the file [Configuration](configuration.md#the-file) shows, its keys in sorted order and its two search paths absolute under that home directory |
 
 Relative paths in the file are resolved from the working directory of the
 command that reads it. The command line reads the file on every compile;
@@ -77,31 +77,3 @@ format; `continue` is the default. A step you wrote sets its own rules with
     "edam:format_2033": "break"
 }
 ```
-
-## The file Sophios writes
-
-```json
-{
-    "inference_rules": {
-        "edam:format_2033": "break",
-        "edam:format_3878": "break",
-        "edam:format_3881": "continue",
-        "edam:format_3987": "continue"
-    },
-    "renaming_conventions": [
-        ["energy_", "edr_"],
-        ["structure_", "tpr_"],
-        ["traj_", "trr_"]
-    ],
-    "search_paths_cwl": {
-        "global": ["/home/you/wic/cwl_adapters"],
-        "gpu": []
-    },
-    "search_paths_wic": {
-        "global": ["/home/you/wic/examples"]
-    }
-}
-```
-
-Keys are written in sorted order. The two search paths are absolute, under
-the home directory the command was given.

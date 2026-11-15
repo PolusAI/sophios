@@ -125,7 +125,7 @@ built from `EXPLANATIONS` in `src/sophios/lang/error_codes.py`.
 | `main.py`, `cli.py` | the command line: argument parsing and the adapter from arguments to settings |
 | `plugins.py`, `input_output.py` | tool and workflow discovery, the configuration, writing artifacts |
 | `preflight.py` | what a local run needs from this machine |
-| `backends.py` | a run as a `RunRequest`, and what each runner is given and leaves: check, prepare, launch, outcome |
+| `backends.py` | a run as a `RunRequest`, and what each runner is given and leaves: prepare, launch, outcome |
 | `run_local.py`, `realtime.py` | running the runner as a child process and reporting how it ended, and the real-time analyses beside it |
 | `post_compile.py` | the rewrites of a compiled tree: flattening, embedding |
 | `drawing.py` | `--graphviz` and `Workflow.draw()` |

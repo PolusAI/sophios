@@ -31,8 +31,9 @@ def test_an_explicit_config_file_is_only_read(monkeypatch: pytest.MonkeyPatch, t
 
     config_file = tmp_path / 'config' / 'custom.json'
     absolute_examples = tmp_path / 'absolute-examples'
-    io.write_config_to_disk({'search_paths_cwl': {'global': ['relative-adapters']},
-                             'search_paths_wic': {'global': [str(absolute_examples)]}}, config_file)
+    config_file.parent.mkdir()
+    config_file.write_text(json.dumps({'search_paths_cwl': {'global': ['relative-adapters']},
+                                       'search_paths_wic': {'global': [str(absolute_examples)]}}), encoding='utf-8')
     before = config_file.read_bytes()
     config = io.get_config(config_file, tmp_path / 'unused-home')
     assert config['search_paths_cwl']['global'] == [str(tmp_path / 'relative-adapters')]

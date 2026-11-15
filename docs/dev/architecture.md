@@ -184,9 +184,9 @@ for a `StepInput` default against the working directory.
   translated onto it in one function. The parser reads its defaults and choices from it.
 - `sophios.backends` describes a run once, as a `RunRequest` that carries the
   `RunSettings`, which the command line, the Python API and the CI harness
-  each build. The backend of its runner (`targets.backend`) answers four
+  each build. The backend of its runner (`targets.backend`) answers three
   questions and starts nothing:
-  `check` (the pre-flight), `prepare` (`run_setup.prepare`), `launch` (the
+  `prepare` (`run_setup.prepare`), `launch` (the
   runner's argv, environment and working directory; `--provenance` unless
   the runner's `provenance` is off) and `outcome` (after exit: the output object and the
   failed steps, read from the runner's log lines).

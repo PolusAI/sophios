@@ -2,9 +2,8 @@
 
 A run is described once, as a `RunRequest`, by every front door: the command line,
 `Workflow.run()` and the CI harness. The backend for its target and runner answers
-four questions about it and runs nothing itself:
+three questions about it and runs nothing itself:
 
-- check: what this machine needs before the run starts;
 - prepare: what the runner reads, written under the base path;
 - launch: the runner's command line, environment and working directory;
 - outcome: after the runner exits, its outputs and the steps that failed.
@@ -114,10 +113,6 @@ class Outcome:
 class Backend(Protocol):
     """The questions a run asks of the program that runs it. Nothing here starts a process."""
 
-    def check(self, documents: Sequence[Path], jobs: Sequence[preflight.Job],
-              settings: RunSettings) -> None:
-        """Raise every problem running `documents` with `jobs` would hit on this machine."""
-
     def prepare(self, lowered: run_setup.Lowered[Any], analyses: tuple[realtime.Analysis, ...], basepath: Path,
                 settings: run_setup.Settings) -> run_setup.Prepared:
         """Write what the runner reads of the model its target `lowered` under `basepath`, and make the machine ready
@@ -206,13 +201,8 @@ def _log_lines(log: Path) -> list[str]:
         return []
 
 
-class _Cwl:
+class _Cwl:  # pylint: disable=too-few-public-methods
     """What every CWL runner shares: the pre-flight checks the machine, `run_setup` writes the files."""
-
-    def check(self, documents: Sequence[Path], jobs: Sequence[preflight.Job],
-              settings: RunSettings) -> None:
-        """The pre-flight's checks: paths, programs and the container engine."""
-        preflight.ready(documents, settings, jobs, pulling=False)
 
     def prepare(self, lowered: run_setup.Lowered[CompilationArtifact], analyses: tuple[realtime.Analysis, ...],
                 basepath: Path, settings: run_setup.Settings) -> run_setup.Prepared:

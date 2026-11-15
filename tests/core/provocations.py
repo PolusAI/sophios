@@ -55,7 +55,7 @@ def _provoke_script_argument_mismatch() -> None:
 
     module = ModuleType('provoked_script')
     module.inputs = {'expected': int}  # type: ignore[attr-defined]
-    check_args_match_inputs(module, {'unexpected': 1}, check=True)
+    check_args_match_inputs(module, {'unexpected': 1})
 
 
 def _provoke_container_engine_unavailable() -> None:
