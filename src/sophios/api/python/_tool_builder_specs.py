@@ -1,12 +1,4 @@
-"""Private spec wrappers for the Tool Builder.
-
-Every class here is a thin, order-preserving wrapper around a `cwl_utils`
-generated class: constructors accept the builder's public (snake_case)
-argument names, and `to_dict()` builds the matching
-`cwl_utils.parser.cwl_v1_2` object and renders it with `.save()`. CWL
-semantics (what fields exist, what they mean, how they serialize) come
-from `cwl_utils`; this module only adapts the calling convention.
-"""
+"""Private spec wrappers for the Tool Builder: each wraps a `cwl_utils` class, taking snake_case names."""
 
 # pylint: disable=too-few-public-methods
 # pylint: disable=too-many-instance-attributes,too-many-arguments

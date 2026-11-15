@@ -1,57 +1,10 @@
-"""Public Nextflow compilation types and the import of a pipeline Sophios wrote.
+"""The Nextflow target's model and refusals, and `import_nextflow`, the import of a pipeline Sophios wrote.
 
-``import_nextflow(directory)`` reads the three files Nextflow itself reads,
-``workflow.nf``, ``nextflow_params.json`` and ``nextflow.config``, and builds
-one Sophios ``Workflow`` through this API: a ``CommandLineTool`` made a step
-for each process, in the order the pipeline calls them; each parameter a
-workflow input holding its value; and every edge bound on the input it feeds,
-a step-only input as a ``StepInput`` on a name its tool does not declare.
-Compiled to Nextflow with inference disabled, the workflow gives back the
-model the files were written from (design §4.2). The import reads nothing
-else: not ``nextflow_workflow.json``, no tool registry, no network, and no
-path a parameter names.
-
-It reads only what Sophios writes, and the one freedom is layout: indentation,
-the length of a run of spaces or tabs, blank lines, comments, the order of the
-process blocks and CR LF line endings, and JSON's own freedom in the params
-file. Anything else stops it with a coded diagnostic at its line, ``wic047``
-to ``wic054``, and nothing is returned. A pipeline no workflow built through
-this API compiles to as it is written is ``wic054``: one with a name the
-compile would change, such as a capitalized process name, or with a port of
-a CWL tool named like an attribute of ``Inputs`` or ``Outputs``, such as
-``keys``.
-
-What the compile does not keep does not come back:
-
-- original names: the import keeps the Nextflow spellings, in which ``~``,
-  ``@`` and every character Nextflow does not allow are ``_``, and a reserved,
-  capitalized or script-declared name has a leading ``_``, which the import
-  keeps; normalization is idempotent, so a second round trip is exact;
-- nesting: subworkflows are inlined, so the workflow is flat;
-- labels, docs, the other compile-time fields, and Sophios-only hints;
-- a step-only input the compile does not carry: one fed only by workflow
-  inputs that neither the step's ``when`` nor its ``scatter`` reads;
-- ``cudaDeviceCountMax``: the ``accelerator`` count is read as
-  ``cudaDeviceCountMin``;
-- comments and formatting;
-- every choice that lowers to the same model: where a value came from (a tool
-  or step default, an unbound optional input and a value written on a step
-  each become a workflow input ``<step>_<port>`` holding it); a maximum
-  resource; ``dockerImageId``; whether a requirement was a hint; whether a File
-  or Directory reference was plain or ``.path``, which it is written as;
-  ``type: stdout``; whether a token came from an
-  argument or an input's own binding, and its position; a single-input
-  scatter's method; a ``when``'s spelling; adjacent ``shellQuote: false``
-  texts; and a tool's input order.
-
-``Workflow.compile(target="nextflow")`` and ``Workflow.run(target="nextflow")``
-raise ``NotLowered``, a ``ValueError``, for a workflow the target cannot lower,
-and ``Workflow.check(target="nextflow")`` returns the same refusals among its
-diagnostics. Its ``refusals`` hold every ``Refusal`` at once, each with the
-``nf-sNNN`` code of its reason (``sophios --explain``), the ``Construct`` it
-refuses, the step, and the file and line its author wrote it at; its
-``diagnostics`` are the same refusals as Sophios reports any error, and its
-text is theirs.
+`Workflow.compile(target="nextflow")` returns the model, an `ExecutableNextflowWorkflow` of the `Nf*` types exported
+here, and raises `NotLowered`, a `ValueError` holding every `Refusal`, for a workflow the target cannot lower.
+`import_nextflow(directory)` reads the three files Nextflow itself reads, `workflow.nf`, `nextflow_params.json` and
+`nextflow.config`, and stops with `wic047` to `wic054` at the first line Sophios did not write. What it accepts and what
+a round trip does not keep are in docs/nextflow.md, "Importing supported DSL2".
 """
 
 from pathlib import Path
@@ -131,8 +84,7 @@ def import_nextflow(directory: str | Path) -> Workflow:
     """Import the pipeline Sophios wrote into ``directory`` as one Sophios workflow.
 
     Compiled to Nextflow with inference disabled, the workflow gives back the
-    model the three files were written from; the module docstring says what
-    that model does not keep.
+    model the three files were written from; docs/nextflow.md says what that model does not keep.
 
     Args:
         directory (str | Path): The directory holding ``workflow.nf``,

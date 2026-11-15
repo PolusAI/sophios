@@ -302,6 +302,8 @@ from. What the compile does not keep does not come back:
 - nesting: subworkflows are inlined, so the workflow is flat;
 - labels, docs, the other compile-time fields of [Field support](#field-support),
   and Sophios-only hints;
+- a step-only input the compile does not carry: one fed only by workflow inputs
+  that neither the step's `when` nor its `scatter` reads;
 - `cudaDeviceCountMax`: the `accelerator` count is read as
   `cudaDeviceCountMin`, the count both runners ask for;
 - comments and formatting;

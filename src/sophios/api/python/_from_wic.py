@@ -1,16 +1,4 @@
-"""Build Python API objects from a `.wic` file: `Workflow.from_wic`.
-
-The file is read, resolved and compiled by the code `sophios --yaml` runs:
-the file door collects every document and tool it reaches, and Resolve pairs
-each step with its process, applies `wic: steps:` contributions and selects
-nothing more. The objects are then built from that resolution, so a step holds
-exactly the tool the file compile runs.
-
-A construct the Python API cannot hold is refused with `api006`, all of them at
-once. Nothing is guessed: no step is renamed, no edge is moved and nothing the
-document says is dropped but `wic: graphviz` and `wic: inlineable`, which no
-Python compile reads, and `cwlVersion`, which the compiler replaces.
-"""
+"""Build Python API objects from a `.wic` file: the work of `Workflow.from_wic`, which documents it."""
 
 # pylint: disable=protected-access
 # This module is a private adapter between a resolved document and the
@@ -80,20 +68,11 @@ class _Reading:
 
 def workflow_from_wic(path: Path, tool_registry: Tools,
                       workflow_paths: Mapping[str, Mapping[str, Path]]) -> "Workflow":
-    """Build the `Workflow` a `.wic` file describes.
-
-    Args:
-        path (Path): The root `.wic` file.
-        tool_registry (Tools): The tools a step may name, as the CLI's registry holds them.
-        workflow_paths (Mapping[str, Mapping[str, Path]]): The `.wic` files a step may
-            call, `{namespace: {stem: path}}`.
+    """Build the `Workflow` a `.wic` file describes: see `Workflow.from_wic`.
 
     Raises:
         SophiosError: The file's own compile errors, or `api006` for every
             construct the Python API cannot hold.
-
-    Returns:
-        Workflow: The root workflow, its steps and nested workflows built.
     """
     bundle = bundle_from_disk(path, {namespace: dict(paths) for namespace, paths in workflow_paths.items()},
                               tool_registry)
@@ -260,12 +239,6 @@ def _read_process(resolved: ResolvedStep, bundle: SourceBundle, reading: _Readin
             reading.refuse(span, f'step {step.id!r} calls a workflow with {", ".join(keys)}; a nested Python '
                            'Workflow has no scatter_on or when: scatter or condition its steps instead')
         _read_call(process.child, span, reading)
-        child_outputs = {port.name for port in process.outputs}
-        for output in step.outputs:
-            if output.name not in child_outputs:
-                reading.refuse(output.span or span,
-                               f'step {step.id!r} names output {output.name!r}, which {process.key.name}.wic '
-                               "does not declare; declare it in that file's outputs:")
         authored = bundle.registry.workflow(process.key)
         assert authored is not None and authored.parsed.document is not None  # Resolve found it
         _read_document(process.child, authored.parsed.document, bundle, reading)

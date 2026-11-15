@@ -1,9 +1,4 @@
-"""Private namespace objects for the public Tool Builder.
-
-- ``Field``, ``Input``, and ``Output`` are the actual spec classes
-- ``Inputs``, ``Outputs`` and ``Fields`` are named collections that derive
-  parameter names from Python keyword arguments
-"""
+"""`Inputs`, `Outputs` and `Fields`: the Tool Builder's named collections of `Input`, `Output` and `Field` specs."""
 
 from collections.abc import Iterator, Mapping
 from typing import Any, TypeVar
