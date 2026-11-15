@@ -6,7 +6,6 @@ from .types import (
     DerivedName,
     Direction,
     Edge,
-    EdgeOrigin,
     EmittedValue,
     Expression,
     PortId,
@@ -43,7 +42,7 @@ def step_inputs(graph: WorkflowGraph) -> dict[StepId, tuple[tuple[PortName, Emit
             if isinstance(binding.resolution, Edge):
                 bind(binding.resolution, explicit=True)
     for edge in graph.linked_edges:
-        bind(edge, explicit=edge.origin is not EdgeOrigin.INFERRED)
+        bind(edge, explicit=not edge.inferred)
 
     shorthand_relays = set(graph.shorthand_relays)
     for name, sinks in graph.input_mapping:

@@ -119,8 +119,7 @@ def _provoke_empty_name() -> None:
         (ResolvedPort('', port_declaration(None)),), (),
         {'class': 'CommandLineTool'},
     )
-    resolved = ResolvedDocument(
-        'provoke', document, (ResolvedStep(step, process),), '0.0.1')
+    resolved = ResolvedDocument('provoke', document, (ResolvedStep(step, process),))
     diagnostics = lower(resolved).diagnostics
     raise SophiosError(tuple(diagnostics))
 

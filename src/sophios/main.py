@@ -355,8 +355,7 @@ def _main(args: argparse.Namespace, unknown_args: list[str]) -> None:
             lowered.model, subworkflows=args.cwl_inline_subworkflows, runtag=args.cwl_inline_runtag))
 
     # A transparent background, for slides.
-    drawing_graph = drawing.draw(compilation, bundle, graph_settings, yaml_path,
-                                 background=None) if args.graphviz else None
+    drawing_graph = drawing.draw(compilation, graph_settings, yaml_path, background=None) if args.graphviz else None
 
     def draw_after_write() -> None:
         # cwltool draws the CWL file, so it is drawn once this compile has written it.

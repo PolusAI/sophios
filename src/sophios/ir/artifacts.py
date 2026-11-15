@@ -43,14 +43,11 @@ class CompilationResult:
     graph: WorkflowGraph
     #: The tool each tool step runs, at any depth: the registry's, packed where it refers to files beside it.
     tools: Mapping[StepId, Tool]
+    #: The version selected once for this compilation tree.
+    lang_version: str
     #: The notes the compile made; a result never holds an error.
     diagnostics: Diagnostics = field(default_factory=Diagnostics)
     #: The real-time analyses the workflow declares, taken out of `graph`.
     realtime: tuple[Declaration, ...] = ()
     #: How the workflow runs: the resolved view carries it to a target.
     policy: RunPolicy = RunPolicy()
-
-    @property
-    def lang_version(self) -> str:
-        """The version selected once for this compilation tree."""
-        return self.graph.lang_version

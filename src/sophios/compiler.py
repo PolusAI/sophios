@@ -58,8 +58,7 @@ def compile_source(bundle: SourceBundle,
     if not quiet:
         print(' starting compilation of', bundle.name)
     selected_version = versions.resolve(settings.lang_version, bundle.lang_version_pins)
-    front = front_end(bundle.parsed, bundle.registry, name=bundle.name,
-                      lang_version=selected_version, check=_tool_check())
+    front = front_end(bundle.parsed, bundle.registry, name=bundle.name, check=_tool_check())
     if front.graph is None:
         raise SophiosError(front.diagnostics)
     if not front.graph.steps:
@@ -84,7 +83,7 @@ def compile_source(bundle: SourceBundle,
     tools = dict(_tools(graph, _Descriptions(bundle.registry)))
     if not quiet:
         print('finishing compilation of', bundle.name)
-    return CompilationResult(graph, tools, diagnostics, realtime, policy=settings.policy)
+    return CompilationResult(graph, tools, selected_version, diagnostics, realtime, policy=settings.policy)
 
 
 def _tool_check() -> ToolCheck:

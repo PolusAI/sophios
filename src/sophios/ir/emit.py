@@ -68,14 +68,14 @@ def _document(workflow: ResolvedWorkflow, whens: list[OpaqueCwl], root: str) -> 
         namespaces[EDAM_NAMESPACE[0]] = EDAM_NAMESPACE[1]
     if namespaces:
         document['$namespaces'] = deepcopy(namespaces)
-    if workflow.schemas:
-        # An ontology is a dependency of the document: only its author adds one.
-        document['$schemas'] = deepcopy(list(workflow.schemas))
+    document.update((key, None) for key, _ in workflow.passthrough if key == '$schemas')  # its place, filled below
     document['inputs'] = {port.name: _port(port.declaration) for port in workflow.inputs}
     document['outputs'] = {port.name: _port(port.declaration, port.output_source) for port in workflow.outputs}
     if requirements := _requirements(workflow, whens):
         document['requirements'] = requirements
-    document.update({key: deepcopy(value) for key, value in workflow.passthrough})
+    # The `requirements:` mapping the author wrote is in the one written above.
+    document.update({key: deepcopy(value) for key, value in workflow.passthrough
+                     if key != 'requirements' or not isinstance(value, dict)})
     return document
 
 
@@ -144,7 +144,7 @@ def _requirements(workflow: ResolvedWorkflow, whens: list[OpaqueCwl]) -> dict[st
     imply, by class."""
     entries = [entry for step in workflow.steps for entry in step.inputs]
     value_from = [str(text) for entry in entries for key, text in entry.written if key == 'valueFrom']
-    requirements = {name: deepcopy(body) for name, body in workflow.requirement_map}
+    requirements = {each.cls: deepcopy(each.body) for each in workflow.requirements if not each.hint}
     for requirement, needed in (
             ('SubworkflowFeatureRequirement', any(isinstance(step.run, ResolvedWorkflow) for step in workflow.steps)),
             ('ScatterFeatureRequirement',

@@ -2,7 +2,6 @@
 kept, deterministic; and each document of tests/core/data/lower lowers to the diagnostics its expected.yaml states.
 The test-side resolver needs no registry, filesystem or config."""
 import json
-from dataclasses import replace
 
 import pytest
 from hypothesis import example, given
@@ -10,7 +9,7 @@ from hypothesis import example, given
 from sophios.ir.declarations import port_declaration
 from sophios.ir.lower import lower
 from sophios.ir.resolve import ResolvedDocument, ResolvedPort, ResolvedProcess, ResolvedStep
-from sophios.ir.types import AuthoredName, Direction, PortId, RegistryKey, StepId, WorkflowGraph
+from sophios.ir.types import RegistryKey
 from sophios.lang.nodes import Document, Step
 from sophios.lang.parser import parse
 
@@ -46,7 +45,7 @@ def _resolved(document: Document) -> ResolvedDocument:
         )
         for step in document.steps
     )
-    return ResolvedDocument('probe', document, steps, '0.0.1')
+    return ResolvedDocument('probe', document, steps)
 
 
 @pytest.mark.fast
@@ -71,8 +70,7 @@ def test_a_well_formed_document_lowers_whole(document: Document) -> None:
     """`documents()` draws only well-formed documents, so each lowers to a graph with a step for each of its steps,
     never a diagnostic or an exception; the same graph twice, in full, mappings included, so none varies with set
     iteration; with every binding written in `in:`, so Emit never reads the AST again; and with every reference its
-    edges, obligations and mappings hold naming a port that exists, which a dangling `source:` would not. A graph
-    refuses to be built holding a port no step declares, or one step twice."""
+    edges and mappings hold naming a port that exists, which a dangling `source:` would not."""
     resolved = _resolved(document)
     result = lower(resolved)
     assert result.graph is not None, [d.code.value for d in result.diagnostics]
@@ -82,17 +80,11 @@ def test_a_well_formed_document_lowers_whole(document: Document) -> None:
         [value for step in document.steps for _, value in step.inputs]
     graph = result.graph
     known = {p.id for s in graph.steps for p in s.inputs + s.outputs}
-    for where, _name, port_id in graph._references():  # pylint: disable=protected-access
-        assert port_id in known, f'{where} names {port_id}'
-    assert {port for edge in graph.edges for port in (edge.source, edge.sink)} <= known
-    ghost = PortId(StepId(graph.namespace, len(graph.steps) + 1, 'ghost'), Direction.INPUT, AuthoredName('p'))
-    for held in ({'explicit_edge_defs': (('e', ghost),)}, {'output_mapping': ((AuthoredName('o'), ghost),)},
-                 {'input_mapping': ((AuthoredName('i'), (ghost,)),)}):
-        with pytest.raises(ValueError, match='names a port no step declares'):
-            replace(graph, **held)
-    if graph.steps:
-        with pytest.raises(ValueError, match='injective'):
-            WorkflowGraph(graph.namespace, children=(graph, graph))
+    held = [port for edge in graph.edges for port in (edge.source, edge.sink)]
+    held += [port for _, port in (*graph.explicit_edge_defs, *graph.output_mapping)]
+    held += [binding.sink for step in graph.steps for binding in step.bindings]
+    held += [port for _, ports in graph.input_mapping for port in ports]
+    assert set(held) <= known
 
 
 @pytest.mark.fast

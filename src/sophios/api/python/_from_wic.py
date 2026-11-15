@@ -15,8 +15,7 @@ from sophios.ir.frontdoor import SourceBundle, bundle_from_disk
 from sophios.ir.lower import output_step
 from sophios.ir.resolve import ResolvedDocument, ResolvedStep, resolve
 from sophios.lang import (CwlRecord, Diagnostic, Document, EdgeRef, InlineLiteral, InputValue, RawCwlRef,
-                          Severity, SophiosError, SophiosErrorCode, SourceSpan, UnresolvedName, WicSidecar,
-                          resolve_lang_version, to_json)
+                          Severity, SophiosError, SophiosErrorCode, SourceSpan, UnresolvedName, WicSidecar, to_json)
 from sophios.wic_types import Tools
 
 from ._ports import OutputParameter, _validate_namespace_name
@@ -78,8 +77,7 @@ def workflow_from_wic(path: Path, tool_registry: Tools,
                               tool_registry)
     compiler.compile_source(bundle, compiler.CompileSettings(), quiet=False)
     assert bundle.parsed.document is not None  # the compile above raised otherwise
-    version = resolve_lang_version(None, bundle.lang_version_pins)
-    resolved = resolve(bundle.parsed.document, bundle.registry, name=bundle.name, lang_version=version)
+    resolved = resolve(bundle.parsed.document, bundle.registry, name=bundle.name)
     assert resolved.document is not None  # the compile above resolved it
 
     reading = _Reading()

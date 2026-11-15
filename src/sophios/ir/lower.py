@@ -25,7 +25,7 @@ from ..lang.parser import Grammar
 from ..lang.spans import SourceSpan
 from .declarations import port_declaration
 from .locations import absolute_paths
-from .resolve import ResolvedDocument, ResolvedStep
+from .resolve import ResolvedDocument, ResolvedStep, graphviz_entry
 from .types import (
     AuthoredName,
     Binding,
@@ -98,24 +98,10 @@ def lower(document: ResolvedDocument, here: Namespace = Namespace()) -> PhaseRes
     namespaces_raw = passthrough.get('$namespaces')
     namespaces = tuple((str(key), value) for key, value in namespaces_raw.items()) \
         if isinstance(namespaces_raw, dict) else ()
-    schemas_raw = passthrough.get('$schemas', ())
-    schemas = tuple(schemas_raw) if isinstance(schemas_raw, list) else ()
-    # Only the mapping form of `requirements:` is modeled; any other shape (a list
-    # holding an `$import` or `$include`, or None from a bare key) is carried
-    # opaquely and Emit writes it back unchanged.
-    requirements_raw = passthrough.get('requirements', {})
-    requirements = (tuple(requirements_raw.items())
-                    if isinstance(requirements_raw, dict) else ())
-    reserved = {'inputs', 'outputs', '$namespaces', '$schemas', 'cwlVersion', 'class'}
-    if isinstance(requirements_raw, dict):
-        reserved.add('requirements')
     opaque = tuple((key, value) for key, value in document.source.passthrough
-                   if key not in reserved)
+                   if key not in ('inputs', 'outputs', '$namespaces', 'cwlVersion', 'class'))
     if diagnostics.has_errors:
-        # A graph is built only from a document the phase accepted: an edge
-        # definition registered for an output the process never declared
-        # (reported above as wic028) would otherwise trip the graph's own
-        # invariants with a ValueError instead of this report.
+        # A graph is built only from a document the phase accepted.
         return PhaseResult(None, diagnostics)
     sidecar = document.source.sidecar
     inlineable = bool(dict(sidecar.entries).get('inlineable', True)) if sidecar is not None else True
@@ -128,14 +114,12 @@ def lower(document: ResolvedDocument, here: Namespace = Namespace()) -> PhaseRes
         passthrough=opaque,
         span=document.source.span,
         name=document.name,
-        lang_version=document.lang_version,
         workflow_inputs=workflow_inputs,
         workflow_outputs=workflow_outputs,
-        requirements=requirements,
         namespaces=namespaces,
-        schemas=schemas,
         children=tuple(children),
         inlineable=inlineable,
+        graphviz=graphviz_entry(sidecar),
     )
     return PhaseResult(graph, diagnostics)
 
@@ -201,7 +185,7 @@ def _resolved_step_node(identity: StepId, resolved: ResolvedStep, defined: dict[
                                    calls_workflow=resolved.process.child is not None)
     return StepNode(identity, resolved.process.key, inputs, outputs, bindings, source.interpreted,
                     source.passthrough, source.span, scatter_ports,
-                    _inference_rules(resolved.sidecar))
+                    _inference_rules(resolved.sidecar), graphviz=graphviz_entry(resolved.sidecar))
 
 
 def _scatter_ports(source: Step, identity: StepId, inputs: tuple[Port, ...],

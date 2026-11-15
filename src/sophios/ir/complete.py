@@ -27,7 +27,6 @@ from .types import (
     BoundaryDeclaration,
     DerivedName,
     Direction,
-    JobBinding,
     Port,
     PortDeclaration,
     PortId,
@@ -91,7 +90,7 @@ def _lift_values(graph: WorkflowGraph) -> WorkflowGraph:
         name = DerivedName(step.id, port.id.port)
         declaration = feeding_declaration(step, port)
         workflow_inputs.append(WorkflowPort(name, declaration))
-        job_bindings.append(JobBinding(name, coerce_job_value(
+        job_bindings.append((name, coerce_job_value(
             port.id.port, declaration, value, scatter_rank=input_rank(step, port.id.port), span=span,
             locator=Locator(step.id.name, step.id.index, '/'.join(authored_path(port.id.port))))))
         input_mapping.append((name, (port.id,)))
@@ -100,7 +99,7 @@ def _lift_values(graph: WorkflowGraph) -> WorkflowGraph:
     for step in graph.steps:
         child = graph.child(step.id)
         bound = {binding.sink.port for binding in step.bindings}
-        jobs = {binding.name: binding.value for binding in child.job_bindings} if child is not None else {}
+        jobs = dict(child.job_bindings) if child is not None else {}
         shorthand_relays += [lift(step, port, jobs[port.id.port], step.span) for port in step.inputs
                              if port.id.port in jobs and port.id.port not in bound]
     for step in graph.steps:

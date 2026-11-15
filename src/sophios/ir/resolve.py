@@ -33,7 +33,6 @@ from ..lang import (
     StepKey,
     UnresolvedName,
     WicSidecar,
-    resolve_lang_version,
 )
 from ..lang.diagnostics import Diagnostic, Diagnostics, Locator
 from ..lang.nodes import GraphvizEntry, InputValue, OpaqueCwl, Step
@@ -154,7 +153,6 @@ class ResolvedDocument:
     name: str
     source: Document
     steps: tuple[ResolvedStep, ...]
-    lang_version: str
     #: Where its file is, which a relative location it writes is read against;
     #: None for a document no file holds, which the Python API builds.
     directory: Path | None = None
@@ -169,7 +167,7 @@ class Resolved:
 
 
 def resolve(document: Document, registry: RegistrySnapshot, *, name: str = 'workflow',
-            lang_version: str | None = None, check: ToolCheck | None = None) -> Resolved:
+            check: ToolCheck | None = None) -> Resolved:
     """Resolve ``document`` solely from ``registry`` and explicit arguments.
 
     ``check``, when given, is asked of each tool a step runs before the tool is read: a refusal is ``wic057``
@@ -181,16 +179,14 @@ def resolve(document: Document, registry: RegistrySnapshot, *, name: str = 'work
     document = selected
     reported: set[str] = set()
     _report_stale_keys(document.sidecar, document, name, reported)
-    version = resolve_lang_version(lang_version, version_pins(document))
-    resolved, diagnostics = _resolve_document(document, registry, name, version, (), reported,
-                                              registry.root_directory, check)
+    resolved, diagnostics = _resolve_document(document, registry, name, (), reported, registry.root_directory, check)
     _copy_diagnostics(diagnostics, selection_diagnostics)
     return Resolved(resolved if not diagnostics.has_errors else None, diagnostics)
 
 
 # pylint: disable-next=too-many-arguments,too-many-positional-arguments,too-many-locals
 def _resolve_document(document: Document, registry: RegistrySnapshot, name: str,
-                      version: str, trail: tuple[RegistryKey, ...], reported: set[str],
+                      trail: tuple[RegistryKey, ...], reported: set[str],
                       directory: Path | None, check: ToolCheck | None) \
         -> tuple[ResolvedDocument, Diagnostics]:
     diagnostics = Diagnostics()
@@ -202,18 +198,15 @@ def _resolve_document(document: Document, registry: RegistrySnapshot, name: str,
         # Its `wic: steps: (N, name):` body contributes to the step before its process is resolved.
         step = _contributed_step(step, sidecar)
         contributed.append(step)
-        process = _resolve_process(step, index, sidecar, registry, version, trail, diagnostics, reported,
-                                   directory, check)
+        process = _resolve_process(step, index, sidecar, registry, trail, diagnostics, reported, directory, check)
         if process is not None:
             steps.append(ResolvedStep(step, process, sidecar))
-    return ResolvedDocument(name, replace(document, steps=tuple(contributed)), tuple(steps), version,
-                            directory), diagnostics
+    return ResolvedDocument(name, replace(document, steps=tuple(contributed)), tuple(steps), directory), diagnostics
 
 
 # pylint: disable-next=too-many-arguments,too-many-positional-arguments,too-many-locals
 def _resolve_process(step: Step, index: int, sidecar: WicSidecar | None, registry: RegistrySnapshot,
-                     version: str, trail: tuple[RegistryKey, ...],
-                     diagnostics: Diagnostics, reported: set[str],
+                     trail: tuple[RegistryKey, ...], diagnostics: Diagnostics, reported: set[str],
                      directory: Path | None, check: ToolCheck | None) -> ResolvedProcess | None:
     namespace = namespace_of(sidecar)
     run = dict(step.interpreted).get('run')
@@ -235,8 +228,7 @@ def _resolve_process(step: Step, index: int, sidecar: WicSidecar | None, registr
     if workflow is None and explicit_workflow:
         workflow = registry.workflow(RegistryKey(namespace, _stem(step.id)))
     if workflow is not None:
-        return _resolve_workflow(step, sidecar, workflow, registry, version, trail, diagnostics,
-                                 reported, check)
+        return _resolve_workflow(step, sidecar, workflow, registry, trail, diagnostics, reported, check)
 
     if tool is None:
         diagnostics.error(SophiosErrorCode.SUBWORKFLOW_INVALID,
@@ -244,10 +236,6 @@ def _resolve_process(step: Step, index: int, sidecar: WicSidecar | None, registr
                           step.span)
         return None
     cwl = tool.cwl
-    if not isinstance(cwl, dict):
-        diagnostics.error(SophiosErrorCode.SUBWORKFLOW_INVALID,
-                          f'process {namespace}/{name} is not a CWL mapping', step.span)
-        return None
     if check is not None and (refusal := check(tool)) is not None:
         diagnostics.error(SophiosErrorCode.TOOL_REFUSED,
                           f'step {step.id!r} runs {tool.run_path}, which cwltool refuses:\n{refusal}',
@@ -270,7 +258,7 @@ def _resolve_process(step: Step, index: int, sidecar: WicSidecar | None, registr
 
 # pylint: disable-next=too-many-arguments,too-many-positional-arguments,too-many-locals
 def _resolve_workflow(step: Step, sidecar: WicSidecar | None, workflow: WorkflowSource,
-                      registry: RegistrySnapshot, version: str, trail: tuple[RegistryKey, ...],
+                      registry: RegistrySnapshot, trail: tuple[RegistryKey, ...],
                       diagnostics: Diagnostics, reported: set[str],
                       check: ToolCheck | None) -> ResolvedProcess | None:
     key = workflow.key
@@ -290,8 +278,8 @@ def _resolve_workflow(step: Step, sidecar: WicSidecar | None, workflow: Workflow
         return None
     for stale in (parsed.document.sidecar, sidecar) if source is inherited else (source.sidecar,):
         _report_stale_keys(stale, source, key.name, reported)
-    child, child_diagnostics = _resolve_document(source, registry, key.name, version,
-                                                 trail + (key,), reported, workflow.directory, check)
+    child, child_diagnostics = _resolve_document(source, registry, key.name, trail + (key,), reported,
+                                                 workflow.directory, check)
     _copy_diagnostics(diagnostics, child_diagnostics)
     interface = _workflow_interface(source, key, diagnostics)
     if interface is None:
@@ -544,14 +532,6 @@ def _inherit_parameters(document: Document, sidecar: WicSidecar | None) -> Docum
                                      implementations=sidecar.implementations,
                                      graphviz=sidecar.graphviz, span=sidecar.span),
         [step.id for step in document.steps]))
-
-
-def called_document(document: Document, call_site: WicSidecar | None,
-                    registry: RegistrySnapshot) -> Document | None:
-    """What a step runs when it calls `document`, as Resolve reads it: `call_site`, the step's
-    own `wic:` entry, merged into the document's `wic:` block, then its implementation selected.
-    None when no implementation can be selected."""
-    return _select_implementation(_inherit_parameters(document, call_site), registry)[0]
 
 
 def _merged_sidecar(own: WicSidecar | None, contributed: WicSidecar,
