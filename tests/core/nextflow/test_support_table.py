@@ -12,8 +12,8 @@ import yaml
 from cwl_utils.parser import cwl_v1_2
 
 from sophios.lang import SUPPORT_MATRIX
-from sophios.ir.refusals import Construct, NotLowered, Refusal
-from sophios.nf_support import CONSTRUCTS, FIELDS, REQUIREMENT_CLASSES, State
+from sophios.ir.refusals import NotLowered, Refusal
+from sophios.nf_support import FIELDS, REQUIREMENT_CLASSES, State
 from sophios.wic_types import Yaml
 
 from .testkit import lowered_case, step, tool
@@ -35,8 +35,8 @@ COMPILE_TIME = {"doc", "format", "intent", "label", "streamable"}
 @pytest.mark.fast
 def test_the_table_classifies_every_field_cwl_declares_under_a_construct() -> None:
     """Each class's rows are the fields cwl_utils or cwltool declares, Sophios's own classes' as the support matrix
-    has them; each requirement class is a CWL class, with its fields unless it is refused; every field stands under a
-    construct a refusal names (resolved-view §7); and the compile-time fields are the ones design §3 names."""
+    has them; each requirement class is a CWL class, with its fields unless it is refused; and the compile-time fields
+    are the ones design §3 names."""
     assert {cwl_class: set(FIELDS[cwl_class]) for cwl_class in SUPPORT_MATRIX} == {
         cwl_class: set(fields) for cwl_class, fields in SUPPORT_MATRIX.items()}
     assert {cwl_class: set(rows) for cwl_class, rows in FIELDS.items()} == {
@@ -44,11 +44,6 @@ def test_the_table_classifies_every_field_cwl_declares_under_a_construct() -> No
     for classes in REQUIREMENT_CLASSES.values():
         for name, row in classes.items():
             assert _declared_fields(name) and (row.state is State.REJECTED or name in FIELDS), name
-    assert set(CONSTRUCTS) == {construct.value for construct in Construct}
-    rows = {row for joined in CONSTRUCTS.values() for row in joined}
-    assert {cwl_class for cwl_class, _name in rows} <= set(FIELDS)
-    assert [(cwl_class, name) for cwl_class, fields in FIELDS.items() for name in fields
-            if (cwl_class, None) not in rows and (cwl_class, name) not in rows] == []
     assert {(cwl_class, name) for cwl_class, fields in FIELDS.items() for name, row in fields.items()
             if row.state is State.COMPILE_TIME} == {
         (cwl_class, name) for cwl_class, fields in FIELDS.items() for name in fields
@@ -134,12 +129,6 @@ def _refused(workflow: Yaml, run: Yaml, note: str) -> list[Refusal]:
     return [refusal for refusal in raised.value.refusals if refusal.reason.endswith(note)]
 
 
-def _constructs(cwl_class: str, name: str) -> set[str]:
-    """The constructs the join says a refusal of the field `name` of `cwl_class` names: its most specific rows'."""
-    specific = {construct for construct, rows in CONSTRUCTS.items() if (cwl_class, name) in rows}
-    return specific or {construct for construct, rows in CONSTRUCTS.items() if (cwl_class, None) in rows}
-
-
 def _lower(workflow: Yaml, run: Yaml, **values: Any) -> Any:
     return lowered_case({"workflow": workflow, "tools": [run], "job": {"x": ["hi"], "xs": ["a", "b"], **values}})[0]
 
@@ -186,12 +175,11 @@ _WITHHELD = "only the literal true is supported: a Nextflow task has network acc
     "cannot withhold it"
 
 
-def _refused_as_its_row_says(place: Callable[[Yaml, Yaml], None], note: str,
-                             constructs: set[str]) -> list[tuple[bool, str | None]]:
-    """The construct and subject of each refusal carrying `note`, when `place` puts a value in `_documents()`."""
+def _refused_as_its_row_says(place: Callable[[Yaml, Yaml], None], note: str) -> list[str | None]:
+    """The subject of each refusal carrying `note`, when `place` puts a value in `_documents()`."""
     workflow, run = _documents()
     place(workflow, run)
-    return [(refusal.construct in constructs, refusal.subject) for refusal in _refused(workflow, run, note)]
+    return [refusal.subject for refusal in _refused(workflow, run, note)]
 
 
 #: A value of the shape CWL gives a field, for each field cwltool's validator refuses "x" for.
@@ -221,24 +209,23 @@ def _section(section: str, requirements: Yaml) -> Callable[[Yaml, Yaml], None]:
 @pytest.mark.fast
 def test_a_refused_row_is_refused_with_its_note_naming_its_place() -> None:
     """Each refused field, refused requirement class and NetworkAccess other than the literal true, set in a workflow
-    that lowers without it, is one refusal carrying its row's note, of a construct the join gives the row, naming the
-    place it was set: the port it sits on, or in the tool the path to it."""
-    expected: dict[str, list[tuple[bool, str | None]]] = {}
-    found: dict[str, list[tuple[bool, str | None]]] = {}
+    that lowers without it, is one refusal carrying its row's note, naming the place it was set: the port it sits
+    on, or in the tool the path to it."""
+    expected: dict[str, list[str | None]] = {}
+    found: dict[str, list[str | None]] = {}
     for cwl_class, name in REJECTED:
-        expected[f"{cwl_class}.{name}"] = [(True, _subject(cwl_class, name))]
-        found[f"{cwl_class}.{name}"] = _refused_as_its_row_says(
-            _field(cwl_class, name), FIELDS[cwl_class][name].note, _constructs(cwl_class, name))
+        expected[f"{cwl_class}.{name}"] = [_subject(cwl_class, name)]
+        found[f"{cwl_class}.{name}"] = _refused_as_its_row_says(_field(cwl_class, name), FIELDS[cwl_class][name].note)
     for section in ("requirements", "hints"):
         for name in REJECTED_CLASSES:
             if (section, name) in _CWLTOOL_REFUSES:
                 continue
-            expected[f"{section}.{name}"] = [(True, f"T.cwl: {section}.{name}")]
+            expected[f"{section}.{name}"] = [f"T.cwl: {section}.{name}"]
             found[f"{section}.{name}"] = _refused_as_its_row_says(
                 _section(section, {name: _CLASS_VALUES.get(name, {})}),
-                REQUIREMENT_CLASSES["CommandLineTool"][name].note, {Construct.TOOL})
+                REQUIREMENT_CLASSES["CommandLineTool"][name].note)
         for value in (False, "$(inputs.x)"):
-            expected[f"{section}.NetworkAccess={value!r}"] = [(True, f"T.cwl: {section}.NetworkAccess.networkAccess")]
+            expected[f"{section}.NetworkAccess={value!r}"] = [f"T.cwl: {section}.NetworkAccess.networkAccess"]
             found[f"{section}.NetworkAccess={value!r}"] = _refused_as_its_row_says(
-                _section(section, {"NetworkAccess": {"networkAccess": value}}), _WITHHELD, {Construct.TOOL})
+                _section(section, {"NetworkAccess": {"networkAccess": value}}), _WITHHELD)
     assert found == expected

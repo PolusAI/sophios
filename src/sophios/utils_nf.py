@@ -69,14 +69,12 @@ from .nf_types import (
     entryname_problem,
     environment_name_problem,
     gives_list,
-    json_value_problem,
     lacks_prefix,
     link_refusal,
     linked_reference,
     literal_problem,
     merge_of,
     optional_output_problems,
-    process_dependencies,
     reference_problems,
     staged_write_problems,
     template_segments,
@@ -537,18 +535,10 @@ def _array_binding(
 _OPTIONAL_BINDING_TYPES = frozenset({"string", "int", "float"})
 
 
-def _optional_binding(raw_name: Any, name: str, binding: standard.CommandLineBinding) -> NfOptionalBinding:
-    """Lower an optional string, int or float input's own binding: nothing when the input is absent."""
-    return NfOptionalBinding(name, _prefix(raw_name, binding), binding.separate is not False)
-
-
-_IWDR_ENTRY_PATTERN = re.compile(r"^\$\(\s*inputs\.([A-Za-z_][A-Za-z0-9_]*)\s*\)$")
-
-
 def _iwdr_entry_reference(value: str) -> str:
     """Return the raw input name referenced by a bare $(inputs.<name>) IWDR entry."""
-    if match := _IWDR_ENTRY_PATTERN.match(value.strip()):
-        return match.group(1)
+    if (match := _INPUT_EXPRESSION.fullmatch(value.strip())) and not match["suffix"]:
+        return str(match["name"])
     raise _Unsupported(
         SophiosErrorCode.NF_STAGING, "must be a bare $(inputs.<name>) reference to one File/Directory input; "
         "inline content construction is deferred"
@@ -734,7 +724,7 @@ def _input_binding_items(
             tokens = _flag_tokens(flag, binding.prefix)
         elif value_from is None and optional and inner in _OPTIONAL_BINDING_TYPES:
             # CWL adds nothing for a null input; the [] sentinel stands for one.
-            tokens = (_optional_binding(raw_name, name, binding),)
+            tokens = (NfOptionalBinding(name, _prefix(raw_name, binding), binding.separate is not False),)
         else:
             value = _template(value_from) if value_from is not None else NfTemplate((NfInputReference(name),))
             tokens = _binding_tokens(binding.prefix, value, separate=binding.separate)
@@ -1470,8 +1460,7 @@ def _tool_capability_findings(tool: "_Tool") -> list[_Finding]:
 
 #: The classes that decide only whether a workflow may use a feature, which cwltool reads at the step (resolved-view
 #: design §8): on a workflow or a step each is an inert declaration, and a tool that inherits one lowers it to nothing.
-_FEATURES = frozenset({"SubworkflowFeatureRequirement", "ScatterFeatureRequirement",
-                       "MultipleInputFeatureRequirement", "StepInputExpressionRequirement"})
+_FEATURES = frozenset(REQUIREMENT_CLASSES["Workflow"])
 
 _Entry = TypeVar("_Entry")
 
@@ -2279,8 +2268,7 @@ def _typed(processes: list[NfProcess], connections: list[NfConnection], param_ty
     position = {process.name: index for index, process in enumerate(processes)}
     done: dict[str, NfProcess] = {}
     failed: dict[str, _Unsupported] = {}
-    for name in topological_order(process_dependencies(position, connections), error="workflow connections contain "
-                                  "a cycle", key=position.__getitem__):
+    for name in topological_order(position, connections):
         done[name] = typed = with_scalar_types(processes[position[name]], incoming, param_types, done)
         if (condition := conditions.get(name)) is None:
             continue
@@ -2517,8 +2505,6 @@ class _Lowering:
     @classmethod
     def of(cls, view: ResolvedWorkflow) -> "_Lowering":
         """The lowering's reading of `view`."""
-        if not isinstance(view, ResolvedWorkflow):
-            raise TypeError("Nextflow conversion requires a resolved view of a compilation")
         steps: list[_Step] = []
         refused: list[_Finding] = []
         for found in tool_steps(view):
@@ -2723,7 +2709,6 @@ def _assembled(lowering: _Lowering, processes: list[NfProcess],
     values = _apply_absent_sentinel({key: local_locations_as_paths(coerce_job_value(
         AuthoredName(key), PortDeclaration(PortType(param_types[key])), value)) for key, value in params.items()})
     problems = {SophiosErrorCode.NF_SOURCE_NAMES_NO_STEP: endpoint_problems(processes, connections),
-                SophiosErrorCode.NF_INPUT_VALUE: [each for each in [json_value_problem(values)] if each is not None],
                 SophiosErrorCode.NF_ABSENT_OPTIONAL: absent_path_problems(values, param_types),
                 SophiosErrorCode.NF_OPTIONAL_OUTPUT: optional_output_problems(processes, connections)}
     if refused := [_Finding(code, "", problem) for code, found in problems.items() for problem in found]:
@@ -2797,7 +2782,6 @@ class NextflowTarget:  # pylint: disable=too-few-public-methods
             view (ResolvedWorkflow): The resolved view of a finished compilation (`compiler.resolved_view`).
 
         Raises:
-            TypeError: If the argument is not a resolved view.
             NotLowered: If there is any refusal; it holds every one.
 
         Returns:

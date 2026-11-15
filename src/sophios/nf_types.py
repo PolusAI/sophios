@@ -116,16 +116,6 @@ def _freeze_json(value: Any) -> Any:
             raise ValueError("workflow params must contain JSON-compatible values")
 
 
-def json_value_problem(value: Any) -> str | None:
-    """Why `value` cannot be held as a workflow parameter, or None: the parameters are JSON, which has no NaN, no
-    infinity and no object key that is not a string."""
-    try:
-        _freeze_json(value)
-    except ValueError as error:
-        return str(error)
-    return None
-
-
 def _thaw_json(value: Any) -> Any:
     if isinstance(value, _Model | Expr):
         return value.to_dict()
@@ -872,10 +862,6 @@ def _type_condition(name: str, condition: Expr, ports: Iterable[NfPort]) -> None
         raise ValueError(f"process {name!r} condition must compute a boolean, not a {typed}")
 
 
-# Adapters that combine two or more scattered whole arrays into invocations
-# (design §6, Topology, Multi-input scatter); each value names its method.
-
-
 @dataclass(frozen=True, slots=True)
 class NfChannel:
     """How a workflow parameter's channel is built (design §5.2).
@@ -1116,60 +1102,26 @@ def with_scalar_types(process: NfProcess, incoming: Mapping[tuple[str, str], NfI
                    step_only_inputs=[filled(port) for port in process.step_only_inputs])
 
 
-def process_dependencies(
-    names: Iterable[str],
-    connections: Iterable[NfConnection],
-) -> dict[str, set[str]]:
-    """Map each process name to the process names it depends on.
+def topological_order(position: Mapping[str, int], connections: Iterable[NfConnection]) -> list[str]:
+    """The processes in the order a workflow calls them: each after every process it reads, and those ready together
+    in the order `position` gives them.
 
-    Args:
-        names (Iterable[str]): Every process name in the workflow.
-        connections (Iterable[NfConnection]): Workflow connections; only
-            process-to-process connections contribute dependencies.
-
-    Returns:
-        dict[str, set[str]]: Dependency sets keyed by process name.
+    Raises:
+        ValueError: The connections make a cycle.
     """
-    dependencies: dict[str, set[str]] = {name: set() for name in names}
+    dependencies: dict[str, set[str]] = {name: set() for name in position}
     for edge in edges(connections):
         if isinstance(edge, NfProcessConnection):
             dependencies[edge.to_process].add(edge.from_process)
-    return dependencies
-
-
-def topological_order(
-    dependencies: Mapping[str, Iterable[str]],
-    *,
-    error: str,
-    key: Callable[[str], Any] | None = None,
-) -> list[str]:
-    """Order process names topologically or raise ``ValueError`` on a cycle.
-
-    Ready names are emitted in batches; ``key`` orders each batch so callers
-    that need it get a deterministic order.
-
-    Args:
-        dependencies (Mapping[str, Iterable[str]]): Dependency sets keyed by
-            process name, as built by :func:`process_dependencies`.
-        error (str): Message for the ``ValueError`` raised on a cycle.
-        key (Callable[[str], Any] | None): Optional sort key applied to each
-            ready batch for deterministic output.
-
-    Raises:
-        ValueError: If the dependency graph contains a cycle.
-
-    Returns:
-        list[str]: Every process name in topological order.
-    """
     sorter = TopologicalSorter(dependencies)
     try:
         sorter.prepare()
     except CycleError as exc:
-        raise ValueError(error) from exc
+        raise ValueError("workflow connections contain a cycle") from exc
     ordered: list[str] = []
     while sorter.is_active():
         batch = sorter.get_ready()
-        ordered.extend(sorted(batch, key=key) if key else batch)
+        ordered.extend(sorted(batch, key=position.__getitem__))
         sorter.done(*batch)
     return ordered
 
@@ -1331,6 +1283,14 @@ class ExecutableNextflowWorkflow(_Model):
             raise ValueError(optional[0])
         # A val input takes a path's value and stages nothing, so a step-only input takes any source.
         carried = {(process.name, port.name) for process in self.processes for port in process.step_only_inputs}
+        for scattered in scatter_edges(self.connections):
+            where = f"{scattered.to_process}.{scattered.to_port}"
+            if (scattered.to_process, scattered.to_port) in carried:
+                raise ValueError(f"step-only input {where} cannot be scattered: no input of the process receives "
+                                 "the element")
+            if self._destination_port(process_by_name, scattered.to_process, scattered.to_port).is_array:
+                raise ValueError(f"channel adapter {scattered.adapter!r} cannot target the array-marked port {where}")
+            adapters_by_process.setdefault(scattered.to_process, set()).add(str(scattered.adapter))
 
         for connection in self.connections:
             merge = connection if isinstance(connection, NfStepInputConnection) else None
@@ -1349,19 +1309,11 @@ class ExecutableNextflowWorkflow(_Model):
                         if from_port not in self.params:
                             raise ValueError(f"connection references unknown workflow input {from_port!r}")
                         destination = self._destination_port(process_by_name, to_process, to_port)
-                        if adapter is not None and destination.is_array:
-                            raise ValueError(
-                                f"channel adapter {adapter!r} cannot target the array-marked port "
-                                f"{to_process}.{to_port}"
-                            )
                         # The renderer builds one channel per parameter, from its
                         # declared type, so every sink must need that one channel:
                         # connection order never picks it. A step input's idioms
                         # take the parameter's own value.
                         declared = param_channel(self.param_types[from_port])
-                        if adapter is not None and (to_process, to_port) in carried:
-                            raise ValueError(f"step-only input {to_process}.{to_port} cannot be scattered: no input "
-                                             "of the process receives the element")
                         if merge is not None:
                             self._check_merged(merge, f"workflow input {from_port!r}", declared, destination,
                                                (to_process, to_port) in carried)
@@ -1376,8 +1328,6 @@ class ExecutableNextflowWorkflow(_Model):
                                 f"{to_process}.{to_port}: incompatible channel qualifiers "
                                 f"{str(declared)!r} and {str(channel)!r}"
                             )
-                        if adapter is not None:
-                            adapters_by_process.setdefault(to_process, set()).add(adapter)
                         self._record_incoming(incoming, to_process, to_port)
                     case NfProcessConnection(from_process, from_port, to_process, to_port, adapter):
                         # Every source names an output of a process: `endpoint_problems` found none that does not.
@@ -1401,16 +1351,6 @@ class ExecutableNextflowWorkflow(_Model):
                                              "outputs only")
                         if adapter == "gather" and merge is None and not destination.is_array:
                             raise ValueError(f"{where} gathers into a port that is not array-typed")
-                        if adapter in SCATTER_METHODS:
-                            if (to_process, to_port) in carried:
-                                raise ValueError(f"step-only input {to_process}.{to_port} cannot be scattered: no "
-                                                 "input of the process receives the element")
-                            if destination.is_array:
-                                raise ValueError(
-                                    f"channel adapter {adapter!r} cannot target the array-marked port "
-                                    f"{to_process}.{to_port}"
-                                )
-                            adapters_by_process.setdefault(to_process, set()).add(adapter)
                         # Cardinality is half the channel contract, so it is
                         # checked on a process edge too: a scalar output driving
                         # an array-marked port renders list operations against a
@@ -1487,10 +1427,7 @@ class ExecutableNextflowWorkflow(_Model):
         process and port, and the workflow outputs follow in their own order.
         """
         position = {process.name: index for index, process in enumerate(self.processes)}
-        order = topological_order(
-            process_dependencies(position, self.connections), error="workflow connections contain a cycle",
-            key=position.__getitem__,
-        )
+        order = topological_order(position, self.connections)
         scattered = {(edge.to_process, edge.to_port) for edge in scatter_edges(self.connections)}
         processes = []
         for name in order:
