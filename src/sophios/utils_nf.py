@@ -122,13 +122,17 @@ def _computed_or_invalid(value: Any, computed: SophiosErrorCode) -> SophiosError
     return computed if expression else SophiosErrorCode.NF_INVALID_CWL
 
 
+def _refuse_separate_without_prefix(prefix: str | None, separate: bool | None) -> None:
+    if lacks_prefix(prefix, separate):
+        raise _Unsupported(SophiosErrorCode.NF_INVALID_CWL, "CWL separate cannot be specified without a prefix")
+
+
 def _prefix(raw_name: Any, binding: standard.CommandLineBinding) -> str | None:
     """A binding's prefix, or None for none: text that is not empty or blank, which cwltool skips."""
     if binding.prefix is not None and blank_prefix(binding.prefix):
         raise _Unsupported(SophiosErrorCode.NF_EMPTY_PREFIX,
                            f"CWL command prefix for {raw_name!r} must be a non-empty string")
-    if lacks_prefix(binding.prefix, binding.separate):
-        raise _Unsupported(SophiosErrorCode.NF_INVALID_CWL, "CWL separate cannot be specified without a prefix")
+    _refuse_separate_without_prefix(binding.prefix, binding.separate)
     return binding.prefix
 
 
@@ -264,22 +268,17 @@ def _array_item_type(array_type: Any) -> Any:
     :func:`_parameter_findings`.
     """
     items = array_type.get("items")
-    match items:
-        case "array":
-            raise _Unsupported(SophiosErrorCode.NF_TYPE, "nested arrays are deferred beyond this lowering")
-        case Mapping() as mapping:
-            if mapping.get("type") == "array":
-                raise _Unsupported(SophiosErrorCode.NF_TYPE, "nested arrays are deferred beyond this lowering")
-            if "inputBinding" in mapping:
-                raise _Unsupported(SophiosErrorCode.NF_ARRAY_BINDING,
-                                   "per-item array element bindings are deferred beyond this lowering")
-            extra = set(mapping) - {"type"}
-            if extra:
-                raise _Unsupported(SophiosErrorCode.NF_TYPE,
-                                   f"unsupported array items fields: {', '.join(sorted(extra))}")
-            return mapping.get("type")
-        case _:
-            return items
+    if items == "array" or _is_array_type(items):
+        raise _Unsupported(SophiosErrorCode.NF_TYPE, "nested arrays are deferred beyond this lowering")
+    if not isinstance(items, Mapping):
+        return items
+    if "inputBinding" in items:
+        raise _Unsupported(SophiosErrorCode.NF_ARRAY_BINDING,
+                           "per-item array element bindings are deferred beyond this lowering")
+    extra = set(items) - {"type"}
+    if extra:
+        raise _Unsupported(SophiosErrorCode.NF_TYPE, f"unsupported array items fields: {', '.join(sorted(extra))}")
+    return items.get("type")
 
 
 def _ports(
@@ -328,8 +327,7 @@ def _literal(text: str) -> NfLiteral:
 
 
 def _template(text: str) -> NfTemplate:
-    if (problem := literal_problem(text)) is not None:
-        raise _Unsupported(SophiosErrorCode.NF_INVALID_CWL, problem)
+    _literal(text)  # refuses what no literal can be
     interpolated = "$(" in text or "${" in text  # cwltool interpolates only these, and strips them
     if interpolated:
         text = text.strip()
@@ -386,8 +384,7 @@ def _position(value: int | str | None, *, default: int) -> int:
 
 
 def _binding_tokens(prefix: str | None, value: NfTemplate, *, separate: bool | None) -> tuple[NfTemplate, ...]:
-    if lacks_prefix(prefix, separate):
-        raise _Unsupported(SophiosErrorCode.NF_INVALID_CWL, "CWL separate cannot be specified without a prefix")
+    _refuse_separate_without_prefix(prefix, separate)
     match prefix:
         case None:
             return (value,)
@@ -423,8 +420,7 @@ def _shell_literal_value(
             SophiosErrorCode.NF_SHELL_QUOTE, f"shellQuote false for {raw_name!r} does not support a prefix; "
             "the raw literal must be the binding's whole value"
         )
-    if lacks_prefix(binding.prefix, binding.separate):
-        raise _Unsupported(SophiosErrorCode.NF_INVALID_CWL, "CWL separate cannot be specified without a prefix")
+    _refuse_separate_without_prefix(binding.prefix, binding.separate)
     value_from = binding.valueFrom
     if value_from is None:
         raise _Unsupported(
@@ -499,16 +495,12 @@ def _boolean_flag_reference(raw_name: Any, name: str, value_from: Any) -> None:
     so that is the sole supported form; it renders identically to the
     no-valueFrom case.
     """
-    template = _template(value_from)
-    match template.segments:
-        case (NfInputReference(name=reference),) if reference == name:
-            return
-        case _:
-            raise _Unsupported(
-                SophiosErrorCode.NF_BOOLEAN_BINDING, "valueFrom on a boolean inputBinding is supported only as "
-                f"$(inputs.{raw_name}), restating the input's own value; "
-                f"{value_from!r} does not have that shape"
-            )
+    if _template(value_from).segments != (NfInputReference(name),):
+        raise _Unsupported(
+            SophiosErrorCode.NF_BOOLEAN_BINDING, "valueFrom on a boolean inputBinding is supported only as "
+            f"$(inputs.{raw_name}), restating the input's own value; "
+            f"{value_from!r} does not have that shape"
+        )
 
 
 def _array_binding(
@@ -868,10 +860,6 @@ _CUDA_REQUIREMENT = "cwltool:CUDARequirement"
 _UNCHECKED_CUDA_FIELDS = ("cudaVersionMin", "cudaComputeCapability")
 
 
-def _cuda_capability(value: str | list[str]) -> str | tuple[str, ...]:
-    return value if isinstance(value, str) else tuple(value)
-
-
 def _device_count(value: Any) -> int:
     match value:
         case bool():
@@ -889,33 +877,31 @@ def _memory(value: Any) -> int | float:
 # The value checks of a requirement's fields, in the order findings report them.
 _REQUIREMENT_VALUES: Mapping[str, Mapping[str, Callable[[Any], Any]]] = {
     "ResourceRequirement": {"coresMin": _cpu_resource, "coresMax": _cpu_resource, "ramMin": _memory, "ramMax": _memory},
-    _CUDA_REQUIREMENT: {
-        "cudaDeviceCountMin": _device_count, "cudaDeviceCountMax": _device_count,
-        "cudaComputeCapability": _cuda_capability,
-    },
+    _CUDA_REQUIREMENT: {"cudaDeviceCountMin": _device_count, "cudaDeviceCountMax": _device_count},
 }
 
 
-def _requirement_value(values: Mapping[str, Any], class_name: str, field: str, otherwise: str = "") -> Any:
-    """The checked value of a requirement's `field`, of its field `otherwise` when `field` is not written, or None."""
-    value = values.get(field)
-    if value is None and otherwise:
-        value = values.get(otherwise)
-    check = _REQUIREMENT_VALUES[class_name].get(field)
-    return value if value is None or check is None else check(value)
+def _min_else_max(low: Any, high: Any) -> Any:
+    return high if low is None else low
 
 
 def _resources(tool: "_Tool") -> NfResources:
     resources = tool.requirement(standard.ResourceRequirement)
-    resources_given, cuda = vars(resources) if resources is not None else {}, tool.extension(_CUDA_REQUIREMENT)
-    # cwltool's device count: the minimum, else the maximum, else 1 (design §6, Resources and containers).
-    gpus = None if cuda is None else _requirement_value(
-        cuda, _CUDA_REQUIREMENT, "cudaDeviceCountMin", "cudaDeviceCountMax") or 1
-    return NfResources(
-        _requirement_value(resources_given, "ResourceRequirement", "coresMin", "coresMax"),
-        _requirement_value(resources_given, "ResourceRequirement", "ramMin", "ramMax"), gpus,
-        *(_requirement_value(cuda or {}, _CUDA_REQUIREMENT, name) for name in _UNCHECKED_CUDA_FIELDS),
-    )
+    cuda = tool.extension(_CUDA_REQUIREMENT)
+    gpus = cores = ram = None
+    if cuda is not None:
+        # cwltool's device count: the minimum, else the maximum, else 1 (design §6, Resources and containers).
+        count = _min_else_max(cuda.get("cudaDeviceCountMin"), cuda.get("cudaDeviceCountMax"))
+        gpus = 1 if count is None else _device_count(count)
+    if resources is not None:
+        cores = _min_else_max(resources.coresMin, resources.coresMax)
+        ram = _min_else_max(resources.ramMin, resources.ramMax)
+        cores = None if cores is None else _cpu_resource(cores)
+        ram = None if ram is None else _memory(ram)
+    capability = (cuda or {}).get("cudaComputeCapability")
+    if not isinstance(capability, str) and capability is not None:
+        capability = tuple(capability)
+    return NfResources(cores, ram, gpus, (cuda or {}).get("cudaVersionMin"), capability)
 
 
 def _cuda_notes(step: str, tool: "_Tool") -> list[Diagnostic]:
@@ -1092,11 +1078,12 @@ def _default_value_findings(cwl_type: Any, default: Any, *, path: str) -> list[_
             or _type_problem(cwl_type) is not None:  # the type has its own refusal
         return []
     if default is None or isinstance(default, (Mapping, list)):
-        return [_Finding(SophiosErrorCode.NF_DEFAULT,
-                         f"{path}.default", "the Nextflow target supports JSON scalar defaults only")]
-    if not _phase1_value_matches(cwl_type, default):
-        return [_Finding(SophiosErrorCode.NF_DEFAULT, f"{path}.default", "value does not match its supported CWL type")]
-    return []
+        note = "the Nextflow target supports JSON scalar defaults only"
+    elif not _phase1_value_matches(cwl_type, default):
+        note = "value does not match its supported CWL type"
+    else:
+        return []
+    return [_Finding(SophiosErrorCode.NF_DEFAULT, f"{path}.default", note)]
 
 
 def _rejection(rows: Mapping[str, Row], name: str, *, path: str, otherwise: tuple[SophiosErrorCode, str]
@@ -1339,15 +1326,13 @@ def _path_reference_findings(tool: "_Tool", entries: Mapping[str, NfEntry]) -> l
             qualifier = _qualifier(declared)
             if qualifier is None:
                 continue  # the input pass reports a type the backend does not lower
-            is_path = qualifier == "path"
-            if suffix is not None and not is_path:
-                findings.append(
-                    _Finding(SophiosErrorCode.NF_PATH_REFERENCE,
-                             position, f"$(inputs.{name}.{suffix}) requires a File or Directory input, "
-                             f"and {name} is declared {declared!r}")
-                )
-                continue
-            if not is_path:
+            if qualifier != "path":
+                if suffix is not None:
+                    findings.append(
+                        _Finding(SophiosErrorCode.NF_PATH_REFERENCE,
+                                 position, f"$(inputs.{name}.{suffix}) requires a File or Directory input, "
+                                 f"and {name} is declared {declared!r}")
+                    )
                 continue
             # What the model takes in its place: .basename, unless it is the input's staged name or a path inside it.
             refusal = link_refusal(entry, writes=kind != "glob") if linked == name else None
@@ -1638,20 +1623,6 @@ def _port_fields(declaration: PortDeclaration, source: Ref | str | None = None) 
     return {*(fields or {"type"}), "outputSource"} if source is not None else fields
 
 
-def _step_fields(node: ResolvedStep) -> set[str]:
-    """The name of every field a step writes, as CWL keys a WorkflowStep: its `scatter`, `when`, requirements and
-    hints, and the rest."""
-    fields = {"id", "in", "out", "run", *dict(node.fields),
-              *("hints" if requirement.hint else "requirements" for requirement in node.requirements)}
-    if node.scatter is not None:
-        fields.add("scatter")
-        if node.scatter.method is not None:
-            fields.add("scatterMethod")
-    if node.condition is not None:
-        fields.add("when")
-    return fields
-
-
 def _call_findings(workflow: ResolvedWorkflow) -> list[_Finding]:
     """Reject the semantics of a call the flat executable graph would erase.
 
@@ -1672,11 +1643,9 @@ def _call_findings(workflow: ResolvedWorkflow) -> list[_Finding]:
             found.append(_Finding(SophiosErrorCode.NF_SCATTERED_CALL, ".scatter",
                                   "scatter on a nested workflow step is deferred beyond this lowering; scattering a "
                                   "sub-DAG is not the single-process shape scatter supports"))
-        elif "scatterMethod" in dict(step.fields):
-            found.append(_Finding(SophiosErrorCode.NF_SCATTER_METHOD_ALONE, ".scatterMethod",
-                                  "scatterMethod without scatter is not executable"))
-        found.extend(_unconsumed_field_findings(_step_fields(step), "WorkflowStep", path=""))
-        found.extend(_own_requirement_findings(step, "WorkflowStep", path=""))
+        else:
+            found.extend(_scatter_method_alone(step))
+        found.extend(_own_findings(step, path=""))
         for port in step.inputs:
             input_path = f".in.{port.name}"
             # The inlining joins one source to each input a call binds.
@@ -1693,9 +1662,7 @@ def _call_findings(workflow: ResolvedWorkflow) -> list[_Finding]:
                 found.extend(_unconsumed_field_findings(
                     _record_fields(port) - _idioms(port), "WorkflowStepInput",
                     path=input_path))
-        found.extend(_unconsumed_field_findings(_workflow_fields(child), "Workflow", path=".run",
-                                                kept=_WORKFLOW_CONSUMED_FIELDS))
-        found.extend(_own_requirement_findings(child, "Workflow", path=".run"))
+        found.extend(_own_findings(child, path=".run"))
         for declared in child.inputs:
             port_path = f".run.inputs.{declared.name}"
             found.extend(_declared_findings(declared.declaration, "WorkflowInputParameter", path=port_path))
@@ -1711,12 +1678,6 @@ def _call_findings(workflow: ResolvedWorkflow) -> list[_Finding]:
         findings.extend(replace(each, step=step) for each in found)
         findings.extend(_call_findings(child))
     return findings
-
-
-def _workflow_fields(workflow: ResolvedWorkflow) -> set[str]:
-    """The name of every field a workflow writes, as CWL keys a Workflow."""
-    return {"class", "cwlVersion", "inputs", "outputs", "steps", *dict(workflow.fields),
-            *("hints" if requirement.hint else "requirements" for requirement in workflow.requirements)}
 
 
 def _carried(tool: ToolStep) -> frozenset[str]:
@@ -1738,9 +1699,7 @@ def _lists(cwl_type: Any) -> bool:
 
 def _workflow_capability_findings(workflow: ResolvedWorkflow, steps: tuple[_Step, ...]) -> list[_Finding]:
     """Apply closed-world analysis to the workflow, its steps, and its boundary values."""
-    findings = _unconsumed_field_findings(_workflow_fields(workflow), "Workflow", path="",
-                                          kept=_WORKFLOW_CONSUMED_FIELDS)
-    findings.extend(_own_requirement_findings(workflow, "Workflow", path=""))
+    findings = _own_findings(workflow, path="")
     with _reported(findings, ".inputs"):
         _normalized_identifiers([port.name for port in workflow.inputs], context="workflow input")
     for given in workflow.inputs:
@@ -1773,12 +1732,8 @@ def _workflow_capability_findings(workflow: ResolvedWorkflow, steps: tuple[_Step
     with _reported(findings, ".steps"):
         _normalized_identifiers([step.node.name for step in steps], context="workflow step", variable=False)
     for step in steps:
-        fields = _step_fields(step.node)
-        found = _unconsumed_field_findings(fields, "WorkflowStep", path="")
-        found.extend(_own_requirement_findings(step.node, "WorkflowStep", path=""))
-        if step.node.scatter is None and "scatterMethod" in fields:
-            found.append(_Finding(SophiosErrorCode.NF_SCATTER_METHOD_ALONE, ".scatterMethod",
-                                  "scatterMethod without scatter is not executable"))
+        found = _own_findings(step.node, path="")
+        found.extend(_scatter_method_alone(step.node))
         for port in step.node.inputs:
             if port.expression is None:
                 found.extend(_unconsumed_field_findings(_record_fields(port),
@@ -1787,13 +1742,36 @@ def _workflow_capability_findings(workflow: ResolvedWorkflow, steps: tuple[_Step
     return findings
 
 
-def _own_requirement_findings(node: ResolvedWorkflow | ResolvedStep, owner: str, *, path: str) -> list[_Finding]:
-    """A workflow's or a step's own requirements and hints: a feature class is consumed there, an inert declaration
-    with no field of its own; every other class is inherited by each tool step inside, and judged there as written
-    on its tool (design §8)."""
-    findings = [_Finding(SophiosErrorCode.NF_INVALID_CWL,
-                         f"{path}.{section}", f"CWL {owner} {section} must be a mapping or list")
-                for section in ("requirements", "hints") if section in dict(node.fields)]
+def _scatter_method_alone(node: ResolvedStep) -> list[_Finding]:
+    """A step that names a scatterMethod and no scatter."""
+    if node.scatter is None and "scatterMethod" in dict(node.fields):
+        return [_Finding(SophiosErrorCode.NF_SCATTER_METHOD_ALONE, ".scatterMethod",
+                         "scatterMethod without scatter is not executable")]
+    return []
+
+
+def _own_findings(node: ResolvedWorkflow | ResolvedStep, *, path: str) -> list[_Finding]:
+    """A workflow's or a step's own fields, requirements and hints: a field the lowering does not consume; a feature
+    class is consumed in a requirement or hint, an inert declaration with no field of its own; every other class is
+    inherited by each tool step inside, and judged there as written on its tool (design §8)."""
+    fields = {*dict(node.fields), *("hints" if requirement.hint else "requirements"
+                                    for requirement in node.requirements)}
+    if isinstance(node, ResolvedWorkflow):
+        owner, kept = "Workflow", _WORKFLOW_CONSUMED_FIELDS
+        fields |= {"class", "cwlVersion", "inputs", "outputs", "steps"}
+    else:
+        owner, kept = "WorkflowStep", None
+        fields |= {"id", "in", "out", "run"}
+        if node.scatter is not None:
+            fields.add("scatter")
+            if node.scatter.method is not None:
+                fields.add("scatterMethod")
+        if node.condition is not None:
+            fields.add("when")
+    findings = _unconsumed_field_findings(fields, owner, path=path, kept=kept)
+    findings += [_Finding(SophiosErrorCode.NF_INVALID_CWL,
+                          f"{path}.{section}", f"CWL {owner} {section} must be a mapping or list")
+                 for section in ("requirements", "hints") if section in dict(node.fields)]
     for requirement in node.requirements:
         if requirement.cls in _FEATURES:
             findings.extend(_unconsumed_field_findings(
@@ -1818,7 +1796,7 @@ def _scatter_source_findings(step: _Step, raw_name: str, source_types: Mapping[s
         # A process-output source is reported once, by the cross-step pass.
         return []
     declared = source_types.get(source)
-    if not _is_array_type(required(declared)[0]):
+    if not _lists(declared):
         return [_Finding(SophiosErrorCode.NF_SCATTER_SOURCE, f".in.{raw_name}",
                          f"a scattered input needs an array-typed source; {source!r} declares {declared!r}", step.node)]
     return []
@@ -1856,7 +1834,7 @@ def _scatter_findings(workflow: ResolvedWorkflow, steps: tuple[_Step, ...]) -> l
                                          f".in.{raw_name}", "scatter over an input the step's tool does not "
                                          "declare is not supported", step.node))
                 continue
-            if _is_array_type(required(canonical(port.type_))[0]):
+            if _lists(canonical(port.type_)):
                 findings.append(
                     _Finding(SophiosErrorCode.NF_SCATTER_OF_ARRAYS,
                              ".scatter", f"scattered input {raw_name!r} is array-typed; scattering over an "
@@ -2124,8 +2102,12 @@ def _conditional_consumer_findings(steps: tuple[_Step, ...]) -> list[_Finding]:
     return findings
 
 
-def _text_capture_endpoints(steps: tuple[_Step, ...]) -> set[str]:
-    """Every ``<step>/<port>`` source that captures file text."""
+def _text_capture_sink_findings(steps: tuple[_Step, ...]) -> list[_Finding]:
+    """Restrict a captured value's sink to a workflow output.
+
+    Every process output before this lowering carried the ``path`` qualifier, so the executable graph has no
+    source-to-destination qualifier agreement check for process edges to lean on.
+    """
     endpoints: set[str] = set()
     for step in steps:
         for raw_port, produced in step.tool.outputs.items():
@@ -2136,16 +2118,6 @@ def _text_capture_endpoints(steps: tuple[_Step, ...]) -> set[str]:
             # A conditional step's is the exception: _conditional_consumer_findings governs its downstream sinks.
             if text_stays_out(capture, step.node.condition is not None):
                 endpoints.add(f"{step.node.name}/{raw_port}")
-    return endpoints
-
-
-def _text_capture_sink_findings(steps: tuple[_Step, ...]) -> list[_Finding]:
-    """Restrict a captured value's sink to a workflow output.
-
-    Every process output before this lowering carried the ``path`` qualifier, so the executable graph has no
-    source-to-destination qualifier agreement check for process edges to lean on.
-    """
-    endpoints = _text_capture_endpoints(steps)
     return [
         _Finding(SophiosErrorCode.NF_CAPTURED_TEXT_READ,
                  f".in.{port.name}", f"{source!r} captures file text; its only approved sink is a workflow "
@@ -2490,9 +2462,7 @@ def _json_value(value: Any) -> Any:
     match value:
         case Mapping() as mapping:
             return {str(key): _json_value(item) for key, item in mapping.items()}
-        case list() as items:
-            return [_json_value(item) for item in items]
-        case tuple() as items:
+        case list() | tuple() as items:
             return [_json_value(item) for item in items]
         case PathLike() as path:
             return str(path)
@@ -2578,11 +2548,6 @@ def _with_field(rest: str, reason: str) -> str:
     return reason if not field or reason.startswith(field.rsplit(".", maxsplit=1)[-1]) else f"{field}: {reason}"
 
 
-def _tool_file(step: ResolvedStep) -> str:
-    """The file a step's tool was read from, as a refusal names it."""
-    return Path(step.run.run_path).name if isinstance(step.run, Tool) else step.name
-
-
 def _step_named(workflow: ResolvedWorkflow, name: str) -> ResolvedStep | None:
     """The step of `workflow`, at any depth, whose qualified name is `name`."""
     for step in workflow.steps:
@@ -2637,7 +2602,8 @@ def _step_refusal(node: ResolvedStep, finding: _Finding, *, root: str) -> Refusa
         case "run":
             field_path = after.removeprefix(".")
             construct, text = Construct.TOOL, finding.text
-            subject = f"{_tool_file(node)}: {field_path}" if field_path else _tool_file(node)
+            tool_file = Path(node.run.run_path).name if isinstance(node.run, Tool) else node.name
+            subject = f"{tool_file}: {field_path}" if field_path else tool_file
         case "requirements" | "hints":
             construct, subject, text = Construct.REQUIREMENT, name or None, _with_field(within, finding.text)
     return Refusal(finding.code, construct, subject, root, node.name, span, text)
