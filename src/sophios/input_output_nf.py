@@ -338,10 +338,6 @@ def _segment_expression(segment: Any, entries: Mapping[str, str]) -> str:
         value=value)
 
 
-def _template_expression(template: Any, entries: Mapping[str, str]) -> str:
-    return " + ".join(_segment_expression(segment, entries) for segment in template.segments)
-
-
 def _shell_quote(value: str) -> str:
     """Return the POSIX shell word produced by the generated Groovy helper."""
     return "'" + value.replace("'", "'\"'\"'") + "'"
@@ -349,7 +345,8 @@ def _shell_quote(value: str) -> str:
 
 def _render_template(template: Any, entries: Mapping[str, str]) -> str:
     """Render one typed token through the generated shell-quoting function."""
-    return Idioms.TEMPLATE.fill(expression=_template_expression(template, entries))
+    return Idioms.TEMPLATE.fill(
+        expression=" + ".join(_segment_expression(segment, entries) for segment in template.segments))
 
 
 def _render_array_binding(token: NfArrayBinding, floats: frozenset[str]) -> str:
@@ -375,16 +372,6 @@ def _render_optional_binding(token: NfOptionalBinding, entries: Mapping[str, str
     return Idioms.OPTIONAL.fill(name=token.name, words=words)
 
 
-def _render_shell_literal(token: NfShellLiteral) -> str:
-    """Render one approved shellQuote:false literal exactly as written, unquoted.
-
-    Bypasses the shell-quoting helper entirely: the text is a CWL-author
-    literal with no input reference, proven by capability analysis before
-    this token can exist, so only the enclosing GString needs escaping.
-    """
-    return _groovy_gstring_fragment(token.text)
-
-
 def _render_command_token(token: Any, entries: Mapping[str, str], floats: frozenset[str]) -> str:
     """Render one argv token; flags, array and optional bindings collapse away when false, empty or absent."""
     if isinstance(token, NfFlag):
@@ -394,7 +381,8 @@ def _render_command_token(token: Any, entries: Mapping[str, str], floats: frozen
     if isinstance(token, NfOptionalBinding):
         return _render_optional_binding(token, entries)
     if isinstance(token, NfShellLiteral):
-        return _render_shell_literal(token)
+        # A shellQuote:false literal is the author's text with no input reference: unquoted, only escaped for the GString.
+        return _groovy_gstring_fragment(token.text)
     return _render_template(token, entries)
 
 
@@ -421,15 +409,6 @@ def render_number(value: int | float) -> str:
 _BRACE_ESCAPES = str.maketrans({"{": "\\{", "}": "\\}"})
 
 
-def _capture_literal(port: NfPort) -> str:
-    """Return the Groovy literal for a capture-marked port's literal glob."""
-    # NfPort admits a capture marker only beside a single-literal glob.
-    assert port.glob is not None
-    segment = port.glob.segments[0]
-    assert isinstance(segment, NfLiteral)
-    return groovy_literal(segment.value)
-
-
 def _options(options: list[tuple[str, str]]) -> str:
     """A declaration's named arguments after its value, each with its leading comma."""
     return "".join(f", {Idioms.OPTION.fill(name=name, value=value)}" for name, value in options)
@@ -441,7 +420,8 @@ def _process_output(port: NfPort, entries: Mapping[str, str], *, tuple_element: 
     # qualifier only for a text capture.
     assert port.glob is not None
     if port.capture == "text":
-        return Idioms.TEXT_CAPTURE.fill(literal=_capture_literal(port))
+        # NfPort admits a capture marker only beside a single-literal glob, which renders as that literal.
+        return Idioms.TEXT_CAPTURE.fill(literal=_render_glob(port.glob, entries))
     # A text capture returns above, so no option reaches a val declaration.
     options = [("glob", "false")] if port.literal_glob else []
     if port.one_file:
@@ -505,16 +485,12 @@ def _path_input(port: NfPort, directory: str | None) -> str:
     return Idioms.INPUT.fill(qualifier="path", name=port.name, options=_options(options + _staged_under(directory)))
 
 
-def _process_input(port: NfPort, *, tuple_element: bool = False) -> str:
+def _tuple_element_input(port: NfPort) -> str:
     directory = None if port.entry is None else _entry_directory(port)
-    if tuple_element:
-        return Idioms.ELEMENT.fill(qualifier=port.qualifier, name=port.name, options=_options(_staged_under(directory)))
-    if port.qualifier == "path":
-        return _path_input(port, directory)
-    return Idioms.INPUT.fill(qualifier=port.qualifier, name=port.name, options="")
+    return Idioms.ELEMENT.fill(qualifier=port.qualifier, name=port.name, options=_options(_staged_under(directory)))
 
 
-def _unscattered_input(port: NfPort) -> str:
+def _process_input(port: NfPort) -> str:
     # The files of an array, whether a workflow input, a gather or a step
     # input, may share a basename; each is staged in its own numbered
     # directory, as cwltool does, so the names cannot collide. Nextflow
@@ -522,7 +498,9 @@ def _unscattered_input(port: NfPort) -> str:
     # two such ports apart.
     if port.is_array and port.qualifier == "path":
         return _path_input(port, f"gather_{port.name}_*")
-    return _process_input(port)
+    if port.qualifier == "path":
+        return _path_input(port, None if port.entry is None else _entry_directory(port))
+    return Idioms.INPUT.fill(qualifier=port.qualifier, name=port.name, options="")
 
 
 # A task's script reads its image's ENTRYPOINT words, NUL-separated, and runs its command after them.
@@ -584,14 +562,13 @@ def _render_process(process: NfProcess, multi_input_ports: tuple[str, ...], floa
 
     if process.all_inputs:
         lines.extend(["", "    input:"])
+        other = list(process.all_inputs)
         if multi_input_ports:
-            scattered = [port for port in process.all_inputs if port.name in multi_input_ports]
-            other = [port for port in process.all_inputs if port.name not in multi_input_ports]
-            elements = ", ".join(_process_input(port, tuple_element=True) for port in scattered)
+            scattered = [port for port in other if port.name in multi_input_ports]
+            other = [port for port in other if port.name not in multi_input_ports]
+            elements = ", ".join(_tuple_element_input(port) for port in scattered)
             lines.append(f"    {Idioms.TUPLE_INPUT.fill(elements=elements)}")
-            lines.extend(f"    {_unscattered_input(port)}" for port in other)
-        else:
-            lines.extend(f"    {_unscattered_input(port)}" for port in process.all_inputs)
+        lines.extend(f"    {_process_input(port)}" for port in other)
     if process.outputs:
         lines.extend(["", "    output:"])
         idiom = Idioms.TUPLE_OUTPUT if multi_input_ports else Idioms.OUTPUT
@@ -753,10 +730,6 @@ NF_OUTPUT_FUNCTION = f'''def {NF_OUTPUT_HELPER}(value, int depth) {{
         return ['class': java.nio.file.Files.isDirectory(value) ? 'Directory' : 'File', 'path': value.toString()]
     return value == [] ? null : value
 }}'''
-
-
-def _shape_channel(process_name: str) -> str:
-    return f"ch_{process_name}_shape"
 
 
 NF_NEST_FUNCTION = f'''def {NF_NEST_HELPER}(List flat, List shape) {{
@@ -1005,7 +978,7 @@ def _render_named_workflow(workflow: ExecutableNextflowWorkflow) -> str:
                 # lengths: one array dimension per scattered input.
                 expression = (
                     f"{expression}.toSortedList {{ it[0] }}.map {{ [it.collect {{ row -> row[1] }}] }}"
-                    f".combine({_shape_channel(connection.from_process)})"
+                    f".combine(ch_{connection.from_process}_shape)"
                     f".flatMap {{ flat, shape -> {NF_NEST_HELPER}(flat, shape) }}"
                 )
             elif (port := next(
