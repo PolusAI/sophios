@@ -148,18 +148,13 @@ def _noted(row: Any) -> str:
     return row.note if row.code is None else f'{row.note} (`{row.code}`)'
 
 
-def _refused_as(constructs: tuple[str, ...]) -> str:
-    """The line naming what a refusal of a field of a class says it is about."""
-    return 'A refusal names it as ' + ' or '.join(f'`{construct}`' for construct in constructs) + '.'
-
-
 # pylint: disable-next=too-many-locals
 def nf_support_markdown() -> str:
     """The support table as Markdown: a summary line, then one table per class."""
     from collections import Counter  # pylint: disable=import-outside-toplevel
     from sophios.lang import SUPPORT_MATRIX, Support  # pylint: disable=import-outside-toplevel
     # pylint: disable-next=import-outside-toplevel
-    from sophios.nf_support import FIELDS, REQUIREMENT_CLASSES, State, constructs_of
+    from sophios.nf_support import FIELDS, REQUIREMENT_CLASSES, State
 
     native = Counter(FIELDS[cwl_class][name].state for cwl_class, rows in SUPPORT_MATRIX.items()
                      for name, support in rows.items() if support is Support.NATIVE)
@@ -174,7 +169,6 @@ def nf_support_markdown() -> str:
             continue
         place = _NF_SUPPORT_PLACES.get(cwl_class)
         lines += ['', f'### `{cwl_class}`' + (f', {place}' if place else ''), '']
-        lines += [_refused_as(constructs_of(cwl_class)), '']
         if (sophios := SUPPORT_MATRIX.get(cwl_class)) is None:
             lines += _table('Field | Nextflow | Note', [
                 (f'`{name}`', row.state, _noted(row)) for name, row in rows.items()])
@@ -192,7 +186,6 @@ def nf_support_markdown() -> str:
     for cwl_class, rows in FIELDS.items():
         if cwl_class in requirements:
             lines += ['', f'### `{cwl_class}` fields', '']
-            lines += [_refused_as(constructs_of(cwl_class)), '']
             lines += _table('Field | Nextflow | Note', [
                 (f'`{name}`', row.state, _noted(row)) for name, row in rows.items()])
     return '\n'.join(lines) + '\n'

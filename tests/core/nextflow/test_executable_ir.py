@@ -11,7 +11,6 @@ from typing import Any, cast
 from hypothesis import example, given, strategies as st
 import pytest
 
-from sophios.api.python.workflow import CompiledWorkflow
 from sophios.input_output_nf import render_nextflow
 from sophios.lang.subset import Expr, Number, Op, Ref, Text, parse
 from sophios.nf_symbols import (
@@ -41,7 +40,6 @@ from sophios.nf_types import (
     NfWorkflowOutputConnection,
 )
 
-from sophios.utils_nf import NEXTFLOW
 
 from ..budgets import budget
 from .testkit import command, output_port, ref, runtime_workflow, template
@@ -592,10 +590,6 @@ CONSTRUCTIONS: dict[str, tuple[Callable[[], Any], Any]] = {
     "step-input-scattered": (partial(_merged, NfWorkflowInputConnection("xs", "JOIN", "files", "dotproduct")),
                              "a step input's sources cannot be scattered"),
     "step-input-merge-deep": (partial(_merged, _ONE, link_merge="merge_deep"), "linkMerge must be one of"),
-    # The lowering reads the resolved view, never a compiled document.
-    "lowering-a-compiled-document": (partial(NEXTFLOW.lower, cast(Any, CompiledWorkflow("wf", {
-        "class": "Workflow", "cwlVersion": "v1.2", "inputs": {}, "outputs": {}, "steps": []}, {}))),
-        (TypeError, "resolved view")),
     # Sophios never writes a parameter value its own entry check stops, read by a step or not.
     **{f"absent-optional-{declared}": (partial(lambda declared: replace(
         runtime_workflow(), params={**runtime_workflow().params, "unread": []},

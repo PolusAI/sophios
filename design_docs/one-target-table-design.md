@@ -168,7 +168,7 @@ its typed inputs is `nf-s010`.
 **What the catch-alls hid**, each now refused with a code before the model is built: an `outputSource` naming a
 port its step lacks (`endpoint_problems`, `nf-s028`, as a step that is not there); an array input read outside its
 own binding, as in `glob: $(inputs.xs).txt` (`reference_problems`, `nf-s050`; an undeclared input is `nf-s045`);
-NaN or an infinity as a value or a default (`json_value_problem`, `nf-s015`); a NUL byte in any literal
+NaN or an infinity as a value or a default (`nf-s015`); a NUL byte in any literal
 (`literal_problem`, `nf-s055`); a section or requirement body of the wrong shape (`_tool_shape_findings`,
 `_as_list`, `_as_mapping`, `nf-s055`); and an optional union, a record or another type the target does not lower
 as a tool input's `default` (the type's own refusal).

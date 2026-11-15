@@ -63,21 +63,22 @@ def _a_written_value_of_any() -> Workflow:
 
 @pytest.mark.fast
 @pytest.mark.parametrize("build, refusals", [
-    (_not_a_number, [("nf-s015", "ratio", "ratio~x")]),
-    (_a_file_with_secondary_files, [("nf-s015", "index", "index~f")]),
-    (_an_optional_pattern_output, [("nf-s030", None, None)]),
-    (_a_written_value_of_any, [("nf-s033", "pick", "array_indices.cwl: outputs.output_array.outputBinding"),
-                               ("nf-s048", "pick", "pick~input_array")]),
+    (_not_a_number, [("nf-s015", "workflow input", "ratio", "ratio~x")]),
+    (_a_file_with_secondary_files, [("nf-s015", "workflow input", "index", "index~f")]),
+    (_an_optional_pattern_output, [("nf-s030", "workflow", None, None)]),
+    (_a_written_value_of_any, [("nf-s033", "tool", "pick", "array_indices.cwl: outputs.output_array.outputBinding"),
+                               ("nf-s048", "workflow input", "pick", "pick~input_array")]),
 ], ids=["not a number", "secondary files", "an optional pattern output", "a written value of Any"])
 def test_a_refusal_only_python_reaches_names_the_line_python_wrote(
-        build: Callable[[], Workflow], refusals: list[tuple[str, str | None, str | None]]) -> None:
-    """What no `.wic` file can write is refused as the rest are, by code, step and subject, at the line of the
-    Python that built it: a NaN and a File's secondary files, values JSON parameters cannot hold; an optional pattern
+        build: Callable[[], Workflow], refusals: list[tuple[str, str, str | None, str | None]]) -> None:
+    """What no `.wic` file can write is refused as the rest are, by code, construct, step and subject, at the line of
+    the Python that built it: a NaN and a File's secondary files, values JSON cannot hold; an optional pattern
     output no workflow output takes, which the file door refuses
     sooner; a value written for an input of a type the target does not lower, at the line the value was written."""
     with pytest.raises(NotLowered) as refused:
         build().compile(target="nextflow")
-    assert [(refusal.code.value, refusal.step, refusal.subject) for refusal in refused.value.refusals] == refusals
+    assert [(refusal.code.value, refusal.construct.value, refusal.step, refusal.subject)
+            for refusal in refused.value.refusals] == refusals
     lines = Path(__file__).read_text(encoding="utf-8").splitlines()
     for refusal, diagnostic in zip(refused.value.refusals, refused.value.diagnostics, strict=True):
         if ".cwl: " not in (refusal.subject or ""):  # a tool's refusal is at the tool's line

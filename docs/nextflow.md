@@ -270,27 +270,8 @@ block comments, the order of the process blocks, and CR LF line endings, but
 not inside a string, a script or stub, or a generated helper, which must be
 as Sophios wrote them; in `nextflow_params.json`, JSON's own whitespace and
 key order. A line break, and the order of the statements in `main:`, are not
-layout. Anything else stops the import with a diagnostic at its line
-([error codes](error_codes.md)), and nothing is returned:
-
-- an edited helper, `wic047`;
-- a statement, directive or channel operator Sophios does not write, such as
-  an `include`, an `errorStrategy` or a `.view()`, `wic048`;
-- an input or output declaration Sophios does not write, such as
-  `tuple val(id), path(reads)`, `wic049`;
-- a script that is not the generated command, or an edited stub, `wic050`;
-- a params file that does not hold one value, in the form Sophios writes,
-  for each parameter the pipeline checks, `wic051`;
-- a `nextflow.config` other than the generated one, `wic052`;
-- text in the generated forms that is not what Sophios writes for the
-  workflow the text describes, such as a derived form that disagrees with the
-  rest, `wic053`;
-- a pipeline no workflow built through the Python API compiles to as it is
-  written, `wic054`: a name the compile would change, such as a capitalized
-  process name, which it writes with a leading `_` (see [Names](#names)), or
-  a port of a CWL tool named like an attribute of the tool builder's `Inputs`
-  or `Outputs`, such as `keys`. Rename it in the workflow the pipeline came
-  from, and compile it again.
+layout. Anything else stops the import with a diagnostic at its line, `wic047`
+to `wic054` ([error codes](error_codes.md)), and nothing is returned.
 
 The import is exact on the model, not on the Sophios workflow the model came
 from. What the compile does not keep does not come back:
@@ -932,13 +913,7 @@ given as a bare name that names nothing yet.
 
 Every construct the target cannot run yet has an `nf-sNNN` code: the
 [error codes](error_codes.md) list them all, and `sophios --explain` prints
-one. When the target learns a construct, its code is retired. Among them:
-
-- Processes must be `CommandLineTool`-equivalent.
-- The number types are `int` and `float`. A `long` or `double`, wherever it
-  is declared, is rejected by name.
-- Fractional CPU requirements reject before lowering; they are not silently
-  rounded.
+one. When the target learns a construct, its code is retired.
 
 ## Field support
 
