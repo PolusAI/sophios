@@ -295,7 +295,7 @@ _WORKFLOW_FEATURE = 'is a workflow requirement: declare it on the workflow'
 #: being rejected; and the feature classes, which a Workflow or a step
 #: declares and its tools inherit as nothing. Every other class a workflow or
 #: a step names is inherited by its tools, each judged as if the tool named it
-#: (resolved-view design §8). A class that is not rejected has its fields in
+#: A class that is not rejected has its fields in
 #: `FIELDS`.
 REQUIREMENT_CLASSES: Final[Mapping[str, Mapping[str, Row]]] = MappingProxyType({
     'CommandLineTool': MappingProxyType({

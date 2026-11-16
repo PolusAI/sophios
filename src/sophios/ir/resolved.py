@@ -6,7 +6,7 @@ parsed and typed `when`, `scatter`, workflow inputs and outputs, and the run
 policy. A construct Sophios took from CWL unchanged means what CWL v1.2 says;
 what Sophios invented (edge inference, the names it makes, anchors) is
 resolved before the view exists, and the view holds only the result, as
-references (design_docs/resolved-view-design.md §3-§6).
+references.
 
 `resolve` builds the view from a finished `WorkflowGraph` and the tool document
 each tool step runs; it never reads a workflow's emitted CWL and refuses
@@ -152,7 +152,7 @@ class StepInput:
     declared: PortDeclaration | None
     #: What the entry says, once: everything else but `type` is read from it.
     value: StepValue
-    #: The canonical CWL type of the value the step input delivers (§5).
+    #: The canonical CWL type of the value the step input delivers.
     type: OpaqueCwl
     span: SourceSpan | None
 
@@ -254,7 +254,7 @@ class ResolvedStep:  # pylint: disable=too-many-instance-attributes
     #: spelled, in the order the process declares them.
     required_inputs: tuple[str, ...]
     span: SourceSpan | None
-    #: A tool step's requirements and hints from outside its tool, as cwltool gives them to it (§8): for each class,
+    #: A tool step's requirements and hints from outside its tool, as cwltool gives them to it: for each class,
     #: the innermost requirement written on an enclosing workflow, a call or the step, else the innermost such hint;
     #: requirements first. A call's is empty: its workflow's steps inherit.
     inherited: tuple[Requirement, ...] = ()
@@ -348,7 +348,7 @@ def bind(view: ResolvedWorkflow, *, values: Mapping[str, OpaqueCwl] | None = Non
 
 def _workflow(graph: WorkflowGraph, outer: '_Level', given: Mapping[str, OpaqueCwl] | None = None) -> ResolvedWorkflow:
     """A workflow's view, inside the level `outer` of the call that runs it, or of nothing for the root; `given` is
-    the type each input the call binds holds, which is what its sources deliver (§5)."""
+    the type each input the call binds holds, which is what its sources deliver."""
     names = outer.names
     requirements = _requirements(graph.passthrough)[0]
     order = written_order(graph)
@@ -419,7 +419,7 @@ class _Level:
 
 
 def _inherited(written: tuple[Requirement, ...]) -> tuple[Requirement, ...]:
-    """What a tool inherits of the requirements and hints written outside it, outermost first (§8): for each class,
+    """What a tool inherits of the requirements and hints written outside it, outermost first: for each class,
     the innermost requirement, else the innermost hint, as cwltool merges a step's with its workflow's and a lookup
     takes the last requirement of a class, then the last hint (cwltool/workflow.py:202-223, cwltool/utils.py:481-489).
     """
@@ -490,7 +490,7 @@ def _ref(ref: PortName | StepOutputRef, names: Names) -> Ref:
 
 
 def _source_type(ref: PortName | StepOutputRef, level: _Level) -> OpaqueCwl:
-    """A source's type at this level (§5): a workflow input's as declared; a step output's inside one array
+    """A source's type at this level: a workflow input's as declared; a step output's inside one array
     layer per scatter it came through, nullable when its producer, or a call it came out of, has a `when`."""
     match ref:
         case StepOutputRef(step=producer_id, port=port):
@@ -517,7 +517,7 @@ def _may_skip(producer: StepNode, port: PortName, level: _Level) -> bool:
 
 def _delivered_type(produced: list[OpaqueCwl], fields: Mapping[str, OpaqueCwl],
                     declared: PortDeclaration | None) -> OpaqueCwl:
-    """What a step input holds after its sources, `linkMerge`, `pickValue` and `default` (§5): `Any` after a
+    """What a step input holds after its sources, `linkMerge`, `pickValue` and `default`: `Any` after a
     `valueFrom`; the declared type where no source says more; sources of different types merge as `Any`."""
     if 'valueFrom' in fields:
         return 'Any'
@@ -530,7 +530,7 @@ def _delivered_type(produced: list[OpaqueCwl], fields: Mapping[str, OpaqueCwl],
 
 
 def _seen(port: StepInput, scatter: Scatter | None) -> OpaqueCwl:
-    """What a `when` reads of a step input: its value, or one element of it in each job of a scatter (§5)."""
+    """What a `when` reads of a step input: its value, or one element of it in each job of a scatter."""
     match port.type:
         case {'type': 'array', 'items': items} if scatter is not None and port.name in scatter.inputs:
             return items
@@ -555,7 +555,7 @@ def _condition(when: OpaqueCwl, inputs: tuple[StepInput, ...], scatter: Scatter 
 
 
 def boolean_problem(condition: Condition) -> str | None:
-    """Why `condition` cannot give `true` or `false`, which CWL requires of a `when` (§10), the `when` quoted first;
+    """Why `condition` cannot give `true` or `false`, which CWL requires of a `when`, the `when` quoted first;
     `None` when it gives one, and when nothing here can tell: the subset cannot parse or type it, or it is not a
     string, which cwltool's schema validation refuses itself."""
     written = condition.written
@@ -580,7 +580,7 @@ def non_boolean_whens(workflow: ResolvedWorkflow) -> tuple[tuple[ResolvedStep, s
 
 @dataclass(frozen=True, slots=True)
 class Through:
-    """A source resolved through call boundaries (§6): a root input, or an output of a tool step, the step spelled
+    """A source resolved through call boundaries: a root input, or an output of a tool step, the step spelled
     by its qualified name."""
 
     ref: Ref

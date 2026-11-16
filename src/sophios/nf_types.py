@@ -40,7 +40,7 @@ PARAM_TYPES = frozenset(
     for array in ("", "[]")
     for optional in ("", "?")
 )
-#: The type a `val` port receives when that is one scalar (design §9): the CWL type, `?` when it may be null.
+#: The type a `val` port receives when that is one scalar: the CWL type, `?` when it may be null.
 SCALAR_TYPES = frozenset(f"{item}{optional}" for item in ("boolean", "int", "float", "string")
                          for optional in ("", "?"))
 # An InitialWorkDirRequirement entry's input is staged under this prefix and
@@ -1087,7 +1087,7 @@ def scalar_type(connection: NfIncomingConnection, param_types: Mapping[str, str]
 
 def with_scalar_types(process: NfProcess, incoming: Mapping[tuple[str, str], NfIncomingConnection],
                       param_types: Mapping[str, str], processes: Mapping[str, NfProcess]) -> NfProcess:
-    """``process`` with each val input given the scalar type its connection gives (design §9); a type the input
+    """``process`` with each val input given the scalar type its connection gives; a type the input
     was given that disagrees is refused."""
     def filled(port: NfPort) -> NfPort:
         if port.qualifier != "val":
@@ -1406,7 +1406,7 @@ class ExecutableNextflowWorkflow(_Model):
             raise ValueError(f"process input {process_name}.{port_name} is not connected")
 
     def _fill_scalar_types(self) -> None:
-        """Give each val input the scalar type its connection gives (design §9), refusing one given that disagrees,
+        """Give each val input the scalar type its connection gives, refusing one given that disagrees,
         and type each condition over the filled inputs."""
         process_by_name = {process.name: process for process in self.processes}
         incoming = incoming_connections(self.connections)

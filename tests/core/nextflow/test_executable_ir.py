@@ -276,7 +276,7 @@ UNREPRESENTABLE: dict[str, tuple[Callable[[], Any], Any]] = {
         "o", "path", "o", NfTemplate((NfBasenameReference("v"), NfLiteral(".done")))),)), _REFUSED),
     # A flag would let list truthiness decide whether its prefix appears.
     "NfProcess-ref-flag-to-an-array": (partial(_proc, _ARRAY, NfFlag("v", "--verbose")), _REFUSED),
-    # A step-only input is a val the command never reads; the condition may (design §9).
+    # A step-only input is a val the command never reads; the condition may.
     "NfProcess-step-only-path": (partial(NfProcess, "P", [], [], command("true"),
                                          step_only_inputs=[NfPort("after", "path")]), _REFUSED),
     "NfProcess-step-only-named-like-an-input": (partial(NfProcess, "P", [NfPort("v", "val")], [], command("true"),
@@ -448,7 +448,7 @@ WORKFLOWS: dict[str, tuple[Callable[[], Any], Any]] = {
         NfProcessConnection("MAYBE", "o", "CONSUME", "source"), x=1), _REFUSED),
     "optional-output-of-a-scatter": (partial(_workflow, [_optional_producer()], NfWorkflowInputConnection(
         "xs", "MAYBE", "x", "dotproduct"), NfWorkflowOutputConnection("MAYBE", "o", "o"), xs=["1"]), _REFUSED),
-    # A val input's scalar type is what its connection gives (design §9): given none, it is given that one.
+    # A val input's scalar type is what its connection gives: given none, it is given that one.
     "val-inputs-given-no-scalar-type": (lambda: _workflow(
         [NfProcess("ONE", [NfPort("v", "val")], [], command("true"), step_only_inputs=[NfPort("s", "val")])],
         NfWorkflowInputConnection("v", "ONE", "v"), NfWorkflowInputConnection("s", "ONE", "s"), v="a", s=1,

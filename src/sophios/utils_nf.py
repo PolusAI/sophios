@@ -1458,8 +1458,8 @@ def _tool_capability_findings(tool: "_Tool") -> list[_Finding]:
     return findings
 
 
-#: The classes that decide only whether a workflow may use a feature, which cwltool reads at the step (resolved-view
-#: design §8): on a workflow or a step each is an inert declaration, and a tool that inherits one lowers it to nothing.
+#: The classes that decide only whether a workflow may use a feature, which cwltool reads at the step:
+#: on a workflow or a step each is an inert declaration, and a tool that inherits one lowers it to nothing.
 _FEATURES = frozenset(REQUIREMENT_CLASSES["Workflow"])
 
 _Entry = TypeVar("_Entry")
@@ -1475,7 +1475,7 @@ def _classes(process: Process, written: Written, section: str) -> set[str]:
 @dataclass(frozen=True, slots=True)
 class _Tool:
     """A step's tool as the lowering reads it: the registry's tool, read once, with the requirements and hints it
-    inherits written into its document (design §8), so every one is lowered, or refused, as the same one written on
+    inherits written into its document, so every one is lowered, or refused, as the same one written on
     the tool."""
 
     process: Process
@@ -1534,7 +1534,7 @@ class _Tool:
 @dataclass(frozen=True, slots=True)
 class _Step:
     """One tool step as the lowering reads it: the view's, its tool as the lowering reads it, and the step-only
-    inputs its process carries (design §9)."""
+    inputs its process carries."""
 
     view: ToolStep
     tool: _Tool
@@ -1670,7 +1670,7 @@ def _call_findings(workflow: ResolvedWorkflow) -> list[_Finding]:
 
 
 def _carried(tool: ToolStep) -> frozenset[str]:
-    """The step-only inputs a step's process carries (design §9): each one but those fed only by root workflow
+    """The step-only inputs a step's process carries: each one but those fed only by root workflow
     inputs, through every call, that neither the step's `when` nor its `scatter` reads. Such an input cannot change
     what the step does or when it starts, so it is left out."""
     step = tool.step
@@ -1742,7 +1742,7 @@ def _scatter_method_alone(node: ResolvedStep) -> list[_Finding]:
 def _own_findings(node: ResolvedWorkflow | ResolvedStep, *, path: str) -> list[_Finding]:
     """A workflow's or a step's own fields, requirements and hints: a field the lowering does not consume; a feature
     class is consumed in a requirement or hint, an inert declaration with no field of its own; every other class is
-    inherited by each tool step inside, and judged there as written on its tool (design §8)."""
+    inherited by each tool step inside, and judged there as written on its tool."""
     fields = {*dict(node.fields), *("hints" if requirement.hint else "requirements"
                                     for requirement in node.requirements)}
     if isinstance(node, ResolvedWorkflow):
@@ -2205,8 +2205,8 @@ class _WhenError(_Unsupported):
 
 
 def _condition_value(step: _Step) -> Expr:
-    """A step's ``when`` as a boolean tree over the inputs the step binds, typed by what each one delivers (design
-    §5, §9): a step-only input as any other, and through every call.
+    """A step's ``when`` as a boolean tree over the inputs the step binds, typed by what each one delivers: a
+    step-only input as any other, and through every call.
 
     A step's when is evaluated once per invocation, after inputs are bound.
     """
@@ -2259,7 +2259,7 @@ def _process(step: _Step) -> tuple[NfProcess, Expr | None]:
 
 def _typed(processes: list[NfProcess], connections: list[NfConnection], param_types: Mapping[str, str],
            conditions: Mapping[str, Expr]) -> tuple[list[NfProcess], dict[str, _Unsupported]]:
-    """Each process with its inputs' scalar types (design §9) and its condition, in its place; and why each process
+    """Each process with its inputs' scalar types and its condition, in its place; and why each process
     that is not, is not.
 
     A process is typed after the processes it reads, since what an output gives depends on its process's condition.
@@ -2616,7 +2616,7 @@ def _refusal(finding: _Finding, view: ResolvedWorkflow) -> Refusal:
 
 def _at_step(finding: _Finding, step: _Step) -> _Finding:
     """A finding of a step's tool, at the step; one about an entry the tool inherits, at the step's requirement of
-    its class: the author wrote it outside the tool's file (design §8)."""
+    its class: the author wrote it outside the tool's file."""
     for place, cls in step.tool.inherited.items():
         written = f".run.{place}"
         if finding.path == written or finding.path.startswith(f"{written}."):
@@ -2727,7 +2727,7 @@ def _source_text_findings(lowering: "_Lowering") -> list[_Finding]:
     """Each source written as `step/port` text that names no tool step the lowering makes a process of, and each
     workflow output the target cannot connect: one with no source, or one that forwards a workflow input.
 
-    Sophios keeps text it could not resolve as it was written (resolved-view design §3). Text naming a step of its
+    Sophios keeps text it could not resolve as it was written. Text naming a step of its
     workflow, a nested workflow's call, is valid CWL the target does not follow; text naming no step is the
     document's mistake.
     """

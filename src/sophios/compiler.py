@@ -103,8 +103,8 @@ def _tool_check() -> ToolCheck:
 
 
 def resolved_view(result: CompilationResult) -> ResolvedWorkflow:
-    """The resolved view of `result`'s graph, with `result.policy`, for a target to lower
-    (design_docs/resolved-view-design.md §4); `bind` gives it a run's values and kept outputs.
+    """The resolved view of `result`'s graph, with `result.policy`, for a target to lower;
+    `bind` gives it a run's values and kept outputs.
 
     Each tool step is paired with the tool the compile found for it, `result.tools`: the view is built from
     the graph and its tools, never from an emitted document.
@@ -115,7 +115,7 @@ def resolved_view(result: CompilationResult) -> ResolvedWorkflow:
 def cwl_notes(view: ResolvedWorkflow) -> tuple[Diagnostic, ...]:
     """The notes the CWL target makes of a compilation, read through its `view`; it never refuses one and never
     changes its CWL: `wic056` at each step whose authored `when` cannot give `true` or `false`, which cwltool stops
-    the run at (design_docs/resolved-view-design.md §10). The view's values and kept outputs change none of them."""
+    the run at. The view's values and kept outputs change none of them."""
     return tuple(
         Diagnostic(Severity.NOTE, SophiosErrorCode.WHEN_NOT_BOOLEAN,
                    f'when {problem}: cwltool stops the run when it gives anything but true or false',
