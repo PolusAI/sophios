@@ -1,4 +1,4 @@
 myst-parser
 # The api page uses automodule's :no-index:, which needs Sphinx 7.2 or newer.
-sphinx>=7.2
+sphinx>=7.2.5
 sphinx-autodoc-typehints
