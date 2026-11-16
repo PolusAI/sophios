@@ -411,7 +411,7 @@ def test_a_cancelled_run_stays_cancelled(monkeypatch: pytest.MonkeyPatch, tmp_pa
     cancellation and not the exit status the runner stopped with, and `collect` raises the run as cancelled, not as
     failed."""
     fake = install(monkeypatch, tmp_path, sleep=60, ignore_sigterm=how == 'ignoring-sigterm')
-    monkeypatch.setattr(run_local, 'STOP_GRACE_SECONDS', 0.5)
+    monkeypatch.setattr(run_local, 'STOP_GRACE_SECONDS', 0.5 if how == 'ignoring-sigterm' else 10)
     handle = echo_workflow().start()
     fake.wait_until_started()
     if how == 'from-another-thread':
