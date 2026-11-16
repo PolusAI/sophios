@@ -1,6 +1,6 @@
 """The Nextflow target's lowering ends one of three ways, whatever it is given: a model, a `NotLowered` holding a coded
-refusal for each construct it cannot lower, or the compile's own `SophiosError` (design_docs/one-target-table-design.md
-§5). Any other exception is a crash: an uncoded refusal a case has not reached yet.
+refusal for each construct it cannot lower, or the compile's own `SophiosError`. Any other
+exception is a crash: an uncoded refusal a case has not reached yet.
 """
 import copy
 from typing import Any

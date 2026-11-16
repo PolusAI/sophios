@@ -1,4 +1,4 @@
-# Expected by hand from design_docs/resolved-view-design.md §10: the CWL target notes each `when` the shared check
+# Expected by hand: the CWL target notes each `when` the shared check
 # finds gives no boolean, at its step, and refuses nothing; the Nextflow target refuses it, and also each `when` its
 # subset cannot read, and a `when` on a call. A `when` that reads an input its step does not declare is a note too,
 # naming the input and, for a made name read dotted, the bracket form.

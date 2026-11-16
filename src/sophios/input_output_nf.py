@@ -1130,7 +1130,7 @@ def nextflow_params(workflow: ExecutableNextflowWorkflow) -> dict[str, Any]:
 
 
 def remove_nextflow_artifacts(outdir: str | Path) -> None:
-    """Remove the four fixed-name artifacts, so a workflow the lowering rejects leaves none (design §8)."""
+    """Remove the four fixed-name artifacts, so a workflow the lowering rejects leaves none."""
     for name in (NEXTFLOW_JSON, NEXTFLOW_SCRIPT, NEXTFLOW_CONFIG, NEXTFLOW_PARAMS):
         (Path(outdir) / name).unlink(missing_ok=True)
 

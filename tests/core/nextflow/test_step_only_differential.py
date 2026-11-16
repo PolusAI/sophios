@@ -1,7 +1,7 @@
-"""Step-only inputs and inherited requirements run under Nextflow as they run under cwltool (resolved-view §8, §9).
+"""Step-only inputs and inherited requirements run under Nextflow as they run under cwltool.
 
 Each example is a batch of small workflows in one root workflow, run once under each runner, and the outputs are
-compared by name and contents. The `DockerRequirement` cases of §8 and `greeting_if` run their tools in containers,
+compared by name and contents. The inherited `DockerRequirement` cases and `greeting_if` run their tools in containers,
 so they are a batch of their own, in a test that needs Docker.
 """
 
@@ -87,7 +87,7 @@ def _when(index: int, loud: bool) -> _Part:
 
 
 def _waits() -> _Part:
-    """§9's example 2: `query` reads nothing of `db`'s and must run after it."""
+    """`query` reads nothing of `db`'s and must run after it."""
     db, db_tool = _echo("db", {"wic_inline_input": "db"})
     query, query_tool = _echo("query", {"wic_inline_input": "query"}, after=_after("db"))
     return _Part([db, query], [db_tool, query_tool],
@@ -103,7 +103,7 @@ def _greet(step: str) -> dict[str, Any]:
 
 def _environment() -> _Part:
     """An `EnvVarRequirement` on the root reaches a tool at the root; a nested step's own reaches its tool instead,
-    being the innermost (§8)."""
+    being the innermost."""
     own = {"EnvVarRequirement": {"envDef": {"SOPHIOS_GREETING": "from the step"}}}
     nested = {"id": "nested.wic", "subtree": {"steps": [{"id": "inner", "requirements": own}],
                                               "outputs": {"out": {"type": "File", "outputSource": "inner/out"}}}}
@@ -218,7 +218,7 @@ def test_step_only_inputs_and_inherited_requirements_run_as_under_cwltool(
 
 def _docker_case(index: int, outside: str, tool: str) -> _Part:
     """A nested workflow whose `outside` section and whose tool's `tool` section each name a DockerRequirement: the
-    tool's requirement wins over the workflow's hint, and the workflow's requirement over the tool's hint (§8). The one
+    tool's requirement wins over the workflow's hint, and the workflow's requirement over the tool's hint. The one
     that wins names Debian, whose name the tool prints; the other an image that does not exist."""
     images = dict.fromkeys((outside, tool), "sophios.invalid/never:1")
     images[tool if tool == "requirements" else outside] = "docker.io/library/debian:bookworm-slim"

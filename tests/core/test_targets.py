@@ -1,4 +1,4 @@
-"""One table of targets, which every entry point reads (design_docs/one-target-table-design.md §2)."""
+"""One table of targets, which every entry point reads."""
 import importlib
 from typing import get_args, get_type_hints
 

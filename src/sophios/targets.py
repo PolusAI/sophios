@@ -3,8 +3,7 @@
 A row is a target's whole contract: how it lowers a compilation, refusing what it cannot run with a `NotLowered`
 whose diagnostics carry their codes; and how it writes what it lowered; its runners are those of
 `sophios.runners`. The command line, `Workflow.compile`, `check`, `run`, `start` and `run_async`, and the run path
-find a target here, by the name `--target` and `target=` give it, and nowhere else
-(design_docs/one-target-table-design.md §2).
+find a target here, by the name `--target` and `target=` give it, and nowhere else.
 
 The names alone are `wic_types.TargetName`, which the command line's parser reads without importing a target.
 """
