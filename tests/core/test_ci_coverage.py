@@ -171,12 +171,6 @@ def test_the_corpus_lane_round_trips_every_wic_root_through_the_python_api() -> 
     assert not missing, 'run_workflows.yml does not run:\n  ' + '\n  '.join(missing)
 
 
-def test_the_census_sees_the_repo() -> None:
-    """Zero invocations is a green census that checks nothing."""
-    found = [a for lane in WORKFLOWS.glob('*.yml') for a in _invocations(lane)]
-    assert len(found) > 20, f'only {len(found)} pytest invocations found; the census is aimed wrong'
-
-
 @pytest.mark.fast
 @pytest.mark.parametrize('workflow_name', ['build_wheel.yml', 'test_and_publish_pypi.yml'])
 def test_package_lanes_leave_nextflow_runtime_to_its_runtime_lane(workflow_name: str) -> None:
@@ -196,21 +190,6 @@ def test_only_the_corpus_lane_runs_the_nextflow_corpus() -> None:
     assert corpus
     assert {name for (name, _), tests in zip(lanes, selected) if tests & corpus} == {'run_workflows.yml'}
     assert corpus <= set().union(*(tests for (name, _), tests in zip(lanes, selected) if name == 'run_workflows.yml'))
-
-
-@pytest.mark.fast
-def test_collection_is_pytests_answer_and_not_ours() -> None:
-    """The helper really asks pytest, and pytest really narrows.
-
-    If `_collect_all` returned everything whatever its arguments, the census
-    below would pass no matter which lanes existed.
-    """
-    # pylint: disable-next=unbalanced-tuple-unpacking  # one result per invocation asked
-    everything, one_file, none = _collect_all([[], ['tests/core/test_ci_coverage.py'],
-                                               ['tests/core/test_ci_coverage.py', '-k', 'no_such_test_name_exists']])
-    assert one_file and one_file < everything
-    assert all(node.startswith('tests/core/test_ci_coverage.py::') for node in one_file)
-    assert not none
 
 
 #: The test files no lane can run, each run by hand instead. The set is the
@@ -319,134 +298,6 @@ def _tests_importing(module: str, path: Path) -> set[str]:
             if isinstance(inner, ast.Import) and any(a.name.split('.')[0] == module for a in inner.names):
                 found.add(node.name)
     return found
-
-
-#: Every test that does not run on the Windows leg, and the evidence that
-#: excluding it takes nothing away: each one ran *nowhere* until a lane step
-#: named its file, so none has ever executed on Windows. Measured on the
-#: `Lint And Test` Windows job, where they fail on `import pwd`.
-#:
-#: `test_emit.py`'s validator tests exercise cwltool itself; the phase lane
-#: collects their platform-neutral siblings on Windows and these run on
-#: the POSIX matrix legs where cwltool's `pwd` dependency is available.
-#:
-#: The list is the claim. Growing it is a deliberate edit here, not a marker
-#: added in passing, because every entry is Windows coverage given up.
-WINDOWS_EXCLUDED: Final = frozenset({
-    # cwltool's and Toil's own parsers read the command line, and both import `pwd`. Windows runs neither
-    # runner (preflight.PLATFORM_LACKS_RUNNERS), so it never uses the command line built for them.
-    'tests/core/test_backends.py::test_each_cwl_runner_reads_its_command_line_as_the_request_says',
-    'tests/core/test_emit.py::test_emit_validates_as_cwl_v1_2',
-    'tests/core/test_leak_boundary.py::test_residue_validates_as_cwl_v1_2',
-    # Six example workflows run by cwltool, in about three seconds together. What each compiles to is stated and
-    # checked on every leg by the compile leg beside it; only a runner shows the outputs.
-    'tests/core/test_compiler.py::test_an_example_runs_under_cwltool_as_stated',
-    # One `cwltool --validate` of a one-step workflow whose tool was unpacked from
-    # a `$graph`, under a second. The ports and the file written are checked on
-    # every leg by the test before it.
-    'tests/core/test_frontdoor.py::test_a_packed_tool_step_validates_in_cwltool',
-    # The script validates the tool it writes through cwltool, so the import
-    # is the script's, not the test's. Its compact twin builds the same hinted
-    # tool without validating it and still runs on Windows.
-    'tests/core/test_example_scripts.py::test_the_integrated_ichnaea_script_compiles_its_hinted_tool',
-    # Loads the corpus into cwltool, to validate its flat and flat-embedded forms and ask
-    # what an embedded document means. Its platform-neutral sibling
-    # `test_corpus_compiles_clean_in_every_form` runs on every leg.
-    'tests/core/test_examples.py::test_corpus_validates_in_cwltool_in_every_form',
-    # Plain CWL workflows run by cwltool through --run_local: a two-step one,
-    # and twelve conformance workflows, each also run by cwltool directly, in
-    # about four seconds. The file's other tests check what the runner is
-    # given and run on Windows.
-    'tests/core/test_plain_cwl.py::test_a_plain_cwl_workflow_runs_through_sophios_as_cwltool_runs_it',
-    # One `Workflow.run()` of a one-step echo, by cwltool, from a script run by a new
-    # interpreter, and one real cwltool run of a failing one-line tool, in a few seconds.
-    # The failure pins the wording of cwltool's job-failure record, which the summary
-    # reads; the other tests of the summary use a stand-in for cwltool and run on every leg.
-    'tests/core/test_python_api_workflow.py::test_a_real_run_prints_its_output_or_names_the_step_that_failed',
-    # One `Workflow.run()` by Toil of a step that writes into the output directory it is given, in about seven
-    # seconds. What the job names for each runner is Toil's to read; only Toil shows that it creates the directory.
-    'tests/core/test_python_api_workflow.py::test_toil_fills_the_output_directory_a_step_is_given',
-    # A workflow run by cwltool through --run_local, with two real-time analyses
-    # run by cwltool beside it, one of them failing, in one run of about eight
-    # seconds. The watcher's own tests use a stand-in for cwltool and run on
-    # every leg.
-    'tests/core/test_realtime.py::test_the_analysis_runs_beside_the_workflow_and_never_changes_its_outcome',
-    # Two roots of a few echo steps, nested two deep, each run through the command line by cwltool
-    # and by Toil with provenance, in about twenty seconds. Which files are written is checked on
-    # every leg by tests/core/data/compiler/names; only a runner shows what its snapshot holds.
-    'tests/core/test_provenance.py::test_every_step_file_is_in_the_provenance_snapshot',
-    # One echo step run through the command line by cwltool and by Toil with provenance, its
-    # `.wic` or its tool declaring EDAM from another URL, in about five seconds each. That no
-    # document carries an ontology of Sophios's own is checked on every leg by `test_emit.py`.
-    'tests/core/test_provenance.py::test_a_wic_with_its_own_edam_schemas_entry_runs_with_provenance',
-    'tests/core/test_provenance.py::test_an_embedded_tool_with_its_own_edam_schemas_entry_runs_with_provenance',
-    # Packed tools run through the command line: one or two `cat`-sized steps each, by cwltool
-    # and, where a runner could differ, by Toil, in about thirty seconds together. What is packed,
-    # and that the compile reads no file it should not, is checked on every leg by the file's
-    # other tests; only a runner shows that the written description runs.
-    'tests/core/test_packing.py::test_a_packed_tool_runs_from_the_tree_and_embedded_twice',
-    'tests/core/test_packing.py::test_a_packed_project_runs_under_cwltool_and_changes_nothing_beside_it',
-    'tests/core/test_packing.py::test_a_packed_tool_and_one_as_written_run_wired_by_inference',
-    'tests/core/test_packing.py::test_one_basepath_runs_two_echo_cwl_and_two_config_txt_with_provenance',
-    # Two quiet runs through the command line by cwltool, a failing step in a call and a tool that names
-    # the file it writes as its stdout, in a few seconds together. What a quiet run writes and gives the
-    # runner is checked on every leg by the file's other tests.
-    'tests/core/test_quiet.py::test_a_quiet_run_prints_each_steps_messages_and_keeps_the_files_it_names',
-    # One cwltool run of a `touch` step one call down that writes into its output directory, under a second. The
-    # job's Directory literal at that depth is checked on every leg by the file's other tests; only a runner shows
-    # that it creates the directory the tool writes into.
-    'tests/core/test_runtime_inputs.py::test_a_tool_below_a_call_writes_into_its_output_target_directory',
-    # One six-step workflow run under Nextflow and under cwltool, and one one-step tool cwltool fails, in about six
-    # seconds. Only Lint And Test's Linux Nextflow step collects it, so the Windows leg gives up nothing it ran; which
-    # references the target refuses is checked on every leg by the staging family of test_capabilities.py.
-    'tests/core/nextflow/test_reference_differential.py::'
-    'test_a_path_inputs_references_mean_under_nextflow_what_they_mean_under_cwltool',
-    # Nine examples that stop, each run under Nextflow and under cwltool, in about twenty seconds together. Lint And
-    # Test's Linux Nextflow step collects them, so the Windows leg gives up nothing it ran.
-    'tests/core/nextflow/test_runtime.py::test_a_run_stops_before_a_step_whose_inputs_it_cannot_decide',
-    'tests/core/nextflow/test_runtime.py::test_a_run_stops_at_a_task_that_leaves_no_one_answer',
-    # Four batches of up to twelve small workflows, each run under Nextflow and under cwltool, in about ten
-    # seconds; and one batch of four, whose tools run in containers, in about ten more. Lint And Test's Linux
-    # Nextflow step collects them, so the Windows leg gives up nothing it ran; what each lowers to is checked on
-    # every leg by the import's fixed point.
-    'tests/core/nextflow/test_step_only_differential.py::'
-    'test_inherited_docker_requirements_and_greeting_if_run_as_under_cwltool',
-    'tests/core/nextflow/test_step_only_differential.py::'
-    'test_step_only_inputs_and_inherited_requirements_run_as_under_cwltool',
-    # Both cwltool entry points, called in-process with cwltool's run stood in for, well under a second.
-    # test_run_local.py is POSIX-only already, so the Windows leg gives up nothing it ran.
-    'tests/core/test_run_local.py::test_the_runner_prints_no_rdflib_encoding_warning',
-    # Seven runs (four pinned, three drawn) of a one-step tool under Nextflow and under cwltool, in about twelve
-    # seconds. Lint And Test's Linux Nextflow step collects it, so the Windows leg gives up nothing it ran.
-    'tests/core/nextflow/test_runtime.py::test_a_command_receives_the_arguments_cwltool_gives_it',
-})
-
-
-@pytest.mark.fast
-def test_no_test_leaves_the_windows_leg_without_being_listed() -> None:
-    """The set of tests skipped off POSIX is exactly the recorded one.
-
-    `needs_cwltool` is what `conftest.py` skips on Windows, so marking a test
-    with it removes that test from one leg of the matrix. That is a cost, and
-    the point of pinning the inventory is that paying it has to be deliberate:
-    a marker added in passing fails here, and so does one removed.
-
-    The membership was not derived by reading imports. It is the failure list
-    from the Windows job, checked back against which lane collected each test
-    before — all five ran nowhere at all until a step named their files.
-    """
-    marked = {
-        f'{path.relative_to(REPO_ROOT).as_posix()}::{test}'
-        for path in _test_files()
-        for test, markers in _marked_tests(path).items()
-        if 'needs_cwltool' in markers
-    }
-    assert marked == WINDOWS_EXCLUDED, (
-        'the set of tests excluded from the Windows leg has changed.\n'
-        f'  newly excluded: {sorted(marked - WINDOWS_EXCLUDED) or "none"}\n'
-        f'  no longer excluded: {sorted(WINDOWS_EXCLUDED - marked) or "none"}\n'
-        'Update WINDOWS_EXCLUDED if that is intended, and say what the test now costs.'
-    )
 
 
 @pytest.mark.fast

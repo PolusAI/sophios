@@ -65,4 +65,4 @@ def test_a_default_beside_a_null_merge_field_is_the_default(field: str) -> None:
     echo = tool("ECHO", inputs={"message": {"type": "string"}}, baseCommand="echo")
     step = {"id": "say", "in": {"message": {"wic_raw_cwl": {"default": "hello", field: None}}}}
     data = {"workflow": {"inputs": {}, "outputs": {}, "steps": [step]}, "tools": [{**echo, "id": "say"}]}
-    assert lowered_case(data)[0].processes[0].name
+    assert lowered_case(data)[0].params == {"say_message": "hello"}

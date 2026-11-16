@@ -1,4 +1,4 @@
 why: An optional File output is null or one file; two matches are neither.
+log: matched 2 files
 step: maybe_log
-says: 'matched 2 files; it takes at most one'
 cwltool: fails
