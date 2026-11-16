@@ -13,35 +13,6 @@ NEXTFLOW_GRAMMAR_VERSION = "26.04.2"
 # - modules/nf-lang/src/main/java/nextflow/script/parser/ScriptAstBuilder.java,
 #   checkInvalidVarName and GROOVY_KEYWORDS
 
-# ScriptParser.identifier explicitly admits these keyword tokens as symbols.
-NEXTFLOW_IDENTIFIER_KEYWORDS = frozenset(
-    {
-        "in",
-        "nextflow",
-        "params",
-        "from",
-        "record",
-        "process",
-        "exec",
-        "input",
-        "output",
-        "script",
-        "shell",
-        "stage",
-        "stub",
-        "topic",
-        "tuple",
-        "when",
-        "workflow",
-        "emit",
-        "main",
-        "onComplete",
-        "onError",
-        "publish",
-        "take",
-    }
-)
-
 # Word-shaped tokens declared before Identifier in ScriptLexer that
 # ScriptParser.identifier does not admit as symbols.
 _NEXTFLOW_LEXER_ONLY_WORDS = frozenset(

@@ -7,6 +7,7 @@ from typing import Any, Final
 
 from sophios.ir.declarations import input_rank, layered, output_rank
 from sophios.ir.types import DerivedName, Port, PortDeclaration, PortId, PortName, StepNode
+from sophios.lang.cwl import ATOMIC_TYPES
 
 
 class ReferenceExpectation(Enum):
@@ -17,9 +18,6 @@ class ReferenceExpectation(Enum):
     UNKNOWN = 'unknown'
 
 
-_ATOMS: Final = frozenset({
-    'null', 'boolean', 'int', 'long', 'float', 'double', 'string', 'File', 'Directory',
-})
 _UNKNOWN: Final = object()
 
 
@@ -31,7 +29,7 @@ def _variants(declared: Any,  # pylint: disable=too-many-return-statements
             return [('array', item) for item in _variants(declared[:-2], active)]
         if declared.endswith('?') and len(declared) > 1:
             return [('atom', 'null'), *_variants(declared[:-1], active)]
-        if declared == 'Any' or declared not in _ATOMS:
+        if declared == 'Any' or declared not in ATOMIC_TYPES:
             return [_UNKNOWN]
         return [('atom', declared)]
 
