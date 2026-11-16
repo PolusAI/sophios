@@ -455,17 +455,35 @@ def _fires(code: SophiosErrorCode) -> bool:
     return False
 
 
+#: Fixtures whose test compares each diagnostic's code exactly: `match` of a list of `{code: ...}` against what the
+#: compile raises (test_compiler:91 and 95, test_infer_phase:62, test_lower:62, test_realtime:167, test_diagnostics:334,
+#: test_python_api_from_wic:271) or `==` of the codes raised (test_python_api_workflow:193).
+_STATED = ('compiler/*/expected.yaml', 'infer/*/expected.yaml', 'lower/expected.yaml', 'realtime/expected.yaml',
+           'preflight/*/expected.yaml', 'from_wic/refused/*/expected.yaml', 'python_api/refused.yaml')
+
+
+def _coded(node: Any) -> set[str]:
+    """Every `code:` a fixture states, by name."""
+    if isinstance(node, dict):
+        return {value for key, item in node.items() for value in ({item} if key == 'code' else _coded(item))}
+    return {value for item in node for value in _coded(item)} if isinstance(node, list) else set()
+
+
 @pytest.mark.skip_pypi_ci
 def test_every_code_is_provoked() -> None:
     """Every SophiosErrorCode is provoked, as a code nothing provokes is dead on arrival: a document under
-    tests/core/data/parse reports it, or else the provocation tests/core/provocations.py registers for it raises it.
-    So a new code lands with its provocation in the same commit."""
-    parsed = {SophiosErrorCode[report[0]] for path in sorted((DATA / 'parse').glob('*/expected.yaml'))
+    tests/core/data/parse reports it, or a fixture family under tests/core/data states it, or else the provocation
+    tests/core/provocations.py registers for it raises it. So a new code lands with its provocation in the same
+    commit."""
+    parsed = {report[0] for path in sorted((DATA / 'parse').glob('*/expected.yaml'))
               for reports in yaml.safe_load(path.read_text(encoding='utf-8'))['documents'].values()
               for report in reports}
-    assert not parsed & set(provocations.COMPILED), sorted(map(str, parsed & set(provocations.COMPILED)))
+    stated = parsed | _coded([yaml.safe_load(path.read_text(encoding='utf-8'))
+                              for pattern in _STATED for path in sorted(DATA.glob(pattern))])
+    both = {code.name for code in provocations.COMPILED} & stated
+    assert not both, sorted(both)
     unprovoked = [str(code) for code in SophiosErrorCode
-                  if code not in parsed and (code not in provocations.COMPILED or not _fires(code))]
+                  if code.name not in stated and (code not in provocations.COMPILED or not _fires(code))]
     assert not unprovoked, f'codes nothing provokes: {unprovoked}'
 
 
