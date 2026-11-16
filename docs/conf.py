@@ -218,3 +218,6 @@ def _render_tables(_app: Sphinx, docname: str, source: list[str]) -> None:
 def setup(app: Sphinx) -> None:
     """Render each table that is held in the code into its page as Sphinx reads it."""
     app.connect('source-read', _render_tables)
+    if building_pdf:  # the PDF's contents go one level deeper than the site's
+        app.connect('include-read', lambda app, rel, parent, content: content.__setitem__(
+            0, content[0].replace(':maxdepth: 1', ':maxdepth: 2')))

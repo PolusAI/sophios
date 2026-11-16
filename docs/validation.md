@@ -36,14 +36,7 @@ workflow is compiled.
 ## The test suite
 
 `tests/core/` holds the compiler's tests, `tests/contrib/` the contrib
-surfaces'. The markers, declared in `pyproject.toml`:
-
-- `fast`: unit and API tests; `pytest -m fast` is the quick local check;
-- `slow`: workflow and integration tests;
-- `serial`: tests that cannot run under `pytest -n`;
-- `needs_cwltool`: runs cwltool; skipped off POSIX;
-- `skip_pypi_ci`: left out of the release lane and the package job;
-- `contrib`: a contrib surface rather than the core compiler.
+surfaces'. The markers are declared in `pyproject.toml`; `pytest -m fast` is the quick local check.
 
 Three kinds of test carry the promises the documentation makes:
 
