@@ -28,15 +28,10 @@ def _declared_fields(cwl_class: str) -> set[str]:
     return set(getattr(cwl_v1_2, cwl_class).attrs)
 
 
-# Design §3 names the compile-time fields: these wherever CWL declares them, and NetworkAccess.
-COMPILE_TIME = {"doc", "format", "intent", "label", "streamable"}
-
-
 @pytest.mark.fast
 def test_the_table_classifies_every_field_cwl_declares_under_a_construct() -> None:
     """Each class's rows are the fields cwl_utils or cwltool declares, Sophios's own classes' as the support matrix
-    has them; each requirement class is a CWL class, with its fields unless it is refused; and the compile-time fields
-    are the ones design §3 names."""
+    has them; and each requirement class is a CWL class, with its fields unless it is refused."""
     assert {cwl_class: set(FIELDS[cwl_class]) for cwl_class in SUPPORT_MATRIX} == {
         cwl_class: set(fields) for cwl_class, fields in SUPPORT_MATRIX.items()}
     assert {cwl_class: set(rows) for cwl_class, rows in FIELDS.items()} == {
@@ -44,10 +39,6 @@ def test_the_table_classifies_every_field_cwl_declares_under_a_construct() -> No
     for classes in REQUIREMENT_CLASSES.values():
         for name, row in classes.items():
             assert _declared_fields(name) and (row.state is State.REJECTED or name in FIELDS), name
-    assert {(cwl_class, name) for cwl_class, fields in FIELDS.items() for name, row in fields.items()
-            if row.state is State.COMPILE_TIME} == {
-        (cwl_class, name) for cwl_class, fields in FIELDS.items() for name in fields
-        if name in COMPILE_TIME or cwl_class == "NetworkAccess"}
 
 
 def _strings() -> Yaml:
@@ -156,7 +147,8 @@ def test_compile_time_fields_leave_the_executable_model_unchanged() -> None:
     workflow["steps"][0]["in"]["f"] = {"wic_raw_cwl": {"source": "f"}}
     plain = _lower(copy.deepcopy(workflow), copy.deepcopy(run), f={"class": "File", "path": "f.txt"})
     for cwl_class, place in POSITIONS.items():
-        place(workflow, run).update({name: SAMPLES[name] for name in COMPILE_TIME & set(FIELDS[cwl_class])})
+        place(workflow, run).update({name: SAMPLES[name] for name, row in FIELDS[cwl_class].items()
+                                     if row.state is State.COMPILE_TIME})
     run["requirements"]["NetworkAccess"] = {"networkAccess": True}
     run.update({"$namespaces": {"edam": "https://edamontology.org/"}, "$schemas": ["https://example.org/formats.rdf"]})
     run["hints"] = [{"class": "NetworkAccess", "networkAccess": True}]

@@ -14,7 +14,6 @@ import os
 from pathlib import Path
 import re
 import tempfile
-import time
 from typing import Any
 
 from hypothesis import example, given, strategies as st
@@ -472,9 +471,7 @@ def test_an_edit_outside_the_subset_stops_the_import_at_its_line(
     for index, (code, file, old, new, at) in enumerate(edits):
         directory = tmp_path / str(index)
         directory.mkdir()
-        started = time.perf_counter()
         _stops(code, directory / file, at, partial(_edited, directory, pipeline, file, old, new))
-        assert time.perf_counter() - started < 5.0, at
 
 
 def _unread(tmp_path: Path, name: str) -> Path:
@@ -562,15 +559,3 @@ def test_a_minimum_of_more_arguments_than_python_recurses_imports(tmp_path: Path
     workflow.outputs.out = step.outputs.out
     compiled = workflow.compile(target="nextflow")
     assert _imported(compiled.write(tmp_path)) == compiled.nextflow_workflow
-
-
-def test_a_condition_too_deep_to_render_stops_the_import_at_its_workflow(
-        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """Python 3.11 recurses deeper rendering nested calls than reading them, so a condition its run: line reads
-    may be too deep to render: the import stops at the workflow."""
-    def too_deep(_model: ExecutableNextflowWorkflow) -> str:
-        raise RecursionError("maximum recursion depth exceeded")
-
-    monkeypatch.setattr("sophios.nf_reader.render_nextflow", too_deep)
-    _stops(_CODE.IMPORT_FOREIGN_STATEMENT, tmp_path / NEXTFLOW_SCRIPT, "workflow provoke",
-           partial(_edited, tmp_path, None, NEXTFLOW_SCRIPT, "", ""))

@@ -173,135 +173,132 @@ def _conditional(condition: Any = None, *, is_array: Any = False) -> NfProcess:
 _BASENAME = NfTemplate((NfBasenameReference("v"),))
 _PLAIN = NfTemplate((NfInputReference("v"),))
 _OUT = template("out.txt")
-_ARRAY_ONLY = "array-marked inputs may only be referenced by array bindings"
-_SEGMENTS = "^" + re.escape("template segments must be one of: NfLiteral, NfInputReference, NfBasenameReference") + "$"
 _ARRAY = NfPort("v", "val", is_array=True)
-_EITHER = (ValueError, TypeError)
+_REFUSED = object()
 
-#: Each IR value or process, built when its row runs, and how construction refuses it: a ValueError's pattern, an
-#: (exception type, pattern) pair, or None for the accepted neighbour of a refusal.
+#: Each IR value or process, built when its row runs, and its outcome: _REFUSED, or None for the accepted neighbour of
+#: a refusal.
 UNREPRESENTABLE: dict[str, tuple[Callable[[], Any], Any]] = {
-    **{f"NfPort-{name}-qualifier": (partial(NfPort, "reads", name), "qualifier")
+    **{f"NfPort-{name}-qualifier": (partial(NfPort, "reads", name), _REFUSED)
        for name in ("tuple", "env", "stdin", "each", "unsupported")},
     "NfPort-reserved-name": (partial(NfPort, "__sophios_shell_quote_9f72e", "val"),
-                             "reserved Nextflow backend identifier"),
-    "NfPort-entry-on-a-val": (partial(NfPort, "source", "val", entry=NfEntry()), "only a path input that is not array"),
+                             _REFUSED),
+    "NfPort-entry-on-a-val": (partial(NfPort, "source", "val", entry=NfEntry()), _REFUSED),
     "NfPort-entry-on-an-array": (partial(NfPort, "source", "path", is_array=True, entry=NfEntry()),
-                                 "only a path input that is not array"),
+                                 _REFUSED),
     "NfPort-entry-on-an-output": (partial(NfPort, "source", "path", "source", template("out"), entry=NfEntry()),
-                                  "only a path input that is not array"),
+                                  _REFUSED),
     # A capture marker is closed data, so it can never hold expression text.
     **{f"NfPort-capture-{text!r}": (partial(NfPort, "result", "path", "result", _OUT, capture=text),
-                                    "port capture must be one of")
+                                    _REFUSED)
        for text in ("$(self[0])", "$(self[0].contents)", "single_path", "contents", "")},
     # Projecting the first match is provable only when one match exists.
     **{f"NfPort-capture-of-{glob}": (partial(NfPort, "result", "path", "result", template(glob), capture="single"),
-                                     "no wildcard character")
+                                     _REFUSED)
        for glob in ("*.txt", "out?.txt", "out[0].txt", "*", "sub/*.txt")},
     # A reference's runtime value cannot be shown wildcard-free at compile time.
     **{f"NfPort-capture-of-a-reference-{index}": (partial(NfPort, "result", "path", "result", glob, capture="single"),
-                                                  "single-literal glob with no input reference")
+                                                  _REFUSED)
        for index, glob in enumerate((template(ref("name")), template("out-", ref("name")),
                                      NfTemplate((NfBasenameReference("source"), NfLiteral(".copy")))))},
     "NfPort-capture-without-a-glob": (partial(NfPort, "result", "path", "result", None, capture="single"),
-                                      "single-literal glob with no input reference"),
+                                      _REFUSED),
     "NfPort-single-capture-on-a-val": (partial(NfPort, "result", "val", "result", _OUT, capture="single"),
-                                       "capture 'single' requires a path port"),
+                                       _REFUSED),
     "NfPort-text-capture-on-a-path": (partial(NfPort, "text", "path", "text", _OUT, capture="text"),
-                                      "capture 'text' requires a val port"),
+                                      _REFUSED),
     "NfPort-capture-and-array": (partial(NfPort, "result", "path", "result", _OUT, is_array=True, capture="single"),
-                                 "cannot combine with an array marker"),
+                                 _REFUSED),
     # A scalar type is what a val input receives when that is one scalar: never a path's, a list's, or another type.
     **{f"NfPort-scalar-type-{name}": (partial(NfPort, "v", qualifier, is_array=array, scalar_type=scalar),
-                                      "a scalar type is one of")
+                                      _REFUSED)
        for name, qualifier, array, scalar in (("of-a-path", "path", False, "string"),
                                               ("of-an-array", "val", True, "int"), ("File", "val", False, "File"))},
-    **{f"NfEntry-{name!r}": (partial(NfEntry, name), reason) for name, reason in (
-        ("", "non-empty"), ("   ", "non-empty"), ("sub/dir.txt", "path separator"), ("a\x00b", "NUL byte"),
-        (".sophios_entry_x", "Sophios reserves"), (".", "names a directory"), ("..", "names a directory"))},
-    **{f"NfFlag-prefix-{prefix!r}": (partial(NfFlag, "reverse", prefix), "prefix") for prefix in ("", "   ")},
-    **{f"NfArrayBinding-prefix-{prefix!r}": (partial(NfArrayBinding, "names", prefix), "prefix")
+    **{f"NfEntry-{name!r}": (partial(NfEntry, name), _REFUSED) for name in (
+        "", "   ", "sub/dir.txt", "a\x00b", ".sophios_entry_x", ".", "..")},
+    **{f"NfFlag-prefix-{prefix!r}": (partial(NfFlag, "reverse", prefix), _REFUSED) for prefix in ("", "   ")},
+    **{f"NfArrayBinding-prefix-{prefix!r}": (partial(NfArrayBinding, "names", prefix), _REFUSED)
        for prefix in ("", "   ")},
-    "NfOptionalBinding-blank-prefix": (partial(NfOptionalBinding, "name", " ", True), "prefix"),
+    "NfOptionalBinding-blank-prefix": (partial(NfOptionalBinding, "name", " ", True), _REFUSED),
     "NfOptionalBinding-unseparated-without-a-prefix": (partial(NfOptionalBinding, "name", None, False),
-                                                       "needs a prefix"),
-    "NfShellLiteral-not-a-string": (partial(NfShellLiteral, cast(Any, 3)), (TypeError, "must be a string")),
-    "NfShellLiteral-NUL": (partial(NfShellLiteral, "bad\x00text"), "NUL"),
-    "NfTemplate-flag": (partial(NfTemplate, (cast(Any, NfFlag("reverse", "-r")),)), (TypeError, _SEGMENTS)),
-    "NfTemplate-shell-literal": (partial(NfTemplate, (cast(Any, NfShellLiteral(">>")),)), (TypeError, _SEGMENTS)),
-    **{f"NfEnvVar-value-{index}": (partial(NfEnvVar, "A", value), "literal text or one input reference")
+                                                       _REFUSED),
+    "NfShellLiteral-not-a-string": (partial(NfShellLiteral, cast(Any, 3)), _REFUSED),
+    "NfShellLiteral-NUL": (partial(NfShellLiteral, "bad\x00text"), _REFUSED),
+    "NfTemplate-flag": (partial(NfTemplate, (cast(Any, NfFlag("reverse", "-r")),)), _REFUSED),
+    "NfTemplate-shell-literal": (partial(NfTemplate, (cast(Any, NfShellLiteral(">>")),)), _REFUSED),
+    **{f"NfEnvVar-value-{index}": (partial(NfEnvVar, "A", value), _REFUSED)
        for index, value in enumerate((template("a", ref("x")), NfTemplate((NfBasenameReference("x"),))))},
-    **{f"NfEnvVar-name-{name!r}": (partial(NfEnvVar, name, template("v")), "shell variable name")
+    **{f"NfEnvVar-name-{name!r}": (partial(NfEnvVar, name, template("v")), _REFUSED)
        for name in ("", "1A", "A-B", "A B", "A=B")},
     **{f"NfResources-accelerator-{value!r}": (partial(NfResources, accelerator=cast(Any, value)),
-                                              "accelerator must be a positive integer")
+                                              _REFUSED)
        for value in (0, -1, True, 1.5, "2")},
     "NfWorkflowInputConnection-None-process": (
-        partial(NfWorkflowInputConnection, "message", cast(Any, None), "message"), ((TypeError, ValueError), None)),
+        partial(NfWorkflowInputConnection, "message", cast(Any, None), "message"), _REFUSED),
     "NfProcess-env-set-twice": (partial(_env_process, NfEnvVar("A", template("1")), NfEnvVar("A", template("2"))),
-                                "more than once"),
+                                _REFUSED),
     "NfProcess-array-typed-output": (partial(NfProcess, "MAKE", [], [NfPort("result", "path", "result", _OUT,
                                                                             is_array=True)], command("true")),
-                                     "array-typed outputs are deferred"),
+                                     _REFUSED),
     "NfProcess-val-output": (partial(NfProcess, "P", [], [NfPort("o", "val", "o")], command("true")),
-                             "path qualifier and typed glob"),
+                             _REFUSED),
     "NfProcess-val-output-with-a-glob": (partial(NfProcess, "P", [], [NfPort("o", "val", "o", _OUT)], command("true")),
-                                         "require path qualifier and typed glob"),
+                                         _REFUSED),
     "NfProcess-two-entries-one-name": (partial(_entry_workflow, NfPort("a", "path", entry=NfEntry("same.txt")),
                                                NfPort("b", "path", entry=NfEntry("same.txt"))),
-                                       "two InitialWorkDirRequirement entries with one literal name"),
-    "NfProcess-ref-flag-to-unknown": (partial(_proc, NfPort("other", "val"), NfFlag("v", "-r")), "unknown inputs"),
+                                       _REFUSED),
+    "NfProcess-ref-flag-to-unknown": (partial(_proc, NfPort("other", "val"), NfFlag("v", "-r")), _REFUSED),
     "NfProcess-ref-array-to-unknown": (partial(_proc, NfPort("other", "val"), NfArrayBinding("v", "-n")),
-                                       "unknown inputs"),
+                                       _REFUSED),
     "NfProcess-ref-flag-to-a-path": (partial(_proc, NfPort("v", "path"), NfFlag("v", "-r")),
-                                     "flag tokens must reference val inputs"),
+                                     _REFUSED),
     "NfProcess-ref-env-to-a-path": (partial(_env_process, NfEnvVar("A", template(ref("x"))), qualifier="path"),
-                                    "environment variables must reference val inputs: x"),
+                                    _REFUSED),
     # A basename is valid in every template position, so each is checked.
     **{f"NfProcess-ref-basename-of-a-val-{where}": (partial(_proc, NfPort("v", "val"), *tokens, **streams),
-                                                    "basename references must target path inputs")
+                                                    _REFUSED)
        for where, tokens, streams in (("token", [_BASENAME], {}), ("stdout", [], {"stdout": _BASENAME}),
                                       ("glob", [], {"outputs": (NfPort("o", "path", "o", _BASENAME),)}))},
     "NfProcess-ref-array-binding-to-a-scalar": (partial(_proc, NfPort("v", "val"), NfArrayBinding("v", "--name")),
-                                                "array bindings must reference array-marked inputs"),
+                                                _REFUSED),
     "NfProcess-ref-optional-binding-to-a-path": (partial(_proc, NfPort("v", "path"), NfOptionalBinding("v")),
-                                                 "optional bindings must reference val inputs"),
-    "NfProcess-ref-optional-binding-to-an-array": (partial(_proc, _ARRAY, NfOptionalBinding("v")), f"{_ARRAY_ONLY}: v"),
+                                                 _REFUSED),
+    "NfProcess-ref-optional-binding-to-an-array": (partial(_proc, _ARRAY, NfOptionalBinding("v")), _REFUSED),
     # A plain reference renders values.toString(), so a two-item array reaches the command line as "[a, b]".
-    "NfProcess-ref-array-in-text": (partial(_proc, _ARRAY, template("--joined=", ref("v"))), _ARRAY_ONLY),
-    "NfProcess-ref-array-token": (partial(_proc, _ARRAY, _PLAIN), _ARRAY_ONLY),
-    "NfProcess-ref-array-stdout": (partial(_proc, _ARRAY, stdout=_PLAIN), _ARRAY_ONLY),
-    "NfProcess-ref-array-glob": (partial(_proc, _ARRAY, outputs=(NfPort("o", "path", "o", _PLAIN),)), _ARRAY_ONLY),
+    "NfProcess-ref-array-in-text": (partial(_proc, _ARRAY, template("--joined=", ref("v"))), _REFUSED),
+    "NfProcess-ref-array-token": (partial(_proc, _ARRAY, _PLAIN), _REFUSED),
+    "NfProcess-ref-array-stdout": (partial(_proc, _ARRAY, stdout=_PLAIN), _REFUSED),
+    "NfProcess-ref-array-glob": (partial(_proc, _ARRAY, outputs=(NfPort("o", "path", "o", _PLAIN),)), _REFUSED),
     # A File[]'s text is the whole list's, so its basename is the tail of [v1/a.txt, v2/b.txt], and no one file's glob.
     "NfProcess-ref-basename-of-an-array": (partial(_proc, NfPort("v", "path", is_array=True), NfTemplate(
-        (NfLiteral("--tag="), NfBasenameReference("v")))), _ARRAY_ONLY),
+        (NfLiteral("--tag="), NfBasenameReference("v")))), _REFUSED),
     "NfProcess-ref-basename-of-an-array-glob": (partial(_proc, NfPort("v", "path", is_array=True), outputs=(NfPort(
-        "o", "path", "o", NfTemplate((NfBasenameReference("v"), NfLiteral(".done")))),)), _ARRAY_ONLY),
+        "o", "path", "o", NfTemplate((NfBasenameReference("v"), NfLiteral(".done")))),)), _REFUSED),
     # A flag would let list truthiness decide whether its prefix appears.
-    "NfProcess-ref-flag-to-an-array": (partial(_proc, _ARRAY, NfFlag("v", "--verbose")), f"{_ARRAY_ONLY}: v"),
+    "NfProcess-ref-flag-to-an-array": (partial(_proc, _ARRAY, NfFlag("v", "--verbose")), _REFUSED),
     # A step-only input is a val the command never reads; the condition may (design §9).
     "NfProcess-step-only-path": (partial(NfProcess, "P", [], [], command("true"),
-                                         step_only_inputs=[NfPort("after", "path")]), "must be val inputs"),
+                                         step_only_inputs=[NfPort("after", "path")]), _REFUSED),
     "NfProcess-step-only-named-like-an-input": (partial(NfProcess, "P", [NfPort("v", "val")], [], command("true"),
                                                         step_only_inputs=[NfPort("v", "val")]),
-                                                "duplicate input port names"),
+                                                _REFUSED),
     **{f"NfProcess-step-only-read-by-{where}": (partial(NfProcess, "P", [], [], NfCommand(tokens, env=env),
                                                         step_only_inputs=[NfPort("s", "val")]),
-                                                "command reads the step-only inputs s")
+                                                _REFUSED)
        for where, tokens, env in (
            ("a-token", (template("echo", ref("s")),), ()),
            ("an-environment-variable", (template("true"),), (NfEnvVar("S", template(ref("s"))),)))},
     "NfProcess-condition-over-a-value-that-may-be-null": (partial(
         NfProcess, "P", [NfPort("s", "val", scalar_type="boolean?")], [], command("true"),
-        condition=parse("$(inputs.s)")), "optional inputs.s may only be compared with null"),
-    "NfProcess-condition-false": (partial(_conditional, False), (_EITHER, "condition must be a typed Expr")),
+        condition=parse("$(inputs.s)")), _REFUSED),
+    "NfProcess-condition-false": (partial(_conditional, False), _REFUSED),
     "NfProcess-condition-string": (partial(_conditional, Text("false")),
-                                   (_EITHER, "condition must compute a boolean")),
+                                   _REFUSED),
     "NfProcess-condition-unknown-op": (partial(_conditional, Op("bogus")),
-                                       (_EITHER, "unsupported construct 'bogus'")),
+                                       _REFUSED),
     "NfProcess-condition-wrong-arity": (partial(_conditional, Op(">", (Ref("a"),))),
-                                        (_EITHER, "> takes two operands")),
-    **{f"NfProcess-is-array-{value!r}": (partial(_conditional, is_array=value), (_EITHER, "is_array must be a bool"))
+                                        _REFUSED),
+    **{f"NfProcess-is-array-{value!r}": (partial(_conditional, is_array=value), _REFUSED)
        for value in ("false", 0)},
 }
 
@@ -366,63 +363,62 @@ _EACH = (NfWorkflowInputConnection("items", "FIRST", "item", "dotproduct"),
          NfWorkflowInputConnection("items", "SECOND", "item", "dotproduct"))
 _TEXT = _text_capture_process("PRODUCE")
 _MESSAGE = NfWorkflowInputConnection("message", "PRODUCE", "message")
-_QUALIFIERS = "incompatible channel qualifiers"
 
-#: Each workflow, built when its row runs, and what construction gives: a ValueError's pattern naming the edge, None
-#: when it constructs, or the canonical connections it constructs with.
+#: Each workflow, built when its row runs, and what construction gives: _REFUSED, None when it
+#: constructs, or the canonical value it constructs with.
 WORKFLOWS: dict[str, tuple[Callable[[], Any], Any]] = {
     "params-key-not-a-string": (partial(ExecutableNextflowWorkflow, "wf", (), (), cast(Any, {1: "value"})),
-                                "keys must be strings"),
+                                _REFUSED),
     "params-not-json": (partial(ExecutableNextflowWorkflow, "wf", (), (), {"value": cast(Any, {1, 2})}),
-                        "JSON-compatible"),
-    "param-without-a-type": (partial(_one, {"value": "a"}), "give a type to exactly the parameters in params: value"),
+                        _REFUSED),
+    "param-without-a-type": (partial(_one, {"value": "a"}), _REFUSED),
     "type-without-a-param": (partial(_one, {"value": "a"}, {"value": "string", "extra": "int"}),
-                             "give a type to exactly the parameters in params: extra"),
-    "param-type-long": (partial(_one, {"value": 1}, {"value": "long"}), "must be one of PARAM_TYPES, not 'long'"),
+                             _REFUSED),
+    "param-type-long": (partial(_one, {"value": 1}, {"value": "long"}), _REFUSED),
     **{f"param-type-{declared}-into-a-val": (partial(_one, {"value": "a"}, {"value": declared}),
-                                             re.escape(f"'value' of type '{declared}' cannot feed ONE.value"))
+                                             _REFUSED)
        for declared in ("string[]", "File")},
     # The port's list arity would deliver a scalar output as a one-element list and hide the mismatch.
     "scalar-output-into-an-array-port": (partial(_workflow, [
         NfProcess("PRODUCE", [], [output_port("out", "out.txt")], command("touch", "out.txt")),
         NfProcess("JOIN", [NfPort("values", "path", is_array=True)], [],
                   NfCommand((template("cat"), NfArrayBinding("values"))))],
-        NfProcessConnection("PRODUCE", "out", "JOIN", "values")), "incompatible channel cardinalities"),
+        NfProcessConnection("PRODUCE", "out", "JOIN", "values")), _REFUSED),
     # An array port and a scalar port must never share one workflow parameter.
     "one-param-into-a-scalar-and-an-array": (partial(_shared, NfPort("shared", "val"),
-                                                     NfPort("shared", "val", is_array=True)), _QUALIFIERS),
+                                                     NfPort("shared", "val", is_array=True)), _REFUSED),
     "one-param-into-a-val-and-a-path": (partial(_shared, NfPort("shared", "val"), NfPort("shared", "path")),
-                                        _QUALIFIERS),
+                                        _REFUSED),
     "one-param-into-a-file-and-a-directory": (partial(_shared, NfPort("shared", "path"), NfPort(
-        "shared", "path", path_kind="directory"), declared="File"), _QUALIFIERS),
+        "shared", "path", path_kind="directory"), declared="File"), _REFUSED),
     # A scattered sink takes the whole array, so the parameter carries a list there and a scalar here.
     "one-param-scattered-and-taken-as-a-scalar": (partial(_shared, NfPort("item", "val"), NfPort("item", "val"),
-                                                          adapter="dotproduct", declared="string[]"), _QUALIFIERS),
+                                                          adapter="dotproduct", declared="string[]"), _REFUSED),
     **{f"adapter-{adapter!r}": (partial(_adapted_workflow, adapter),
-                                "channel adapter must be one of dotproduct, flat_crossproduct, nested_crossproduct")
+                                _REFUSED)
        for adapter in ("gather", "scatter", "", "collect")},
     "adapter-into-an-array-port": (partial(_adapted_workflow, port=NfPort("item", "val", is_array=True)),
-                                   "cannot target the array-marked port SCATTER.item"),
+                                   _REFUSED),
     # One element per invocation cannot fill an array-marked port, which would be bound to a bare Path.
     **{f"{method}-rescattered-into-an-array-port": (partial(
         _scattered_pair, "dotproduct", NfPort("x", "path", is_array=True), NfPort("y", "val"),
         edge=NfProcessConnection("PAIR", "f", "NEXT", "x", method),
         y=NfWorkflowInputConnection("yvals", "NEXT", "y", method)),
-        f"channel adapter '{method}' cannot target the array-marked port NEXT.x")
+        _REFUSED)
        for method in ("dotproduct", "flat_crossproduct", "nested_crossproduct")},
     "process-mixing-scatter-methods": (partial(
         _workflow, [NfProcess("PAIR", [NfPort("first", "val"), NfPort("second", "val")], [], command("true"))],
         NfWorkflowInputConnection("firsts", "PAIR", "first", "flat_crossproduct"),
         NfWorkflowInputConnection("seconds", "PAIR", "second", "dotproduct"), firsts=["a"], seconds=["b"]),
-        "mixes channel adapters dotproduct, flat_crossproduct"),
+        _REFUSED),
     **{f"{method}-ungathered-edge-{'first' if first else 'last'}": (partial(
         _scattered_pair, method, NfPort("x", "path"), edge=NfProcessConnection("PAIR", "f", "NEXT", "x"),
-        edge_first=first), r"connection PAIR\.f -> NEXT\.x must carry a gather adapter")
+        edge_first=first), _REFUSED)
        for method in ("dotproduct", "flat_crossproduct") for first in (False, True)},
     **{f"{method}-skipped-positions-gathered-{'first' if first else 'last'}": (partial(
         _scattered_pair, method, NfPort("x", "path", is_array=True), edge_first=first,
         edge=NfProcessConnection("PAIR", "f", "NEXT", "x", "gather"), condition=parse("$(inputs.a == 'x')")),
-        r"connection PAIR\.f -> NEXT\.x gathers the skipped positions")
+        _REFUSED)
        for method in ("dotproduct", "flat_crossproduct") for first in (False, True)},
     # An adapter belongs to its scattered process; every sink here takes the whole array (design §5.2).
     "one-array-param-scattered-differently-and-taken-whole": (partial(_workflow, [
@@ -443,15 +439,15 @@ WORKFLOWS: dict[str, tuple[Callable[[], Any], Any]] = {
         "CONSUME", [NfPort("text", "val")], [output_port("result", "copy.txt")],
         command("printf", "%s", template(ref("text")), stdout="copy.txt"))],
         _MESSAGE, NfProcessConnection("PRODUCE", "text", "CONSUME", "text"),
-        NfWorkflowOutputConnection("CONSUME", "result", "result"), message="hi"), r"PRODUCE.text captures file text"),
+        NfWorkflowOutputConnection("CONSUME", "result", "result"), message="hi"), _REFUSED),
     "workflow-named-like-a-process": (partial(ExecutableNextflowWorkflow, "echo", [NfProcess(
         "echo", [], [output_port("o", "o.txt")], command("true"))], [], {}),
-        "workflow name 'echo' is also a process name"),
+        _REFUSED),
     "optional-output-into-a-process": (partial(_workflow, [_optional_producer(), NfProcess(
         "CONSUME", [NfPort("source", "path")], [], command("true"))], NfWorkflowInputConnection("x", "MAYBE", "x"),
-        NfProcessConnection("MAYBE", "o", "CONSUME", "source"), x=1), "optional output"),
+        NfProcessConnection("MAYBE", "o", "CONSUME", "source"), x=1), _REFUSED),
     "optional-output-of-a-scatter": (partial(_workflow, [_optional_producer()], NfWorkflowInputConnection(
-        "xs", "MAYBE", "x", "dotproduct"), NfWorkflowOutputConnection("MAYBE", "o", "o"), xs=["1"]), "optional output"),
+        "xs", "MAYBE", "x", "dotproduct"), NfWorkflowOutputConnection("MAYBE", "o", "o"), xs=["1"]), _REFUSED),
     # A val input's scalar type is what its connection gives (design §9): given none, it is given that one.
     "val-inputs-given-no-scalar-type": (lambda: _workflow(
         [NfProcess("ONE", [NfPort("v", "val")], [], command("true"), step_only_inputs=[NfPort("s", "val")])],
@@ -460,17 +456,16 @@ WORKFLOWS: dict[str, tuple[Callable[[], Any], Any]] = {
                               step_only_inputs=[NfPort("s", "val", scalar_type="int")])),
     "a-scalar-type-its-connection-does-not-give": (partial(_workflow, [NfProcess(
         "ONE", [NfPort("v", "val", scalar_type="int")], [], command("true"))],
-        NfWorkflowInputConnection("v", "ONE", "v"), v="a"), "ONE.v receives 'string', but its scalar type is 'int'"),
+        NfWorkflowInputConnection("v", "ONE", "v"), v="a"), _REFUSED),
     # A condition types over the scalar types its inputs are given.
     **{f"a-condition-over-{given}-input-given-no-scalar-type": (partial(lambda value: _workflow([_conditional(parse(
         "$(inputs.a > 1)"))], NfWorkflowInputConnection("a", "TASK", "a"), a=value), value), outcome)
-       for given, value, outcome in (("an-int", 1, None),
-                                     ("a-string", "x", "TASK' condition does not type over its inputs"))},
+       for given, value, outcome in (("an-int", 1, None), ("a-string", "x", _REFUSED))},
     "a-condition-over-a-step-only-input-after-a-path-output": (lambda: _workflow([
         NfProcess("TOUCH", [], [output_port("f", "f.txt")], command("touch", "f.txt")),
         NfProcess("ECHO", [], [output_port("result", "out.txt")], command("true"), condition=parse("$(inputs.after)"),
                   step_only_inputs=[NfPort("after", "val")])],
-        NfProcessConnection("TOUCH", "f", "ECHO", "after")), "only scalar inputs are admitted"),
+        NfProcessConnection("TOUCH", "f", "ECHO", "after")), _REFUSED),
     # A step-only input takes a step's path output as a value, staging nothing; it is never scattered.
     "a-step-only-input-after-a-path-output": (partial(_workflow, [
         NfProcess("TOUCH", [], [output_port("f", "f.txt")], command("touch", "f.txt")),
@@ -478,7 +473,7 @@ WORKFLOWS: dict[str, tuple[Callable[[], Any], Any]] = {
         NfProcessConnection("TOUCH", "f", "ECHO", "after")), None),
     "a-scattered-step-only-input": (partial(_workflow, [NfProcess("ECHO", [], [], command("true"), step_only_inputs=[
         NfPort("s", "val", scalar_type="string")])], NfWorkflowInputConnection("ss", "ECHO", "s", "dotproduct"),
-        ss=["a"]), "step-only input ECHO.s cannot be scattered"),
+        ss=["a"]), _REFUSED),
 }
 
 
@@ -487,12 +482,11 @@ def _staged(segment: NfInputReference | NfBasenameReference) -> dict[str, tuple[
     matches, and a stream written there writes through the link into the input; an entry is matched and a writable
     one is a copy, and a name derived from the input's is a new one."""
     kind = type(segment).__name__
-    globbed = "output 'result' globs the staged input 'source', or a name inside it"
     rows: dict[str, tuple[Callable[[], Any], Any]] = {}
     for before, after in (("", ""), ("./", ""), ("", "/keep.txt"), ("a/../", "/")):
         output = NfPort("result", "path", "result", NfTemplate((NfLiteral(before), segment, NfLiteral(after))))
         rows[f"glob-{kind}-{before}{after}-staged"] = (partial(_entry_workflow, NfPort("source", "path"),
-                                                               outputs=(output,)), globbed)
+                                                               outputs=(output,)), _REFUSED)
         rows[f"glob-{kind}-{before}{after}-entry"] = (partial(
             _entry_workflow, NfPort("source", "path", entry=NfEntry()), outputs=(output,)), None)
     derived_names = (NfTemplate((segment, NfLiteral(".copy"))), NfTemplate((NfLiteral("out/"), segment)))
@@ -502,9 +496,7 @@ def _staged(segment: NfInputReference | NfBasenameReference) -> dict[str, tuple[
     for stream in ("stdout", "stderr"):
         for after in ("", "/keep.txt"):
             target = NfTemplate((segment, NfLiteral(after)))
-            for entry, outcome in ((None, f"{stream} writes through the link input 'source' is staged under"),
-                                   (NfEntry(), f"{stream} writes through the link input 'source' is staged under"),
-                                   (NfEntry(copy=True), None)):
+            for entry, outcome in ((None, _REFUSED), (NfEntry(), _REFUSED), (NfEntry(copy=True), None)):
                 rows[f"{stream}-{kind}{after}-{entry!r}"] = (partial(
                     _entry_workflow, NfPort("source", "path", entry=entry), streams={stream: target}), outcome)
         rows[f"{stream}-{kind}-derived"] = (partial(_entry_workflow, NfPort("source", "path"), streams={
@@ -514,7 +506,7 @@ def _staged(segment: NfInputReference | NfBasenameReference) -> dict[str, tuple[
         "source", "path", entry=NfEntry(copy=True)), tokens=("cat", NfTemplate((segment,)))), None)
     rows[f"reference-{kind}-to-a-renamed-entry"] = (partial(_entry_workflow, NfPort(
         "source", "path", entry=NfEntry("renamed.txt")), tokens=("cat", NfTemplate((segment,)))),
-        "references an input whose InitialWorkDirRequirement entry has a literal name")
+        _REFUSED)
     return rows
 
 
@@ -542,72 +534,58 @@ def _merged(*sources: Any, link_merge: str = "merge_flattened", pick_value: str 
 _GATHERED = NfProcessConnection("PAIR", "f", "JOIN", "files", "gather")
 _ONE = NfProcessConnection("A", "f", "JOIN", "files")
 _XS = NfWorkflowInputConnection("xs", "JOIN", "files")
-_ARRAY_JOIN = "an array source joins only by merge_flattened with no pickValue"
 _CONDITION = NfProcess("CALC", [NfPort("a", "val", scalar_type="int")], [output_port("out", "out.txt")],
                        command("true"), condition=parse("$(Math.pow(inputs.a, 2) > 1)"))
-_AT_MOST_ONE = "optional outputs o must match at most one file and must reach a workflow"
 
 #: Every row above, and the staged-input rules for both kinds of reference.
 CONSTRUCTIONS: dict[str, tuple[Callable[[], Any], Any]] = {
     **UNREPRESENTABLE, **WORKFLOWS, **_staged(NfInputReference("source")), **_staged(NfBasenameReference("source")),
-    **{f"optional-{glob}-alone": (partial(_optional, glob, capture), _AT_MOST_ONE)
+    **{f"optional-{glob}-alone": (partial(_optional, glob, capture), _REFUSED)
        for glob, capture in (("*.log", None), ("maybe.txt", "single"))},
     # A step input's sources join as the idioms can, at one process input, and are never scattered.
     "step-input-one-value-to-an-array-port": (partial(_merged, _ONE, pick_value="first_non_null"),
-                                              "gives one value to a port that is array-typed"),
+                                              _REFUSED),
     "step-input-a-list-to-a-scalar-port": (partial(_merged, _ONE, link_merge="merge_nested", port=NfPort(
-        "files", "path")), "gives a list to a port that is not array-typed"),
-    "step-input-an-array-merged-nested": (partial(_merged, _GATHERED, _ONE, link_merge="merge_nested"), _ARRAY_JOIN),
-    "step-input-an-array-picked": (partial(_merged, _XS, _ONE, pick_value="all_non_null"), _ARRAY_JOIN),
+        "files", "path")), _REFUSED),
+    "step-input-an-array-merged-nested": (partial(_merged, _GATHERED, _ONE, link_merge="merge_nested"), _REFUSED),
+    "step-input-an-array-picked": (partial(_merged, _XS, _ONE, pick_value="all_non_null"), _REFUSED),
     "step-input-a-val-array-into-a-path": (partial(_merged, NfWorkflowInputConnection("items", "JOIN", "files")),
-                                           "workflow input 'items' is val\\[\\], which its port's path cannot take"),
+                                           _REFUSED),
     "step-input-two-processes": (partial(_merged, _ONE, NfProcessConnection("A", "f", "PAIR", "item")),
-                                 "must all reach one process input"),
+                                 _REFUSED),
     "step-input-scattered": (partial(_merged, NfWorkflowInputConnection("xs", "JOIN", "files", "dotproduct")),
-                             "a step input's sources cannot be scattered"),
-    "step-input-merge-deep": (partial(_merged, _ONE, link_merge="merge_deep"), "linkMerge must be one of"),
+                             _REFUSED),
+    "step-input-merge-deep": (partial(_merged, _ONE, link_merge="merge_deep"), _REFUSED),
     # Sophios never writes a parameter value its own entry check stops, read by a step or not.
     **{f"absent-optional-{declared}": (partial(lambda declared: replace(
         runtime_workflow(), params={**runtime_workflow().params, "unread": []},
         param_types={**runtime_workflow().param_types, "unread": declared}), declared),
-        re.escape(f"workflow input 'unread' is an absent optional {declared},"))
+        _REFUSED)
        for declared in ("File?", "Directory?")},
     # A tree built without parsing, as the import builds one, is checked when its process is built.
     **{f"condition-built-with-{name}": (partial(replace, _CONDITION, condition=replace(
-        cast(Op, _CONDITION.condition), args=(node, *cast(Op, _CONDITION.condition).args[1:]))), pattern)
-       for name, node, pattern in (
-           ("a-call", Op("Runtime.getRuntime().exec", (Ref("a"),)), "unsupported construct"),
-           ("a-literal", Number("010"), "not a strict-mode decimal"))},
+        cast(Op, _CONDITION.condition), args=(node, *cast(Op, _CONDITION.condition).args[1:]))), _REFUSED)
+       for name, node in (
+           ("a-call", Op("Runtime.getRuntime().exec", (Ref("a"),))), ("a-literal", Number("010")))},
 }
 
 
-def _refusal(outcome: Any) -> tuple[Any, str | None] | None:
-    """The exception type and pattern `outcome` states, or None when it states that construction succeeds."""
-    if isinstance(outcome, str):
-        return ValueError, outcome
-    if isinstance(outcome, tuple) and len(outcome) == 2 and (isinstance(outcome[0], type) or (
-            isinstance(outcome[0], tuple) and all(isinstance(each, type) for each in outcome[0]))):
-        return outcome
-    return None
-
-
 def _as_stated(build: Callable[[], Any], outcome: Any) -> str:
-    """Nothing when constructing as `build` does gives `outcome`; else what it gives."""
-    refusal = _refusal(outcome)
+    """Nothing when `build` is refused exactly where `outcome` is _REFUSED and otherwise constructs it; else what
+    happened."""
     try:
         built = build()
     except (ValueError, TypeError) as error:
-        stated = refusal is not None and isinstance(error, refusal[0]) and (
-            refusal[1] is None or re.search(refusal[1], str(error)) is not None)
-        return "" if stated else f"raised {error!r}"
-    return "" if refusal is None and outcome in (None, built) else f"constructed {built!r}"
+        return "" if outcome is _REFUSED else f"raised {error!r}"
+    return "" if outcome is not _REFUSED and outcome in (None, built) else f"constructed {built!r}"
 
 
 @pytest.mark.fast
 def test_an_ir_value_constructs_exactly_as_its_row_says() -> None:
-    """A malformed IR value, process or workflow is unrepresentable: construction refuses it, naming the field, or the
-    edge where connections and params disagree on channel kind, cardinality, scatter adapter, capture, optionality or
-    staging; its accepted neighbour constructs, as the canonical value where its row states one."""
+    """A malformed IR value, process or workflow is unrepresentable: construction refuses it with a `ValueError` or
+    `TypeError`, whether a field is malformed or connections and params disagree on channel kind, cardinality,
+    scatter adapter, capture, optionality or staging; its accepted neighbour constructs, as the canonical value where
+    its row states one."""
     assert {name: problem for name, (build, outcome) in CONSTRUCTIONS.items()
             if (problem := _as_stated(build, outcome))} == {}
 

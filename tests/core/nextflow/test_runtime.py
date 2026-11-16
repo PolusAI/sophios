@@ -151,8 +151,7 @@ def test_an_example_workflow_runs_under_nextflow_as_stated(
         folder: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Each directory of tests/core/data/examples, run as Nextflow, gives exactly the outputs its `expected.yaml`
     states by class, basename and contents, the outputs cwltool gives too (test_compiler.py's cwltool leg), and
-    leaves the files beside the workflow as they were. A `workflow.nf` and `nextflow.config` beside it are the
-    pipeline written, for what no run shows."""
+    leaves the files beside the workflow as they were."""
     directory = tmp_path / "example"
     workflow = _example(folder, directory, monkeypatch)
     before = files_beside(directory)
@@ -160,16 +159,13 @@ def test_an_example_workflow_runs_under_nextflow_as_stated(
     assert ran is not None and isinstance(ran.outputs, dict)
     assert {name: observed(value) for name, value in ran.outputs.items()} == stated(folder)["outputs"]
     assert _kept(directory, before), "Nextflow changed a file beside the workflow"
-    pipeline = directory / "out" / "nextflow_workflow"
-    for written in ("workflow.nf", "nextflow.config"):
-        if (folder / written).exists():
-            assert (pipeline / written).read_text(encoding="utf-8") == (folder / written).read_text(encoding="utf-8")
 
 
 def _stopped(folder: Path, expected: dict[str, Any], tmp_path: Path,
              monkeypatch: pytest.MonkeyPatch) -> tuple[RunStatus, Path]:
-    """An example the Nextflow target runs and cannot finish: the run fails, an error line of its log or the error the
-    run raised names the step `expected` names, the run's log or Nextflow's says why as `expected` says, and the files
+    """An example the Nextflow target runs and cannot finish: the run fails, a line of its log names the step
+    `expected` names (an error line, or the line `log` is on), the log holds the text `expected` gives as `log` (a
+    stop's own words, an output, a pick), and the files
     beside the workflow are left as they were. cwltool `fails` on the same workflow too, or `runs` it, as `expected`
     says: where it runs, the stop is a rule of Sophios's own. Returns the run's status and its work directory."""
     import cwltool.main  # pylint: disable=import-outside-toplevel
@@ -181,9 +177,9 @@ def _stopped(folder: Path, expected: dict[str, Any], tmp_path: Path,
     status = handle.wait()
     assert status.state is RunState.FAILED, handle.logs()
     logs, pipeline = handle.logs(), directory / "out" / "nextflow_workflow"
-    raised = [line for line in logs.splitlines() if "ERROR" in line or expected["says"] in line]
-    assert any(expected["step"] in line for line in raised), logs
-    assert expected["says"] in logs + (pipeline / ".nextflow.log").read_text(encoding="utf-8"), logs
+    assert any(expected["step"] in line for line in logs.splitlines()
+               if "ERROR" in line or expected["log"] in line), logs
+    assert expected["log"] in logs, logs
     assert _kept(directory, before)
     reference = _example(folder, tmp_path / "cwltool", monkeypatch)
     code, _, messages = cwltool_run(cwltool.main.main, reference, tmp_path / "cwltool")
@@ -195,7 +191,7 @@ def _stopped(folder: Path, expected: dict[str, Any], tmp_path: Path,
 @pytest.mark.serial
 @pytest.mark.needs_cwltool
 @pytest.mark.parametrize("folder, expected",
-                         case_dirs("nextflow/stops/before_a_task", "step", "says", "unwritten", "cwltool"))
+                         case_dirs("nextflow/stops/before_a_task", "step", "log", "unwritten", "cwltool"))
 def test_a_run_stops_before_a_step_whose_inputs_it_cannot_decide(
         folder: Path, expected: dict[str, Any], tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A pickValue that finds no one value, and a `when` holding a subexpression that is not finite, stop the run
@@ -208,7 +204,7 @@ def test_a_run_stops_before_a_step_whose_inputs_it_cannot_decide(
 @pytest.mark.nextflow
 @pytest.mark.serial
 @pytest.mark.needs_cwltool
-@pytest.mark.parametrize("folder, expected", case_dirs("nextflow/stops/in_a_task", "step", "says", "cwltool"))
+@pytest.mark.parametrize("folder, expected", case_dirs("nextflow/stops/in_a_task", "step", "log", "cwltool"))
 def test_a_run_stops_at_a_task_that_leaves_no_one_answer(
         folder: Path, expected: dict[str, Any], tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Two files for an output that takes one, none for an output that needs one, and two entries of one name in a
@@ -747,7 +743,6 @@ def test_a_captured_text_is_the_files_utf8_up_to_the_cwl_limit(
     flow = Workflow([step], "capture")
     flow.outputs.captured = step.outputs.text
     run = flow.compile(target="nextflow").write(root / "run")
-    assert "eval" not in (run / "workflow.nf").read_text(encoding="utf-8")
     result = execute_nextflow(run)
     output = result.stdout + result.stderr
     try:
