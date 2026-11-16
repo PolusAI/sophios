@@ -48,8 +48,8 @@ _SHAPE_SCHEMA: Final[Mapping[Shape, Callable[[], JsonSchema]]] = MappingProxyTyp
     Shape.SIDECAR_STEPS: lambda: {
         'description': 'Per-step metadata, keyed "(index, name)" or by a unique step id.',
         'type': 'object',
-        'patternProperties': {Grammar.WIC_STEP_KEY_PATTERN: {'$ref': '#/$defs/wicStepEntry'},
-                              Grammar.WIC_STEP_ID_PATTERN: {'$ref': '#/$defs/wicStepEntry'}},
+        'patternProperties': {Grammar.WIC_STEP_KEY.pattern: {'$ref': '#/$defs/wicStepEntry'},
+                              Grammar.WIC_STEP_ID.pattern: {'$ref': '#/$defs/wicStepEntry'}},
         'additionalProperties': False,
     },
     #: Structure only; a field's own constraints (e.g. non-empty step id)

@@ -130,13 +130,8 @@ class Grammar:  # pylint: disable=too-few-public-methods  # a namespace, not a t
     #: `wic:` sidecar step keys have the surface form "(1, step_name)".
     WIC_STEP_KEY: Final = re.compile(r'^\(\s*(\d+)\s*,\s*(.+?)\s*\)$')
 
-    #: The same rule as a string, for consumers that need to state it rather
-    #: than apply it — the exported JSON Schema, principally.
-    WIC_STEP_KEY_PATTERN: Final = WIC_STEP_KEY.pattern
-
     #: The other spelling: a bare step id, for a step whose id is unique.
     WIC_STEP_ID: Final = re.compile(r'^[A-Za-z0-9_.-]+$')
-    WIC_STEP_ID_PATTERN: Final = WIC_STEP_ID.pattern
 
     # No SCALAR_TAGS table here: scalar resolution is delegated to PyYAML's
     # SafeConstructor (see _resolved_scalar) to avoid diverging from it.

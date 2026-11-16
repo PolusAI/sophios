@@ -10,6 +10,7 @@ from hypothesis import strategies as st
 
 from sophios.api.python.workflow import _python_api_types_match
 from sophios.lang.compatibility import TypeRelation, reference_relation
+from sophios.lang.cwl import ATOMIC_TYPES
 from sophios.lang.diagnostics import SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
 from sophios.wic_types import StepId, Tool, Tools, Yaml
@@ -57,7 +58,7 @@ _CASES: Final = (
 )
 
 
-_ATOMS: Final = ('null', 'boolean', 'int', 'long', 'float', 'double', 'string', 'File', 'Directory', 'Any')
+_ATOMS: Final = (*sorted(ATOMIC_TYPES), 'Any')
 #: Declarations as a tool may write them: atoms, `Any`, unions and arrays, the `?` and `[]` shorthands, and what the
 #: judge must survive without knowing: a record, an enum, a named schema, a malformed array, nothing.
 _DECLARATIONS: Final = cwl_types(
