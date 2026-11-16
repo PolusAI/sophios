@@ -31,6 +31,19 @@ states what each owes the other and how that is checked. The `.wic`
 extension, the `wic:` block, the `wic_*` desugared keys and the `wic0NN`
 codes are concrete syntax that workflows depend on.
 
+## Sophios semantics
+
+A workflow document means a Sophios workflow graph: its steps, the tools they
+run, the edges between them (written or inferred), their types, scatter,
+conditions and run policy, after composition, naming and inference. Every
+target is a lowering of that graph: CWL, Nextflow and any later one. Where
+Sophios takes a construct from CWL (a tool's command line, scatter, `when`,
+expressions), it means what CWL v1.2 says, with cwltool as the reference, so
+every target is checked against one oracle. What is Sophios's own (inference,
+composition, names, run policy) is decided in the graph, before any target
+sees it. A workflow imported from another language is translated into this
+graph through the same front door; it is never another surface.
+
 ## 1. What Sophios does with CWL
 
 Sophios is a leaky abstraction over CWL, deliberately. The document is
@@ -52,88 +65,10 @@ declared in one place, `sophios.lang.SUPPORT_MATRIX`
 
 `support.py` is the source and `tests/core/test_support_matrix.py` the
 check: it reads the fields of each class from `cwl_utils.parser.cwl_v1_2`,
-so a field the schema has and the matrix lacks fails the build. Where the
-tables below and `support.py` disagree, `support.py` wins. A test named
-without a file is in `tests/core/test_leak_boundary.py`. A field outside these five classes on a
+so a field the schema has and the matrix lacks fails the build. The field-by-field
+support is rendered in the "Sophios" column of [Nextflow](../nextflow.md). A field outside these five classes on a
 step's tool is passthrough wholesale: Sophios does not classify
 `CommandLineTool` fields.
-
-**`Workflow`**
-
-| Field | Support | Note | Pinned by |
-|---|---|---|---|
-| `class` | native | written by the compiler | `tests/core/data/compiler/boundary` |
-| `cwlVersion` | native | written; `wic035` for an unrunnable value | `tests/core/data/compiler/boundary` |
-| `doc` | passthrough | | `test_leak_boundary.py` |
-| `hints` | passthrough | | `test_leak_boundary.py` |
-| `id` | passthrough | | `test_leak_boundary.py` |
-| `inputs` | native | merged into; the compiler wins on a collision | `tests/core/data/compiler/boundary` |
-| `intent` | passthrough | | `test_leak_boundary.py` |
-| `label` | passthrough | | `test_leak_boundary.py` |
-| `outputs` | native | read: `outputSource` is resolved; merged into | `tests/core/data/compiler/boundary` |
-| `requirements` | native | merged into | `test_user_requirements_are_merged_into_not_copied` |
-| `steps` | native | | `test_a_well_formed_document_is_read_whole` (`test_lang_parser.py`) |
-
-**`WorkflowStep`**
-
-| Field | Support | Note | Pinned by |
-|---|---|---|---|
-| `doc` | passthrough | | `test_leak_boundary.py` |
-| `hints` | passthrough | | `test_leak_boundary.py` |
-| `id` | native | `[A-Za-z0-9_-][A-Za-z0-9_.-]*`, else `wic045`, as for workflow input and output names and the root's name | `test_a_well_formed_document_is_read_whole` (`test_lang_parser.py`), `test_a_step_id_outside_the_allowed_characters_is_refused_at_its_line` (`test_diagnostics.py`) |
-| `in` | native | | `test_a_well_formed_document_is_read_whole` (`test_lang_parser.py`) |
-| `label` | passthrough | | `test_leak_boundary.py` |
-| `out` | native | | `test_a_construct_reads_alike_in_either_spelling_and_position` (`test_lang_parser.py`) |
-| `requirements` | passthrough | | `test_leak_boundary.py` |
-| `run` | native | a registry stem, a path relative to the document, or an inline body | `tests/core/data/run_paths` (`test_frontdoor.py`) |
-| `scatter` | native | | `test_leak_boundary.py` |
-| `scatterMethod` | native | | `test_leak_boundary.py` |
-| `when` | native | | `test_leak_boundary.py` |
-
-**`WorkflowStepInput`** (an entry of a step's `in:`)
-
-| Field | Support | Note | Pinned by |
-|---|---|---|---|
-| `id` | native | the `in:` key | `test_a_document_reads_as_its_family_states` (`test_lang_parser.py`) |
-| `source` | native | `!*`, a bare workflow-input name, or a list of them inside `!cwl {source: [...]}` | `test_a_document_reads_as_its_family_states` (`test_lang_parser.py`) |
-| `default` | native | through `!cwl {...}`; a relative File or Directory `location`/`path` is written absolute against the `.wic`'s directory | `test_a_cwl_record_emits_the_fields_it_carries` (`test_emit.py`), `test_a_wic_file_default_is_written_absolute_against_the_wic` (`test_wic_defaults.py`) |
-| `label` | native | through `!cwl {...}` | `test_a_cwl_record_emits_the_fields_it_carries` (`test_emit.py`) |
-| `linkMerge` | native | through `!cwl {...}` | `test_a_cwl_record_emits_the_fields_it_carries` (`test_emit.py`) |
-| `loadContents` | native | through `!cwl {...}` | `test_a_cwl_record_emits_the_fields_it_carries` (`test_emit.py`) |
-| `loadListing` | native | through `!cwl {...}` | `test_a_cwl_record_emits_the_fields_it_carries` (`test_emit.py`) |
-| `pickValue` | native | through `!cwl {...}` | `test_a_cwl_record_emits_the_fields_it_carries` (`test_emit.py`) |
-| `valueFrom` | native | through `!cwl {...}` | `test_a_cwl_record_emits_the_fields_it_carries` (`test_emit.py`) |
-
-**`WorkflowOutputParameter`** (an entry of the workflow's `outputs:`)
-
-| Field | Support | Note | Pinned by |
-|---|---|---|---|
-| `id` | native | | `tests/core/data/compiler/boundary` |
-| `type` | native | | `tests/core/data/compiler/sources` |
-| `outputSource` | native | one step/port reference; a list is `wic038` | `test_leak_boundary.py` |
-| `format` | passthrough | | `tests/core/data/compiler/boundary` |
-| `doc` | passthrough | | `tests/core/data/compiler/boundary` |
-| `label` | passthrough | | `tests/core/data/compiler/boundary` |
-| `secondaryFiles` | passthrough | | `test_emit.py` |
-| `streamable` | passthrough | | `test_emit.py` |
-| `linkMerge` | rejected | `wic038` | `tests/core/data/lower` |
-| `pickValue` | rejected | `wic038` | `tests/core/data/lower` |
-
-**`WorkflowInputParameter`** (an entry of the workflow's `inputs:`)
-
-| Field | Support | Note | Pinned by |
-|---|---|---|---|
-| `id` | native | | `tests/core/data/compiler/boundary` |
-| `type` | native | read for the reference judgment | `tests/core/data/compiler/refused` |
-| `format` | native | read by inference | `tests/core/data/compiler/boundary` |
-| `default` | passthrough | a relative File or Directory `location`/`path` is written absolute against the `.wic`'s directory | `tests/core/data/compiler/boundary`, `test_a_wic_file_default_is_written_absolute_against_the_wic` (`test_wic_defaults.py`) |
-| `doc` | passthrough | | `tests/core/data/compiler/boundary` |
-| `label` | passthrough | | `tests/core/data/compiler/boundary` |
-| `inputBinding` | passthrough | | `tests/core/data/compiler/boundary` |
-| `loadContents` | passthrough | | `test_emit.py` |
-| `loadListing` | passthrough | | `test_emit.py` |
-| `secondaryFiles` | passthrough | | `test_emit.py` |
-| `streamable` | passthrough | | `test_emit.py` |
 
 ### 1.1 The native rows of `Workflow`
 
@@ -347,70 +282,20 @@ An unknown version is `wic017`; pins that disagree within one compilation are
 
 Codes are contract: a caller matches on `SophiosErrorCode`, suppresses a
 code, or reads it out of a log, while message wording is free to improve. The
-enum is `sophios.lang.error_codes.SophiosErrorCode`, in two ranges: `wic0NN`
-for a document, or for what running it needs from the machine (kind
-`machine`: `wic015`, `wic016`, `wic021`, `wic029`, `wic037`), and `api0NN`
-for the Python API, where the document is fine and the call was not. A code
+enum is `sophios.lang.error_codes.SophiosErrorCode`, in three ranges: `wic0NN` for a
+document, or for what running it needs from the machine; `api0NN` for the Python
+API, where the document is fine and the call was not; and `nf-sNNN` for Nextflow
+support, where the workflow is fine and the target cannot run it yet. A code
 is never renumbered, and a code that shipped in a release is never reused;
 `wic040`, `wic041` and `wic042` are unassigned. `wic043` is a note, an
 error under `--inference_strict`.
 
-Every member is provoked, in one of two ways: a document under
-`tests/core/data/parse` reports it (`data/parse`), or a callable in
-`tests/core/provocations.py` that drives the compiler or its helpers raises it
-(`COMPILED`). `tests/core/test_lang_parser.py` fails for a member neither
-provokes, so a new code lands with its provocation in the same commit.
+Every member is provoked: a fixture case under `tests/core/data` states it and
+its test compares codes exactly, or, for a code no fixture states, a callable in
+`tests/core/provocations.py` raises it. `tests/core/test_lang_parser.py` fails
+for a member nothing provokes, so a new code lands with its provocation in the
+same commit.
 Every member has an `Explanation` in `EXPLANATIONS` (kind, meaning, fix);
 `tests/core/test_diagnostics.py` fails for one without, and keeps
 `sophios --explain` equal to it; the [error codes page](../error_codes.md)
 is built from it.
-
-| Code | Member | Provoked in |
-|---|---|---|
-| `wic001` | `INVALID_YAML` | `data/parse` |
-| `wic002` | `NOT_A_MAPPING` | `data/parse` |
-| `wic003` | `EXPECTED_MAPPING` | `data/parse` |
-| `wic004` | `EXPECTED_SEQUENCE` | `data/parse` |
-| `wic005` | `EXPECTED_SCALAR` | `data/parse` |
-| `wic006` | `MISSING_STEP_ID` | `data/parse` |
-| `wic007` | `EMPTY_STEP_ID` | `data/parse` |
-| `wic008` | `MALFORMED_WIC_STEP_KEY` | `data/parse` |
-| `wic009` | `UNKNOWN_TAG` | `data/parse` |
-| `wic010` | `DUPLICATE_KEY` | `data/parse` |
-| `wic011` | `UNRESOLVED_INPUT` | `COMPILED` |
-| `wic012` | `MISSING_REQUIRED_INPUT` | `COMPILED` |
-| `wic013` | `SUBWORKFLOW_INVALID` | `COMPILED` |
-| `wic014` | `SCRIPT_ARGUMENT_MISMATCH` | `COMPILED` |
-| `wic015` | `CONTAINER_ENGINE_UNAVAILABLE` | `COMPILED` |
-| `wic016` | `MISSING_INPUT_FILE` | `COMPILED` |
-| `wic017` | `UNKNOWN_LANG_VERSION` | `COMPILED` |
-| `wic018` | `LANG_VERSION_CONFLICT` | `COMPILED` |
-| `wic019` | `MISPLACED_EDGE_DEF` | `data/parse` |
-| `wic020` | `LITERAL_TYPE_MISMATCH` | `COMPILED` |
-| `wic021` | `DIRECTORY_NOT_WRITABLE` | `COMPILED` |
-| `wic022` | `FIXED_POINT_NOT_REACHED` | `COMPILED` |
-| `wic023` | `INCOMPATIBLE_INPUT_REFERENCE` | `COMPILED` |
-| `wic024` | `RESERVED_KEY` | `data/parse` |
-| `wic025` | `UNDEFINED_EDGE` | `COMPILED` |
-| `wic026` | `DUPLICATE_EDGE_DEF` | `COMPILED` |
-| `wic027` | `EMPTY_NAME` | `COMPILED` |
-| `wic028` | `UNDECLARED_PORT` | `COMPILED` |
-| `wic029` | `PROGRAM_MISSING` | `COMPILED` |
-| `wic030` | `RECURSIVE_ALIAS` | `data/parse` |
-| `wic031` | `DUPLICATE_DOCUMENT_NAME` | `COMPILED` |
-| `wic032` | `UNKNOWN_SCATTER_PORT` | `COMPILED` |
-| `wic033` | `UNKNOWN_WIC_KEY` | `data/parse` |
-| `wic034` | `MALFORMED_WIC_VALUE` | `data/parse` |
-| `wic035` | `UNSUPPORTED_CWL_VERSION` | `data/parse` |
-| `wic036` | `UNTYPED_OUTPUT` | `COMPILED` |
-| `wic037` | `IMAGE_UNAVAILABLE` | `COMPILED` |
-| `wic038` | `STEP_INPUT_RECORD` | `data/parse` |
-| `wic039` | `POSITIONAL_OUTPUT_SOURCE` | `COMPILED` |
-| `wic043` | `INFERENCE_GUESS` | `COMPILED` |
-| `wic044` | `REALTIME_DECLARATION` | `COMPILED` |
-| `api001` | `INVALID_INPUT_VALUE` | `COMPILED` |
-| `api002` | `INVALID_STEP` | `COMPILED` |
-| `api003` | `INVALID_LINK` | `COMPILED` |
-| `api004` | `INVALID_TOOL` | `COMPILED` |
-| `api005` | `WORKFLOW_RUN_FAILED` | `COMPILED` |
-| `api006` | `NO_PYTHON_SPELLING` | `COMPILED` |

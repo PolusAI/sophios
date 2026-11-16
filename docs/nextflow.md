@@ -1,13 +1,15 @@
 # Nextflow DSL2 target
 
 Sophios can compile supported workflows to a validated Nextflow intermediate
-representation and deterministic DSL2 artifacts. CWL remains the canonical
-compiler representation; the Nextflow target converts the compiler's
-already-inferred workflow graph without running inference a second time.
+representation and deterministic DSL2 artifacts. Like CWL, the Nextflow target
+lowers the one compiled graph and its resolved view
+([architecture](dev/architecture.md)), without running inference a second time.
 
 The target fails closed: a CWL field, type, requirement or hint it does not
 consume is rejected by name, before any artifact is written, never dropped.
-[Field support](#field-support) lists what it does with each one.
+[Field support](#field-support) lists what it does with each one; every
+construct it cannot run yet has an `nf-sNNN` code, which the
+[error codes](error_codes.md) list and `sophios --explain` prints.
 `target="nextflow"` accepts no user-written Groovy; every string you write is
 rendered as data.
 
@@ -300,11 +302,12 @@ from. What the compile does not keep does not come back:
   the spelling of a `when`; adjacent `shellQuote: false` texts, read as one;
   and a tool's input order.
 
-Two facts the workflow needs and that nothing in the rest of the text gives
+Three facts the workflow needs and that nothing in the rest of the text gives
 ride in each process's `ext` directive, which no generated script reads: a
 `cwltool:CUDARequirement`'s `cudaVersionMin` and `cudaComputeCapability`
-([GPUs](#gpus)), and which outputs are a `Directory`
-([Output cardinality](#output-cardinality)).
+([GPUs](#gpus)), which outputs are a `Directory`
+([Output cardinality](#output-cardinality)), and which inputs only the step's
+`when` or `scatter` reads ([Conditional steps](#conditional-steps)).
 
 ## Boolean flags
 
@@ -420,10 +423,8 @@ followed by each element as its own argument, and contributes nothing at all
 when the array is empty. An empty array is a present, valid value — distinct
 from an absent optional value above.
 
-`itemSeparator`, `separate: false`, and `valueFrom` on an array binding are
-not supported, nor are nested arrays, a per-item `inputBinding`, or array-typed
-outputs. A binding on a `boolean` array is rejected: CWL adds only its prefix,
-when the array is not empty, and never an item's `true` or `false`.
+A binding on a `boolean` array is rejected: CWL adds only its prefix, when the
+array is not empty, and never an item's `true` or `false`.
 
 ## Shell mode
 
@@ -470,9 +471,7 @@ A value is literal text, or exactly `$(inputs.<name>)` of a `string` input.
 The task exports each variable, its value shell-quoted, before the command
 runs, so the command sees the value byte for byte. In literal text a `$` that
 is not followed by `(` or `{` is plain text. A referenced optional input
-needs a value. Any other value is rejected by name: a reference to an input
-of another type, `.path` or `.basename`, a reference inside other text, or any
-other expression. So is a name that is not a shell variable name.
+needs a value. Any other value is rejected by name.
 
 ## Containers
 
@@ -499,10 +498,9 @@ no arguments, so the image runs its `CMD`; name the program in `baseCommand`.
 `accelerator` directive. The count is `cudaDeviceCountMin`, else
 `cudaDeviceCountMax`, else 1, the count cwltool asks for. A count is a whole
 number; an expression is rejected. `cudaVersionMin` and
-`cudaComputeCapability` have no Nextflow counterpart: the process carries
-each one present, as written, in its `ext` directive, which no generated
-script reads. The generated pipeline does not check them, and compiling
-reports each one with the note [`wic046`](error_codes.md). The command line prints the note with the other
+`cudaComputeCapability` have no Nextflow counterpart: the pipeline does not
+check them, and compiling reports each one with the note
+[`wic046`](error_codes.md). The command line prints the note with the other
 diagnostics. In Python, `compile(target="nextflow")` prints it on stderr, in the
 same words, and keeps it in `diagnostics`; a run, `run()`, `start()` or
 `run_async()`, prints it too and keeps it on the result. Where a task runs is
@@ -569,12 +567,7 @@ Such an input cannot also be referenced in that tool's command, stream
 targets, or output globs; the command names the entry by its literal, as
 above.
 
-Rejected: an `entry` that is not a bare reference to one `File` or
-`Directory` input (inline content construction), an `entryname` that is any
-other expression, holds a `/`, or is `.` or `..`, an `entryname` that begins with
-`.sophios_entry_` (the hidden directory's prefix), a `writable` that is not a
-literal boolean, a listing entry naming a `val`-qualifier or array-typed
-input, an input listed twice, and two entries with one literal name. A name
+Any other listing entry is rejected by name. A name
 that collides only when the task runs, such as two entries of inputs with one
 basename, or an entry and a staged input with one basename, stops the task
 with an error naming the entry.
@@ -658,9 +651,7 @@ source. A scattered step may carry a `when`, evaluated per invocation; the
 gathered result keeps `null` at each skipped position, so a conditional
 scatter's outputs can only reach a workflow output. An unscattered step's
 output reaches a scattered step as one value, which every task reads; it is
-not an array to scatter over, since no tool output is an array. Scattering
-over an array-typed port, over a non-array source, and scattering a nested
-workflow step are all rejected.
+not an array to scatter over, since no tool output is an array. Any other scatter is rejected by name.
 
 ## Nested workflows
 
@@ -682,11 +673,8 @@ backend recursively projects the resolved leaf steps as processes, named as
 [Names](#names) says. The generated artifacts are flat; nested DSL2
 `workflow` blocks are not emitted.
 
-The core semantic pipeline rejects invalid boundary declarations, including
-unbound subworkflow inputs and outputs that do not resolve to a child step.
-The backend separately rejects executable semantics that would be lost when a
-resolved boundary is removed. In particular, `scatter` on a subworkflow call
-is not supported. A scattered leaf step *inside* a subworkflow is not a
+The backend rejects executable semantics that would be lost when a resolved
+boundary is removed: `scatter` on a subworkflow call is not supported. A scattered leaf step *inside* a subworkflow is not a
 special case: after projection it follows the scatter rules above.
 
 A tool step inherits the requirements and hints written outside its tool, on
@@ -730,15 +718,9 @@ Every source is one value: a workflow input, a gathered scatter output, or an
 unscattered step's output. Each file of a joined list is staged in its own
 numbered directory, as a gathered file is, so same-named files never collide.
 A `pickValue` gives a value that is not `null`, so a conditional step's output
-may reach any port through one. These are rejected by name: a `default` of a
-`File` or `Directory` input; a `pickValue` on one source with no `linkMerge`; a
-`default` beside a `linkMerge` or a `pickValue`, which never applies; a
-`pickValue` over an array source, since `[]` stands for both `null` and an
-empty array; `merge_nested` over an array source, which would nest arrays; a
-source that may be `null` in a joined list with no `pickValue`; a scattered
-input with any of these fields; and any of them on the input of a nested
-workflow step. `label` is documentation. `valueFrom`, `loadContents` and
-`loadListing` on a step input are rejected.
+may reach any port through one. Any other use of these fields, and `valueFrom`,
+`loadContents` and `loadListing` on a step input, is rejected by name.
+`label` is documentation.
 
 ## Output cardinality
 
@@ -759,11 +741,6 @@ the declaration instead of dropping it, emits a single path, and fails the
 task when nothing matches. A `File` or `Directory` output whose glob is a
 pattern renders `arity: '1'` as well, so several matches fail the task as
 they fail in cwltool.
-
-A `path` output declares no kind, and Nextflow does not check `type: 'dir'`
-for a literal output name, so a process names its `Directory` outputs in its
-`ext` directive instead, `ext Directory: ['<name>']`, which no generated
-script reads.
 
 An optional `File?` or `Directory?` output renders `optional: true`; when
 nothing matches, a workflow output reports `null`, carried by the `[]`
@@ -820,13 +797,10 @@ from the task work directory, so the pinned CWL v1.2 semantics hold exactly:
 - The bytes are decoded as UTF-8 **strictly**: malformed input fails the task
   instead of becoming U+FFFD.
 
-`type: int` and `type: float` are rejected: parsing text into a number is
-computation, not a projection. Declare `type: string` and parse downstream.
+`type: int` and `type: float` are rejected: declare `type: string` and parse downstream.
 
 A captured value's only supported sink is a workflow output. Feeding one into
-another process is rejected, because every process output before this one
-carried the `path` qualifier and the executable graph has no qualifier
-agreement check for process edges yet.
+another process is rejected.
 
 ## Conditional steps
 
@@ -864,12 +838,7 @@ skipped upstream step, as in CWL.
 That possibly-null value is admitted only where the sentinel is sound: at a
 workflow output (which reports `null`), or at an optional `val` input of a
 later step whose use the absent-optional lowering already admits (never
-referenced, or referenced only as a boolean flag or by its own binding). Every other consumer is
-rejected by name — a non-optional port, a `path` consumer, an array-typed
-port, or an array-typed output of a conditional step outside scatter.
-
-`when` on a step whose `run` is a workflow is rejected, since skipping an
-inlined sub-DAG is not this lowering's single-process shape.
+referenced, or referenced only as a boolean flag or by its own binding). Every other consumer is rejected by name.
 
 CWL lets a step bind an input its tool does not declare: the tool never
 receives it, but the step's `when` reads it, and the step starts only once
@@ -877,9 +846,7 @@ its sources have values. The process carries such an input as a `val` input
 after the tool's own, which the command never reads and the call passes as
 it passes every other input, so a `when` reads it and the task waits for it;
 a `val` stages nothing, so an input fed by a `File` output only orders the
-tasks. The process's `ext` directive names these inputs,
-`ext WorkflowStepInput: ['enabled']`, so the import binds each one again as a
-`StepInput`. One fed only by workflow inputs, through every nested workflow,
+tasks. One fed only by workflow inputs, through every nested workflow,
 that neither the step's `when` nor its `scatter` reads changes nothing the
 step runs, and the target leaves it out. A `scatter` over one is rejected,
 since no process input receives the element. A conditional step's process
@@ -908,12 +875,6 @@ itself, not through Sophios, so before each run it makes the output
 directories the image-workflows tools write into (see Staging with
 InitialWorkDirRequirement): an empty directory for every `Directory` input
 given as a bare name that names nothing yet.
-
-## Current limits
-
-Every construct the target cannot run yet has an `nf-sNNN` code: the
-[error codes](error_codes.md) list them all, and `sophios --explain` prints
-one. When the target learns a construct, its code is retired.
 
 ## Field support
 

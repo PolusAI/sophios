@@ -634,15 +634,8 @@ step's input is not one of them. `scatterMethod` is one of `dotproduct`,
 A scatter runs one step once per element of a list, where a script would
 use a loop, and keeps the workflow a graph without cycles:
 
-```yaml
-steps:
-  echo_3:
-    scatter: [message1, message2]
-    scatterMethod: flat_crossproduct
-    in:
-      message1: !ii [Hello, Goodbye]
-      message2: !ii [sun, moon]
-      message3: !ii and stars
+```{literalinclude} cookbook/scatter.wic
+:language: yaml
 ```
 
 | Code | When | Fix |
