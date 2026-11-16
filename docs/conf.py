@@ -118,7 +118,8 @@ html_static_path = ['_static']
 
 # -- Tables rendered from the code -------------------------------------------
 # docs/nextflow.md shows src/sophios/nf_support.py's table and docs/error_codes.md the catalog of
-# src/sophios/lang/error_codes.py, each where the page holds its marker (`_RENDERED`).
+# src/sophios/lang/error_codes.py and docs/cli-reference.md the flags of src/sophios/cli.py, each where the page
+# holds its marker (`_RENDERED`).
 
 # Where a class's fields are written, for a class whose name does not say.
 _NF_SUPPORT_PLACES = {
@@ -200,10 +201,37 @@ def error_code_markdown() -> str:
         for code, explanation in EXPLANATIONS.items()])) + '\n'
 
 
+def cli_flag_markdown() -> str:
+    """One table per argument group of the `sophios` command's parser, in the parser's order."""
+    from sophios.cli import neutral, parser, target_options  # pylint: disable=import-outside-toplevel
+
+    def default(action: Any) -> str:
+        value = action.default
+        if action.nargs == 0:
+            return 'off'
+        if value in ('', None):
+            return ''
+        if value == str(Path.home()):
+            return 'your home directory'
+        if value == sys.maxsize:
+            return 'unlimited'
+        return f"`{' '.join(map(str, value)) if isinstance(value, list) else value}`"
+
+    lines: list[str] = []
+    for group in (neutral, *target_options.values()):
+        if group._group_actions:  # pylint: disable=protected-access
+            lines += ['', f'### {group.title}', '', *_table('Flag | Default | Effect', [
+                (f'`{parser._get_formatter()._format_action_invocation(action)}`',  # pylint: disable=protected-access
+                 default(action), ' '.join((action.help or '').split()))
+                for action in group._group_actions])]  # pylint: disable=protected-access
+    return '\n'.join(lines) + '\n'
+
+
 # Per page, the marker it holds and the table Sphinx renders there from the code.
 _RENDERED = {
     'nextflow': ('<!-- nf-support-table -->', nf_support_markdown),
     'error_codes': ('<!-- error-code-table -->', error_code_markdown),
+    'cli-reference': ('<!-- cli-flag-tables -->', cli_flag_markdown),
 }
 
 
