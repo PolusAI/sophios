@@ -77,7 +77,7 @@ def _compile_wic(root: Path, settings: sophios.compiler.CompileSettings) -> Comp
 
 def _bodies(diagnostics: Any) -> list[str]:
     """Each diagnostic as it is printed, but for the place it points at, which is the surface's own."""
-    return [re.sub(r'^.+?:\d+:\d+: ', '', str(item)) for item in diagnostics]
+    return [str(replace(item, span=None)) for item in diagnostics]
 
 
 def _refusal(error: SophiosError) -> list[dict[str, Any]]:

@@ -76,4 +76,4 @@ def test_the_drawing_is_what_its_example_states(monkeypatch: pytest.MonkeyPatch,
     ranks = [[len(indent), [_unquoted(name) for name in names.split('; ')]]
              for indent, names in re.findall(r'^(\t*)\{rank=same; (.*)\}$', dot, re.MULTILINE)]
     assert 'ranks' not in drawn or ranks == drawn['ranks']
-    assert match({'contains': drawn['said']} if 'said' in drawn else {'re': ''}, capsys.readouterr().err)
+    assert 'said' not in drawn or match({'contains': drawn['said']}, capsys.readouterr().err)
