@@ -52,8 +52,9 @@ dependencies = [
     "docker",
     # FYI also need uidmap to run podman rootless
     "podman",
-    # We are using the official release for these packages for now
-    "toil[cwl]",
+    # Pinned: a Toil release changes how every compiled workflow runs, so
+    # raise this only after the weekly Toil lane passes on the new release.
+    "toil[cwl]==9.5.0",
     "fastapi",
     "uvicorn"
 ]
