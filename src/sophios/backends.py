@@ -30,7 +30,7 @@ from .lang.diagnostics import Diagnostic, SophiosError
 from .nf_reader import read_nextflow
 from .nf_types import ExecutableNextflowWorkflow
 from .runners import RunSettings
-from .runtime_inputs import output_target_inputs
+from .runtime_inputs import directory_literal, output_target_inputs
 from .utils_nf import nextflow_names
 from .wic_types import Json
 
@@ -204,13 +204,17 @@ def _log_lines(log: Path) -> list[str]:
 class _Cwl:  # pylint: disable=too-few-public-methods
     """What every CWL runner shares: the pre-flight checks the machine, `run_setup` writes the files."""
 
+    #: An empty output directory, as this runner takes one in its job.
+    empty_directory = staticmethod(directory_literal)
+
     def prepare(self, lowered: run_setup.Lowered[CompilationArtifact], analyses: tuple[realtime.Analysis, ...],
                 basepath: Path, settings: run_setup.Settings) -> run_setup.Prepared:
         """The workflow and its job under `basepath`, its analyses beside it, and its images pulled.
 
         The artifact written is the model, as the front door rewrote it.
         """
-        return run_setup.prepare(lowered.model, analyses, basepath, settings, output_target_inputs(lowered.view))
+        return run_setup.prepare(lowered.model, analyses, basepath, settings, output_target_inputs(lowered.view),
+                                 empty_directory=self.empty_directory)
 
 
 class CwltoolBackend(_Cwl):
@@ -260,6 +264,13 @@ class CwltoolBackend(_Cwl):
 
 class ToilBackend(_Cwl):
     """Toil's CWL runner, `toil-cwl-runner`."""
+
+    @staticmethod
+    def empty_directory(name: str) -> Json:
+        """An empty directory named `name` in Toil's own form. Toil drops the empty listing of a CWL Directory
+        literal in a step's job, then fails reading it (DataBiosphere/toil#5692)."""
+        from toil.lib.directory import encode_directory  # pylint: disable=import-outside-toplevel
+        return {'class': 'Directory', 'basename': name, 'location': encode_directory({})}
 
     def launch(self, request: RunRequest) -> Launch:
         """`toil-cwl-runner` with a job store per workflow under the base path, then the documents."""
