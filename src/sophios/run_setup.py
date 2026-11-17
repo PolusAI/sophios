@@ -5,13 +5,13 @@ the command line and `Workflow.run()`: bind the job values, write the workflow
 and its real-time analyses, check the machine and pull the images, and name the
 images without entrypoints when asked.
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from collections.abc import Collection
 from typing import Generic, TypeVar
 from pathlib import Path
 import tempfile
 
-from sophios import input_output, post_compile, preflight, realtime
+from sophios import input_output, plugins, preflight, realtime
 from sophios.ir.artifacts import CompilationArtifact
 from sophios.ir.resolved import ResolvedWorkflow
 from sophios.lang.diagnostics import Diagnostic
@@ -111,9 +111,13 @@ def _prepare(artifact: CompilationArtifact, analyses: tuple[realtime.Analysis, .
     if settings.check:
         return Prepared(artifact.name, plans, documents)
     if settings.run.runner.remove_entrypoints:
-        artifact = post_compile.remove_artifact_entrypoints(settings.run.runner.container_engine, artifact)
+        plugins.remove_entrypoints(settings.run.runner.container_engine,
+                                   (artifact, *(analysis.artifact for analysis in analyses)))
+        artifact = plugins.dockerPull_append_noentrypoint_artifact(artifact)
         # The images are built from the ones the pre-flight pulled, so the rewrite is written over the first write.
         input_output.write_artifacts_to_disk(artifact, basepath, settings.run.inputs_file,
                                              output_targets=output_targets)
-        plans = realtime.write(realtime.without_entrypoints(analyses), basepath, artifact.name, settings.root_dir)
+        analyses = tuple(replace(a, artifact=plugins.dockerPull_append_noentrypoint_artifact(a.artifact))
+                         for a in analyses)
+        plans = realtime.write(analyses, basepath, artifact.name, settings.root_dir)
     return Prepared(artifact.name, plans, documents)

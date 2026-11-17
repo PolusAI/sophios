@@ -277,14 +277,14 @@ Python, finds the tools that break that advice. It was built for the
 continuous integration of Sophios's own tool collections, where the same
 tools must run both in their released images and on the host from the
 latest code, and an entrypoint makes the two behave differently. With the
-flag, before a local run, Sophios rebuilds every tagged image on your
-machine, not only the workflow's, as a copy tagged `<tag>-noentrypoint`
+flag, before a local run, Sophios rebuilds each image the workflow's tools
+pull as a copy tagged `<tag>-noentrypoint`
 whose entrypoint is removed, and points the compiled tools at those copies.
 A tool with no `baseCommand` or `arguments` of its own then fails, which is
 what you wanted to find out.
 
-Use it as a diagnostic, never as a way to run workflows. It rebuilds every
-local image on each run, leaves the copies behind, works only with Docker
+Use it as a diagnostic, never as a way to run workflows. It rebuilds the
+workflow's images on each run, leaves the copies behind, works only with Docker
 and Podman, and acts only on a local run. The copies are tagged images, so
 `docker image prune` without `-a` keeps them; to remove them, delete them by
 tag, `docker image rm <image>:<tag>-noentrypoint`. The fix for a tool the

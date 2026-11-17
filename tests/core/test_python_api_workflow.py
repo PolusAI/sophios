@@ -423,8 +423,8 @@ def test_run_writes_what_compile_returns_and_hands_the_runner_its_own_flags(monk
     prepared: list[tuple[list[Path], RunSettings]] = []
     monkeypatch.setattr(python_runtime.preflight, 'ready',
                         lambda documents, settings, jobs=(), **_: prepared.append((documents, settings)))
-    monkeypatch.setattr(sophios.post_compile.docker, 'from_env',
-                        lambda: SimpleNamespace(images=SimpleNamespace(list=lambda: [])))
+    monkeypatch.setattr(sophios.plugins.docker, 'from_env',
+                        lambda: SimpleNamespace(images=SimpleNamespace(build=lambda **_: None)))
     for quiet in (True, False):
         workflow.run(basepath='base', runner=Cwltool(remove_entrypoints=True), generate_run_script=True, quiet=quiet)
         command = (tmp_path / 'run.sh').read_text(encoding='utf-8').splitlines()[-1].split()
@@ -467,8 +467,8 @@ def test_run_args_dict_means_its_typed_spelling_and_no_run_is_made_of_what_no_ru
     checked: list[RunSettings] = []
     monkeypatch.setattr(python_runtime.preflight, 'ready', lambda _documents, run, *_a, **_k: checked.append(run))
     monkeypatch.setattr(python_runtime.run_local, 'start', lambda *_args, **_kwargs: pytest.fail('ran'))
-    monkeypatch.setattr(sophios.post_compile.docker, 'from_env',
-                        lambda: SimpleNamespace(images=SimpleNamespace(list=lambda: [])))
+    monkeypatch.setattr(sophios.plugins.docker, 'from_env',
+                        lambda: SimpleNamespace(images=SimpleNamespace(build=lambda **_: None)))
     workflow = Workflow([adapter_step('echo', message='hello')], 'wf')
     for refused in (lambda: workflow.start(run_args_dict={'generate_run_script': 'yes'}),
                     lambda: workflow.run(target='nextflow', run_args_dict={'cachedir': 'cache', 'resume': ''}),
