@@ -19,13 +19,13 @@ import threading
 import time
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final
 
 import yaml
 
-from . import compiler, plugins
+from . import compiler
 from . import input_output as io
 from .ir import emit, frontdoor
 from .ir.artifacts import CompilationArtifact
@@ -169,12 +169,6 @@ def write(analyses: tuple[Analysis, ...], basepath: Path, workflow_name: str, ro
         'declared_at': plan.declared_at,
     } for plan in plans], indent=2), encoding='utf-8')
     return tuple(plans)
-
-
-def without_entrypoints(analyses: tuple[Analysis, ...]) -> tuple[Analysis, ...]:
-    """`analyses` naming the no-entrypoint images `--docker_remove_entrypoints` builds."""
-    return tuple(replace(analysis, artifact=plugins.dockerPull_append_noentrypoint_artifact(analysis.artifact))
-                 for analysis in analyses)
 
 
 #: The argv that runs an analysis: (its CWL, its job file, the output dir, its own cachedir) -> argv.

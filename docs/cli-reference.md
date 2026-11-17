@@ -58,7 +58,7 @@ Without one of them the command compiles and then asks for one. Under
 | `--partial_failure_enable` | off | compile the CWL so that a job exiting with a success code counts as success with `null` outputs, and every step with required inputs runs only when they are not `null`, then only if its own `when:` says so ([Partial failures](partial-failures.md)) |
 | `--partial_failure_success_codes CODE ...` | `0 1` | the exit codes that count as success under `--partial_failure_enable`; `0` is always one |
 | `--partial_failure_success_codes_range LOW HIGH` | `0 1` | a range of such codes, `LOW` included and `HIGH` excluded |
-| `--docker_remove_entrypoints` | off | a diagnostic, not for everyday runs: before a local run, rebuild every tagged local image without its `ENTRYPOINT`, to show which tools depend on one: a tool without its own `baseCommand` or `arguments` fails under it; it acts only on a local run, so it does nothing with `--generate_cwl_workflow` |
+| `--docker_remove_entrypoints` | off | a diagnostic, not for everyday runs: before a local run, rebuild each image the workflow pulls without its `ENTRYPOINT`, to show which tools depend on one: a tool without its own `baseCommand` or `arguments` fails under it; it acts only on a local run, so it does nothing with `--generate_cwl_workflow` |
 
 The four rewriting flags (`--cwl_inline_subworkflows`, `--cwl_inline_runtag`,
 `--partial_failure_enable`, `--docker_remove_entrypoints`) are an error with a plain CWL workflow under

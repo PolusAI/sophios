@@ -65,7 +65,7 @@ class Cwltool(_CwlRunner):
         ignore_install: Do not check that the container engine is installed.
         ignore_processes: Do not check that the engine runs few enough processes.
         provenance: Have cwltool write its record of the run under the base path.
-        remove_entrypoints: Run every image without its entrypoint.
+        remove_entrypoints: Run the workflow's images without their entrypoints.
         cachedir: Where cwltool caches a job whose tool and inputs are unchanged; '' for no cache.
     """
 

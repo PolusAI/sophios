@@ -7,12 +7,11 @@ from pathlib import Path
 import re
 import sys
 import tempfile
-from typing import Any, TypeAlias
+from typing import Any, Iterable, Iterator, TypeAlias
 
 import yaml
 import podman
 import docker
-
 
 from . import utils_cwl
 from .lang.diagnostics import SophiosError
@@ -166,18 +165,14 @@ def get_tools_cwl(config: Json, validate_plugins: bool = False,
     return tools_cwl
 
 
-Client: TypeAlias = docker.DockerClient | podman.PodmanClient  # type: ignore
-
-
-def remove_entrypoints(client: Client, build: Any) -> None:
-    """remove/overwrite the entrypoints from all images
+def remove_entrypoints(container_engine: str, artifacts: Iterable[CompilationArtifact]) -> None:
+    """Build, in the local `container_engine` (docker or podman), a no-entrypoint copy of each image `artifacts` pull.
 
     https://cwl.discourse.group/t/override-docker-entrypoint-in-command-line-tool/695/2
-    "Here is what the CWL standards have to say about software container entrypoints"
     "I recommend changing your docker container to not use ENTRYPOINT."
 
-    This script will remove / overwrite the entrypoints in ALL of the docker images on your local machine.
-    (It will append -noentrypoint to the version tag.)
+    Each copy is the image's tag with -noentrypoint appended, the one
+    `dockerPull_append_noentrypoint_artifact` points the tools at; no other image is touched.
 
     The reason is that we want to simultaneously allow
     1. release environments, where users will simply run code in a docker image and
@@ -188,35 +183,33 @@ def remove_entrypoints(client: Client, build: Any) -> None:
     modify paths to be w.r.t. their host machine instead of w.r.t. the image. (/opt/.../main.py)
 
     Without entrypoints, to switch between 1 and 2, simply comment out DockerRequirement ... that's it!
-    The point is that we want a uniform API so that we can programmatically switch between 1 and 2 in the CI.
-    We want to run the integration tests first, and only push releases to dockerhub
-    when the tests pass (NOT vice versa!).
     """
-    # Get a list of all Docker images
-    images = client.images.list()
+    pulls = sorted({pull for artifact in artifacts for pull in _docker_pulls(artifact)
+                    if _noentrypoint_tag(pull) != pull})
+    if not pulls:
+        return
+    if container_engine == 'docker':
+        _build(docker.from_env().images, pulls)  # type: ignore
+    elif container_engine == 'podman':
+        with podman.PodmanClient() as client:  # the active podman machine, else the user's own socket
+            _build(client.images, pulls)
 
-    # Iterate over each container
-    for image in images:
-        if len(image.attrs['RepoTags']) != 0 and len(image.tags) != 0:
-            for tag in image.tags:
-                if tag.endswith('-noentrypoint'):
-                    continue
 
-                # Define the content of the Dockerfile
-                dockerfile_content = f'''
-                FROM {tag}
-                ENTRYPOINT []
-                '''
-                with tempfile.TemporaryDirectory() as tempdir:
-                    with open(tempdir + '/Dockerfile_tmp', mode='w', encoding='utf-8') as f:
-                        f.write(dockerfile_content)
+def _build(images: Any, pulls: Iterable[str]) -> None:
+    """Build each of `pulls` as its no-entrypoint tag, with an empty ENTRYPOINT."""
+    for pull in pulls:
+        with tempfile.TemporaryDirectory() as tempdir:
+            (Path(tempdir) / 'Dockerfile').write_text(f'FROM {pull}\nENTRYPOINT []\n', encoding='utf-8')
+            # podman-py names a random file when told none, one the context does not hold
+            images.build(path=tempdir, dockerfile='Dockerfile', tag=_noentrypoint_tag(pull))
 
-                    # Build the new Docker image from the Dockerfile
-                    build.build(
-                        path=tempdir,
-                        dockerfile="Dockerfile_tmp",
-                        tag=f"{tag}-noentrypoint"
-                    )
+
+def _docker_pulls(artifact: CompilationArtifact) -> Iterator[str]:
+    """Each `dockerPull` the runner reads in `artifact` and its children."""
+    for requirement in _docker_requirements(artifact.cwl):
+        yield requirement['dockerPull']
+    for child in artifact.children:
+        yield from _docker_pulls(child)
 
 
 def _docker_requirement(cwl: Cwl, section: str) -> dict[str, Any] | None:
@@ -254,16 +247,17 @@ def _noentrypoint_tag(image: str) -> str:
     return f"{prefix}{repo}:{tag or 'latest'}-noentrypoint"
 
 
-def _append_noentrypoint_in_place(process: Cwl) -> None:
-    """Tag every `DockerRequirement` of `process` and of each process embedded in its steps."""
+def _docker_requirements(process: Cwl) -> Iterator[dict[str, Any]]:
+    """Each `DockerRequirement` with a `dockerPull`, in `requirements` or `hints`, of `process` and of every
+    process embedded in its steps, at any depth. The entries are the process's own, not copies."""
     for section in ('requirements', 'hints'):
         requirement = _docker_requirement(process, section)
         if requirement is not None and requirement.get('dockerPull'):
-            requirement['dockerPull'] = _noentrypoint_tag(requirement['dockerPull'])
+            yield requirement
     steps = process.get('steps', [])
     for step in steps.values() if isinstance(steps, dict) else steps:
         if isinstance(step, dict) and isinstance(step.get('run'), dict):
-            _append_noentrypoint_in_place(step['run'])
+            yield from _docker_requirements(step['run'])
 
 
 def dockerPull_append_noentrypoint(cwl: Cwl) -> Cwl:
@@ -274,7 +268,8 @@ def dockerPull_append_noentrypoint(cwl: Cwl) -> Cwl:
     steps, at any depth. `cwl` itself is not changed.
     """
     cwl_noentrypoint = copy.deepcopy(cwl)
-    _append_noentrypoint_in_place(cwl_noentrypoint)
+    for requirement in _docker_requirements(cwl_noentrypoint):
+        requirement['dockerPull'] = _noentrypoint_tag(requirement['dockerPull'])
     return cwl_noentrypoint
 
 

@@ -2,10 +2,6 @@ import sys
 import copy
 from dataclasses import dataclass, replace
 from typing import Any, Final
-import docker
-import podman
-from podman.domain.images_build import BuildMixin
-from . import plugins
 from .wic_types import Cwl, Yaml
 from .ir.artifacts import CompilationArtifact
 from .ir.names import NAMESPACE_SEPARATOR
@@ -439,17 +435,3 @@ def apply_inline_options(artifact: CompilationArtifact, *,
     if runtag:
         artifact = inline_artifact_runs(artifact)
     return artifact
-
-
-def remove_artifact_entrypoints(container_engine: str,
-                                artifact: CompilationArtifact) -> CompilationArtifact:
-    """Build no-entrypoint images and rewrite the immutable artifact tree."""
-    if container_engine == 'docker':
-        client = docker.from_env()  # type: ignore
-        plugins.remove_entrypoints(client, client.images)
-    elif container_engine == 'podman':
-        # See https://github.com/containers/podman-py?tab=readme-ov-file#example-usage
-        uri = "unix:///run/user/1000/podman/podman.sock"
-        with podman.PodmanClient(base_url=uri) as client:
-            plugins.remove_entrypoints(client, BuildMixin())
-    return plugins.dockerPull_append_noentrypoint_artifact(artifact)
