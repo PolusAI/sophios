@@ -21,7 +21,7 @@ from ..lang.diagnostics import Diagnostics, Locator
 from ..lang.error_codes import SophiosErrorCode
 from ..lang.names import check_written_name
 from ..lang.nodes import CwlRecord, Document, EdgeRef, InputValue, OpaqueCwl, Step, UnresolvedName, WicSidecar
-from ..lang.parser import Grammar
+from ..lang.parser import step_key
 from ..lang.spans import SourceSpan
 from .declarations import port_declaration
 from .locations import absolute_paths
@@ -304,9 +304,9 @@ def output_step(step_ids: Sequence[str], step_text: str) -> tuple[int, str | Non
     checks the name; an id names its first occurrence. None when `step_text`
     names no step.
     """
-    key = Grammar.WIC_STEP_KEY.match(step_text)
-    if key is not None:
-        return int(key.group(1)), key.group(2)
+    key = step_key(step_text)
+    if key is not None and key.index is not None:
+        return key.index, key.name
     if step_text in step_ids:
         return step_ids.index(step_text) + 1, None
     return None

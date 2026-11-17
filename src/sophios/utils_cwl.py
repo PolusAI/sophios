@@ -15,6 +15,7 @@ from schema_salad.fetcher import DefaultFetcher
 
 from .input_output import dump_wic_yaml
 from .lang.cwl import tool_process
+from .utils import strip_terminal_codes
 from .wic_types import Cwl, Yaml
 
 
@@ -79,7 +80,6 @@ class InvalidTool(Exception):
 
 #: The position cwltool's message line starts with, `<file or URI>:<line>:<column>:`, and the nesting after it.
 _POSITION: Final = re.compile(r'^\S+?:(\d+):(\d+):( *)')
-_COLOUR: Final = re.compile(r'\x1b\[[0-9;]*m')
 #: What schema-salad heads a nested resolution error with: the loader's object id, and the document's URI.
 _IDENTIFIED: Final = re.compile(r'\(\d+\) (?:\([^)\s]*\) )?')
 _ATTEMPT: Final = re.compile(r"tried (?:array of <[^>]*>|\S+) but\b\s*|,? tried \S+$")
@@ -95,7 +95,7 @@ def _plain(error: Exception, name: str, *, positions: bool) -> str:
     document no file holds.
     """
     places: list[list[str]] = []
-    for line in _COLOUR.sub('', str(error)).splitlines():
+    for line in strip_terminal_codes(str(error)).splitlines():
         if found := _POSITION.match(line):
             places.append([f"{found[1]}:{found[2]}" if positions else '', found[3] + line[found.end():].strip()])
         elif _IDENTIFIED.match(line.lstrip()):

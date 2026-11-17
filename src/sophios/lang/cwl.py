@@ -7,6 +7,7 @@ Import `CWL_VERSION` rather than writing a version literal.
 from collections.abc import Mapping, Sequence
 from enum import Enum, StrEnum
 from pathlib import Path, PurePosixPath
+import re
 from typing import Any, Final, TypeAlias, TypeGuard, TypeVar
 
 from cwl_utils.parser import cwl_v1_2 as _standard
@@ -245,6 +246,23 @@ def requirement(process: Process, cls: type[_Requirement]) -> _Requirement | Non
     """The first requirement of the standard's class `cls`, else the first hint of it."""
     return next((each for each in (*(process.requirements or ()), *(process.hints or ())) if isinstance(each, cls)),
                 None)
+
+
+#: An input a CWL expression reads, `inputs.name` or `inputs["name"]`: `inputs.name-1` is `inputs.name` minus 1.
+_INPUT_READ: Final = re.compile(r'\binputs(?:\.([A-Za-z_]\w*)|\[\s*["\']([^"\']+)["\']\s*\])')
+
+
+def inputs_read(value: Any) -> tuple[str, ...]:
+    """Every input the CWL expressions in `value` (a string, or the strings at any depth of a list or mapping) read,
+    in order of first mention."""
+    match value:
+        case str():
+            return tuple(dict.fromkeys(a or b for a, b in _INPUT_READ.findall(value)))
+        case list():
+            return tuple(dict.fromkeys(name for item in value for name in inputs_read(item)))
+        case Mapping():
+            return inputs_read(list(value.values()))
+    return ()
 
 
 def fields_set(value: Any) -> list[str]:

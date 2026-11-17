@@ -1,11 +1,9 @@
 """The typed compiler boundary over the phase pipeline."""
-import re
 import sys
 from collections.abc import Iterator
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final
 
 
 from . import utils_cwl
@@ -27,7 +25,8 @@ from .ir.types import RegistryKey, StepId, StepNode, WorkflowGraph
 from .lang import versions
 from .lang.diagnostics import Diagnostic, Diagnostics, Locator, Severity, SophiosError
 from .lang.nodes import CwlRecord, UnresolvedName
-from .lang.parser import Grammar
+from .lang.cwl import inputs_read
+from .lang.parser import step_key
 from .lang.error_codes import SophiosErrorCode
 from .wic_types import Cwl, Tool
 
@@ -136,17 +135,6 @@ def _tools(graph: WorkflowGraph, descriptions: '_Descriptions') -> Iterator[tupl
             yield from _tools(called, descriptions)
 
 
-#: `inputs.name` and `inputs["name"]` inside a `when:` expression.
-_EXPRESSION_INPUT: Final = re.compile(r'inputs(?:\.([A-Za-z_]\w*)|\[\s*["\']([^"\']+)["\']\s*\])')
-
-
-def _expression_inputs(expression: object) -> tuple[str, ...]:
-    """Every step input a CWL expression reads, in order of first mention."""
-    if not isinstance(expression, str):
-        return ()
-    return tuple(dict.fromkeys(a or b for a, b in _EXPRESSION_INPUT.findall(expression)))
-
-
 def _authored_spelling_notes(graph: WorkflowGraph) -> list[str]:
     """One plain line for each `outputSource` that names a step by an id more than one step
     has: it means the first.
@@ -163,7 +151,8 @@ def _authored_spelling_notes(graph: WorkflowGraph) -> list[str]:
     ids = [step.id.name for step in graph.steps]
     for name, source in graph.output_mapping:
         written = str(sources[name]).rsplit('/', 1)[0]
-        if Grammar.WIC_STEP_KEY.match(written) or ids.count(source.step.name) == 1:
+        key = step_key(written)
+        if key is not None and key.index is not None or ids.count(source.step.name) == 1:
             continue
         position = [step.id for step in graph.steps].index(source.step) + 1
         notes.append(f"Warning! {file}: output {str(name)!r} has outputSource '{sources[name]}', but "
@@ -187,7 +176,7 @@ def _when_notes(graph: WorkflowGraph, names: Names) -> list[Diagnostic]:
         return [note for child in graph.children for note in _when_notes(child, names)]
     for step in graph.steps:
         declared = [names.port(port.id.port) for port in step.inputs]
-        for read in _expression_inputs(dict(step.interpreted).get('when')):
+        for read in inputs_read(dict(step.interpreted).get('when')):
             if read not in declared:
                 made = [name for name in declared if name.startswith(f'{read}{NAMESPACE_SEPARATOR}')]
                 hint = f" Write {' or '.join(f'inputs[{name!r}]' for name in made)} to read one it declares." \

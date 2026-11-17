@@ -31,6 +31,7 @@ from .nf_reader import read_nextflow
 from .nf_types import ExecutableNextflowWorkflow
 from .runners import RunSettings
 from .runtime_inputs import directory_literal, output_target_inputs
+from .utils import strip_terminal_codes
 from .utils_nf import nextflow_names
 from .wic_types import Json
 
@@ -167,8 +168,6 @@ def _environment(request: RunRequest) -> dict[str, str]:
 #: cwltool's messages for a job that did not succeed (cwltool/job.py), as its log prints them.
 _JOB_ENDED: Final = re.compile(r'\[job (?P<job>.+?)\] (?:exited with status: (?P<status>-?\d+)'
                                r'|was terminated by signal: (?P<signal>\w+)|completed (?P<completed>\w+))\s*$')
-#: A terminal colour code: cwltool colours its log.
-_COLOUR: Final = re.compile(r'\x1b\[[0-9;]*m')
 
 
 def failed_steps(lines: Iterable[str]) -> dict[str, int | str | None]:
@@ -181,7 +180,7 @@ def failed_steps(lines: Iterable[str]) -> dict[str, int | str | None]:
     ended: dict[str, int | str] = {}
     failed: dict[str, int | str | None] = {}
     for line in lines:
-        found = _JOB_ENDED.search(_COLOUR.sub('', line))
+        found = _JOB_ENDED.search(strip_terminal_codes(line))
         if found is None:
             continue
         job = found['job']
