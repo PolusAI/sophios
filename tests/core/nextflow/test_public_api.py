@@ -157,21 +157,25 @@ def test_a_target_takes_its_own_options_and_no_other(capsys: pytest.CaptureFixtu
                 if owner in {"every target", target}:
                     cli.validate_target_args(args)
                     continue
-                with pytest.raises(SystemExit, match="2"):
+                with pytest.raises(SystemExit) as caught:
                     cli.validate_target_args(args)
+                assert caught.value.code == 2
                 assert f"{action.option_strings[0]} (--target {owner})" in capsys.readouterr().err
-        with pytest.raises(SystemExit, match="2"):
+        with pytest.raises(SystemExit) as caught:
             sophios_main._main(cli.get_args("workflow.wic", ["--target", target]), ["--bogus"])
+        assert caught.value.code == 2
         assert "--passthrough_flags" in capsys.readouterr().err.splitlines()[-1]
     for flags in (["--run_local"], ["--check"], ["--generate_run_script"], ["--passthrough_flags", "yes"]):
         assert cli.get_args("workflow.wic", ["--target", "nextflow", *flags]).target == "nextflow"
     for flags in (["--generate_cwl_workflow"], ["--quiet"], ["--cwl_runner", "toil-cwl-runner"],
                   ["--container_engine", "podman"], ["--cachedir", "cache"], ["--outdir", "out"],
                   ["--inputs_file", "inputs.yml"]):
-        with pytest.raises(SystemExit, match="2"):
+        with pytest.raises(SystemExit) as caught:
             cli.get_args("workflow.wic", ["--target", "nextflow", *flags])
-    with pytest.raises(SystemExit, match="2"):
+        assert caught.value.code == 2
+    with pytest.raises(SystemExit) as caught:
         cli.get_args("workflow.wic", ["--run_local", "--generate_cwl_workflow"])
+    assert caught.value.code == 2
 
 
 @pytest.mark.fast
@@ -182,8 +186,9 @@ def test_a_plain_cwl_workflow_under_allow_raw_cwl_is_lowered_under_nextflow(
     written."""
     raw = str(DATA / "nextflow" / "cli" / "raw.cwl")
     monkeypatch.chdir(tmp_path)
-    with pytest.raises(SystemExit, match="1"):
+    with pytest.raises(SystemExit) as caught:
         sophios_main._main(cli.get_args(raw, ["--allow_raw_cwl", "--homedir", str(tmp_path)]), [])
+    assert caught.value.code == 1
     assert "--generate_cwl_workflow" in capsys.readouterr().out
     sophios_main._main(cli.get_args(raw, [
         "--allow_raw_cwl", "--homedir", str(tmp_path), "--target", "nextflow", "--basepath", "out"]), [])

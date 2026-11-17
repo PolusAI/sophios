@@ -15,7 +15,6 @@ all of them. Asking pytest cannot disagree with pytest.
 """
 import ast
 import json
-import re
 import shlex
 import subprocess
 import sys
@@ -69,7 +68,7 @@ def _invocations(workflow: Path) -> list[list[str]]:
     for job in (script.get('jobs') or {}).values():
         for step in (job.get('steps') or []):
             for line in (step.get('run') or '').splitlines():
-                if not re.search(r'\bpytest\b', line):
+                if 'pytest' not in line:
                     continue
                 tokens = shlex.split(line, comments=True)
                 if 'pytest' in tokens:
