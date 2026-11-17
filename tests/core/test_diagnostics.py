@@ -24,13 +24,12 @@ from sophios.lang.diagnostics import Diagnostic, Diagnostics, Locator, Severity,
 from sophios.lang.error_codes import EXPLANATIONS, Kind, SophiosErrorCode
 from sophios.lang.spans import SourceSpan
 
-from .budgets import budget
+from .budgets import FAST, budget
 from .cases import case_dirs, match, printed
 from .helpers import run_cli
 from .hermetic import compile_hermetic, compile_hermetic_source, cwl_tree
 from .strategies import author_names, pinned
 from .synthetic_tools import clt, registered
-from .test_lang_parser import FAST
 
 _TYPES: Final = {'int': int, 'long': int, 'float': float, 'double': float, 'boolean': bool, 'string': str}
 _TEXTS = st.text('07.e+-:axy', max_size=4)

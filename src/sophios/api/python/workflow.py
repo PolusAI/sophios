@@ -21,7 +21,7 @@ from sophios.lang.error_codes import SophiosErrorCode
 from sophios.lang.names import check_written_name
 from sophios.lang.spans import SourceSpan
 from sophios.run_status import RunResult, RunState, RunStatus, StepStatus, WorkflowRunError
-from sophios.wic_types import DEFAULT_BASEPATH, Tools
+from sophios.wic_types import DEFAULT_BASEPATH, TargetName, Tools
 
 from ._compiled import CompiledNextflowWorkflow, CompiledWorkflow
 from ._inference import Inference
@@ -989,7 +989,7 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
     def compile(  # pylint: disable=too-many-arguments
         self,
         *,
-        target: Literal["cwl", "nextflow"] = "cwl",
+        target: TargetName = "cwl",
         tool_registry: Tools | None = None,
         lang_version: str | None = None,
         inference: Inference = Inference(),
@@ -998,7 +998,7 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
         """Compile this workflow into the selected target representation.
 
         Args:
-            target (Literal["cwl", "nextflow"]): Compilation target.
+            target (TargetName): Compilation target.
             tool_registry (Tools | None): Optional tool registry override.
             lang_version (str | None): Pin the Sophios language version for
                 this compilation; None (the default) infers it. An explicit
@@ -1037,7 +1037,7 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
         tool_registry: Tools | None = None,
         *,
         workflow_paths: Mapping[str, Mapping[str, Path]] | None = None,
-        target: Literal["cwl", "nextflow"] = "cwl",
+        target: TargetName = "cwl",
         lang_version: str | None = None,
         inference: Inference = Inference(),
         policy: RunPolicy = RunPolicy(),
@@ -1063,7 +1063,7 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
             basepath (str): As :meth:`run` takes it: the directory the run would write into.
             tool_registry (Tools | None): As :meth:`compile` takes it.
             workflow_paths (Mapping[str, Mapping[str, Path]] | None): As :meth:`run` takes it.
-            target (Literal["cwl", "nextflow"]): The target to check for.
+            target (TargetName): The target to check for.
             lang_version (str | None): As :meth:`compile` takes it.
             inference (Inference): As :meth:`compile` takes it.
             policy (RunPolicy): As :meth:`compile` takes it.
@@ -1158,7 +1158,7 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
         workflow_paths: Mapping[str, Mapping[str, Path]] | None = None,
         inference: Inference = Inference(),
         policy: RunPolicy = RunPolicy(),
-        target: Literal["cwl", "nextflow"] = "cwl",
+        target: TargetName = "cwl",
         runner: Runner | None = None,
         outdir: str = _RUN.outdir,
         inputs_file: str = _RUN.inputs_file,
@@ -1192,7 +1192,7 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
                 infers the same edges ``compile(inference=...)`` does.
             policy (RunPolicy): As :meth:`compile` takes it: the run writes the CWL
                 ``compile(policy=...)`` returns.
-            target (Literal["cwl", "nextflow"]): What the workflow is run as: CWL, or the pipeline
+            target (TargetName): What the workflow is run as: CWL, or the pipeline
                 the Nextflow target lowers it to.
             runner (Runner | None): The program that runs it, with the flags it is
                 given as they are and its own settings: ``Toil('--batchSystem', 'slurm',
@@ -1232,7 +1232,7 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
         workflow_paths: Mapping[str, Mapping[str, Path]] | None = None,
         inference: Inference = Inference(),
         policy: RunPolicy = RunPolicy(),
-        target: Literal["cwl", "nextflow"] = "cwl",
+        target: TargetName = "cwl",
         runner: Runner | None = None,
         outdir: str = _RUN.outdir,
         inputs_file: str = _RUN.inputs_file,
@@ -1259,7 +1259,7 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
                 ``.wic`` files a real-time analysis may be.
             inference (Inference): How an unbound input is connected.
             policy (RunPolicy): As :meth:`run` takes it.
-            target (Literal["cwl", "nextflow"]): As :meth:`run` takes it.
+            target (TargetName): As :meth:`run` takes it.
             runner (Runner | None): As :meth:`run` takes it.
             outdir (str): As :meth:`run` takes it.
             inputs_file (str): As :meth:`run` takes it.
@@ -1286,7 +1286,7 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
         workflow_paths: Mapping[str, Mapping[str, Path]] | None = None,
         inference: Inference = Inference(),
         policy: RunPolicy = RunPolicy(),
-        target: Literal["cwl", "nextflow"] = "cwl",
+        target: TargetName = "cwl",
         runner: Runner | None = None,
         outdir: str = _RUN.outdir,
         inputs_file: str = _RUN.inputs_file,
@@ -1313,7 +1313,7 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
                 name real-time analyses, which are refused.
             inference (Inference): How an unbound input is connected.
             policy (RunPolicy): As :meth:`run` takes it.
-            target (Literal["cwl", "nextflow"]): As :meth:`run` takes it.
+            target (TargetName): As :meth:`run` takes it.
             runner (Runner | None): As :meth:`run` takes it.
             outdir (str): As :meth:`run` takes it.
             inputs_file (str): As :meth:`run` takes it.

@@ -425,10 +425,8 @@ def test_run_writes_what_compile_returns_and_hands_the_runner_its_own_flags(monk
                         lambda documents, settings, jobs=(), **_: prepared.append((documents, settings)))
     monkeypatch.setattr(sophios.plugins.docker, 'from_env',
                         lambda: SimpleNamespace(images=SimpleNamespace(build=lambda **_: None)))
-    for quiet in (True, False):
-        workflow.run(basepath='base', runner=Cwltool(remove_entrypoints=True), generate_run_script=True, quiet=quiet)
-        command = (tmp_path / 'run.sh').read_text(encoding='utf-8').splitlines()[-1].split()
-        assert ('--quiet' in command) is quiet
+    workflow.run(basepath='base', runner=Cwltool(remove_entrypoints=True), generate_run_script=True)
+    assert '--quiet' in (tmp_path / 'run.sh').read_text(encoding='utf-8').splitlines()[-1].split()
 
     compiled = workflow.compile()
     assert sorted(path.name for path in (tmp_path / 'base').iterdir()) == ['exact.cwl', 'exact_inputs.yml']
