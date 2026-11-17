@@ -16,7 +16,7 @@ from sophios.ir.artifacts import CompilationArtifact
 from sophios.ir.resolved import ResolvedWorkflow
 from sophios.lang.diagnostics import Diagnostic
 from sophios.runners import RunSettings
-from sophios.runtime_inputs import runner_job_inputs
+from sophios.runtime_inputs import EmptyDirectory, directory_literal, runner_job_inputs
 from sophios.wic_types import Yaml
 
 ModelT = TypeVar('ModelT')
@@ -65,14 +65,17 @@ class Prepared:
     documents: tuple[Path, ...]
 
 
+# pylint: disable-next=too-many-arguments
 def prepare(artifact: CompilationArtifact, analyses: tuple[realtime.Analysis, ...], basepath: Path,
-            settings: Settings, output_targets: Collection[str]) -> Prepared:
+            settings: Settings, output_targets: Collection[str], *,
+            empty_directory: EmptyDirectory = directory_literal) -> Prepared:
     """Write `artifact` and `analyses` under `basepath` as they are given, and make the machine ready to run them.
 
     `artifact` is written as it is: a tree from the command line, one document under
     `--cwl_inline_runtag` and from Python. Its job is the values bound in the workflow, as `targets.for_run` made
-    them for the runner, under the inputs file's. The pre-flight reads `settings.bound`, the same values as written. Each of `output_targets` (`runtime_inputs.output_target_inputs`)
-    is a name for the run to create.
+    them for the runner, under the inputs file's. The pre-flight reads `settings.bound`, the same values as written.
+    Each of `output_targets` (`runtime_inputs.output_target_inputs`) is a name for the run to create, written in the
+    job as `empty_directory` gives the runner an empty directory.
 
     A check (`settings.check`) writes them into a temporary directory instead, removed
     when the check ends, so it leaves `basepath` as it found it.
@@ -81,9 +84,9 @@ def prepare(artifact: CompilationArtifact, analyses: tuple[realtime.Analysis, ..
         SophiosError: What the pre-flight found in the way, before anything is pulled.
     """
     if not settings.check:
-        return _prepare(artifact, analyses, basepath, settings, output_targets)
+        return _prepare(artifact, analyses, basepath, settings, output_targets, empty_directory=empty_directory)
     with tempfile.TemporaryDirectory(prefix='sophios-check-') as scratch:
-        return _prepare(artifact, analyses, Path(scratch), settings, output_targets)
+        return _prepare(artifact, analyses, Path(scratch), settings, output_targets, empty_directory=empty_directory)
 
 
 def inputs_job(inputs_file: str, named: str, output_targets: Collection[str] = ()) -> preflight.Job | None:
@@ -95,10 +98,12 @@ def inputs_job(inputs_file: str, named: str, output_targets: Collection[str] = (
                          Path(inputs_file).parent.absolute(), named)
 
 
+# pylint: disable-next=too-many-arguments
 def _prepare(artifact: CompilationArtifact, analyses: tuple[realtime.Analysis, ...], basepath: Path,
-             settings: Settings, output_targets: Collection[str]) -> Prepared:
+             settings: Settings, output_targets: Collection[str], *, empty_directory: EmptyDirectory) -> Prepared:
     """`prepare`, writing under `basepath`."""
-    input_output.write_artifacts_to_disk(artifact, basepath, settings.run.inputs_file, output_targets=output_targets)
+    input_output.write_artifacts_to_disk(artifact, basepath, settings.run.inputs_file, output_targets=output_targets,
+                                         empty_directory=empty_directory)
     plans = realtime.write(analyses, basepath, artifact.name, settings.root_dir)
     # The pre-flight reads the CWL the runner will get, so it runs after the write.
     documents = (basepath / f'{artifact.name}.cwl', *realtime.documents(analyses, basepath))
@@ -116,7 +121,7 @@ def _prepare(artifact: CompilationArtifact, analyses: tuple[realtime.Analysis, .
         artifact = plugins.dockerPull_append_noentrypoint_artifact(artifact)
         # The images are built from the ones the pre-flight pulled, so the rewrite is written over the first write.
         input_output.write_artifacts_to_disk(artifact, basepath, settings.run.inputs_file,
-                                             output_targets=output_targets)
+                                             output_targets=output_targets, empty_directory=empty_directory)
         analyses = tuple(replace(a, artifact=plugins.dockerPull_append_noentrypoint_artifact(a.artifact))
                          for a in analyses)
         plans = realtime.write(analyses, basepath, artifact.name, settings.root_dir)

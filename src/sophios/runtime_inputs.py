@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import copy
-from collections.abc import Collection, Mapping
+from collections.abc import Callable, Collection, Mapping
 from pathlib import PurePath, PurePosixPath, PureWindowsPath
 import re
-from typing import Any
+from typing import Any, TypeAlias
 
 from cwl_utils.parser.cwl_v1_2 import Dirent, InitialWorkDirRequirement
 
@@ -18,20 +18,31 @@ from sophios.wic_types import Json, Tool
 
 _INPUT_REFERENCE = re.compile(r"\binputs\.([A-Za-z_][A-Za-z0-9_-]*)")
 
+#: An empty directory of a given name, as a runner takes one in a job.
+EmptyDirectory: TypeAlias = Callable[[str], Json]
 
-def runner_job_inputs(job_inputs: Mapping[str, Any], output_targets: Collection[str]) -> Json:
+
+def directory_literal(name: str) -> Json:
+    """An empty directory named `name` as CWL writes one: a Directory literal the runner creates."""
+    return {"class": "Directory", "basename": name, "listing": []}
+
+
+def runner_job_inputs(job_inputs: Mapping[str, Any], output_targets: Collection[str],
+                      empty_directory: EmptyDirectory = directory_literal) -> Json:
     """`job_inputs` as a runner gets them: each File's format resolved, and each of `output_targets` (the root
-    job keys `output_target_inputs` names) a Directory literal the runner creates, empty, under the name it gave."""
-    return name_output_targets(resolve_file_formats(job_inputs), output_targets)
+    job keys `output_target_inputs` names) an empty directory the runner creates under the name it gave."""
+    return name_output_targets(resolve_file_formats(job_inputs), output_targets, empty_directory)
 
 
-def name_output_targets(job_inputs: Mapping[str, Any], output_targets: Collection[str]) -> Json:
-    """A copy of `job_inputs` in which each of `output_targets` is a Directory literal the runner creates, empty,
-    under the name it gave: a runner given an absolute path for a Directory would never create it."""
+def name_output_targets(job_inputs: Mapping[str, Any], output_targets: Collection[str],
+                        empty_directory: EmptyDirectory = directory_literal) -> Json:
+    """A copy of `job_inputs` in which each of `output_targets` is an empty directory the runner creates under the
+    name it gave, as `empty_directory` writes one: a runner given an absolute path for a Directory would never
+    create it."""
     job = dict(job_inputs)
     for name in output_targets:
         if name in job:
-            job[name] = _output_target_directory(job[name], name)
+            job[name] = _output_target_directory(job[name], name, empty_directory)
     return job
 
 
@@ -104,10 +115,10 @@ def _is_directory(cwl_type: Any) -> bool:
     return inner == "Directory" or isinstance(inner, list) and "Directory" in inner
 
 
-def _output_target_directory(value: Any, source_key: str) -> Any:
-    """The literal for a name, or for a Directory read as one: its `location`, `path` or `basename`. An absolute path
-    or a URL is left as written: it is a Directory as CWL reads any, and where a tool may write is the runner's to
-    say (`InplaceUpdateRequirement`)."""
+def _output_target_directory(value: Any, source_key: str, empty_directory: EmptyDirectory) -> Any:
+    """The empty directory for a name, or for a Directory read as one: its `location`, `path` or `basename`. An
+    absolute path or a URL is left as written: it is a Directory as CWL reads any, and where a tool may write is the
+    runner's to say (`InplaceUpdateRequirement`)."""
     match value:
         case str() as name:
             pass
@@ -121,7 +132,7 @@ def _output_target_directory(value: Any, source_key: str) -> Any:
             return value
     if "://" in name or PurePosixPath(name).is_absolute() or PureWindowsPath(name).is_absolute():
         return value
-    return {"class": "Directory", "basename": _output_target_basename(name, source_key), "listing": []}
+    return empty_directory(_output_target_basename(name, source_key))
 
 
 def _output_target_basename(location: str, source_key: str) -> str:

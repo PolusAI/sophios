@@ -10,7 +10,7 @@ from ruamel.yaml import YAML as _RuamelYAML
 from ruamel.yaml.nodes import ScalarNode as _RuamelScalarNode
 
 from . import auto_gen_header
-from .runtime_inputs import runner_job_inputs
+from .runtime_inputs import EmptyDirectory, directory_literal, runner_job_inputs
 from .ir.artifacts import CompilationArtifact
 from .ir.locations import absolute_paths
 from .lang.diagnostics import SophiosError
@@ -88,19 +88,20 @@ def read_inputs_file(path: str) -> Yaml:
 
 
 def write_artifacts_to_disk(artifact: CompilationArtifact, path: Path, inputs_file: str = '',
-                            *, output_targets: Collection[str]) -> None:
+                            *, output_targets: Collection[str],
+                            empty_directory: EmptyDirectory = directory_literal) -> None:
     """Write a graph-derived artifact tree in `path`, each document under its own name, and the root's job.
 
     Only the root has a job: a runner reads no other. A relative `location` or `path` of a File or
     Directory in `inputs_file`, at any depth, is resolved against the inputs file's own directory
     (CWL v1.2 section 5.1.5: the base IRI of the document) and written absolute. Each of `output_targets`
     (`runtime_inputs.output_target_inputs`) is a name for the run to create, so it is read as one first and
-    written as the Directory literal the runner creates.
+    written as the empty directory the runner creates, in the form `empty_directory` gives.
     """
     inputs = absolute_paths(runner_job_inputs(read_inputs_file(inputs_file), output_targets),
                             Path(inputs_file).absolute().parent) if inputs_file else {}
     path.mkdir(parents=True, exist_ok=True)
-    job = runner_job_inputs({**artifact.job_inputs, **inputs}, output_targets)
+    job = runner_job_inputs({**artifact.job_inputs, **inputs}, output_targets, empty_directory)
     (path / f'{artifact.name}_inputs.yml').write_text(
         f'{auto_gen_header}{dump_wic_yaml(job)}', encoding='utf-8')
     _write_documents(artifact, path)

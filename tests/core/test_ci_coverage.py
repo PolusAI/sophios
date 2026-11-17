@@ -363,6 +363,9 @@ WINDOWS_EXCLUDED: Final = frozenset({
     # The failure pins the wording of cwltool's job-failure record, which the summary
     # reads; the other tests of the summary use a stand-in for cwltool and run on every leg.
     'tests/core/test_python_api_workflow.py::test_a_real_run_prints_its_output_or_names_the_step_that_failed',
+    # One `Workflow.run()` by Toil of a step that writes into the output directory it is given, in about seven
+    # seconds. What the job names for each runner is Toil's to read; only Toil shows that it creates the directory.
+    'tests/core/test_python_api_workflow.py::test_toil_fills_the_output_directory_a_step_is_given',
     # A workflow run by cwltool through --run_local, with two real-time analyses
     # run by cwltool beside it, one of them failing, in one run of about eight
     # seconds. The watcher's own tests use a stand-in for cwltool and run on
