@@ -19,14 +19,18 @@ from podman.domain.images_manager import ImagesManager
 
 import sophios.plugins
 import sophios.preflight
+from sophios.compiler import CompileSettings, compile_source
+from sophios.ir.frontdoor import bundle_from_disk
 from sophios.ir.types import PortType
 from sophios.ir.policy import RunPolicy, tolerant_tool
 from sophios.lang.cwl import CWL_VERSION
 from sophios.lang.diagnostics import SophiosError
+from sophios.lang.error_codes import SophiosErrorCode
 from sophios.wic_types import Yaml
 
 from .budgets import budget
 from .cases import DATA, cases, match
+from .hermetic import cwl_tree
 from .helpers import ADAPTERS, run_cli, search_config
 
 
@@ -371,3 +375,33 @@ def test_validate_plugins_accepts_the_shipped_tools_and_names_the_file_of_one_cw
     refusing = {'search_paths_cwl': {'global': [str(DATA / 'compiler' / 'refused')]}}
     with pytest.raises(SophiosError, match=r"(?s)wic057.*refused.\w+\.cwl is a tool cwltool refuses:"):
         sophios.plugins.get_tools_cwl(refusing, validate_plugins=True)
+
+
+@pytest.mark.fast
+def test_a_tool_file_that_is_not_yaml_stops_only_the_workflow_that_runs_it(tmp_path: Path) -> None:
+    """Discovery indexes tools by name and path; a tool file is read when a step runs it, so one that cannot be read
+    leaves a workflow that does not use it alone, and refuses the step that does with its file named."""
+    shutil.copy(ADAPTERS / 'echo.cwl', tmp_path)
+    (tmp_path / 'unreadable.cwl').write_text('this: is: not: yaml: [\n', encoding='utf-8')
+    (tmp_path / 'binary.cwl').write_bytes(b'\xff\xfe\x00bad')
+    (tmp_path / 'insert_steps_automatically_x.cwl').write_text('this: is: not: yaml: [\n', encoding='utf-8')
+    (tmp_path / 'unused.wic').write_text('steps:\n- id: echo\n  in:\n    message: !ii hi\n', encoding='utf-8')
+    (tmp_path / 'used.wic').write_text('steps:\n- id: unreadable\n', encoding='utf-8')
+    (tmp_path / 'binary.wic').write_text('steps:\n- id: binary\n', encoding='utf-8')
+    tools = sophios.plugins.get_tools_cwl({'search_paths_cwl': {'global': [str(tmp_path)]}})
+
+    def compiled(workflow: str) -> Any:
+        return cwl_tree(compile_source(bundle_from_disk(tmp_path / workflow, {}, tools), CompileSettings(), quiet=True))
+
+    assert [child.namespace for child in compiled('unused.wic').children] == [('echo',)]
+    with pytest.raises(SophiosError) as raised:
+        compiled('used.wic')
+    diagnostic, = raised.value.diagnostics
+    assert diagnostic.code is SophiosErrorCode.INVALID_YAML
+    assert diagnostic.locator is not None and diagnostic.locator.step == 'unreadable'
+    assert str(tmp_path / 'unreadable.cwl') in diagnostic.message
+    with pytest.raises(SophiosError) as raised:
+        compiled('binary.wic')
+    diagnostic, = raised.value.diagnostics
+    assert diagnostic.code is SophiosErrorCode.INVALID_YAML and diagnostic.locator is not None
+    assert diagnostic.locator.step == 'binary'

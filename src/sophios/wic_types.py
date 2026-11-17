@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from functools import cached_property
 from typing import Any, Final, Literal, NamedTuple, TypeAlias, TypedDict, get_args
 
-from .lang.cwl import Process, Written, load_process
+from .lang.cwl import Process, Written, load_process, read_tool
 
 # See https://mypy.readthedocs.io/en/stable/kinds_of_types.html#type-aliases
 
@@ -28,9 +28,22 @@ Yaml: TypeAlias = dict[str, Any]
 @dataclass(frozen=True)
 class Tool:
     run_path: str
-    cwl: Cwl
+    #: The tool's process; None for a tool file, which `cwl` reads when first asked, so only a tool a step runs
+    #: has to be readable.
+    _cwl: Cwl | None = None
     #: Whether the file at `run_path` is the tool, read from it, and not a path a tool written elsewhere is named by.
     from_file: bool = False
+
+    @cached_property
+    def cwl(self) -> Cwl:
+        """The tool's process.
+
+        Raises:
+            SophiosError: `wic001` for a tool file that is not YAML.
+        """
+        if self._cwl is None:
+            return read_tool(self.run_path)
+        return self._cwl
 
     @cached_property
     def loaded(self) -> tuple[Process, Written]:

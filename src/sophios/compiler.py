@@ -74,7 +74,9 @@ def compile_source(bundle: SourceBundle,
     linked = link(prepared)
     if linked.graph is None:
         raise SophiosError(linked.diagnostics)
-    inferred = infer(linked.graph, settings.inference, InsertionCatalog.from_registry(bundle.registry))
+    inferred = infer(linked.graph, settings.inference,
+                     InsertionCatalog.from_registry(bundle.registry) if settings.inference.insert_steps_automatically
+                     else InsertionCatalog())
     if inferred.graph is None:
         raise SophiosError(inferred.diagnostics)
     graph = declare_namespaces(inferred.graph, bundle.registry)

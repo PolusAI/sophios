@@ -14,64 +14,8 @@ from schema_salad.exceptions import SchemaSaladException
 from schema_salad.fetcher import DefaultFetcher
 
 from .input_output import dump_wic_yaml
-from .lang.diagnostics import SophiosError
-from .lang.error_codes import SophiosErrorCode
+from .lang.cwl import tool_process
 from .wic_types import Cwl, Yaml
-
-
-def tool_process(cwl: Yaml, source: str) -> Yaml:
-    """The process a tool document defines: the document itself, or its ``main`` if it is packed.
-
-    A CWL runner runs a packed document through its ``main`` process and
-    refuses one without; Sophios reads a tool the same way, once, where the
-    document is loaded, so every reader of a tool's CWL sees one process.
-    ``main`` is the ``$graph`` entry of that id, or the whole document when
-    ``cwltool --pack`` packs a single tool (no ``$graph``, ``id: '#main'``).
-    It is written out as a file of its own, so it takes the ``cwlVersion``,
-    ``$namespaces`` and ``$schemas`` the packed document declares once at its
-    top, and drops the ``id`` that placed it in the graph. A packer writes
-    ``main``'s ports as ``#main/<port>``; they lose that prefix, so each port
-    keeps the name it is bound by.
-
-    Args:
-        cwl (Yaml): A loaded CWL document.
-        source (str): Where it came from, for the diagnostic.
-
-    Raises:
-        SophiosError: ``SUBWORKFLOW_INVALID`` for a ``$graph`` with no ``main``.
-    """
-    if not isinstance(cwl, dict):
-        return cwl  # not a CWL document: cwltool refuses it at the step that runs it
-    graph = cwl.get('$graph')
-    if not isinstance(graph, list):
-        return _as_main(cwl) if cwl.get('id') in ('main', '#main') else cwl
-    processes = [entry for entry in graph if isinstance(entry, dict)]
-    main = next((entry for entry in processes if entry.get('id') in ('main', '#main')), None)
-    if main is None:
-        ids = ', '.join(str(entry.get('id')) for entry in processes)
-        raise SophiosError.error(
-            SophiosErrorCode.SUBWORKFLOW_INVALID,
-            f'{source} is a packed CWL document ($graph) with no main process; it holds: {ids}. '
-            'CWL runs a packed document through its main, so name the process to run main, '
-            'or unpack it into a file of its own')
-    shared: Yaml = {key: cwl[key] for key in ('cwlVersion', '$namespaces', '$schemas') if key in cwl}
-    return _as_main({**shared, **main})
-
-
-def _as_main(process: Yaml) -> Yaml:
-    """A packed ``main`` as a file of its own: without its ``id``, and its ports named as they are bound."""
-    process = {key: value for key, value in process.items() if key != 'id'}
-    for ports in ('inputs', 'outputs'):
-        if isinstance(process.get(ports), list):
-            process[ports] = [_without_main_prefix(port) for port in process[ports]]
-    return process
-
-
-def _without_main_prefix(port: Any) -> Any:
-    """A port of a packed ``main`` with its ``id`` as ``<port>``, not ``#main/<port>`` or ``main/<port>``."""
-    if isinstance(port, dict) and isinstance(port.get('id'), str):
-        return {**port, 'id': port['id'].removeprefix('#').removeprefix('main/')}
-    return port
 
 
 #: The keys schema-salad resolves against the document that writes them.

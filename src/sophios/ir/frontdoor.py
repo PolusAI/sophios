@@ -10,8 +10,6 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import yaml
-
 from ..lang import (
     CWL_VERSION,
     CwlRecord,
@@ -25,8 +23,8 @@ from ..lang import (
     UnresolvedName,
     parse,
 )
+from ..lang.cwl import read_tool
 from ..python_cwl_adapter import generate_CWL_CommandLineTool, get_module
-from ..utils_cwl import tool_process
 from ..wic_types import StepId, Tool, Tools
 from .resolve import (RegistrySnapshot, generated_process_id, inline_run_name, namespace_of, path_from_root,
                       run_path_name, step_sidecar, version_pins)
@@ -200,9 +198,7 @@ def _register_run(step: Step, namespace: str, document_dir: Path, reading: _Read
     name = run_path_name(run, path_from_root(target, reading.root_directory))
     reading.run_names[(document_dir, run)] = name
     if run.endswith('.cwl'):
-        with open(target, mode='r', encoding='utf-8') as handle:
-            reading.generated[StepId(name, namespace)] = Tool(
-                str(target), tool_process(yaml.safe_load(handle.read()), str(target)), from_file=True)
+        reading.generated[StepId(name, namespace)] = Tool(str(target), read_tool(str(target)), from_file=True)
     else:
         _register_workflow((namespace, name), target, reading)
     return True
