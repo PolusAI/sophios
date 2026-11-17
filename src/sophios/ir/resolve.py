@@ -10,6 +10,7 @@ from collections import Counter
 from collections.abc import Callable, Sequence
 from copy import deepcopy
 from dataclasses import dataclass, replace
+from functools import cached_property
 from hashlib import sha256
 import json
 import os
@@ -34,21 +35,34 @@ from ..lang import (
     UnresolvedName,
     WicSidecar,
 )
-from ..lang.diagnostics import Diagnostic, Diagnostics, Locator
+from ..lang.diagnostics import Diagnostic, Diagnostics, Locator, SophiosError
 from ..lang.nodes import GraphvizEntry, InputValue, OpaqueCwl, Step
-from ..wic_types import Cwl, Tools
+from ..wic_types import Cwl, Tool, Tools
 from .declarations import port_declaration
 from .types import PortDeclaration, RegistryKey
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class ToolDefinition:
     """An owned snapshot of one runnable process definition."""
 
     key: RegistryKey
-    run_path: str
-    cwl: Cwl
-    from_file: bool = False
+    source: Tool
+
+    @property
+    def run_path(self) -> str:
+        """Where the tool is, or is named as."""
+        return self.source.run_path
+
+    @property
+    def from_file(self) -> bool:
+        """Whether `run_path` is the tool's own file."""
+        return self.source.from_file
+
+    @cached_property
+    def cwl(self) -> Cwl:
+        """The tool's process, copied when first asked: the snapshot's own, read only for a tool a step runs."""
+        return deepcopy(self.source.cwl)
 
 
 #: Why a tool is not a valid CWL process, or None when it is: what `resolve` asks of each tool a step runs, before it
@@ -91,8 +105,7 @@ class RegistrySnapshot:
                    root_directory: Path | None = None) -> 'RegistrySnapshot':
         """Own a deterministic snapshot of the legacy public registry."""
         definitions = tuple(sorted((
-            ToolDefinition(RegistryKey(step_id.plugin_ns, step_id.stem),
-                           tool.run_path, deepcopy(tool.cwl), tool.from_file)
+            ToolDefinition(RegistryKey(step_id.plugin_ns, step_id.stem), tool)
             for step_id, tool in tools.items()
         ), key=lambda item: item.key))
         sources = tuple(sorted((
@@ -235,7 +248,12 @@ def _resolve_process(step: Step, index: int, sidecar: WicSidecar | None, registr
                           f'process {namespace}/{name} is absent from the supplied registry',
                           step.span)
         return None
-    cwl = tool.cwl
+    try:
+        cwl = tool.cwl
+    except SophiosError as error:  # a tool file is read here, when a step runs it
+        for diagnostic in error.diagnostics:
+            diagnostics.error(diagnostic.code, diagnostic.message, step.span, Locator(step=step.id, index=index))
+        return None
     if check is not None and (refusal := check(tool)) is not None:
         diagnostics.error(SophiosErrorCode.TOOL_REFUSED,
                           f'step {step.id!r} runs {tool.run_path}, which cwltool refuses:\n{refusal}',

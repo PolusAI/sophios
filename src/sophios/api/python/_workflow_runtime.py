@@ -43,7 +43,7 @@ from sophios.lang.error_codes import SophiosErrorCode
 # Re-exported by `workflow`, which reaches the run settings only through this adapter.
 from sophios.runners import Cwltool, Nextflow, Runner, RunSettings, Toil  # pylint: disable=unused-import
 from sophios.runtime_inputs import output_target_inputs, resolve_file_formats, runner_job_inputs
-from sophios.utils_cwl import tool_process
+from sophios.lang.cwl import read_tool, tool_process
 from sophios.wic_types import DEFAULT_BASEPATH, GraphSettings, Json, StepId, Tool, Tools, Yaml
 
 from ._inference import Inference
@@ -147,7 +147,7 @@ def load_clt(clt_path: Path, tool_registry: Tools) -> tuple[CWLCommandLineTool, 
     if clt_path.exists():
         try:
             # The process first: a packed document with no `main` is refused by name, not as "invalid".
-            yaml_file = tool_process(_load_yaml(clt_path), str(clt_path))
+            yaml_file = read_tool(str(clt_path))
             clt = load_document_by_uri(clt_path)
         except SophiosError:
             raise

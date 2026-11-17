@@ -10,6 +10,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Final, TypeAlias, TypeGuard, TypeVar
 
 from cwl_utils.parser import cwl_v1_2 as _standard
+import yaml
 
 from .diagnostics import SophiosError
 from .error_codes import SophiosErrorCode
@@ -256,3 +257,76 @@ def fields_set(value: Any) -> list[str]:
     namespaces = value.loadingOptions.namespaces or {}
     return [*standard, *(next((f'{prefix}:{name.removeprefix(uri)}' for prefix, uri in namespaces.items()
                                if name.startswith(uri)), name) for name in value.extension_fields)]
+
+
+def read_tool(path: str) -> dict[str, Any]:
+    """The process the tool file at `path` defines, read when a step first needs it.
+
+    Raises:
+        SophiosError: `wic001` for a file that is not YAML or cannot be read; see `tool_process` for the others.
+    """
+    try:
+        with open(path, mode='r', encoding='utf-8') as stream:
+            document = yaml.safe_load(stream.read())
+    except yaml.YAMLError as error:
+        raise SophiosError.error(SophiosErrorCode.INVALID_YAML,
+                                 f'The tool {path} is not valid YAML: {" ".join(str(error).split())}') from error
+    except (OSError, UnicodeDecodeError) as error:
+        raise SophiosError.error(SophiosErrorCode.INVALID_YAML,
+                                 f'The tool {path} cannot be read as UTF-8 text: {error}') from error
+    return tool_process(document, path)
+
+
+def tool_process(cwl: dict[str, Any], source: str) -> dict[str, Any]:
+    """The process a tool document defines: the document itself, or its ``main`` if it is packed.
+
+    A CWL runner runs a packed document through its ``main`` process and
+    refuses one without; Sophios reads a tool the same way, once, where the
+    document is loaded, so every reader of a tool's CWL sees one process.
+    ``main`` is the ``$graph`` entry of that id, or the whole document when
+    ``cwltool --pack`` packs a single tool (no ``$graph``, ``id: '#main'``).
+    It is written out as a file of its own, so it takes the ``cwlVersion``,
+    ``$namespaces`` and ``$schemas`` the packed document declares once at its
+    top, and drops the ``id`` that placed it in the graph. A packer writes
+    ``main``'s ports as ``#main/<port>``; they lose that prefix, so each port
+    keeps the name it is bound by.
+
+    Args:
+        cwl (dict[str, Any]): A loaded CWL document.
+        source (str): Where it came from, for the diagnostic.
+
+    Raises:
+        SophiosError: ``SUBWORKFLOW_INVALID`` for a ``$graph`` with no ``main``.
+    """
+    if not isinstance(cwl, dict):
+        return cwl  # not a CWL document: cwltool refuses it at the step that runs it
+    graph = cwl.get('$graph')
+    if not isinstance(graph, list):
+        return _as_main(cwl) if cwl.get('id') in ('main', '#main') else cwl
+    processes = [entry for entry in graph if isinstance(entry, dict)]
+    main = next((entry for entry in processes if entry.get('id') in ('main', '#main')), None)
+    if main is None:
+        ids = ', '.join(str(entry.get('id')) for entry in processes)
+        raise SophiosError.error(
+            SophiosErrorCode.SUBWORKFLOW_INVALID,
+            f'{source} is a packed CWL document ($graph) with no main process; it holds: {ids}. '
+            'CWL runs a packed document through its main, so name the process to run main, '
+            'or unpack it into a file of its own')
+    shared: dict[str, Any] = {key: cwl[key] for key in ('cwlVersion', '$namespaces', '$schemas') if key in cwl}
+    return _as_main({**shared, **main})
+
+
+def _as_main(process: dict[str, Any]) -> dict[str, Any]:
+    """A packed ``main`` as a file of its own: without its ``id``, and its ports named as they are bound."""
+    process = {key: value for key, value in process.items() if key != 'id'}
+    for ports in ('inputs', 'outputs'):
+        if isinstance(process.get(ports), list):
+            process[ports] = [_without_main_prefix(port) for port in process[ports]]
+    return process
+
+
+def _without_main_prefix(port: Any) -> Any:
+    """A port of a packed ``main`` with its ``id`` as ``<port>``, not ``#main/<port>`` or ``main/<port>``."""
+    if isinstance(port, dict) and isinstance(port.get('id'), str):
+        return {**port, 'id': port['id'].removeprefix('#').removeprefix('main/')}
+    return port
