@@ -4,7 +4,6 @@ import logging
 import glob
 import os
 from pathlib import Path
-import re
 import sys
 import tempfile
 from typing import Any, Iterable, Iterator, TypeAlias
@@ -31,8 +30,8 @@ class NoPreviouslyDefinedFilter(logging.Filter):
 class NoResolvedFilter(logging.Filter):
     # pylint:disable=too-few-public-methods
     def filter(self, record: logging.LogRecord) -> bool:
-        m = re.match(r"Resolved '.*' to '.*'", record.getMessage())
-        return not bool(m)  # (True if m else False)
+        message = record.getMessage()
+        return not (message.startswith("Resolved '") and "' to '" in message)
 
 
 def logging_filters() -> None:

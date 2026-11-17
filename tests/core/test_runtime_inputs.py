@@ -116,8 +116,8 @@ def test_an_output_target_directory_given_an_absolute_path_is_left_as_written(gi
                                              ('listed.wic', 'write_dir_listed~outDir')], ids=['one', 'two', 'listed'])
 def test_an_output_target_directory_below_calls_is_a_directory_literal_at_its_root_key(
         tmp_path: Path, source: str, key: str) -> None:
-    """The job key is the step's qualified input, however many calls deep, and whether the tool writes its
-    requirements as a mapping or as a list."""
+    """The job key is the step's qualified input, however many calls deep, whether the tool writes its
+    requirements as a mapping or as a list, and whether it reads the input as inputs.outDir or inputs["outDir"]."""
     out = _written(tmp_path, source, f'{key}: {{class: Directory, location: result.outDir}}\n')
     assert _job(out, source.removesuffix('.wic')) == {
         key: {'class': 'Directory', 'basename': 'result.outDir', 'listing': []}}

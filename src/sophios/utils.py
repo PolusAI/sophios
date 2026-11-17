@@ -1,4 +1,13 @@
-from typing import Any
+import re
+from typing import Any, Final
+
+#: A terminal control sequence: a colour or cursor code, or a character-set switch, as cwltool and Nextflow print.
+_TERMINAL_CODE: Final = re.compile(r'\x1b(?:\[[0-9;]*[A-Za-z]|\([A-Z0-9])')
+
+
+def strip_terminal_codes(text: str) -> str:
+    """`text` without the terminal's control sequences."""
+    return _TERMINAL_CODE.sub('', text)
 
 
 def recursively_delete_dict_key(key: str, obj: Any) -> Any:

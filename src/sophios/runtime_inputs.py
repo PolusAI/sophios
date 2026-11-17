@@ -5,18 +5,15 @@ from __future__ import annotations
 import copy
 from collections.abc import Callable, Collection, Mapping
 from pathlib import PurePath, PurePosixPath, PureWindowsPath
-import re
 from typing import Any, TypeAlias
 
 from cwl_utils.parser.cwl_v1_2 import Dirent, InitialWorkDirRequirement
 
 from sophios.edam import resolve_file_format
 from sophios.ir.resolved import InputRef, ResolvedWorkflow, Through, tool_steps
-from sophios.lang.cwl import Process, ports_named, required, requirement
+from sophios.lang.cwl import Process, inputs_read, ports_named, required, requirement
 from sophios.wic_types import Json, Tool
 
-
-_INPUT_REFERENCE = re.compile(r"\binputs\.([A-Za-z_][A-Za-z0-9_-]*)")
 
 #: An empty directory of a given name, as a runner takes one in a job.
 EmptyDirectory: TypeAlias = Callable[[str], Json]
@@ -98,7 +95,7 @@ def _output_target_inputs(run: Tool) -> set[str]:
     target_inputs: set[str] = set()
     for output in process.outputs:
         if _is_directory(output.type_) and (binding := getattr(output, "outputBinding", None)) is not None:
-            for input_name in _referenced_inputs(binding.glob):
+            for input_name in inputs_read(binding.glob):
                 if input_name in writable_inputs and input_name in inputs and _is_directory(inputs[input_name].type_):
                     target_inputs.add(input_name)
     return target_inputs
@@ -107,7 +104,7 @@ def _output_target_inputs(run: Tool) -> set[str]:
 def _writable_initial_workdir_inputs(process: Process) -> set[str]:
     listing = getattr(requirement(process, InitialWorkDirRequirement), "listing", None)
     return {name for entry in listing if isinstance(entry, Dirent) and entry.writable is True
-            for name in _referenced_inputs(entry.entry)} if isinstance(listing, list) else set()
+            for name in inputs_read(entry.entry)} if isinstance(listing, list) else set()
 
 
 def _is_directory(cwl_type: Any) -> bool:
@@ -142,15 +139,3 @@ def _output_target_basename(location: str, source_key: str) -> str:
             f"output-target Directory input {source_key!r} must be a simple directory name, got {location!r}"
         )
     return basename
-
-
-def _referenced_inputs(value: Any) -> set[str]:
-    match value:
-        case str() as text:
-            return set(_INPUT_REFERENCE.findall(text))
-        case list() as items:
-            return set().union(*(_referenced_inputs(item) for item in items))
-        case Mapping() as mapping:
-            return set().union(*(_referenced_inputs(item) for item in mapping.values()))
-        case _:
-            return set()

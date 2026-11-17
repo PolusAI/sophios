@@ -32,6 +32,7 @@ from .ir.locations import input_paths
 from .lang.diagnostics import Diagnostic, Severity, SophiosError
 from .lang.error_codes import SophiosErrorCode
 from .runners import RunSettings
+from .utils import strip_terminal_codes
 from .wic_types import Yaml
 
 #: Engines `<engine> info` reaches: it needs the engine's daemon or machine, and no container or network.
@@ -339,10 +340,6 @@ def _program_problems(found: Needs, run: RunSettings) -> list[Diagnostic]:
     return problems
 
 
-#: A terminal control sequence: the nextflow launcher colours what it prints.
-_CONTROL: Final = re.compile(r'\x1b(?:\[[0-9;]*[A-Za-z]|\([A-Z0-9])')
-
-
 def nextflow_problems(run: RunSettings) -> list[Diagnostic]:
     """A `wic029` when a run cannot start `nextflow`: it is not here, or `nextflow -version` fails, as it does
     without a Java it can run, or Sophios cannot run it on this platform. The first line it printed is quoted.
@@ -364,7 +361,7 @@ def nextflow_problems(run: RunSettings) -> list[Diagnostic]:
     proc = sub.run([program, '-version'], check=False, stdout=sub.PIPE, stderr=sub.STDOUT, text=True, errors='replace')
     if proc.returncode == 0:
         return []
-    said = next((line.strip() for line in _CONTROL.sub('', proc.stdout).splitlines() if line.strip()),
+    said = next((line.strip() for line in strip_terminal_codes(proc.stdout).splitlines() if line.strip()),
                 'it said nothing')
     return [_missing(f'nextflow -version exited with status {proc.returncode} ({said}): Nextflow needs a Java it '
                      'can run; install one and point JAVA_HOME at it')]
