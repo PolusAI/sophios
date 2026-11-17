@@ -17,7 +17,8 @@ from sophios.wic_types import Yaml
 
 from . import ast_strategies as strat
 from .ast_strategies import hints_values, passthrough_keys, passthrough_values
-from .compile_harness import COMPILED, compile_info
+from .budgets import COMPILED
+from .compile_harness import compile_info
 from .cwl_validation import validate_cwl
 from .hermetic import compile_hermetic, cwl_tree
 

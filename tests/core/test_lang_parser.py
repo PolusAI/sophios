@@ -37,13 +37,11 @@ from sophios.lang.spans import SourceSpan
 from sophios.utils_yaml import Key
 
 from . import provocations
-from .budgets import budget
+from .budgets import FAST, budget
 from .cases import DATA, case_dirs, diagnostic as as_written
 from .test_setup import workflow_paths
 from .strategies import documents, identifiers, input_lines, pinned, scalar_spellings
 from .wic_reading import YamlWithSophiosTagsOpaque
-
-FAST = budget(200)
 
 #: The exported schema, as an editor validates a document's JSON projection with it.
 SCHEMA_VALIDATOR: Final = jsonschema.Draft202012Validator(wic_schema())

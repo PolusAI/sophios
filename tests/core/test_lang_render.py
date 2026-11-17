@@ -12,13 +12,11 @@ from sophios.lang import Document, InlineLiteral, Step, parse
 from sophios.lang.render import render
 from sophios.lang.spans import SourceSpan
 
-from .budgets import budget
+from .budgets import FAST, budget
 from .cases import DATA
 from .strategies import documents, identifiers, pinned
 from .test_lang_parser import reading
 from .wic_reading import YamlWithSophiosTagsOpaque
-
-FAST = budget(200)
 
 # Literals are drawn as YAML source text rather than converted from Python values: writing the spelling out keeps
 # the awkward cases visible, and leaves the test no quoting logic of its own to agree with the renderer's. Included on

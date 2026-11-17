@@ -3,6 +3,7 @@ from pathlib import Path
 import subprocess as sub
 import time
 
+import numpy
 import yaml
 
 from .helpers import REPO_ROOT
@@ -30,35 +31,7 @@ def _run_command(cmd: list[str]) -> str:
 
 def _quadratic_coefficient(samples: dict[int, float]) -> float:
     """Return the x^2 coefficient from a least-squares quadratic timing fit."""
-    rows = [[float(size * size), float(size), 1.0] for size in samples]
-    values = list(samples.values())
-    normal_matrix = [
-        [sum(row[i] * row[j] for row in rows) for j in range(3)]
-        for i in range(3)
-    ]
-    normal_vector = [sum(row[i] * value for row, value in zip(rows, values)) for i in range(3)]
-    augmented = [
-        [*matrix_row, vector_value]
-        for matrix_row, vector_value in zip(normal_matrix, normal_vector)
-    ]
-
-    for pivot in range(3):
-        pivot_row = max(range(pivot, 3), key=lambda row: abs(augmented[row][pivot]))
-        assert abs(augmented[pivot_row][pivot]) > 1e-12
-        augmented[pivot], augmented[pivot_row] = augmented[pivot_row], augmented[pivot]
-
-        pivot_value = augmented[pivot][pivot]
-        augmented[pivot] = [value / pivot_value for value in augmented[pivot]]
-        for row_index in range(3):
-            if row_index == pivot:
-                continue
-            factor = augmented[row_index][pivot]
-            augmented[row_index] = [
-                current - factor * pivot_value
-                for current, pivot_value in zip(augmented[row_index], augmented[pivot])
-            ]
-
-    return augmented[0][3]
+    return float(numpy.polyfit(list(samples), list(samples.values()), 2)[0])
 
 
 def test_scattering_scaling(tmp_path: Path) -> None:

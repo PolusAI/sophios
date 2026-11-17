@@ -302,8 +302,16 @@ _VALUES = st.recursive(
     lambda inner: st.lists(inner, max_size=2), max_leaves=4)
 
 
+#: Values their types take: without them, a coercer that refused every value would pass the property.
+_TAKEN: Final[tuple[tuple[str, Yaml, Any], ...]] = (
+    ('string', {}, 'a'), ('int', {}, 1), ('File', {'format': 'edam:format_1'}, {'class': 'File', 'location': 'a'}))
+
+
 @pytest.mark.skip_pypi_ci
 @given(_TYPES, st.sampled_from([{}, {'format': 'edam:format_1'}]), _VALUES)
+@example(*_TAKEN[0])
+@example(*_TAKEN[1])
+@example(*_TAKEN[2])
 @COVERAGE
 def test_a_job_value_is_its_own_normal_form(raw: Any, fmt: Yaml, value: Any) -> None:
     """Coercing a coerced job value changes nothing, which is what lets a
@@ -313,6 +321,7 @@ def test_a_job_value_is_its_own_normal_form(raw: Any, fmt: Yaml, value: Any) -> 
     try:
         once = coerce_job_value(name, declaration, value)
     except SophiosError:
+        assert (raw, fmt, value) not in _TAKEN, 'a value its type takes was refused'
         return
     assert coerce_job_value(name, declaration, once) == once
 

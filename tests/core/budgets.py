@@ -29,3 +29,8 @@ def budget(max_examples: int) -> settings:
     property in this suite relaxes: generated workflows are slow to compile."""
     return settings(max_examples=max_examples * SCALE,
                     suppress_health_check=[HealthCheck.too_slow], deadline=None, print_blob=True)
+
+
+#: The budget of a property that only parses or renders; one that compiles takes `COMPILED`.
+FAST: Final = budget(200)
+COMPILED: Final = budget(100)

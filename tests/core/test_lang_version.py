@@ -13,8 +13,8 @@ from sophios.lang.error_codes import SophiosErrorCode
 import sophios.cli
 import sophios.main
 
+from .budgets import FAST
 from .cases import DATA
-from .compile_harness import FAST
 from .test_setup import load_test_registry
 
 #: The key earlier Sophios versions annotated compiled CWL with.
