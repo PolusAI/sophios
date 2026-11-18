@@ -30,25 +30,32 @@ histories = st.lists(
 @pytest.mark.fast
 @given(histories.flatmap(lambda known: st.tuples(
     st.just(known), st.none() | st.sampled_from(known) | st.just('9.9.9'),
-    st.lists(st.sampled_from(known) | st.just('9.9.9'), max_size=4).map(tuple))))
-@example((KNOWN_VERSIONS, '9.9.9', ()))
-@example((KNOWN_VERSIONS, None, ('9.9.9',)))
+    st.lists(st.sampled_from(known) | st.just('9.9.9'), max_size=4).map(tuple),
+    st.lists(st.sampled_from(known), max_size=2).map(tuple))))
+@example((KNOWN_VERSIONS, '9.9.9', (), ()))
+@example((KNOWN_VERSIONS, None, ('9.9.9',), ()))
+@example((KNOWN_VERSIONS, KNOWN_VERSIONS[0], (), (KNOWN_VERSIONS[-1],)))
 @FAST
-def test_resolution_follows_the_rule_the_spec_states(case: tuple[tuple[str, ...], str | None, tuple[str, ...]]) -> None:
+def test_resolution_follows_the_rule_the_spec_states(
+        case: tuple[tuple[str, ...], str | None, tuple[str, ...], tuple[str, ...]]) -> None:
     """Language spec §6. The explicit setting wins regardless of what the tree pins. A version that does not exist,
     asked for or pinned, is an error naming the known ones, never a silent fallback to something else (wic017).
     Agreeing pins resolve to their one version; disagreeing pins are a reported conflict, never an average or a quiet
     winner (wic018). With nothing to satisfy, the newest: a pin is the only thing that moves resolution below it,
-    and order is history position, not string order: '0.0.10' is newer than '0.0.2'. So untagged never fails."""
-    known, requested, pins = case
+    and order is history position, not string order: '0.0.10' is newer than '0.0.2'. So untagged never fails. Syntax
+    the tree reaches that a later version brought is refused under an older one (wic060), never read as it would be
+    later, so an untagged tree compiles whatever it holds."""
+    known, requested, pins, needs = case
     if requested is not None:
         expected: object = requested if requested in known else SophiosErrorCode.UNKNOWN_LANG_VERSION
     elif set(pins) - set(known):
         expected = SophiosErrorCode.UNKNOWN_LANG_VERSION
     else:
         expected = SophiosErrorCode.LANG_VERSION_CONFLICT if len(set(pins)) > 1 else (pins or known)[-1]
+    if expected in known and any(known.index(need) > known.index(str(expected)) for need in needs):
+        expected = SophiosErrorCode.LANG_VERSION_TOO_OLD
     try:
-        assert resolve_lang_version(requested, pins, known=known) == expected
+        assert resolve_lang_version(requested, pins, known=known, needs=[(need, None) for need in needs]) == expected
     except SophiosError as caught:
         first = list(caught.diagnostics)[0]
         assert first.code is expected, caught

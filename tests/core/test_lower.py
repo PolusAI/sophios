@@ -88,7 +88,7 @@ def test_a_well_formed_document_lowers_whole(document: Document) -> None:
 
 
 @pytest.mark.fast
-@given(shapes().map(lambda shape: parse(json.dumps(shape), 'recovered.wic').document))
+@given(shapes().map(lambda shape: parse(json.dumps(shape), 'recovered.wic').document).filter(bool))  # a workflow
 @example(parse('steps:\n- id: ""\n  in: {}\n', 'recovered.wic').document)
 @example(parse('steps:\n- \n', 'recovered.wic').document)
 @example(parse('steps:\n- id:\n', 'recovered.wic').document)

@@ -248,6 +248,12 @@ def requirement(process: Process, cls: type[_Requirement]) -> _Requirement | Non
                 None)
 
 
+#: Where a CWL expression starts: a parameter reference or a JavaScript expression, `$(`, or a function body, `${`.
+EXPRESSION: Final = re.compile(r'\$[({]')
+
+#: A size, as `needs: ram:` may write one: a whole number, not zero, of mebibytes, gibibytes or tebibytes.
+SIZE: Final = re.compile('([0-9]*[1-9][0-9]*)([MGT])')
+
 #: An input a CWL expression reads, `inputs.name` or `inputs["name"]`: `inputs.name-1` is `inputs.name` minus 1.
 _INPUT_READ: Final = re.compile(r'\binputs(?:\.([A-Za-z_]\w*)|\[\s*["\']([^"\']+)["\']\s*\])')
 

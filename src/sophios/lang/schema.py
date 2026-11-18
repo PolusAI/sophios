@@ -13,7 +13,7 @@ from dataclasses import fields
 from types import MappingProxyType
 from typing import Final, final
 
-from .nodes import Document, OutputBinding, Shape, Step, WicSidecar, surface_of
+from .nodes import Document, OutputBinding, Shape, Step, ToolDocument, WicSidecar, surface_of
 from .cwl import CWL_VERSIONS
 from .parser import SIDECAR_WRAPPER_KEY, Grammar, JsonSchema
 
@@ -66,18 +66,13 @@ def wic_schema() -> JsonSchema:
     annotate or edit the result in place.
     """
     document = _object_schema(Document)
-    document['properties']['cwlVersion'] = {
-        'enum': list(CWL_VERSIONS),
-        'description': 'Ignored in favour of the substrate version, '
-                       'but must be one the toolchain runs (language spec §1).',
-    }
     return {
         '$schema': Json.DIALECT,
         '$id': Json.SCHEMA_ID,
-        'title': 'Sophios workflow',
-        'description': 'Desugared projection of a Sophios document. '
+        'title': 'Sophios document',
+        'description': 'Desugared projection of a Sophios document: a workflow, or a tool when it says what runs. '
                        'See docs/wic-reference.md.',
-        **document,
+        'anyOf': [{**document, 'not': {'$ref': '#/$defs/runs'}}, {'$ref': '#/$defs/tool'}],
         '$defs': _defs(),
     }
 
@@ -104,15 +99,25 @@ def _object_schema(node_type: type, *, omit: frozenset[str] = frozenset()) -> Js
                 # left unconstrained — Sophios reads them, CWL owns their shapes.
                 for key in sorted(Grammar.INTERPRETED_STEP_KEYS):
                     properties[key] = {'description': f'Interpreted by Sophios: {key} (.wic reference §2.2).'}
+                # But an inline body that says what runs is a tool, of a tool's shape.
+                properties['run']['anyOf'] = [{'not': {'$ref': '#/$defs/runs'}}, {'$ref': '#/$defs/tool'}]
             case Shape.SIDECAR_ENTRIES:
                 # Closed, and each value's shape is the one the parser checks.
                 properties.update(_values_schema(Grammar.SIDECAR_VALUES))
+            case Shape.TOOL_VALUE if form.key is not None:
+                properties[form.key] = deepcopy(Grammar.TOOL_VALUES[form.key])  # the shape the parser checks
             case _ if form.key is not None:
                 properties[form.key] = _SHAPE_SCHEMA[form.shape]()
             case _:
                 # IDENTITY without a key is carried positionally, not as a key.
                 continue
 
+    if node_type in (Document, ToolDocument):
+        properties['cwlVersion'] = {
+            'enum': list(CWL_VERSIONS),
+            'description': 'Ignored in favour of the substrate version, '
+                           'but must be one the toolchain runs (language spec §1).',
+        }
     return {'type': 'object', 'properties': properties, 'additionalProperties': open_object}
 
 
@@ -135,6 +140,9 @@ def _defs() -> dict[str, JsonSchema]:
         'wicBlock': _wic_block(),
         'wicStepBlock': _wic_step_block(),
         'wicStepEntry': _wic_step_entry(),
+        'runs': {'description': 'A mapping that says what runs is a tool (.wic reference §2.4).', 'type': 'object',
+                 'anyOf': [{'required': [key]} for key in Grammar.TOOL_RUNS]},
+        'tool': {**_object_schema(ToolDocument), '$ref': '#/$defs/runs'},
     }
 
 

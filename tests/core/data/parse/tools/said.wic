@@ -1,0 +1,14 @@
+command: samtools view -b '-o' {out} -@ {threads} 'two words' {{b}} {in-file}
+inputs:
+  in-file: {type: File, inputBinding: {prefix: -i}}
+  out: string
+  threads: int?
+outputs:
+  log: stderr
+  made: {from: "{out}", label: what view writes}
+  index: "{in-file}.bai"
+  kept: {type: File, outputBinding: {glob: x}}
+docker: quay.io/biocontainers/samtools:1.21
+needs: {cores: 4, ram: 064G}
+stderr: view.log
+wic: {lang_version: 0.1.0}

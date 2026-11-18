@@ -5,12 +5,13 @@ Python objects, because composition preserves the source marks that make
 diagnostics worth reading. Nothing here raises: a caller always receives a
 result carrying whatever was parsed plus whatever went wrong.
 """
+import math
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from itertools import chain
 from types import MappingProxyType
-from typing import Any, Final, Iterator, Mapping, NoReturn, TypedDict, final, get_args
+from typing import Any, Final, Iterator, Mapping, NoReturn, TypedDict, cast, final, get_args
 
 import yaml
 from jsonschema import Draft202012Validator
@@ -28,13 +29,16 @@ from .nodes import (
     InputValue,
     OpaqueCwl,
     OutputBinding,
+    Port,
     RawCwlRef,
     Step,
     StepKey,
+    ToolDocument,
     UnresolvedName,
     WicSidecar,
+    Word,
 )
-from .cwl import CWL_VERSIONS, SCATTER_METHODS
+from .cwl import CWL_VERSIONS, EXPRESSION, SCATTER_METHODS, SIZE
 from .spans import SourceSpan
 from .support import STEP_INPUT_RECORD_KEYS
 
@@ -48,13 +52,36 @@ _RANKSAME_ENTRY: Final = '\\([0-9]+, [A-Za-z0-9_\\.]+\\)'
 JsonSchema = TypedDict('JsonSchema', {
     '$schema': str, '$id': str, '$ref': str, '$defs': 'dict[str, JsonSchema]',
     'title': str, 'description': str, 'type': 'str | list[str]', 'enum': list[str], 'pattern': str,
-    'minLength': int, 'minProperties': int, 'maxProperties': int, 'required': list[str],
+    'minLength': int, 'exclusiveMinimum': int, 'minProperties': int, 'maxProperties': int, 'required': list[str],
     'properties': 'dict[str, JsonSchema]', 'patternProperties': 'dict[str, JsonSchema]',
     'additionalProperties': 'bool | JsonSchema', 'items': 'JsonSchema',
-    'oneOf': 'list[JsonSchema]', 'anyOf': 'list[JsonSchema]',
+    'oneOf': 'list[JsonSchema]', 'anyOf': 'list[JsonSchema]', 'not': 'JsonSchema',
 }, total=False)
 
 _NON_EMPTY: Final[JsonSchema] = {'type': 'string', 'minLength': 1}
+#: Where a value ends: nothing follows it. `$` stops before the line break a block scalar ends in.
+_END: Final = '(?![\\s\\S])'
+#: What a tool needs of a resource: a positive number, or a CWL expression.
+_AMOUNT: Final[JsonSchema] = {'type': ['number', 'string'], 'exclusiveMinimum': 0,
+                              'pattern': f'^\\s*{EXPRESSION.pattern}',
+                              'description': 'a positive number or a CWL expression'}
+
+
+#: A port of a tool, as its `inputs:` and as its `outputs:` write one under its name.
+_PORTS: Final[Mapping[str, JsonSchema]] = MappingProxyType({
+    'inputs': {'type': ['string', 'array', 'object'], 'properties': {'inputBinding': {'type': 'object'}},
+               'description': 'a type or a CWL port (in a flow mapping a comma starts another input: write the '
+                              'port on a line of its own, or quote it)'},
+    'outputs': {'type': ['string', 'object'], 'properties': {'from': {'type': 'string'}},
+                'description': 'a line (`stdout`, `stderr` or a pattern such as `{name}.txt`) or a CWL port'}})
+#: The two sections of them: a mapping of each name to its port, or CWL's list of ports, each a mapping named by its
+#: `id:`, whose name is what follows the last `#`; and no value is no port.
+_SECTIONS: Final[Mapping[str, JsonSchema]] = MappingProxyType({key: {
+    'type': ['object', 'array', 'null'], 'additionalProperties': port,
+    'description': 'a mapping of names to ports, or a list of ports each named by its `id:`', 'items': {
+        **port, 'type': 'object', 'required': ['id'],
+        'properties': {**port['properties'], 'id': {'type': 'string', 'pattern': '[^#]$'}}}}
+    for key, port in _PORTS.items()})
 
 
 @final
@@ -127,6 +154,32 @@ class Grammar:  # pylint: disable=too-few-public-methods  # a namespace, not a t
         'inference': {},
     })
 
+    #: The keys that say what a tool runs. One of them makes a document, or a step's inline `run:` body, a tool, as
+    #: `steps` makes a document a workflow.
+    TOOL_RUNS: Final = ('command', 'script')
+
+    #: Every key of its own a tool has (.wic reference §2.4), with the JSON Schema of its value; any other key of a
+    #: tool is CWL, copied. The parser checks each value (`wic059`, in the words of its `description` when it has
+    #: one) and the exported schema states the same table.
+    TOOL_VALUES: Final[Mapping[str, JsonSchema]] = MappingProxyType({
+        'command': {'type': ['string', 'array'], 'items': {'type': 'string'},
+                    'description': 'a command line as you would type it, or the list of its words'},
+        'script': {'type': 'string'},
+        **_SECTIONS,
+        'docker': {'type': 'string', 'pattern': f'^[^\\s,]+{_END}', 'description': 'one image, such as python:3.12'},
+        'needs': {'type': 'object', 'additionalProperties': False, 'properties': {'cores': _AMOUNT, 'ram': {
+            **_AMOUNT, 'pattern': f'^{SIZE.pattern}{_END}|{_AMOUNT["pattern"]}',
+            'description': 'a positive number of mebibytes, a size such as 512M, 64G or 1T, or a CWL expression'}}},
+    })
+
+    #: A word of a command line as typed (.wic reference §2.4): text, 'quoted' or "quoted" text and `{name}`
+    #: placeholders, up to a space; or a quote that never closes.
+    LINE_WORD: Final = re.compile(r"""(?:'[^']*'|"[^"]*"|\{[^{}]*\}|[^\s'"])+|\S""")
+    #: What a line holds beside its text: `{{` and `}}`, the braces they are; `{name}`, an input; a brace alone.
+    LINE_PLACE: Final = re.compile(r'\{\{|\}\}|\{([^{}]*)\}|[{}]')
+    #: What a word of a typed line holds only between quotes: a space, what only a shell reads, a quote; or nothing.
+    NEEDS_A_QUOTE: Final = re.compile(r"""[\s|&;<>()`$*?\[\]\\'"]|^$""")
+
     #: `wic:` sidecar step keys have the surface form "(1, step_name)".
     WIC_STEP_KEY: Final = re.compile(r'^\(\s*(\d+)\s*,\s*(.+?)\s*\)$')
 
@@ -141,13 +194,16 @@ class Grammar:  # pylint: disable=too-few-public-methods  # a namespace, not a t
 class ParseResult:
     """The outcome of parsing one document.
 
-    `document` is None only when nothing could be recovered — malformed YAML,
-    or a root that is not a mapping. Otherwise it is present even alongside
-    errors, so a caller can report several problems at once.
+    `document` is the workflow the text is, and `tool` the tool it is when it
+    says `command:` or `script:`: one of the two. Both are None only when
+    nothing could be recovered — malformed YAML, or a root that is not a
+    mapping. Otherwise one is present even alongside errors, so a caller can
+    report several problems at once.
     """
 
     document: Document | None
     diagnostics: Diagnostics
+    tool: ToolDocument | None = None
 
 
 def _every_node(root: yaml.nodes.Node) -> list[yaml.nodes.Node]:
@@ -271,13 +327,13 @@ def _start(span: SourceSpan | None) -> tuple[int, int]:
 
 
 def parse(text: str, filename: str = '<string>') -> ParseResult:
-    """Parse `.wic` source text into a `Document`.
+    """Parse `.wic` source text into a `Document`, or into a `ToolDocument` when it says `command:` or `script:`.
 
     This function is total: it never raises, for any input. Malformed YAML,
     wrong node kinds, and unknown tags are all reported as diagnostics, in
     reading order, so a reader works down the file once.
     """
-    reader = _Reader(filename)
+    reader = _Reader(filename, text)
     whole = SourceSpan(filename, 1, 1, text.count('\n') + 1, 1)
     try:
         root = yaml.compose(text, Loader=yaml.SafeLoader)
@@ -296,17 +352,21 @@ def parse(text: str, filename: str = '<string>') -> ParseResult:
             reader.error(SophiosErrorCode.UNKNOWN_TAG,
                          f'unknown tag {node.tag!r}; the Sophios tags are !ii, !&, !*, and !cwl', node)
     failure = _load(root, nodes, reader.span(root))
-    document = None
+    document = tool = None
     if isinstance(root, yaml.nodes.MappingNode):
-        document = reader.document(root)
+        if reader.runs(root):
+            tool = reader.tool(root)
+        else:
+            document = reader.document(root)
     else:
         reader.error(SophiosErrorCode.NOT_A_MAPPING, f'a Sophios document must be a mapping, found {_kind(root)}', root)
     # What the loader cannot build is reported unless the parser has reported an error at that place: both can
     # trip over one node -- a collection used as a key or as a name, a misplaced `!&` -- and one mistake earns one
     # diagnostic. A root that is no mapping was not read, which is no reason to keep quiet about its content.
-    if failure and (document is None or all(_start(found.span) != _start(failure[1]) for found in reader.diags)):
+    if failure and ((document or tool) is None
+                    or all(_start(found.span) != _start(failure[1]) for found in reader.diags)):
         reader.diags.error(SophiosErrorCode.UNKNOWN_TAG, *failure)
-    return ParseResult(document, Diagnostics(sorted(reader.diags, key=lambda found: _start(found.span))))
+    return ParseResult(document, Diagnostics(sorted(reader.diags, key=lambda found: _start(found.span))), tool)
 
 
 # --------------------------------------------------------------------------
@@ -319,6 +379,7 @@ class _Reader:
     """One reading of one file: where its nodes are written, and what has been reported about them."""
 
     file: str
+    text: str
     diags: Diagnostics = field(default_factory=Diagnostics)
 
     def span(self, node: yaml.nodes.Node, start: yaml.nodes.Node | None = None) -> SourceSpan:
@@ -344,7 +405,9 @@ class _Reader:
                 kept.append((key_node, key, value_node))
         return kept
 
-    def _listed(self, key: str, node: yaml.nodes.Node) -> OpaqueCwl:
+    def _listed(self, key: str, node: yaml.nodes.Node,
+                named: list[tuple[str, yaml.nodes.Node, OpaqueCwl]] | None = None,
+                malformed: SophiosErrorCode = SophiosErrorCode.EXPECTED_MAPPING) -> OpaqueCwl:
         """Materialise `inputs`, `outputs`, `requirements` or `hints`, reading CWL's list form as its mapping form.
 
         CWL writes each as a mapping or as a list of entries named by `id:` (ports)
@@ -354,7 +417,9 @@ class _Reader:
         after the `#`, or a name already taken cannot be a mapping entry and is
         reported. A list holding an `$import` or `$include`
         entry cannot be keyed, since that entry is named by a file only cwltool
-        reads, so it is returned as written for cwltool to resolve.
+        reads, so it is returned as written for cwltool to resolve. `named`, when
+        given, gets every entry that has a name, as the name, the entry's node
+        and its other fields: one whose name is taken too. An entry that cannot be read is reported as `malformed`.
         """
         value = self._opaque(node)
         if not isinstance(node, yaml.nodes.SequenceNode) or not isinstance(value, list) or any(
@@ -365,19 +430,22 @@ class _Reader:
         for entry_node, entry in zip(node.value, value, strict=True):
             name = entry.get(named_by) if isinstance(entry, dict) else None
             if not isinstance(entry, dict) or not isinstance(name, str):
-                self.error(SophiosErrorCode.EXPECTED_MAPPING,
-                           f'a list-form {key}: entry must be a mapping with a string {named_by}:', entry_node)
+                self.error(malformed, f'a list-form {key}: entry must be a mapping with a string {named_by}:',
+                           entry_node)
                 continue
             written, name = name, name.rsplit('#', 1)[-1] if named_by == 'id' else name
+            body = {field: item for field, item in entry.items() if field != named_by}
             if named_by == 'id' and not name:
-                self.error(SophiosErrorCode.EXPECTED_MAPPING,
-                           f'a list-form {key}: entry id: {written!r} names no port: '
+                self.error(malformed, f'a list-form {key}: entry id: {written!r} names no port: '
                            'the name is the part after the last #, and it must not be empty', entry_node)
-            elif name in mapping:
+                continue
+            if named is not None:
+                named.append((name, entry_node, body))
+            if name in mapping:
                 self.error(SophiosErrorCode.DUPLICATE_KEY,
                            f'{key}: entry {name!r} is defined more than once', entry_node)
             else:
-                mapping[name] = {field: item for field, item in entry.items() if field != named_by}
+                mapping[name] = body
         return mapping
 
     def document(self, root: yaml.nodes.MappingNode) -> Document:
@@ -393,17 +461,189 @@ class _Reader:
             elif key == 'wic':
                 sidecar = self._sidecar(value_node)
             else:
-                value = self._listed(key, value_node) if key in Grammar.LISTED_BY else self._opaque(value_node)
+                value = self._passed(key, value_node)
                 passthrough.append((key, value))
-                if key == 'cwlVersion' and value not in CWL_VERSIONS:
-                    # The compiler writes its own; an authored one must be one the toolchain runs (language spec §1).
-                    self.error(SophiosErrorCode.UNSUPPORTED_CWL_VERSION,
-                               f'cwlVersion must be one of {", ".join(CWL_VERSIONS)}, found {_found(value)}',
-                               value_node)
                 if key in ('inputs', 'outputs') and isinstance(value_node, yaml.nodes.MappingNode):
                     port_spans.extend((key, name.value, self.span(name)) for name, _ in value_node.value
                                       if isinstance(name, yaml.nodes.ScalarNode))
         return Document(steps, sidecar, tuple(passthrough), self.span(root), as_mapping, tuple(port_spans))
+
+    def _passed(self, key: str, node: yaml.nodes.Node) -> OpaqueCwl:
+        """A top-level key the language does not read: CWL, kept as written, its list forms keyed."""
+        value = self._listed(key, node) if key in Grammar.LISTED_BY else self._opaque(node)
+        if key == 'cwlVersion' and value not in CWL_VERSIONS:
+            # The compiler writes its own; an authored one must be one the toolchain runs (language spec §1).
+            self.error(SophiosErrorCode.UNSUPPORTED_CWL_VERSION,
+                       f'cwlVersion must be one of {", ".join(CWL_VERSIONS)}, found {_found(value)}', node)
+        return value
+
+    def runs(self, node: yaml.nodes.Node) -> list[yaml.nodes.Node]:
+        """The keys of `node` that say what a tool runs: a mapping with one is a tool."""
+        return [key for key, _ in node.value if isinstance(key, yaml.nodes.ScalarNode)
+                and key.value in Grammar.TOOL_RUNS] if isinstance(node, yaml.nodes.MappingNode) else []
+
+    def tool(self, root: yaml.nodes.Node) -> ToolDocument:
+        """Build a ToolDocument from a mapping that says `command:` or `script:`: a document, or a step's inline
+        `run:` body. Each of its own keys is checked against its shape (`wic059`) and read into what it says, each
+        word and each port with its place; every other key is CWL. A key that is refused is read as unsaid, so one
+        mistake earns one diagnostic. What the tool cannot mean (`wic058`) is reported in the same reading, unless
+        its `inputs:` could not be read.
+        """
+        nodes = {key: (at, value) for at, key, value in self._entries(root.value, 'tool key')}
+        keys = tuple((key, self.span(at)) for key, (at, _) in nodes.items())
+        defining = [key for key in nodes if key in ('steps', *Grammar.TOOL_RUNS)]
+        for key in defining[1:]:
+            self._refuse(f'`{key}:` beside `{defining[0]}:`: a document has one defining key. `steps:` makes it a '
+                         'workflow, `command:` or `script:` a tool; a workflow runs a tool from a step '
+                         '(`run: tool.wic`)', self.span(nodes[key][0]))
+        reported = len(self.diags)
+        # A placeholder is an input, so `inputs:` is read first, wherever it is written.
+        said: dict[str, Any] = {'inputs': self._ports('inputs', nodes['inputs'][1]) if 'inputs' in nodes else ()}
+        declared = {port.name: port for port in said['inputs']} if len(self.diags) == reported else None
+        passthrough: list[tuple[str, OpaqueCwl]] = []
+        for key, (_, node) in nodes.items():
+            reported = len(self.diags)
+            if key == 'wic':
+                said['sidecar'] = self._sidecar(node)
+            elif key == 'outputs':
+                said[key] = self._ports(key, node, declared)
+            elif key in Grammar.TOOL_VALUES and key != 'inputs':
+                value = self._opaque(node)
+                if len(self.diags) == reported and self._shaped(Grammar.TOOL_VALUES[key], value, node, key) \
+                        and key not in defining[1:]:
+                    said[key] = self._words(node, declared) if key == 'command' else tuple(
+                        value.items()) if isinstance(value, dict) else value
+            elif key not in ('inputs', 'steps', *defining[1:]):
+                value = self._passed(key, node)
+                self._plain(value, node)
+                passthrough.append((key, value))
+        return ToolDocument(**said, passthrough=tuple(passthrough), span=self.span(root), keys=keys)
+
+    def _ports(self, key: str, node: yaml.nodes.Node, declared: Mapping[str, Port] | None = None) -> tuple[Port, ...]:
+        """The `inputs:` or `outputs:` of a tool as its ports, each where it is named: a mapping of names, or CWL's
+        list of ports, each named by its `id:`. Each is checked against the port `Grammar.TOOL_VALUES` gives the
+        section; one that is not of its shape is reported and left out, and one named twice is held to its shape as
+        the first is. An output that says a line, alone or as its `from:`, has it read where it is written, a
+        placeholder of it one of the inputs `declared`."""
+        section = Grammar.TOOL_VALUES[key]
+        port = cast(JsonSchema, section['additionalProperties'])
+        entries: list[tuple[str, yaml.nodes.Node, OpaqueCwl]] = []
+        if isinstance(node, yaml.nodes.MappingNode):
+            named = [(name, at, body, self._opaque(body)) for at, name, body in self._entries(node.value, key[:-1])]
+        elif isinstance(node, yaml.nodes.SequenceNode):
+            listed = self._listed(key, node, entries, SophiosErrorCode.MALFORMED_TOOL_VALUE)
+            if listed is not None and not isinstance(listed, dict):
+                self.error(SophiosErrorCode.MALFORMED_TOOL_VALUE,
+                           f'{key} names ports only cwltool reads (`$import`): write them as a mapping of names, or '
+                           'as a list of ports each named by its `id:`', node)
+            named = [(name, item, item, body) for name, item, body in entries]
+        else:
+            # No value is no port, and any other is refused.
+            self._shaped(section, self._opaque(node), node, key)
+            return ()
+        ports: dict[str, Port] = {}
+        for name, at, written, body in named:
+            if not self._shaped(port, body, written, f'{key}: {name}'):
+                continue
+            self._plain(body, written)
+            fields = dict(body) if isinstance(body, dict) else {'type' if key == 'inputs' else 'from': body}
+            line = fields.pop('from', None) if key == 'outputs' else None
+            if isinstance(body, dict) and isinstance(written, yaml.nodes.MappingNode):
+                written = next((value for said, value in written.value if said.value == 'from'), written)
+            ports[name] = Port(name, tuple(fields.items()), None if line is None else tuple(
+                self._parts(str(line), written, [0], declared, 'an output line')), self.span(at))
+        return tuple(ports.values())
+
+    # pylint: disable-next=too-many-locals
+    def _words(self, node: yaml.nodes.Node, declared: Mapping[str, Port] | None) -> tuple[Word, ...]:
+        """The words of `command:`. A line as typed splits at spaces, and a word of it is text, `'quoted text'` or
+        `{name}`; a list is the words themselves, and no quote or shell character is read in one. A value is a word
+        of its own, so none ever reaches a shell. A word that is refused is read on as the text it was written as,
+        so one mistake earns one diagnostic."""
+        typed = isinstance(node, yaml.nodes.ScalarNode)
+        cursor = [0]
+        words: list[Word] = []
+        for item, written in [(node, word) for word in Grammar.LINE_WORD.findall(node.value)] if typed else [
+                (item, str(item.value)) for item in node.value]:
+            reported, inside = len(self.diags), [*cursor]
+            where = self._within(item, written, cursor)
+            quoted = bool(typed and re.fullmatch(r"""'[^']*'|"[^"]*\"""", written))
+            parts = self._parts(written[1:-1] if quoted else written, item, inside, declared, '`command:`')
+            names = [part for part in parts if part.input is not None]
+            text = ''.join(part.text for part in parts)
+            if names and (quoted or len(parts) > 1):
+                self._refuse(f'{written}: a value is a word of its own, never joined to text or put in quotes; for '
+                             '`--out=VALUE` write the input with `inputBinding: {prefix: --out=, separate: false}`, '
+                             'and for a value inside a script write `script:`', where)
+            elif typed and not (quoted or names) and (found := Grammar.NEEDS_A_QUOTE.search(text)):
+                self._refuse(f"{written}: a quote covers a whole word, as in 'two words'" if found[0] in '\'"' else
+                             f'`{found[0]}` in `command:` needs a shell, and no shell reads a command line: quote '
+                             'the word to pass it as text, or write `script:`', where)
+            words.append(Word(written, span=where) if len(self.diags) > reported
+                         else names[0] if names else Word(text, None, quoted, where))
+        return tuple(words)
+
+    def _parts(self, text: str, node: yaml.nodes.Node, cursor: list[int], declared: Mapping[str, Port] | None,
+               line: str) -> list[Word]:
+        """`text` of a line as its runs of text and its `{name}` placeholders, each the input of that name among
+        `declared`, with its own place. `{{` and `}}` are the braces they are. A brace alone, and a name that is no
+        input, are reported and read as the text they are; with no inputs read, no name is looked up."""
+        parts: list[Word] = []
+        run, last = '', 0
+        for found in Grammar.LINE_PLACE.finditer(text):
+            run, last = run + text[last:found.start()], found.end()
+            where = self._within(node, found[0], cursor)
+            name = found[1]
+            if name is not None and declared is not None and name in declared:
+                parts += [Word(run)] * bool(run) + [Word(input=declared[name], span=where)]
+                run = ''
+            elif name is None:
+                run += found[0][0]
+                if len(found[0]) == 1:
+                    self._refuse(f'`{found[0]}` alone opens or closes no placeholder: write `{{name}}` for the '
+                                 f'input `name`, and `{found[0] * 2}` for a brace that is text', where)
+            else:
+                run += found[0]
+                if declared is not None:
+                    self._refuse(f'{found[0]} names no input of this tool (its inputs: '
+                                 f'{", ".join(declared) or "none"}); in {line}, a brace that is text is written '
+                                 'twice, `{{`', where)
+        return parts + [Word(run + text[last:])] * bool(run + text[last:])
+
+    def _plain(self, value: OpaqueCwl, node: yaml.nodes.Node) -> None:
+        """Report a Sophios construct in `value`, read from `node`: a tool takes none."""
+        if _holds_construct(value):
+            self._refuse('a tool takes no edge and no workflow input, so a Sophios construct (`!ii`, `!*`, `!cwl`) '
+                         'says nothing in one: write the value CWL takes', self.span(node))
+
+    def _shaped(self, schema: JsonSchema, value: OpaqueCwl, node: yaml.nodes.Node, where: str) -> bool:
+        """Whether `value`, one of a tool's own read from `node`, is of the shape `schema` gives it. Each way it is
+        not is reported (`wic059`), at the node that holds the fault."""
+        refused = list(_refusals(schema, value, node, where))
+        for message, at in refused:
+            self.error(SophiosErrorCode.MALFORMED_TOOL_VALUE, message, at)
+        return not refused
+
+    def _within(self, node: yaml.nodes.Node, text: str, cursor: list[int]) -> SourceSpan:
+        """Where `text`, a piece of the scalar `node`, is written: its next place in the scalar's source from
+        `cursor` on, which moves past it. Only a scalar YAML reads as it is written, on one line, between quotes or
+        without, has such places, and there the next is the right one. In any other (a block, a folded line, an
+        escape, a quote written twice) a piece found by its text could be another piece, so each stands at the
+        scalar."""
+        start, end = node.start_mark.index, node.end_mark.index
+        written = self.text[start:end]
+        found = self.text.find(text, max(cursor[0], start), end) if text and node.value in (
+            written, written[1:-1]) else -1
+        if found < 0:
+            return self.span(node)
+        cursor[0] = found + len(text)
+        line = node.start_mark.line + 1
+        column = found - self.text.rfind('\n', 0, found)
+        return SourceSpan(self.file, line, column, line, column + len(text))
+
+    def _refuse(self, message: str, span: SourceSpan | None) -> None:
+        """Report what a line of a tool cannot say."""
+        self.diags.error(SophiosErrorCode.TOOL_DOCUMENT, message, span)
 
     def _steps(self, node: yaml.nodes.Node) -> tuple[Step, ...]:
         """Parse `steps:`, which may be a mapping or a sequence, into the same AST."""
@@ -474,6 +714,7 @@ class _Reader:
         outputs: tuple[OutputBinding, ...] = ()
         interpreted: list[tuple[str, OpaqueCwl]] = []
         passthrough: list[tuple[str, OpaqueCwl]] = []
+        tool: ToolDocument | None = None
         for key_node, key, value_node in self._entries(entries, 'step key'):
             if key == 'id':
                 # The step has its identity from its key in `steps:`, or from the `id:` of its entry at `named_at`:
@@ -487,11 +728,13 @@ class _Reader:
                 outputs = self._outputs(value_node)
             elif key in Grammar.INTERPRETED_STEP_KEYS:
                 interpreted.append((key, self._opaque(value_node)))
+                if key == 'run' and self.runs(value_node):  # an inline body that says what runs is a tool
+                    tool = self.tool(value_node)
             elif key in Grammar.STEP_LISTED_KEYS:
                 passthrough.append((key, self._listed(key, value_node)))
             else:
                 passthrough.append((key, self._opaque(value_node)))
-        return Step(step_id, inputs, outputs, tuple(interpreted), tuple(passthrough), span)
+        return Step(step_id, inputs, outputs, tuple(interpreted), tuple(passthrough), span, tool)
 
     def _inputs(self, node: yaml.nodes.Node) -> tuple[tuple[str, InputValue], ...]:
         """Parse a step's `in:` mapping into typed input values.
@@ -650,6 +893,10 @@ class _Reader:
                         implementations = [(self._key_text(name), self.document(body))
                                            for name, body in value_node.value
                                            if isinstance(body, yaml.nodes.MappingNode) and body.value]
+                        for runs in (found for _, body in value_node.value for found in self.runs(body)[:1]):
+                            self.error(SophiosErrorCode.TOOL_DOCUMENT,
+                                       f'`{runs.value}:` makes this implementation a tool, and an implementation is a '
+                                       'workflow: a step of it runs the tool (`run: tool.wic`)', runs)
         return WicSidecar(tuple(steps), tuple(entries), tuple(implementations), graphviz, self.span(node))
 
     def _sidecar_steps(self, node: yaml.nodes.Node, path: frozenset[int]) -> list[tuple[StepKey, WicSidecar]]:
@@ -851,14 +1098,18 @@ def _refusals(schema: JsonSchema, value: OpaqueCwl, node: yaml.nodes.Node,
                 name = str(key_node.value)
                 if name in declared:
                     yield from _refusals(declared[name], value[name], value_node, f'{where}: {name}')
-                else:
+                elif schema.get('additionalProperties') is False:
                     yield f'{where} has no key {name!r}; its keys are: {", ".join(sorted(declared))}', key_node
         case {'items': entry}, list(), yaml.nodes.SequenceNode():
             for index, (item, item_node) in enumerate(zip(value, node.value)):
                 yield from _refusals(entry, item, item_node, f'{where}[{index}]')
         case _:
-            for error in Draft202012Validator(schema).iter_errors(value):
-                yield f'{where} {_REFUSED[error.validator](error.validator_value, value)}', node
+            # JSON has no number that is not finite, so no keyword refuses one: it is checked as the text it is.
+            unfinite = 'number' in schema.get('type', ()) and isinstance(value, float) and not math.isfinite(value)
+            for error in Draft202012Validator(schema).iter_errors(str(value) if unfinite else value):
+                # A value whose schema describes it is told so in those words, whichever keyword refuses it.
+                yield (f'{where} must be {schema["description"]}, found {_found(value)}' if 'description' in schema
+                       else f'{where} {_REFUSED[error.validator](error.validator_value, value)}'), node
 
 
 _KINDS: Final[Mapping[str, str]] = MappingProxyType({
@@ -881,7 +1132,7 @@ def _found(value: OpaqueCwl) -> str:
             return 'a list'
         case None | bool() | int() | float() | str():
             return repr(value)
-    return f'a {type(value).__name__}'
+    return 'a Sophios construct' if isinstance(value, get_args(InputValue)) else f'a {type(value).__name__}'
 
 
 def _graphviz(value: OpaqueCwl) -> GraphvizEntry:

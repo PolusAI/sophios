@@ -39,6 +39,9 @@ class Shape(StrEnum):
     #: The `wic:` block's value keys: a closed set, each with a declared
     #: value shape (`Grammar.SIDECAR_VALUES`, .wic reference §7).
     SIDECAR_ENTRIES = 'sidecar_entries'
+    #: One of a tool's own keys: of a closed set, each with a declared value
+    #: shape (`Grammar.TOOL_VALUES`, .wic reference §2.4).
+    TOOL_VALUE = 'tool_value'
     #: Any key not claimed above: CWL, copied through untouched.
     PASSTHROUGH = 'passthrough'
 
@@ -212,6 +215,9 @@ class Step:
     interpreted: tuple[tuple[str, OpaqueCwl], ...] = surface(Shape.INTERPRETED, default=())
     passthrough: tuple[tuple[str, OpaqueCwl], ...] = surface(Shape.PASSTHROUGH, default=())
     span: SourceSpan | None = surface(Shape.INTERNAL, default=None)
+    #: An inline `run:` body that says `command:` or `script:`, read as the tool it is. Internal, not a second
+    #: surface: the body stays in `interpreted`, from which it is spelled.
+    tool: 'ToolDocument | None' = surface(Shape.INTERNAL, default=None)
 
 
 @dataclass(frozen=True, slots=True)
@@ -283,3 +289,63 @@ class Document:
     #: Where each entry of `inputs:` and `outputs:` written as a mapping was written: (`inputs` or `outputs`,
     #: its name, its span).
     port_spans: tuple[tuple[str, str, SourceSpan], ...] = surface(Shape.INTERNAL, default=())
+
+
+@dataclass(frozen=True, slots=True)
+class Port:
+    """An input or an output of a tool, under its name.
+
+    `fields` is the CWL port it writes, kept as CWL: an input written as its type alone is its `type` and nothing
+    more. An output that says where it is (`stdout`, `stderr` or a pattern, alone or as its `from:`) has that `line`,
+    its runs of text and its inputs, and `fields` is what is written beside it.
+    """
+
+    name: str
+    fields: tuple[tuple[str, OpaqueCwl], ...] = ()
+    line: 'tuple[Word, ...] | None' = None
+    span: SourceSpan | None = None
+
+    @property
+    def type(self) -> OpaqueCwl:
+        """The type the port writes, if it writes one."""
+        return dict(self.fields).get('type')
+
+
+@dataclass(frozen=True, slots=True)
+class Word:
+    """A word of a tool's command line, or a part of an output line: text, or the value of one input of the tool
+    (`{name}`). `quoted` is a word of text written between quotes, which is never read as a flag."""
+
+    text: str = ''
+    input: Port | None = None
+    quoted: bool = False
+    span: SourceSpan | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ToolDocument:  # pylint: disable=too-many-instance-attributes
+    """A parsed tool: a document, or a step's inline `run:` body, that says what runs with `command:` or `script:`,
+    as one that says `steps:` is a workflow.
+
+    Each of its own keys is read into what it says, and Python builds the same node from its objects; `passthrough`
+    holds every other key, CWL that is copied into the CommandLineTool the tool means
+    (`sophios.lang.commandline.command_line_tool`).
+    """
+
+    #: The words of `command:`, each text or one input; None when the tool says no command.
+    command: tuple[Word, ...] | None = surface(Shape.TOOL_VALUE, 'command', default=None)
+    script: str | None = surface(Shape.TOOL_VALUE, 'script', default=None)
+    inputs: tuple[Port, ...] = surface(Shape.TOOL_VALUE, 'inputs', default=())
+    outputs: tuple[Port, ...] = surface(Shape.TOOL_VALUE, 'outputs', default=())
+    docker: str | None = surface(Shape.TOOL_VALUE, 'docker', default=None)
+    #: `cores` and `ram`, as written: `ram` may be a size (`64G`).
+    needs: tuple[tuple[str, OpaqueCwl], ...] = surface(Shape.TOOL_VALUE, 'needs', default=())
+    sidecar: WicSidecar | None = surface(Shape.SIDECAR, 'wic', default=None)
+    passthrough: tuple[tuple[str, OpaqueCwl], ...] = surface(Shape.PASSTHROUGH, default=())
+    span: SourceSpan | None = surface(Shape.INTERNAL, default=None)
+    #: Where each key is written: (the key, its span).
+    keys: tuple[tuple[str, SourceSpan], ...] = surface(Shape.INTERNAL, default=())
+
+    def at(self, key: str) -> SourceSpan | None:
+        """Where `key` is written; else where the tool is."""
+        return dict(self.keys).get(key, self.span)

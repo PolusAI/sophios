@@ -1,5 +1,6 @@
 """The Sophios renderer inverts parsing: a document reads the same once rendered, rendering settles at once, a value
 built in Python gets a spelling that reads back as itself, and a document renders as tests/core/data/render states."""
+import json
 import math
 from typing import Any
 
@@ -8,13 +9,13 @@ import yaml
 from hypothesis import example, given
 from hypothesis import strategies as st
 
-from sophios.lang import Document, InlineLiteral, Step, parse
+from sophios.lang import Document, InlineLiteral, Step, parse, to_json
 from sophios.lang.render import render
 from sophios.lang.spans import SourceSpan
 
 from .budgets import FAST, budget
 from .cases import DATA
-from .strategies import documents, identifiers, pinned
+from .strategies import documents, identifiers, pinned, tools
 from .test_lang_parser import reading
 from .wic_reading import YamlWithSophiosTagsOpaque
 
@@ -39,7 +40,7 @@ def awkward_literal_documents(draw: st.DrawFn) -> str:
 
 
 @pytest.mark.fast
-@given(st.one_of(documents(), awkward_literal_documents()))
+@given(st.one_of(documents(), awkward_literal_documents(), tools()))
 # Hypothesis's failure database does not travel to CI, so what it once found is pinned.
 @example('')                                                      # nothing at all
 @example('steps:\n- id: t\n  in:\n    f: !ii {a: !* e}\n')      # a construct inside a collection literal
@@ -50,15 +51,22 @@ def awkward_literal_documents(draw: st.DrawFn) -> str:
 def test_a_rendered_document_reads_the_same_and_renders_the_same(source: str) -> None:
     """Parsing a rendered document reproduces the document, and rendering it again reproduces the text: a formatter
     that never settled would churn every file it touched. The rendered text is also YAML that `yaml.SafeLoader` loads
-    with the Sophios tags opaque, since a renderer writing what YAML rejects would be writing a dialect."""
+    with the Sophios tags opaque, since a renderer writing what YAML rejects would be writing a dialect. A tool's
+    command typed as a line stays a line, and its projection to JSON reads as the same tool."""
     first = parse(source, 'a.wic')
-    assert not first.diagnostics.has_errors and first.document is not None
-    rendered = render(first.document)
+    written = first.document or first.tool
+    assert not first.diagnostics.has_errors and written is not None, [str(d) for d in first.diagnostics]
+    rendered = render(written)
     second = parse(rendered, 'b.wic')
-    assert not second.diagnostics.has_errors and second.document is not None, [str(d) for d in second.diagnostics]
-    assert reading(second.document) == reading(first.document)
-    assert render(second.document) == rendered
-    yaml.load(rendered, Loader=YamlWithSophiosTagsOpaque)
+    again = second.document or second.tool
+    assert not second.diagnostics.has_errors and again is not None, [str(d) for d in second.diagnostics]
+    assert reading(again) == reading(written)
+    assert render(again) == rendered
+    loaded = yaml.load(rendered, Loader=YamlWithSophiosTagsOpaque)
+    if first.tool is not None:
+        if 'command' in loaded:
+            assert isinstance(loaded['command'], str) or not isinstance(yaml.safe_load(source)['command'], str)
+        assert reading(parse(json.dumps(to_json(written)), 'c.wic').tool) == reading(written)
 
 
 #: A value the renderer must spell as an `!ii` payload, as the Python API hands it over: no source text behind it.

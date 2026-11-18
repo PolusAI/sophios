@@ -1,0 +1,3 @@
+# A value put between quotes is text no more than one joined to text.
+command: echo '{a}'
+inputs: {a: string}

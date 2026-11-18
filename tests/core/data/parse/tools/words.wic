@@ -1,0 +1,3 @@
+# What no word of a typed line is, each refused at the word.
+command: bwa --out={d} 'mem {f}' x'y' a|b $HOME {f {} {{ok}} 'a|b' {f} '{{}}' "never closed
+inputs: {d: string, f: File}

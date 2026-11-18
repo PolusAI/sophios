@@ -1,0 +1,10 @@
+# One key says what a document is, a name is written once, and a tool takes no Sophios construct.
+script: echo
+steps:
+- id: s
+command: echo {a}
+inputs: {a: {type: string, default: !ii x}, b: File, b: string}
+outputs: {o: stdout, o: stderr}
+arguments: [!* made, {valueFrom: !cwl other/port}]
+inputs: {g: File}
+wic: {nonsense: 1}

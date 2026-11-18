@@ -1,0 +1,81 @@
+why: A document, or a step's inline `run:` body, that says `command:` or `script:` is a tool. Each key of its own
+  has a shape (wic059, at the value that is not of it) and each line a meaning (wic058, at the word, the
+  placeholder, the port or the key that cannot mean it), every one reported in the same reading and once; a name
+  written twice is the wic010 it is anywhere.
+# Each document's diagnostics, by code, line and column in reading order; an accepted document reports none.
+documents:
+  bodies.wic:
+  - [TOOL_DOCUMENT, 5, 27]         # `|` needs a shell
+  - [TOOL_DOCUMENT, 5, 29]         # {nmae} is no input of the body
+  - [MALFORMED_TOOL_VALUE, 8, 13]  # docker: a list
+  - [TOOL_DOCUMENT, 12, 5]         # command: beside script:
+  - [TOOL_DOCUMENT, 18, 7]         # an implementation is a workflow
+  keys.wic:
+  - [TOOL_DOCUMENT, 3, 1]          # steps: beside script:
+  - [TOOL_DOCUMENT, 5, 1]          # command: beside script:
+  - [TOOL_DOCUMENT, 6, 13]         # a port that holds !ii
+  - [DUPLICATE_KEY, 6, 54]         # the input b, twice
+  - [DUPLICATE_KEY, 7, 22]         # the output o, twice
+  - [TOOL_DOCUMENT, 8, 12]         # CWL beside that holds !* and !cwl
+  - [DUPLICATE_KEY, 9, 1]          # inputs:, twice
+  - [UNKNOWN_WIC_KEY, 10, 7]
+  listed.wic: []
+  listed_wrong.wic:
+  - [MALFORMED_TOOL_VALUE, 3, 10]  # a, no mapping
+  - [MALFORMED_TOOL_VALUE, 3, 13]
+  - [MALFORMED_TOOL_VALUE, 4, 11]  # no id
+  quoted.wic:
+  - [TOOL_DOCUMENT, 2, 15]         # '{a}'
+  said.wic: []
+  shapes.wic:
+  - [MALFORMED_TOOL_VALUE, 2, 17]
+  - [MALFORMED_TOOL_VALUE, 2, 20]
+  - [MALFORMED_TOOL_VALUE, 3, 9]   # an image, and a line break after it
+  - [MALFORMED_TOOL_VALUE, 5, 9]   # gpus
+  - [MALFORMED_TOOL_VALUE, 5, 25]  # .nan
+  - [MALFORMED_TOOL_VALUE, 5, 36]  # 0G
+  - [MALFORMED_TOOL_VALUE, 6, 25]  # an input with no type
+  - [MALFORMED_TOOL_VALUE, 6, 30]
+  - [MALFORMED_TOOL_VALUE, 6, 69]  # inputBinding: 3
+  - [MALFORMED_TOOL_VALUE, 7, 14]
+  - [MALFORMED_TOOL_VALUE, 7, 27]  # from: a list
+  sized.wic:
+  - [MALFORMED_TOOL_VALUE, 2, 9]
+  - [MALFORMED_TOOL_VALUE, 4, 10]  # .inf
+  - [MALFORMED_TOOL_VALUE, 5, 8]   # a size, and a line break after it
+  - [MALFORMED_TOOL_VALUE, 7, 9]
+  - [MALFORMED_TOOL_VALUE, 9, 1]   # $import
+  - [MALFORMED_TOOL_VALUE, 10, 10]
+  words.wic:
+  - [TOOL_DOCUMENT, 2, 14]         # --out={d}
+  - [TOOL_DOCUMENT, 2, 24]         # 'mem {f}'
+  - [TOOL_DOCUMENT, 2, 34]         # x'y'
+  - [TOOL_DOCUMENT, 2, 39]         # a|b
+  - [TOOL_DOCUMENT, 2, 43]         # $HOME
+  - [TOOL_DOCUMENT, 2, 49]         # {f
+  - [TOOL_DOCUMENT, 2, 52]         # {}
+  - [TOOL_DOCUMENT, 2, 79]         # "never closed
+# What an accepted document reads as: the words of its `command`, each its text, `{quoted: text}` when quoted and
+# `{input: name}` for a value; each of its `inputs` and `outputs` as the CWL port it writes, CWL's list form keyed,
+# with the `line` an output says; and every other key as CWL (`passthrough`).
+reads:
+  said.wic:
+    command: [samtools, view, -b, {quoted: -o}, {input: out}, -@, {input: threads}, {quoted: two words}, '{b}',
+              {input: in-file}]
+    inputs:
+      in-file: {type: File, inputBinding: {prefix: -i}}
+      out: {type: string}
+      threads: {type: 'int?'}
+    outputs:
+      log: {line: [stderr]}
+      made: {label: what view writes, line: [{input: out}]}
+      index: {line: [{input: in-file}, .bai]}
+      kept: {type: File, outputBinding: {glob: x}}
+    docker: quay.io/biocontainers/samtools:1.21
+    needs: {cores: 4, ram: 064G}
+    wic: {entries: {lang_version: 0.1.0}}
+    passthrough: {stderr: view.log}
+  listed.wic:
+    command: [--verbose, {input: x}, a | b, '{x}', it's, "'q'"]
+    inputs: {x: {type: string}, y: {type: File}}
+    outputs: {o: {doc: 'the {y} file', line: [{input: y}, .txt]}}

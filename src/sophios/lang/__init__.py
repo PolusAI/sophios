@@ -16,11 +16,14 @@ from .nodes import (
     InputValue,
     OpaqueCwl,
     OutputBinding,
+    Port,
     RawCwlRef,
     Step,
     StepKey,
+    ToolDocument,
     UnresolvedName,
     WicSidecar,
+    Word,
 )
 from ..utils_yaml import Key
 from .parser import Grammar, ParseResult, parse
@@ -48,6 +51,7 @@ __all__ = [
     'OpaqueCwl',
     'OutputBinding',
     'ParseResult',
+    'Port',
     'RawCwlRef',
     'Severity',
     'SophiosError',
@@ -55,8 +59,10 @@ __all__ = [
     'Step',
     'StepKey',
     'Support',
+    'ToolDocument',
     'UnresolvedName',
     'WicSidecar',
+    'Word',
     'parse',
     'render',
     'resolve_lang_version',

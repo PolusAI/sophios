@@ -1,0 +1,9 @@
+# The words as a list, which reads no quote and no shell character; CWL's list form of the ports; and keys that say
+# nothing.
+command: [--verbose, "{x}", "a | b", "{{x}}", "it's", "'q'"]
+inputs:
+- {id: x, type: string}
+- {id: "tool.cwl#y", type: File}
+outputs:
+- {id: o, doc: "the {y} file", from: "{y}.txt"}
+needs: {}
