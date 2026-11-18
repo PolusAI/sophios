@@ -4,8 +4,9 @@ The language spec pins Sophios to one CWL version; that version belongs
 here, in the language definition, not to whichever module emits a document.
 Import `CWL_VERSION` rather than writing a version literal.
 """
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from enum import Enum, StrEnum
+from itertools import chain
 from pathlib import Path, PurePosixPath
 import re
 from typing import Any, Final, TypeAlias, TypeGuard, TypeVar
@@ -254,6 +255,56 @@ EXPRESSION: Final = re.compile(r'\$[({]')
 #: A size, as `needs: ram:` may write one: a whole number, not zero, of mebibytes, gibibytes or tebibytes.
 SIZE: Final = re.compile('([0-9]*[1-9][0-9]*)([MGT])')
 
+
+def declared(process: dict[str, Any], cls: str) -> list[tuple[str, dict[str, Any]]]:
+    """The requirements and hints of a process document of the class `cls`, as the list form writes them, each with
+    its section (`requirements` or `hints`), whether the section is written as a mapping or as a list."""
+    return [(section, item) for section in ('requirements', 'hints') for _, item in _listed(process, section)
+            if isinstance(item, dict) and item.get('class') == cls]
+
+
+def require(process: dict[str, Any], section: str, cls: str) -> dict[str, Any] | None:
+    """The entry of the class `cls` in `section` (`requirements` or `hints`) of a process document, added where the
+    document writes that section, a mapping or a list; an entry it wrote is the one returned, with what it says. None
+    for a section, or an entry, of another shape."""
+    written = process.setdefault(section, [])
+    found = None
+    if isinstance(written, dict):
+        found = written[cls] = written.get(cls) or {}
+    elif isinstance(written, list):
+        found = next((item for item in written if isinstance(item, dict) and item.get('class') == cls), None)
+        if found is None:
+            written.append(found := {'class': cls})
+    return found if isinstance(found, dict) else None
+
+
+def literal(text: str) -> str:
+    """Text as it is written inside a CWL string that holds an expression, which cwltool unescapes: a backslash,
+    and what would start an expression, each behind a backslash."""
+    return text.replace('\\', '\\\\').replace('$(', '\\$(').replace('${', '\\${')
+
+
+def strings(value: Any) -> Iterator[str]:
+    """Every string in `value`: itself, or the strings at any depth of a list or of a mapping's values."""
+    match value:
+        case str():
+            yield value
+        case list():
+            yield from chain.from_iterable(map(strings, value))
+        case Mapping():
+            yield from strings(list(value.values()))
+
+
+def declare_javascript(process: dict[str, Any]) -> None:
+    """Declare `InlineJavascriptRequirement` in a tool that holds an expression and declares it nowhere, as a
+    requirement or a hint: one rule, for a tool written in `.wic` and for the Python builder. A `requirements` that is
+    neither a mapping nor a list is left as it is."""
+    javascript = _standard.InlineJavascriptRequirement.__name__
+    if any(map(EXPRESSION.search, strings(process))):
+        if not declared(process, javascript):
+            require(process, 'requirements', javascript)
+
+
 #: An input a CWL expression reads, `inputs.name` or `inputs["name"]`: `inputs.name-1` is `inputs.name` minus 1.
 _INPUT_READ: Final = re.compile(r'\binputs(?:\.([A-Za-z_]\w*)|\[\s*["\']([^"\']+)["\']\s*\])')
 
@@ -261,14 +312,15 @@ _INPUT_READ: Final = re.compile(r'\binputs(?:\.([A-Za-z_]\w*)|\[\s*["\']([^"\']+
 def inputs_read(value: Any) -> tuple[str, ...]:
     """Every input the CWL expressions in `value` (a string, or the strings at any depth of a list or mapping) read,
     in order of first mention."""
-    match value:
-        case str():
-            return tuple(dict.fromkeys(a or b for a, b in _INPUT_READ.findall(value)))
-        case list():
-            return tuple(dict.fromkeys(name for item in value for name in inputs_read(item)))
-        case Mapping():
-            return inputs_read(list(value.values()))
-    return ()
+    return tuple(dict.fromkeys(a or b for text in strings(value) for a, b in _INPUT_READ.findall(text)))
+
+
+def input_reference(name: str, field: str = '') -> str | None:
+    """The CWL parameter reference to `field` of the input `name`, in the form CWL has for the name: `$(inputs.name)`
+    for a symbol, `$(inputs["name"])` for any other. It is what `inputs_read` reads back; None for a name neither
+    form holds (one with a quote in it)."""
+    read = next((text for text in (f'inputs.{name}', f'inputs["{name}"]') if inputs_read(text) == (name,)), None)
+    return read and f'$({read}{field})'
 
 
 def fields_set(value: Any) -> list[str]:

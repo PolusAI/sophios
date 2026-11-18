@@ -1,0 +1,132 @@
+# A tool as `.wic` text and the CommandLineTool it means, key for key. What a line writes is written where CWL has it;
+# what the author wrote beside it stands as written, and in its own place when the line writes there too.
+- id: grep
+  why: a command with a flag, a File and an output named for one; the name of an input need not be an identifier
+  wic: |
+    command: grep -n {pattern} {in-file}
+    inputs:
+      pattern: string
+      in-file: File
+    outputs:
+      matches: stdout
+      index: "{in-file}.idx"
+  cwl:
+    class: CommandLineTool
+    cwlVersion: v1.2
+    baseCommand: grep
+    inputs:
+      pattern: {type: string, inputBinding: {position: 1, prefix: -n}}
+      in-file: {type: File, inputBinding: {position: 2}}
+    outputs:
+      matches: {type: stdout}
+      index: {type: File, outputBinding: {glob: '$(inputs["in-file"].basename).idx'}}
+    requirements: [{class: InlineJavascriptRequirement}]
+
+- id: beside_a_line
+  why: what an output says beside its line (doc, label) is kept for a stream and for a pattern, an input that is a
+    Directory is a Directory output, and a class the author wrote is not the tool's
+  wic: |
+    class: ExpressionTool
+    command: sort {text}
+    inputs: {text: File, dir: Directory}
+    outputs:
+      log: {from: stderr, doc: what it says}
+      out: {from: stdout, label: sorted}
+      made: {from: "{text}.sorted", doc: the file, label: made}
+      same: {from: "{dir}"}
+  cwl:
+    class: CommandLineTool
+    cwlVersion: v1.2
+    baseCommand: sort
+    inputs:
+      text: {type: File, inputBinding: {position: 1}}
+      dir: {type: Directory}
+    outputs:
+      log: {type: stderr, doc: what it says}
+      out: {type: stdout, label: sorted}
+      made: {type: File, outputBinding: {glob: $(inputs.text.basename).sorted}, doc: the file, label: made}
+      same: {type: Directory, outputBinding: {glob: $(inputs.dir.basename)}}
+    requirements: [{class: InlineJavascriptRequirement}]
+
+- id: a_tie_of_positions
+  why: the line's own arguments come before the author's, so on a tie of positions the line's word runs first
+  wic: |
+    command: echo first {a} last
+    inputs: {a: string}
+    arguments:
+    - {valueFrom: mid, position: 2}
+  cwl:
+    class: CommandLineTool
+    cwlVersion: v1.2
+    baseCommand: [echo, first]
+    arguments:
+    - {position: 2, valueFrom: last}
+    - {valueFrom: mid, position: 2}
+    inputs:
+      a: {type: string, inputBinding: {position: 1}}
+    outputs: {}
+
+- id: a_script
+  why: the script's command line is env, bash and its file; each input is a variable; the file joins the author's own
+    listing, and the author's other requirements stand
+  wic: |
+    script: |
+      echo "$text" "$xs"
+    inputs:
+      text: string
+      xs: string[]
+    outputs: {out: "{text}.txt"}
+    requirements:
+    - class: InitialWorkDirRequirement
+      listing: [{entryname: other, entry: x}]
+  cwl:
+    class: CommandLineTool
+    cwlVersion: v1.2
+    requirements:
+      InitialWorkDirRequirement:
+        listing:
+        - {entryname: other, entry: x}
+        - {class: File, basename: .script.sh, contents: "echo \"$text\" \"$xs\"\n"}
+      InlineJavascriptRequirement: {}
+    baseCommand: env
+    arguments:
+    - {position: 1, valueFrom: bash}
+    - {position: 2, valueFrom: .script.sh}
+    inputs:
+      text: {type: string, inputBinding: {position: 0, prefix: text=, separate: false}}
+      xs: {type: "string[]", inputBinding: {position: 0, prefix: xs=, separate: false, itemSeparator: " "}}
+    outputs:
+      out: {type: File, outputBinding: {glob: $(inputs.text).txt}}
+
+- id: a_container_and_its_needs
+  why: docker is a hint, needs a requirement in mebibytes, and a command written as a list is the same words
+  wic: |
+    command: [run, "{n}"]
+    inputs: {n: int}
+    docker: debian:12
+    needs: {cores: 2, ram: 4G}
+  cwl:
+    class: CommandLineTool
+    cwlVersion: v1.2
+    hints: [{class: DockerRequirement, dockerPull: "debian:12"}]
+    requirements: [{class: ResourceRequirement, coresMin: 2, ramMin: 4096}]
+    baseCommand: run
+    inputs:
+      n: {type: int, inputBinding: {position: 1}}
+    outputs: {}
+
+- id: a_stream_word_beside_an_input
+  why: the text stdout is the stream only alone; beside an input it is the start of a pattern
+  wic: |
+    command: echo {a}
+    inputs: {a: string}
+    outputs: {o: "stdout{a}"}
+  cwl:
+    class: CommandLineTool
+    cwlVersion: v1.2
+    baseCommand: echo
+    inputs:
+      a: {type: string, inputBinding: {position: 1}}
+    outputs:
+      o: {type: File, outputBinding: {glob: stdout$(inputs.a)}}
+    requirements: [{class: InlineJavascriptRequirement}]

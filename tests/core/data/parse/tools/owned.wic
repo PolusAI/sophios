@@ -1,0 +1,9 @@
+# What the script property cannot draw: a record named in a SchemaDefRequirement is the record it names, its field's
+# binding included; and what a `default:` holds is data, which puts no word on the command line.
+script: echo "$a"
+inputs:
+  named: Rec
+  data: {type: Any, default: {inputBinding: x, type: record}}
+requirements:
+- class: SchemaDefRequirement
+  types: [{name: Rec, type: record, fields: [{name: f, type: string, inputBinding: {valueFrom: hello}}]}]

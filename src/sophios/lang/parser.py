@@ -8,7 +8,7 @@ result carrying whatever was parsed plus whatever went wrong.
 import math
 import re
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from itertools import chain
 from types import MappingProxyType
 from typing import Any, Final, Iterator, Mapping, NoReturn, TypedDict, cast, final, get_args
@@ -38,6 +38,7 @@ from .nodes import (
     WicSidecar,
     Word,
 )
+from .commandline import command_line_tool
 from .cwl import CWL_VERSIONS, EXPRESSION, SCATTER_METHODS, SIZE
 from .spans import SourceSpan
 from .support import STEP_INPUT_RECORD_KEYS
@@ -490,7 +491,6 @@ class _Reader:
         its `inputs:` could not be read.
         """
         nodes = {key: (at, value) for at, key, value in self._entries(root.value, 'tool key')}
-        keys = tuple((key, self.span(at)) for key, (at, _) in nodes.items())
         defining = [key for key in nodes if key in ('steps', *Grammar.TOOL_RUNS)]
         for key in defining[1:]:
             self._refuse(f'`{key}:` beside `{defining[0]}:`: a document has one defining key. `steps:` makes it a '
@@ -517,7 +517,9 @@ class _Reader:
                 value = self._passed(key, node)
                 self._plain(value, node)
                 passthrough.append((key, value))
-        return ToolDocument(**said, passthrough=tuple(passthrough), span=self.span(root), keys=keys)
+        tool = ToolDocument(**said, passthrough=tuple(passthrough), span=self.span(root),
+                            keys=tuple((key, self.span(at)) for key, (at, _) in nodes.items()))
+        return tool if declared is None else replace(tool, cwl=command_line_tool(tool, self.diags))
 
     def _ports(self, key: str, node: yaml.nodes.Node, declared: Mapping[str, Port] | None = None) -> tuple[Port, ...]:
         """The `inputs:` or `outputs:` of a tool as its ports, each where it is named: a mapping of names, or CWL's
@@ -525,8 +527,7 @@ class _Reader:
         section; one that is not of its shape is reported and left out, and one named twice is held to its shape as
         the first is. An output that says a line, alone or as its `from:`, has it read where it is written, a
         placeholder of it one of the inputs `declared`."""
-        section = Grammar.TOOL_VALUES[key]
-        port = cast(JsonSchema, section['additionalProperties'])
+        port = cast(JsonSchema, Grammar.TOOL_VALUES[key]['additionalProperties'])
         entries: list[tuple[str, yaml.nodes.Node, OpaqueCwl]] = []
         if isinstance(node, yaml.nodes.MappingNode):
             named = [(name, at, body, self._opaque(body)) for at, name, body in self._entries(node.value, key[:-1])]
@@ -539,7 +540,7 @@ class _Reader:
             named = [(name, item, item, body) for name, item, body in entries]
         else:
             # No value is no port, and any other is refused.
-            self._shaped(section, self._opaque(node), node, key)
+            self._shaped(Grammar.TOOL_VALUES[key], self._opaque(node), node, key)
             return ()
         ports: dict[str, Port] = {}
         for name, at, written, body in named:

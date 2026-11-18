@@ -1,0 +1,9 @@
+script: |
+  wc -l < "$text" > "$name.count"   # {name} | $(x)
+inputs: {text: File, name: string}
+outputs:
+  count: "{name}.count"
+arguments: []
+requirements:
+- class: InitialWorkDirRequirement
+  listing: [$(inputs.text)]
