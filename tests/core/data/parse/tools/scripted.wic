@@ -1,0 +1,10 @@
+# A script's command line is the script's alone, and each input is the variable of its name.
+script: echo "$text"
+inputs:
+  PATH: string
+  naïve: string
+  my-in: string
+  text: string
+baseCommand: ls
+hints: [{class: InitialWorkDirRequirement, listing: [{entryname: .script.sh, entry: hi}]}]
+requirements: {InitialWorkDirRequirement: {listing: $(inputs.text)}}

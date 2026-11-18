@@ -1,0 +1,3 @@
+# An array of booleans has no flag to write, and a command with nothing to run is no command.
+command: echo {flags}
+inputs: {flags: "boolean[]"}

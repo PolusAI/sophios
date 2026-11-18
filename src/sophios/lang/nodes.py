@@ -345,6 +345,9 @@ class ToolDocument:  # pylint: disable=too-many-instance-attributes
     span: SourceSpan | None = surface(Shape.INTERNAL, default=None)
     #: Where each key is written: (the key, its span).
     keys: tuple[tuple[str, SourceSpan], ...] = surface(Shape.INTERNAL, default=())
+    #: The CommandLineTool this tool means, as the parser's lowering made it: kept, so nothing lowers the tool again.
+    #: None where the parser did not lower it, because its `inputs:` could not be read.
+    cwl: dict[str, Any] | None = surface(Shape.INTERNAL, default=None)
 
     def at(self, key: str) -> SourceSpan | None:
         """Where `key` is written; else where the tool is."""

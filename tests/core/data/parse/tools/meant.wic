@@ -1,0 +1,26 @@
+# What a line cannot mean, each refused where it is said: at the placeholder, or at the output.
+command: sort {nmae} {b} -k {f} {f} -p {p} {q} {in-file}
+inputs:
+  name: string
+  b: boolean
+  f: File
+  p: {type: string, inputBinding: {prefix: -p}}
+  q: {type: string, inputBinding: {position: 3}}
+  in-file: File
+  xs: "File[]"
+  o: "File?"
+  u: [File, string]
+outputs:
+  typed: File
+  nested: "File[][]"
+  empty: ""
+  many: "{xs}.out"
+  maybe: "{o}.bai"
+  either: "{u}.x"
+  unknown: "{nmae}.out"
+  bound: {from: stdout, outputBinding: {glob: x}}
+  stream: {from: stderr, type: File}
+  brace: "a}b"
+  fine: "{in-file}.bai"
+  documented: {doc: "{nmae}", from: "{nmae}.out"}
+requirements: 3

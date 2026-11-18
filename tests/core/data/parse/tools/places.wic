@@ -1,0 +1,11 @@
+# A place a line writes that the author wrote too: refused once, at the key that says it twice.
+command: sort {f}
+inputs: {f: File}
+baseCommand: ls
+docker: debian:12
+needs: {cores: 2}
+requirements:
+  DockerRequirement:
+hints:
+- {class: ResourceRequirement, ramMax: 9}
+arguments: nope

@@ -10,6 +10,7 @@ documents:
   - [MALFORMED_TOOL_VALUE, 8, 13]  # docker: a list
   - [TOOL_DOCUMENT, 12, 5]         # command: beside script:
   - [TOOL_DOCUMENT, 18, 7]         # an implementation is a workflow
+  counted.wic: []
   keys.wic:
   - [TOOL_DOCUMENT, 3, 1]          # steps: beside script:
   - [TOOL_DOCUMENT, 5, 1]          # command: beside script:
@@ -26,7 +27,43 @@ documents:
   - [MALFORMED_TOOL_VALUE, 4, 11]  # no id
   quoted.wic:
   - [TOOL_DOCUMENT, 2, 15]         # '{a}'
+  meant.wic:
+  - [TOOL_DOCUMENT, 2, 15]         # {nmae} is no input
+  - [TOOL_DOCUMENT, 2, 22]         # a boolean with no flag
+  - [TOOL_DOCUMENT, 2, 33]         # {f} placed twice
+  - [TOOL_DOCUMENT, 2, 40]         # a flag before a port that says a prefix
+  - [TOOL_DOCUMENT, 2, 44]         # a port that says a position
+  - [TOOL_DOCUMENT, 14, 3]         # a type is no line
+  - [TOOL_DOCUMENT, 15, 3]
+  - [TOOL_DOCUMENT, 16, 3]         # an empty line
+  - [TOOL_DOCUMENT, 17, 10]        # an array has no one name
+  - [TOOL_DOCUMENT, 18, 11]        # nor has an input that may be null
+  - [TOOL_DOCUMENT, 19, 12]        # nor one of several types
+  - [TOOL_DOCUMENT, 20, 13]        # {nmae} is no input
+  - [TOOL_DOCUMENT, 21, 3]         # from: beside outputBinding:
+  - [TOOL_DOCUMENT, 22, 3]         # from: stderr beside type:
+  - [TOOL_DOCUMENT, 23, 12]        # a brace alone
+  - [TOOL_DOCUMENT, 25, 38]        # {nmae} in from:, not in the doc: before it
+  - [TOOL_DOCUMENT, 26, 1]         # requirements: is no section to add to
+  arrays.wic:
+  - [TOOL_DOCUMENT, 2, 15]         # {flags}: a boolean array has no flag
+  nothing.wic:
+  - [TOOL_DOCUMENT, 2, 1]          # command: has nothing to run
+  owned.wic:
+  - [TOOL_DOCUMENT, 5, 3]          # a record named in a SchemaDefRequirement, and the field binding in it
+  places.wic:
+  - [TOOL_DOCUMENT, 4, 1]          # baseCommand: beside command:
+  - [TOOL_DOCUMENT, 5, 1]          # docker: beside a DockerRequirement, once though it says nothing
+  - [TOOL_DOCUMENT, 6, 1]          # needs: beside a ResourceRequirement hint
+  - [TOOL_DOCUMENT, 11, 1]         # arguments: is no list
   said.wic: []
+  scripted.wic:
+  - [TOOL_DOCUMENT, 4, 3]          # PATH is the shell's
+  - [TOOL_DOCUMENT, 5, 3]          # naïve is no shell variable
+  - [TOOL_DOCUMENT, 6, 3]          # nor is my-in
+  - [TOOL_DOCUMENT, 8, 1]          # baseCommand: beside script:
+  - [TOOL_DOCUMENT, 9, 1]          # an InitialWorkDirRequirement hint
+  - [TOOL_DOCUMENT, 10, 1]         # a listing that is no list
   shapes.wic:
   - [MALFORMED_TOOL_VALUE, 2, 17]
   - [MALFORMED_TOOL_VALUE, 2, 20]
@@ -79,3 +116,8 @@ reads:
     command: [--verbose, {input: x}, a | b, '{x}', it's, "'q'"]
     inputs: {x: {type: string}, y: {type: File}}
     outputs: {o: {doc: 'the {y} file', line: [{input: y}, .txt]}}
+  counted.wic:
+    script: "wc -l < \"$text\" > \"$name.count\"   # {name} | $(x)\n"
+    inputs: {text: {type: File}, name: {type: string}}
+    outputs: {count: {line: [{input: name}, .count]}}
+    passthrough: {arguments: [], requirements: {InitialWorkDirRequirement: {listing: [$(inputs.text)]}}}

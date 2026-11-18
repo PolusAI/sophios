@@ -1,15 +1,25 @@
 """A tool written in `.wic`: a document, or a step's inline `run:` body, that says `command:` or `script:`. Each word is
-read where it is written. What a tool cannot say is stated, with its place, in tests/core/data/parse/tools."""
+read where it is written; a command line means its words, and an output line its file, under cwltool's own
+evaluators; a script is run as written; and a line adds CWL and changes none. What a tool cannot say is stated, with
+its place, in tests/core/data/parse/tools, and what each means in tests/core/data/tool_lowering.yaml."""
+import io
 import json
+import tempfile
+from pathlib import Path
 from typing import Any
 
 import pytest
+from cwl_utils.expression import do_eval
 from hypothesis import assume, example, given
 from hypothesis import strategies as st
 
-from sophios.lang import ToolDocument, parse
+from sophios.input_output import dump_wic_yaml
+from sophios.lang import SophiosErrorCode, ToolDocument, parse
+from sophios.lang.commandline import command_line_tool
+from sophios.utils_cwl import make_tool
 
-from .budgets import FAST
+from .budgets import FAST, budget
+from .cases import cases
 
 #: Input names as a tool may write them: a CWL id holds more than an identifier does.
 NAMES = ['v', 'x_1', 'in-file', 'in.file', '1st', 'naïve', 'Sample', 'a+b']
@@ -121,3 +131,213 @@ def test_a_word_is_read_where_it_is_written(case: tuple[list[str], list[str] | N
             starts = rows[word.span.start_line - 1][word.span.start_column - 1:][:1]
             assert (word.span.start_line, starts) == (4 if inline else 1, _SPELLINGS[spelling](line)[:1]), (
                 text, at, word.span)
+
+
+def _tool(document: dict[str, Any]) -> dict[str, Any]:
+    """The CommandLineTool the tool `document` means when it is written as `.wic`, which the parser reads without a
+    diagnostic and lowers once, the CWL kept on the tool."""
+    parsed = parse(dump_wic_yaml(document), 'tool.wic')
+    assert parsed.tool is not None and parsed.tool.cwl is not None and not parsed.diagnostics, [
+        str(found) for found in parsed.diagnostics]
+    return parsed.tool.cwl
+
+
+def _argv(tool: dict[str, Any], job: dict[str, Any]) -> list[str]:
+    """What cwltool would run: the command line its own job builder makes of `tool` for `job`."""
+    from cwltool.context import RuntimeContext  # pylint: disable=import-outside-toplevel  # no Windows
+    process = make_tool('file:///tool.cwl', dump_wic_yaml(tool))
+    assert process is not None
+    with tempfile.TemporaryDirectory() as scratch:
+        context = RuntimeContext({'basedir': scratch, 'outdir': scratch, 'tmpdir': scratch,
+                                  'tmpdir_prefix': f'{scratch}/', 'tmp_outdir_prefix': f'{scratch}/'})
+        job_made, = filter(None, process.job(job, lambda *_: None, context))
+    return list(getattr(job_made, 'command_line'))
+
+
+def _by_class(section: Any) -> dict[str, Any]:
+    """The requirements or hints of a tool by their class, whether written as a mapping or as a list."""
+    if isinstance(section, list):
+        return {entry['class']: {key: value for key, value in entry.items() if key != 'class'} for entry in section}
+    return dict(section)
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('case', cases('tool_lowering.yaml', 'wic', 'cwl'))
+def test_a_tool_means_the_cwl_its_row_states(case: dict[str, Any]) -> None:
+    """A tool as `.wic` text is the CommandLineTool its row states, key for key and in the order of every list; the
+    CWL the parser's lowering made is the one the tool keeps, and lowering the tool again says the same."""
+    parsed = parse(case['wic'], 'tool.wic')
+    assert parsed.tool is not None and not parsed.diagnostics, [str(found) for found in parsed.diagnostics]
+    assert parsed.tool.cwl == case['cwl']
+    assert command_line_tool(parsed.tool) == parsed.tool.cwl
+
+
+#: A value that is not there: its flag goes with it, and a dash word that is text stays.
+_ABSENT = ({'v': 'string?'}, {'v': None})
+
+
+@pytest.mark.needs_cwltool
+@pytest.mark.fast
+@given(commands(), st.booleans())
+@example((['wc', "'-w'", '{v}'], None, *_ABSENT, ['wc', '-w']), False)  # a dash word between quotes is text,
+@example((['grep', '--', '{v}'], ['grep', '--', '{v}'], *_ABSENT, ['grep', '--']), False)  # and so are dashes alone,
+@example((['grep', '--', '{v}'], ['grep', '--', '{v}'], *_ABSENT, ['grep', '--']), True)  # as a word of a list too
+@example((['cat', '{v}', "'$(x)'"], ['cat', '{v}', '$(x)'], {'v': 'string'}, {'v': 'a'}, ['cat', 'a', '$(x)']),
+         False)  # text CWL would evaluate stays text, after a value too
+@example((['grep', '{v}'], ['grep', '{v}'],
+          {'v': {'type': 'string', 'inputBinding': {'prefix': '--p=', 'separate': False}}}, {'v': 'a'},
+          ['grep', '--p=a']), False)  # the port says how its own value is written
+@budget(60)
+def test_a_command_line_means_its_words(case: tuple[list[str], list[str] | None, dict[str, Any], dict[str, Any],
+                                                    list[str]], as_list: bool) -> None:
+    """The command line cwltool builds from the tool a `.wic` means is the words of the line with the job's values in
+    their places: a flag goes with its value and with nothing else; a value is one word whatever its input is called
+    and however it looks; an input's own binding says how and the line says where; and text stays text, which CWL
+    would otherwise evaluate. The words before the first value or flag are the tool's `baseCommand`, and a line that
+    starts with a flag or a value writes none: the image's entry point runs it."""
+    typed, listed, ports, job, argv = case
+    if as_list and listed is None:
+        return
+    lowered = _tool({'command': listed if as_list else ' '.join(typed), 'inputs': ports})
+    assert _argv(lowered, job) == argv
+    words = [*typed, '{']
+    leading = 0 if typed[0][0] in '-{' else next(
+        index for index, word in enumerate(words)
+        if word[0] == '{' or word[0] == '-' and word.strip('-') and words[index + 1][0] == '{')
+    assert lowered.get('baseCommand', []) == (argv[0] if leading == 1 else argv[:leading])
+
+
+@pytest.mark.fast
+@given(st.lists(st.sampled_from(['.txt', '*.out', 'x y', '$(z)', 'a\\\\b', '\\', '{{}}', '{s}', '{n}', '{in-file}',
+                                 '{d.1}', '${{y}}']), min_size=1, max_size=4))
+@example(['{d.1}'])  # one Directory input's own name is a Directory
+@example(['${{y}}', '{s}'])  # text that would start a function body is text
+@budget(100)
+def test_an_output_line_names_the_file_it_says(pieces: list[str]) -> None:
+    """The glob of an output line, as CWL's own evaluator reads it for a job, is the line with each input's name in
+    its place (a File's or a Directory's base name), whatever the input is called; text stays text however it looks,
+    beside an input too, where the evaluator would unescape it; and the output is a Directory only when the line is
+    one Directory input's own name."""
+    job: Any = {'s': 'v w', 'n': 3, 'in-file': {'class': 'File', 'location': 'file:///x/a.bam', 'basename': 'a.bam'},
+                'd.1': {'class': 'Directory', 'location': 'file:///x/dir', 'basename': 'dir'}}
+    names = {'{s}': 'v w', '{n}': '3', '{in-file}': 'a.bam', '{d.1}': 'dir', '{{}}': '{}', '${{y}}': '${y}'}
+    output = _tool({'command': 'echo', 'outputs': {'o': ''.join(pieces)}, 'inputs': {
+        's': 'string', 'n': 'int', 'in-file': 'File', 'd.1': 'Directory'}})['outputs']['o']
+    assert output['type'] == ('Directory' if pieces == ['{d.1}'] else 'File')
+    assert str(do_eval(output['outputBinding']['glob'], job, [], None, None, {})) == ''.join(
+        names.get(piece, piece) for piece in pieces)
+
+
+@pytest.mark.fast
+@given(st.lists(st.one_of(st.sampled_from(['--color=never', '$(runtime.cores)']), st.fixed_dictionaries(
+    {'valueFrom': st.sampled_from(['mid', '$(inputs.a)'])},
+    optional={'position': st.integers(-3, 9), 'prefix': st.just('-e')})), max_size=3),
+    st.sampled_from([[{'class': 'InitialWorkDirRequirement', 'listing': [{'entry': 'x', 'entryname': 'y'}]}],
+                     {'InitialWorkDirRequirement': {'listing': [{'entry': 'x', 'entryname': 'y'}]}},
+                     [{'class': 'EnvVarRequirement', 'envDef': {'E': 'v'}}]]),
+    st.lists(st.sampled_from(['hints', 'baseCommand', 'stdin']), unique=True))
+@budget(100)
+def test_a_line_adds_cwl_and_changes_none(arguments: list[Any], requirements: Any, unsaid: list[str]) -> None:
+    """The CWL an author writes beside `command:` stands as written, where CWL puts it: every argument and requirement
+    of his is in the tool unchanged and in its order, and each line adds its own. A key written with no value says
+    nothing, so it is no place already written."""
+    tool = {'command': 'echo first {a} last', 'inputs': {'a': 'string'}, 'requirements': requirements,
+            'needs': {'cores': 2}, 'docker': 'a:1'}
+    assert _tool(tool | dict.fromkeys(unsaid)) == _tool(tool)
+    lowered = _tool(tool | {'arguments': arguments})
+    assert [each for each in lowered['arguments'] if each in arguments] == arguments
+    theirs, after = _by_class(requirements), _by_class(lowered['requirements'])
+    assert all(after[name] == body for name, body in theirs.items())
+    assert {'ResourceRequirement'} <= set(after) and _by_class(lowered['hints']) == {
+        'DockerRequirement': {'dockerPull': 'a:1'}}
+
+
+#: An input of a script tool by what it is: its port; a job's value for it; and the words cwltool puts on the command
+#: line for it, `{}` its name, or None where the port puts words that are no variable of the script.
+_RECORD: dict[str, Any] = {'type': 'record', 'fields': [{'name': 'f', 'type': 'string'}]}
+_SCRIPT_INPUTS: dict[str, tuple[Any, Any, list[str] | None]] = {
+    'string': ('string', 'v', ['{}=v']), 'array': ('string[]', ['p', 'q r'], ['{}=p q r']),
+    'unset': ('int?', None, []), 'true': ({'type': 'boolean'}, True, ['{}=']),
+    'bound': ({'type': 'string', 'inputBinding': {'position': 2}}, 'v', None),
+    'empty binding': ({'type': 'string[]', 'inputBinding': {}}, ['a'], None),
+    'bound array': ({'type': {'type': 'array', 'items': 'string', 'inputBinding': {'valueFrom': 'hello'}}}, ['a'],
+                    None),
+    'bound items': ({'type': {'type': 'array', 'items': {'type': 'array', 'items': 'string',
+                                                         'inputBinding': {'prefix': 'hello'}}}}, [['a', 'b']], None),
+    'bound field': ({'type': {**_RECORD, 'fields': [{**_RECORD['fields'][0],
+                                                     'inputBinding': {'position': -1, 'valueFrom': 'hello'}}]}},
+                    {'f': 'a'}, None),
+    'record': ({'type': _RECORD}, {'f': 'a'}, None)}
+_STAGED = ({'entryname': '.script.sh', 'entry': 'hi'}, {'class': 'File', 'basename': '.script.sh', 'contents': 'hi'},
+           {'entryname': './.script.sh', 'entry': 'hi'})
+
+
+@pytest.mark.needs_cwltool
+@pytest.mark.fast
+@given(st.dictionaries(st.sampled_from(['a', 'b', 'c']), st.sampled_from(sorted(_SCRIPT_INPUTS)), max_size=3),
+       st.lists(st.sampled_from(['hello', {'valueFrom': 'x', 'position': 1}]), max_size=1),
+       st.sampled_from([None, 'other', *_STAGED]))
+@example({'a': 'bound array'}, [], None)
+@example({'a': 'bound items'}, [], None)
+@example({'a': 'bound field'}, [], None)
+@example({'a': 'string'}, [], _STAGED[0])
+@example({'a': 'string'}, [], _STAGED[2])
+@budget(100)
+def test_a_script_owns_its_command_line(inputs: dict[str, str], arguments: list[Any], staged: Any) -> None:
+    """Beside `script:`, whatever CWL could put a word on the command line is refused (`wic058`) where it is written:
+    `arguments:`, an input's binding at any depth (the port's own, its type's, an array's items, a record's field), a
+    record input, and a listing entry for the script's own file. A script with none of them runs the command line
+    cwltool's own job builder makes of it, exactly `env name=value ... bash .script.sh`, with nothing between."""
+    entry = staged if isinstance(staged, dict) else {'entryname': staged, 'entry': 'x'}
+    tool: dict[str, Any] = {
+        'script': 'echo "$a"', 'inputs': {name: _SCRIPT_INPUTS[kind][0] for name, kind in inputs.items()},
+        'outputs': {}, 'arguments': arguments}
+    if staged:
+        tool['requirements'] = [{'class': 'InitialWorkDirRequirement', 'listing': [entry]}]
+    written = dump_wic_yaml(tool)
+    parsed = parse(written, 'script.wic')
+    refused = [written.splitlines()[found.span.start_line - 1].split(':')[0].strip() for found in parsed.diagnostics
+               if found.code is SophiosErrorCode.TOOL_DOCUMENT and found.span]
+    assert len(refused) == len(parsed.diagnostics)
+    assert sorted(refused) == sorted([name for name, kind in inputs.items() if _SCRIPT_INPUTS[kind][2] is None]
+                                     + ['arguments'] * bool(arguments)
+                                     + ['requirements'] * isinstance(staged, dict))
+    if not refused:
+        assert parsed.tool is not None and parsed.tool.cwl is not None
+        job = {name: _SCRIPT_INPUTS[kind][1] for name, kind in sorted(inputs.items())}
+        assert _argv(parsed.tool.cwl, job) == [
+            'env', *(word.format(name) for name, kind in sorted(inputs.items())
+                     for word in _SCRIPT_INPUTS[kind][2] or ()), 'bash', '.script.sh']
+
+
+@pytest.mark.needs_cwltool
+@pytest.mark.slow
+@given(st.lists(st.sampled_from(['$(inputs.s)', '${return 1;}', '\\$(x)', '\\\\', '{s}', '{{b}}', '"', "'", '`id`',
+                                 '$(id)', '\t', '\r', 'plain']), max_size=6), st.booleans(),
+       st.text(st.sampled_from(list('ab $(){}`"\'\\\n\t;|*')), max_size=8),
+       st.lists(st.text(st.sampled_from(list('ab $(){}`"\'\\;|*')), max_size=4), max_size=3), st.booleans(),
+       st.sampled_from(['string[]', 'string[]?', {'type': 'string[]'}]))
+@budget(8)  # pylint: disable-next=too-many-arguments,too-many-positional-arguments
+def test_a_script_runs_as_written_with_each_input_in_its_variable(
+        hostile: list[str], newline: bool, text: str, items: list[str], flag: bool, array: Any) -> None:
+    """A `script:` tool run by cwltool, whose one output is what the script prints: each of its variables and then its
+    own file, each ended by a NUL, which no value holds. The file is the script as written, byte for byte, whatever
+    it holds that CWL, YAML or the line grammar would read; and each input is in the variable of its name as the
+    characters it is: an array, however its type is written, as its items between spaces, a true boolean set and
+    empty, a false one and a null unset."""
+    import cwltool.main  # pylint: disable=import-outside-toplevel  # no Windows
+    script = '\n'.join(['printf \'%s\\0\' "$s" "$xs" "${b-unset}" "${o-unset}"', 'cat .script.sh',
+                        '# ' + ' '.join(hostile)]) + '\n' * newline
+    tool = _tool({'script': script, 'inputs': {'s': 'string', 'xs': array, 'b': 'boolean', 'o': 'string?'},
+                  'outputs': {'printed': 'stdout'}})
+    with tempfile.TemporaryDirectory() as scratch:
+        base = Path(scratch)
+        (base / 'tool.cwl').write_text(dump_wic_yaml(tool), encoding='utf-8')
+        (base / 'job.json').write_text(json.dumps({'s': text, 'xs': items, 'b': flag}), encoding='utf-8')
+        out, err = io.StringIO(), io.StringIO()
+        code = cwltool.main.main(['--quiet', '--outdir', str(base / 'out'), str(base / 'tool.cwl'),
+                                  str(base / 'job.json')], stdout=out, stderr=err)
+        assert code == 0, err.getvalue()
+        printed = json.loads(out.getvalue())['printed']
+        assert Path(printed['path']).read_bytes().split(b'\0') == [
+            text.encode(), ' '.join(items).encode(), b'' if flag else b'unset', b'unset', script.encode()]
