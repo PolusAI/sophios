@@ -1,0 +1,4 @@
+# What a tool cannot say is reported where the tool says it, in the tool's own file.
+steps:
+- id: bad
+  run: bad_tool.wic

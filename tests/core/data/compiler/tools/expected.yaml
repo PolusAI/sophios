@@ -1,0 +1,41 @@
+# A tool written in .wic, as the compiler writes it out: named by path, by its id on the workflow search paths, written
+# as an inline body, and as the root, where its ports are the workflow's inputs; what a compile pinned to a version
+# older than tools is told; and what a step that names a workflow from the tool search paths is told.
+by_path.wic:
+  files: [by_path.cwl, by_path_inputs.yml, by_path~grep.cwl]
+  written:
+    by_path~grep.cwl: &grep
+      class: CommandLineTool
+      baseCommand: grep
+      inputs:
+        pattern: {exact: {type: string, inputBinding: {position: 1, prefix: -n}}}
+        in-file: {exact: {type: File, inputBinding: {position: 2}}}
+      outputs:
+        matches: {exact: {type: stdout}}
+        index: {exact: {type: File, outputBinding: {glob: '$(inputs["in-file"].basename).idx'}}}
+by_id.wic:
+  written: {by_id~grep.cwl: *grep}
+inline.wic:
+  written:
+    inline~count.cwl:
+      baseCommand: env
+      arguments: {exact: [{position: 1, valueFrom: bash}, {position: 2, valueFrom: .script.sh}]}
+      inputs: {text: {exact: {type: File, inputBinding: {position: 0, prefix: text=, separate: false}}}}
+      requirements:
+      - class: InitialWorkDirRequirement
+        listing: [{class: File, basename: .script.sh, contents: 'wc -l < "$text" > count.txt'}]
+grep.wic:
+  files: [grep.cwl, grep_inputs.yml, grep~grep.cwl]
+  written:
+    grep.cwl: {class: Workflow, inputs: {exact: {pattern: {type: string}, in-file: {type: File}}}}
+    grep~grep.cwl: *grep
+by_bad_tool.wic:
+  refused: [{code: TOOL_DOCUMENT, severity: error, file: bad_tool.wic, line: 1, column: 15}]
+collide.wic:
+  written: {collide~shared@1.cwl: &echo {baseCommand: echo}, collide~shared@2.cwl: *echo}
+pinned.wic:
+  refused: [{code: LANG_VERSION_TOO_OLD, severity: error, file: grep.wic, line: 1, column: 1}]
+pinned_nested.wic:
+  refused: [{code: LANG_VERSION_TOO_OLD, severity: error, file: grep.wic, line: 1, column: 1}]
+by_name.wic:
+  refused: [{code: SUBWORKFLOW_INVALID, severity: error, file: by_name.wic, line: 6, column: 3}]

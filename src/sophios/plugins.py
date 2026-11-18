@@ -119,7 +119,8 @@ def get_tools_cwl(config: Json, validate_plugins: bool = False,
                   basepath: str | Path = DEFAULT_BASEPATH) -> Tools:
     """Uses glob() to find all of the CWL CommandLineTool definition files within the configured search paths
 
-    Only names and paths are indexed: a tool file is read, and refused if it is not a tool, when a step runs it.
+    Only names and paths are indexed, of each `.cwl` and each `.wic`: a tool file is read, and refused if it is not a
+    tool, when a step runs it. A `.cwl` is the tool of its stem wherever a `.wic` of that stem is found.
 
     A stem found more than once in a namespace prints a warning, and the later definition wins:
     search paths in the order the config lists them, then files in sorted path order.
@@ -137,16 +138,20 @@ def get_tools_cwl(config: Json, validate_plugins: bool = False,
     # Index all of the tools; each is read when a step uses it.
     tools_cwl: Tools = {}
     definitions: _Definitions = {}
+    written: _Definitions = {}  # each `.wic`, a tool of its stem unless a `.cwl` of that stem is found
     for plugin_ns in cwl_dirs_tag:
         for cwl_dir in cwl_dirs_tag[plugin_ns]:
             # "PurePath.relative_to() requires self to be the subpath of the argument, but os.path.relpath() does not."
             # See https://docs.python.org/3/library/pathlib.html#id4 and
             # See https://stackoverflow.com/questions/67452690/pathlib-path-relative-to-vs-os-path-relpath
             cwl_paths = _discoverable_paths(cwl_dir, 'cwl', basepath)
-            if len(cwl_paths) == 0:
+            wic_paths = _discoverable_paths(cwl_dir, 'wic', basepath)
+            if len(cwl_paths) == 0 and len(wic_paths) == 0:
                 print(f'Warning! No cwl files found in {cwl_dir}.')
                 print("Check 'search_paths_cwl' in your config file")
                 print('This almost certainly means you are not in the correct directory.')
+            for path in wic_paths:
+                _record(written, StepId(Path(path).stem, plugin_ns), os.path.abspath(path))
 
             for cwl_path_str in cwl_paths:
                 if 'biobb_md' in cwl_path_str:
@@ -159,6 +164,11 @@ def get_tools_cwl(config: Json, validate_plugins: bool = False,
                 cwl_path_abs = os.path.abspath(cwl_path_str)
                 _record(definitions, StepId(stem, plugin_ns), cwl_path_abs)
                 tools_cwl[StepId(stem, plugin_ns)] = Tool(cwl_path_abs, from_file=True)
+    # The one place the same-stem rule is applied, so every door finds the tool the index names.
+    for key, files in written.items():
+        if key not in tools_cwl:
+            definitions[key] = files
+            tools_cwl[key] = Tool(list(files.values())[-1])
     _warn_duplicates('tool', definitions)
     return tools_cwl
 

@@ -342,15 +342,24 @@ def read_tool(path: str) -> dict[str, Any]:
         SophiosError: `wic001` for a file that is not YAML or cannot be read; see `tool_process` for the others.
     """
     try:
-        with open(path, mode='r', encoding='utf-8') as stream:
-            document = yaml.safe_load(stream.read())
+        document = yaml.safe_load(tool_text(path))
     except yaml.YAMLError as error:
         raise SophiosError.error(SophiosErrorCode.INVALID_YAML,
                                  f'The tool {path} is not valid YAML: {" ".join(str(error).split())}') from error
+    return tool_process(document, path)
+
+
+def tool_text(path: str) -> str:
+    """The text of the tool file at `path`, in whatever language it is written.
+
+    Raises:
+        SophiosError: `wic001` for a file that cannot be read as UTF-8 text.
+    """
+    try:
+        return Path(path).read_text(encoding='utf-8')
     except (OSError, UnicodeDecodeError) as error:
         raise SophiosError.error(SophiosErrorCode.INVALID_YAML,
                                  f'The tool {path} cannot be read as UTF-8 text: {error}') from error
-    return tool_process(document, path)
 
 
 def tool_process(cwl: dict[str, Any], source: str) -> dict[str, Any]:

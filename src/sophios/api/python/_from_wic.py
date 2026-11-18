@@ -13,10 +13,10 @@ from typing import TYPE_CHECKING, Any, Final, cast
 from sophios import compiler
 from sophios.ir.frontdoor import SourceBundle, bundle_from_disk
 from sophios.ir.lower import output_step
-from sophios.ir.resolve import ResolvedDocument, ResolvedStep, resolve
+from sophios.ir.resolve import RegistrySnapshot, ResolvedDocument, ResolvedStep, resolve
 from sophios.lang import (CwlRecord, Diagnostic, Document, EdgeRef, InlineLiteral, InputValue, RawCwlRef,
                           Severity, SophiosError, SophiosErrorCode, SourceSpan, UnresolvedName, WicSidecar, to_json)
-from sophios.wic_types import Tools
+from sophios.wic_types import StepId, Tools
 
 from ._ports import OutputParameter, _validate_namespace_name
 from ._utils import authored_at, validate_python_identifier_name
@@ -88,7 +88,7 @@ def workflow_from_wic(path: Path, tool_registry: Tools,
         warnings.warn(f"{file}: wic: {', '.join(keys)} dropped: the Python API has no spelling for "
                       f"{'them' if len(keys) > 1 else 'it'}, and it changes no CWL a Workflow compiles or runs",
                       UserWarning, stacklevel=3)
-    return _build_workflow(resolved.document)
+    return _build_workflow(resolved.document, bundle.registry)
 
 
 # --------------------------------------------------------------------------
@@ -228,10 +228,10 @@ def _read_process(resolved: ResolvedStep, bundle: SourceBundle, reading: _Readin
         reading.refuse(span, f'step {step.id!r} is a python_script step; build its tool with '
                        'sophios.api.python.tool_builder and make it a Step')
         return
-    if isinstance(run, str) and run.endswith('.wic'):
-        reading.refuse(span, f'step {step.id!r}: run: {run} names a workflow; a nested Python Workflow is '
-                       f'named after its file: write the step as id: {Path(run).name}')
     if process.child is not None:
+        if isinstance(run, str) and run.endswith('.wic'):
+            reading.refuse(span, f'step {step.id!r}: run: {run} names a workflow; a nested Python Workflow is '
+                           f'named after its file: write the step as id: {Path(run).name}')
         keys = [f'{key}:' for key in ('scatter', 'scatterMethod', 'when') if key in interpreted]
         if keys:
             reading.refuse(span, f'step {step.id!r} calls a workflow with {", ".join(keys)}; a nested Python '
@@ -316,11 +316,11 @@ def _output_source(document: ResolvedDocument, raw: str) -> tuple[int, str] | No
 # --------------------------------------------------------------------------
 
 
-def _build_workflow(document: ResolvedDocument) -> "Workflow":
+def _build_workflow(document: ResolvedDocument, registry: RegistrySnapshot) -> "Workflow":
     """The `Workflow` for one resolved document; each call builds its own children."""
     from .workflow import Workflow  # pylint: disable=import-outside-toplevel
 
-    processes = [_build_process(resolved) for resolved in document.steps]
+    processes = [_build_process(resolved, registry) for resolved in document.steps]
     source = document.source
     with authored_at(source.span):
         workflow = Workflow(processes, document.name)
@@ -341,16 +341,20 @@ def _build_workflow(document: ResolvedDocument) -> "Workflow":
     return workflow
 
 
-def _build_process(resolved: ResolvedStep) -> "Step | Workflow":
+def _build_process(resolved: ResolvedStep, registry: RegistrySnapshot) -> "Step | Workflow":
     """The `Step` holding the tool Resolve chose, or the nested `Workflow` a call names."""
     from .workflow import Step  # pylint: disable=import-outside-toplevel
 
     if resolved.process.child is not None:
-        return _build_workflow(resolved.process.child)
+        return _build_workflow(resolved.process.child, registry)
     assert isinstance(resolved.process.declaration, dict)  # a tool's CWL; Resolve checked it
     with authored_at(resolved.source.span):
-        return Step.from_cwl_document(resolved.process.declaration, process_name=resolved.source.id,
+        step = Step.from_cwl_document(resolved.process.declaration, process_name=resolved.source.id,
                                       run_path=resolved.process.run_path)
+    tool = registry.tool(resolved.process.key)
+    if tool is not None:  # the tool's own document, which a compile is held to the version of
+        step._tool_registry[StepId(step.clt_path.stem, 'global')] = tool.source
+    return step
 
 
 def _bind_step(resolved: ResolvedStep, process: "Step | Workflow", workflow: "Workflow",

@@ -352,7 +352,7 @@ def _resolves(case: Yaml, base: Path, monkeypatch: pytest.MonkeyPatch, capsys: p
     for kind in case.get('kinds', ['tool']):
         for name in case['files']:
             (base / name).parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(_LAID_OUT[kind], base / f'{name}{_LAID_OUT[kind].suffix}')
+            shutil.copyfile(_LAID_OUT[kind], base / (name if Path(name).suffix else f'{name}{_LAID_OUT[kind].suffix}'))
         roots = {ns: [str(base / root) for root in paths] for ns, paths in case.get('roots', {'global': ['']}).items()}
         for listing in (_LISTED, _listed_in_reverse):
             monkeypatch.setattr(glob, 'glob', listing)

@@ -1,0 +1,5 @@
+# `shared.cwl` and `shared.wic` are both tools of the stem `shared`; a .cwl is the tool its stem names, so a step that
+# names the .wic never changes the tool the stem gives another step.
+steps:
+- id: shared.wic
+- id: shared

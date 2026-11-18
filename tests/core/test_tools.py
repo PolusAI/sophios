@@ -1,7 +1,8 @@
 """A tool written in `.wic`: a document, or a step's inline `run:` body, that says `command:` or `script:`. Each word is
 read where it is written; a command line means its words, and an output line its file, under cwltool's own
-evaluators; a script is run as written; and a line adds CWL and changes none. What a tool cannot say is stated, with
-its place, in tests/core/data/parse/tools, and what each means in tests/core/data/tool_lowering.yaml."""
+evaluators; a script is run as written; a line adds CWL and changes none; and a tool is one tool through every door
+that reaches it. What a tool cannot say is stated, with its place, in tests/core/data/parse/tools, and what each means
+in tests/core/data/tool_lowering.yaml."""
 import io
 import json
 import tempfile
@@ -13,13 +14,20 @@ from cwl_utils.expression import do_eval
 from hypothesis import assume, example, given
 from hypothesis import strategies as st
 
+from sophios.api.python.workflow import Step, Workflow
+from sophios.compiler import CompileSettings, compile_source
 from sophios.input_output import dump_wic_yaml
+from sophios.ir.frontdoor import bundle_from_disk
 from sophios.lang import SophiosErrorCode, ToolDocument, parse
 from sophios.lang.commandline import command_line_tool
+from sophios.lang.cwl import canonical_type
+from sophios.lang.diagnostics import SophiosError
+from sophios.plugins import get_tools_cwl
 from sophios.utils_cwl import make_tool
 
 from .budgets import FAST, budget
 from .cases import cases
+from .hermetic import cwl_tree
 
 #: Input names as a tool may write them: a CWL id holds more than an identifier does.
 NAMES = ['v', 'x_1', 'in-file', 'in.file', '1st', 'naïve', 'Sample', 'a+b']
@@ -341,3 +349,133 @@ def test_a_script_runs_as_written_with_each_input_in_its_variable(
         printed = json.loads(out.getvalue())['printed']
         assert Path(printed['path']).read_bytes().split(b'\0') == [
             text.encode(), ' '.join(items).encode(), b'' if flag else b'unset', b'unset', script.encode()]
+
+
+def _said(tool: dict[str, Any]) -> dict[str, Any]:
+    """What a CommandLineTool says, however it is spelled: its ports and its requirements and hints by name, whether
+    written as a list or as a mapping, each input's type in full; its `id` and `cwlVersion` set aside."""
+    said = {key: value for key, value in tool.items() if key not in ('id', 'cwlVersion')}
+    for section, name in (('inputs', 'id'), ('outputs', 'id'), ('requirements', 'class'), ('hints', 'class')):
+        if isinstance(said.get(section), list):
+            said[section] = {entry[name]: {key: value for key, value in entry.items() if key != name}
+                             for entry in said[section]}
+    return said | {'inputs': {name: port | {'type': canonical_type(port['type'])}
+                              for name, port in said.get('inputs', {}).items()}}
+
+
+#: A tool, the version it pins, and the code of what it cannot say.
+_TOOLS = st.sampled_from([
+    ('command: grep {pattern} {file}\ninputs: {pattern: string, file: File}\noutputs: {matches: stdout}\n', None, None),
+    ('script: echo "$text"\ninputs: {text: string}\noutputs: {said: stdout}\n', None, None),
+    ('command: [echo, "{n}"]\ninputs: {n: {type: int, default: 3}}\noutputs: {o: "{n}.txt"}\ndocker: a:1\n', None,
+     None),
+    ('command: grep {patern} | wc\ninputs: {pattern: string}\n', None, SophiosErrorCode.TOOL_DOCUMENT),
+    ('command: 3\n', None, SophiosErrorCode.MALFORMED_TOOL_VALUE),
+    ('command: echo\nwic: {lang_version: 9.9.9}\n', '9.9.9', None),
+    ('command: echo\nwic: {lang_version: 0.0.1}\n', '0.0.1', None)])
+
+
+def _version_refusal(version: str) -> SophiosErrorCode | None:
+    """What a compile under `version` says of a tool: no version is 9.9.9, and tools are syntax in none before 0.1.0."""
+    return (SophiosErrorCode.UNKNOWN_LANG_VERSION if version == '9.9.9'
+            else SophiosErrorCode.LANG_VERSION_TOO_OLD if version == '0.0.1' else None)
+
+
+@pytest.mark.fast
+@given(_TOOLS, st.sampled_from([None, '0.0.1', '0.1.0', '9.9.9']))
+@budget(30)  # pylint: disable-next=too-many-locals
+def test_a_tool_is_one_tool_through_every_door(case: tuple[str, str | None, SophiosErrorCode | None],
+                                               setting: str | None) -> None:
+    """A tool named as the root, by `run:`, written as an inline body, found by its stem on the tool search paths,
+    given to a Python `Step` by its path or by its name, and read by `Workflow.from_wic` as the root, by `run:`, as an
+    inline body and by its stem, is each time the same CommandLineTool, or is refused with the same code; as the root
+    its ports are the workflow's inputs, by name, type and default, each at the line of the tool that declares it.
+    Nothing tells one door's tool from another's: the registry discovery gives holds each tool as a file it reads when
+    a step runs it, whatever it is written in. The version is chosen as for a workflow: a setting that is no version is
+    refused before anything is read, and a tool is refused for what it cannot say before its version is held to the
+    setting or to the pin the tool writes (a tool needs 0.1.0). Python reads a file when it is given one, and compiles
+    under the setting."""
+    text, pin, fault = case
+    expected = _version_refusal(setting) if setting == '9.9.9' else fault or _version_refusal(setting or pin or '0.1.0')
+    in_python = fault or _version_refusal(setting or pin or '0.1.0')
+    from_wic = fault or _version_refusal(pin or '0.1.0') or _version_refusal(setting or '0.1.0')
+    with tempfile.TemporaryDirectory() as scratch:
+        base = Path(scratch)
+        (base / 'adapters').mkdir()
+        (base / 'adapters' / 'tool.cwl').write_text(  # the stem of the root: its own file is the tool it means
+            'cwlVersion: v1.2\nclass: CommandLineTool\nbaseCommand: from-the-index\ninputs: {}\noutputs: {}\n',
+            encoding='utf-8')
+        for path in (base / 'tool.wic', base / 'adapters' / 'named.wic'):
+            path.write_text(text, encoding='utf-8')
+        (base / 'run.wic').write_text('steps:\n- id: tool\n  run: tool.wic\n', encoding='utf-8')
+        (base / 'stem.wic').write_text('steps:\n- id: named\n', encoding='utf-8')
+        (base / 'inline.wic').write_text('steps:\n- id: tool\n  run:\n' + ''.join(
+            f'    {line}\n' for line in text.splitlines()), encoding='utf-8')
+
+        def index() -> Any:
+            return get_tools_cwl({'search_paths_cwl': {'global': [str(base / 'adapters')]}})
+
+        def read(root: str) -> Workflow:
+            return Workflow.from_wic(base / root, tool_registry=index())
+        doors: dict[str, Any] = {root: (lambda root=root: compile_source(
+            bundle_from_disk(base / root, {}, index()), CompileSettings(lang_version=setting), quiet=True))
+            for root in ('tool.wic', 'run.wic', 'stem.wic', 'inline.wic')}
+        doors |= {
+            'Step': lambda: Workflow([Step(clt_path=base / 'adapters' / 'named.wic')], 'w').compile(
+                lang_version=setting, tool_registry=index()),
+            'Step, by its name': lambda: Workflow([Step(clt_path=Path('named.cwl'), tool_registry=index())],
+                                                  'w').compile(lang_version=setting, tool_registry=index()),
+            'from_wic, by run:': lambda: read('run.wic').compile(lang_version=setting),
+            'from_wic, an inline body': lambda: read('inline.wic').compile(lang_version=setting),
+            'from_wic, by its stem': lambda: read('stem.wic').compile(lang_version=setting, tool_registry=index())}
+        if 'default' not in text:  # a Python workflow port carries only a type (api006)
+            doors['from_wic'] = lambda: read('tool.wic').compile(lang_version=setting)
+        tools, codes = {}, {}
+        for door, compiled in doors.items():
+            try:
+                made = compiled()
+                tools[door] = _said(cwl_tree(made).children[0].cwl if door.endswith('.wic')
+                                    else made.cwl_workflow['steps'][0]['run'])
+                if door == 'tool.wic':
+                    ports = {port.name: port for port in parse(text, door).tool.inputs}  # type: ignore[union-attr]
+                    assert {name: (port['type'], port.get('default'))
+                            for name, port in cwl_tree(made).cwl['inputs'].items()} \
+                        == {name: (port.type, dict(port.fields).get('default')) for name, port in ports.items()}
+            except SophiosError as error:
+                codes[door] = {found.code for found in error.diagnostics}
+    wanted = {door: expected if door.endswith('.wic') else from_wic if door.startswith('from_wic') else in_python
+              for door in doors}
+    assert codes == {door: {code} for door, code in wanted.items() if code is not None}, (codes, tools)
+    assert all(tool == next(iter(tools.values())) for tool in tools.values()), tools
+
+
+@pytest.mark.fast
+def test_a_tool_found_once_is_the_tool_of_its_stem_for_every_door(tmp_path: Path) -> None:
+    """Discovery names each tool once, and gives a stem to its `.cwl` when a `.wic` has it too. A `.wic` of that stem
+    reached any other way, by a Python `Step` given its path or by a step that names it, is never a second tool of
+    the stem: a step that names the stem still runs the `.cwl`, whatever came first. The root is the one file that
+    is read as itself."""
+    (tmp_path / 'adapters').mkdir()
+    (tmp_path / 'elsewhere').mkdir()
+    (tmp_path / 'adapters' / 'grep.cwl').write_text(
+        'cwlVersion: v1.2\nclass: CommandLineTool\nbaseCommand: echo-from-cwl\ninputs: {}\noutputs: {}\n',
+        encoding='utf-8')
+    (tmp_path / 'elsewhere' / 'grep.wic').write_text('command: echo-from-wic\n', encoding='utf-8')
+    (tmp_path / 'suffixed.wic').write_text('steps:\n- id: grep.wic\n', encoding='utf-8')
+
+    def registry() -> Any:
+        return get_tools_cwl({'search_paths_cwl': {'global': [str(tmp_path / 'adapters')]}})
+
+    def command(compiled: Any) -> Any:
+        return compiled.cwl_workflow['steps'][0]['run']['baseCommand']
+    shared = registry()
+    by_path = Workflow([Step(clt_path=tmp_path / 'elsewhere' / 'grep.wic', tool_registry=shared)], 'w')
+    by_name = Workflow([Step(clt_path=Path('grep.cwl'), tool_registry=shared)], 'w')
+    assert command(by_name.compile(tool_registry=shared)) == 'echo-from-cwl'
+    assert command(by_path.compile(tool_registry=shared)) == 'echo-from-cwl'
+    suffixed = compile_source(bundle_from_disk(tmp_path / 'suffixed.wic',
+                              {}, registry()), CompileSettings(), quiet=True)
+    assert cwl_tree(suffixed).children[0].cwl['baseCommand'] == 'echo-from-cwl'
+    root = compile_source(bundle_from_disk(tmp_path / 'elsewhere' / 'grep.wic', {}, registry()), CompileSettings(),
+                          quiet=True)
+    assert cwl_tree(root).children[0].cwl['baseCommand'] == 'echo-from-wic'

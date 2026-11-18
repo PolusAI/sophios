@@ -171,6 +171,10 @@ def cwl_workflow_as_a_tool() -> None:
     Workflow([step], 'wsay').compile()
 
 
+def wic_workflow_as_a_tool() -> None:
+    Step(clt_path=HERE.parent / 'compiler' / 'tools' / 'by_path.wic')
+
+
 # Names Sophios cannot write: a step's name is an id of the compiled CWL, a workflow's the stem of its files.
 
 def step_named_with_a_tilde() -> None:

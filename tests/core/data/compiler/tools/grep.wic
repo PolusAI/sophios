@@ -1,0 +1,7 @@
+command: grep -n {pattern} {in-file}
+inputs:
+  pattern: string
+  in-file: File
+outputs:
+  matches: stdout
+  index: "{in-file}.idx"

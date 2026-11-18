@@ -32,6 +32,7 @@ from ..lang import (
     SophiosErrorCode,
     SourceSpan,
     StepKey,
+    ToolDocument,
     UnresolvedName,
     WicSidecar,
 )
@@ -56,7 +57,7 @@ class ToolDefinition:
 
     @property
     def from_file(self) -> bool:
-        """Whether `run_path` is the tool's own file."""
+        """Whether `run_path` is the tool's own CWL file."""
         return self.source.from_file
 
     @cached_property
@@ -251,8 +252,12 @@ def _resolve_process(step: Step, index: int, sidecar: WicSidecar | None, registr
     try:
         cwl = tool.cwl
     except SophiosError as error:  # a tool file is read here, when a step runs it
-        for diagnostic in error.diagnostics:
-            diagnostics.error(diagnostic.code, diagnostic.message, step.span, Locator(step=step.id, index=index))
+        for diagnostic in error.diagnostics:  # one in the tool's own file stays where it says
+            # A file that is no tool, named by a step, is a workflow the step runs wrongly.
+            code = (SophiosErrorCode.SUBWORKFLOW_INVALID if diagnostic.code is SophiosErrorCode.INVALID_TOOL
+                    else diagnostic.code)
+            diagnostics.error(code, diagnostic.message, diagnostic.span or step.span,
+                              Locator(step=step.id, index=index))
         return None
     if check is not None and (refusal := check(tool)) is not None:
         diagnostics.error(SophiosErrorCode.TOOL_REFUSED,
@@ -672,7 +677,7 @@ def namespace_of(sidecar: WicSidecar | None) -> str:
     return str(dict(sidecar.entries).get('namespace', 'global')) if sidecar is not None else 'global'
 
 
-def version_pins(document: Document) -> tuple[str, ...]:
+def version_pins(document: Document | ToolDocument) -> tuple[str, ...]:
     """The `wic: lang_version:` `document` pins, if it pins one."""
     value = dict(document.sidecar.entries).get('lang_version') if document.sidecar is not None else None
     return () if value is None else (str(value),)
