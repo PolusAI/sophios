@@ -1,66 +1,51 @@
-"""Lowering a resolved document to a graph: total, every reference names an existing port, every authored binding
-kept, deterministic; and each document of tests/core/data/lower lowers to the diagnostics its expected.yaml states.
-The test-side resolver needs no registry, filesystem or config."""
-import json
+"""Lowering a document reached as a compile reaches it, through Resolve and the Check inside it: total, every reference
+names an existing port, every authored binding kept, deterministic; and each document of tests/core/data/check and
+tests/core/data/lower gives the diagnostics its expected.yaml states."""
+from collections.abc import Callable
 
 import pytest
-from hypothesis import example, given
+from hypothesis import given
 
-from sophios.ir.declarations import port_declaration
 from sophios.ir.lower import lower
-from sophios.ir.resolve import ResolvedDocument, ResolvedPort, ResolvedProcess, ResolvedStep
-from sophios.ir.types import RegistryKey
-from sophios.lang.nodes import Document, Step
+from sophios.ir.resolve import RegistrySnapshot, resolve
+from sophios.lang.nodes import Document
 from sophios.lang.parser import parse
+from sophios.wic_types import Tools
 
 from . import ast_strategies as strat
 from .cases import DATA, diagnostic, match
-from .hermetic import COVERAGE, ORACLE
+from .hermetic import COVERAGE, bundle
 from .helpers import stated
-from .strategies import shapes
+from .synthetic_tools import SYNTHETIC_TOOLS, clt, registered
 
 
-def _declared_inputs(step: Step) -> tuple[str, ...]:
-    """What a process declares, as far as the step shows it: the inputs it
-    binds, and those it scatters over whether bound or not."""
-    scatter = dict(step.interpreted).get('scatter')
-    scattered = [name for name in scatter if isinstance(name, str)] if isinstance(scatter, list) else []
-    named = [name for name, _ in step.inputs] + scattered
-    return tuple(dict.fromkeys(named))
-
-
-def _resolved(document: Document) -> ResolvedDocument:
-    """Build Lower's typed input independently of production Resolve."""
-    declaration = port_declaration(None)
-    steps = tuple(
-        ResolvedStep(
-            step,
-            ResolvedProcess(
-                RegistryKey('test', step.id),
-                f'{step.id}.cwl',
-                tuple(ResolvedPort(name, declaration) for name in _declared_inputs(step)),
-                tuple(ResolvedPort(binding.name, declaration) for binding in step.outputs),
-                {'class': 'CommandLineTool'},
-            ),
-        )
-        for step in document.steps
-    )
-    return ResolvedDocument('probe', document, steps)
+def _running(document: Document) -> Tools:
+    """A tool for each step of `document`, declaring the inputs the step binds and the outputs it names."""
+    return registered({step.id: clt(dict.fromkeys((name for name, _ in step.inputs), {'type': 'Any'}),
+                                    dict.fromkeys((out.name for out in step.outputs), {'type': 'File'}))
+                       for step in document.steps})
 
 
 @pytest.mark.fast
-def test_a_document_lowers_to_the_diagnostics_its_family_states() -> None:
-    """Each `.wic` of tests/core/data/lower, parsed and lowered, gives exactly the diagnostics expected.yaml lists for
-    it, by code, severity and line, and a graph exactly when none is an error."""
-    expected = stated(DATA / 'lower')
-    assert sorted(expected) == sorted(path.name for path in (DATA / 'lower').glob('*.wic'))
+@pytest.mark.parametrize('family, tools', [('check', lambda _: {}), ('lower', _running)])
+def test_a_document_gives_the_diagnostics_its_family_states(family: str,
+                                                            tools: Callable[[Document], Tools]) -> None:
+    """Each `.wic` of tests/core/data/<family> parses clean and gives, through Resolve and then Lower, exactly the
+    diagnostics expected.yaml lists for it, by code, severity and line, and a graph exactly when none is an error. A
+    `check` document breaks a rule of its own nodes, and with no tool to find gives Check's alone: Resolve looks
+    nothing up for it."""
+    expected = stated(DATA / family)
+    assert sorted(expected) == sorted(path.name for path in (DATA / family).glob('*.wic'))
     for name, diagnostics in expected.items():
-        document = parse((DATA / 'lower' / name).read_text(encoding='utf-8'), name).document
-        assert document is not None, name
-        result = lower(_resolved(document))
-        found = [diagnostic(each) for each in result.diagnostics]
-        assert match(diagnostics, found), (name, found)
-        assert (result.graph is None) is result.diagnostics.has_errors, name
+        parsed = parse((DATA / family / name).read_text(encoding='utf-8'), name)
+        assert parsed.document is not None and not parsed.diagnostics.has_errors, (name, list(parsed.diagnostics))
+        resolved = resolve(parsed.document, RegistrySnapshot.from_tools(tools(parsed.document)), name='probe')
+        found = list(resolved.diagnostics)
+        if resolved.document is not None:
+            lowered = lower(resolved.document)
+            assert (lowered.graph is None) is lowered.diagnostics.has_errors, name
+            found += lowered.diagnostics
+        assert match(diagnostics, [diagnostic(each) for each in found]), (name, found)
 
 
 @pytest.mark.fast
@@ -71,13 +56,16 @@ def test_a_well_formed_document_lowers_whole(document: Document) -> None:
     never a diagnostic or an exception; the same graph twice, in full, mappings included, so none varies with set
     iteration; with every binding written in `in:`, so Emit never reads the AST again; and with every reference its
     edges and mappings hold naming a port that exists, which a dangling `source:` would not."""
-    resolved = _resolved(document)
-    result = lower(resolved)
+    model = bundle(strat.to_yml(document), 'probe', SYNTHETIC_TOOLS)
+    assert model.parsed.document is not None
+    resolved = resolve(model.parsed.document, model.registry, name='probe')
+    assert resolved.document is not None, [str(each) for each in resolved.diagnostics]
+    result = lower(resolved.document)
     assert result.graph is not None, [d.code.value for d in result.diagnostics]
     assert len(result.graph.steps) == len(document.steps)
-    assert lower(resolved).graph == result.graph
+    assert lower(resolved.document).graph == result.graph
     assert [b.value for step in result.graph.steps for b in step.bindings] == \
-        [value for step in document.steps for _, value in step.inputs]
+        [value for step in resolved.document.source.steps for _, value in step.inputs]
     graph = result.graph
     known = {p.id for s in graph.steps for p in s.inputs + s.outputs}
     held = [port for edge in graph.edges for port in (edge.source, edge.sink)]
@@ -85,21 +73,3 @@ def test_a_well_formed_document_lowers_whole(document: Document) -> None:
     held += [binding.sink for step in graph.steps for binding in step.bindings]
     held += [port for _, ports in graph.input_mapping for port in ports]
     assert set(held) <= known
-
-
-@pytest.mark.fast
-@given(shapes().map(lambda shape: parse(json.dumps(shape), 'recovered.wic').document).filter(bool))  # a workflow
-@example(parse('steps:\n- id: ""\n  in: {}\n', 'recovered.wic').document)
-@example(parse('steps:\n- \n', 'recovered.wic').document)
-@example(parse('steps:\n- id:\n', 'recovered.wic').document)
-@example(Document(steps=(Step(id=''),)))   # a step the parser never built, so it carries no span at all
-@ORACLE
-def test_a_document_the_parser_recovered_never_raises(document: Document) -> None:
-    """Totality over what `parse` returns, not over what it accepts: a graph exactly when nothing reported is an error.
-
-    A recovered document is exactly when a caller is least able to handle an
-    exception, and a result carrying neither a graph nor a diagnostic is worse
-    than the exception it replaced -- `ok` is False and nothing says why.
-    """
-    result = lower(_resolved(document))
-    assert (result.graph is None) is result.diagnostics.has_errors, [str(d) for d in result.diagnostics]

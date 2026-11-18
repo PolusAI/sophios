@@ -39,6 +39,7 @@ from ..lang import (
 from ..lang.diagnostics import Diagnostic, Diagnostics, Locator, SophiosError
 from ..lang.nodes import GraphvizEntry, InputValue, OpaqueCwl, Step
 from ..wic_types import Cwl, Tool, Tools
+from .check import CheckedDocument, check as check_document
 from .declarations import port_declaration
 from .types import PortDeclaration, RegistryKey
 
@@ -203,19 +204,29 @@ def _resolve_document(document: Document, registry: RegistrySnapshot, name: str,
                       trail: tuple[RegistryKey, ...], reported: set[str],
                       directory: Path | None, check: ToolCheck | None) \
         -> tuple[ResolvedDocument, Diagnostics]:
-    diagnostics = Diagnostics()
-    contributed: list[Step] = []
-    steps: list[ResolvedStep] = []
     counts = Counter(step.id for step in document.steps)
-    for index, step in enumerate(document.steps, start=1):
-        sidecar = step_sidecar(document.sidecar, index, step.id, counts[step.id])
-        # Its `wic: steps: (N, name):` body contributes to the step before its process is resolved.
-        step = _contributed_step(step, sidecar)
-        contributed.append(step)
-        process = _resolve_process(step, index, sidecar, registry, trail, diagnostics, reported, directory, check)
-        if process is not None:
-            steps.append(ResolvedStep(step, process, sidecar))
-    return ResolvedDocument(name, replace(document, steps=tuple(contributed)), tuple(steps), directory), diagnostics
+    sidecars = tuple(step_sidecar(document.sidecar, index, step.id, counts[step.id])
+                     for index, step in enumerate(document.steps, start=1))
+    # Its `wic: steps: (N, name):` body contributes to each step, and the document it makes is checked, before
+    # anything is looked up.
+    assembled = replace(document, steps=tuple(map(_contributed_step, document.steps, sidecars)))
+    checked, diagnostics = check_document(assembled, name, root=not trail)
+    if checked is None:
+        return ResolvedDocument(name, assembled, (), directory), diagnostics
+    return _resolve_steps(checked, sidecars, registry, name, trail, reported, directory, check, diagnostics)
+
+
+# pylint: disable-next=too-many-arguments,too-many-positional-arguments
+def _resolve_steps(checked: CheckedDocument, sidecars: tuple[WicSidecar | None, ...], registry: RegistrySnapshot,
+                   name: str, trail: tuple[RegistryKey, ...], reported: set[str], directory: Path | None,
+                   check: ToolCheck | None, diagnostics: Diagnostics) -> tuple[ResolvedDocument, Diagnostics]:
+    """The process each step of a checked document runs: the one stage of Resolve that looks anything up, so it is
+    handed only a document `check` made."""
+    steps = tuple(ResolvedStep(step, process, sidecar) for index, (step, sidecar)
+                  in enumerate(zip(checked.document.steps, sidecars, strict=True), start=1)
+                  if (process := _resolve_process(step, index, sidecar, registry, trail, diagnostics, reported,
+                                                  directory, check)) is not None)
+    return ResolvedDocument(name, checked.document, steps, directory), diagnostics
 
 
 # pylint: disable-next=too-many-arguments,too-many-positional-arguments,too-many-locals

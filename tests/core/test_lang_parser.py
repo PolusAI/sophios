@@ -479,8 +479,7 @@ def _fires(code: SophiosErrorCode) -> bool:
 #: Fixtures whose test compares each diagnostic's code exactly: `match` of a list of `{code: ...}` against what the
 #: compile raises (test_compiler:91 and 95, test_infer_phase:62, test_lower:62, test_realtime:167, test_diagnostics:334,
 #: test_python_api_from_wic:271) or `==` of the codes raised (test_python_api_workflow:193).
-_STATED = ('compiler/*/expected.yaml', 'infer/*/expected.yaml', 'lower/expected.yaml', 'realtime/expected.yaml',
-           'preflight/*/expected.yaml', 'from_wic/refused/*/expected.yaml', 'python_api/refused.yaml')
+_STATED = ('**/expected.yaml', 'python_api/refused.yaml')
 
 
 def _coded(node: Any) -> set[str]:

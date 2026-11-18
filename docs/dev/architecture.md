@@ -26,7 +26,11 @@ real-time declarations.
    builds its bundle from the `Document` it constructs, with no parse.
 2. **Resolve** pairs each step with its process (a tool, a workflow, an
    implementation, an inline body) from an immutable registry snapshot, applying `wic: steps:` contributions. It
-   discovers nothing and parses nothing. A registry `Tool` reads its one file
+   discovers nothing and parses nothing. Each document it reaches, its contributions applied, first passes
+   **Check** (`sophios.ir.check`): the rules of its own nodes (step ids, names, one producer per edge name, the
+   shape of `scatter:` and of workflow outputs), stated once for a parsed document and a Python-built one alike.
+   Resolve looks nothing up for a document Check has not made a `CheckedDocument` of, so a bad step id is reported
+   as itself, never as a process that is absent, and the phases after it assume those rules. A registry `Tool` reads its one file
    the first time anything asks, a `.cwl` through the CWL loader and a `.wic`
    through `parse()` and its lowering, so every consumer sees one kind of
    tool, and a registry key is fixed once, when discovery finds the file (a

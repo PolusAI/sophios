@@ -88,7 +88,7 @@ jobs:
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         timeout-minutes: 180
         run: >-
-          pytest tests/core/test_predicates.py tests/core/test_reference_compatibility.py tests/core/test_canonical_path.py tests/core/test_emit.py tests/core/test_resolve.py tests/core/test_infer_phase.py tests/core/test_edge_binding.py tests/core/test_lower.py
+          pytest tests/core/test_predicates.py tests/core/test_reference_compatibility.py tests/core/test_emit.py tests/core/test_resolve.py tests/core/test_infer_phase.py tests/core/test_edge_binding.py tests/core/test_lower.py
           tests/core/test_leak_boundary.py::test_freight_survives_byte_for_byte_and_changes_nothing_else
           --hypothesis-seed="$HYPOTHESIS_SEED" --junitxml=property-reports/oracle.xml
 

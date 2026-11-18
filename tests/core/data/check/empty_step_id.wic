@@ -1,0 +1,5 @@
+# The mapping form takes a step's id from its key, which the parser reads as written: an empty one is wic007, as the
+# list form's is, before any tool is looked up for it, so no step says its process is absent.
+steps:
+  "":
+    in: {}

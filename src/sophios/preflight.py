@@ -15,7 +15,6 @@ import os
 import re
 import shutil
 import subprocess as sub
-import sys
 import sysconfig
 import tempfile
 from collections.abc import Mapping, Sequence
@@ -395,7 +394,7 @@ def engine_problems(images: Sequence[str], run: RunSettings) -> list[Diagnostic]
     problems = []
     if proc.returncode != 0 and not runner.ignore_install:
         problems.append(_unusable_engine(engine, proc.returncode, proc.stderr.decode('utf-8', errors='replace')))
-    if engine in DOCKER_LIKE and sys.platform != 'win32' and not runner.ignore_processes:
+    if engine in DOCKER_LIKE and not runner.ignore_processes:  # 0 processes where there is no pgrep (Windows)
         count = _docker_processes()
         if count > MAX_DOCKER_PROCESSES:
             problems.append(_engine_error(

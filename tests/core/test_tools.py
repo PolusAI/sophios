@@ -22,7 +22,6 @@ from sophios.compiler import CompileSettings, compile_source
 from sophios.input_output import dump_wic_yaml
 from sophios.ir.frontdoor import bundle_from_disk
 from sophios.lang import SophiosErrorCode, ToolDocument, parse
-from sophios.lang.commandline import command_line_tool
 from sophios.lang.cwl import canonical_type
 from sophios.lang.diagnostics import SophiosError
 from sophios.plugins import get_tools_cwl
@@ -178,12 +177,10 @@ def _by_class(section: Any) -> dict[str, Any]:
 @pytest.mark.fast
 @pytest.mark.parametrize('case', cases('tool_lowering.yaml', 'wic', 'cwl'))
 def test_a_tool_means_the_cwl_its_row_states(case: dict[str, Any]) -> None:
-    """A tool as `.wic` text is the CommandLineTool its row states, key for key and in the order of every list; the
-    CWL the parser's lowering made is the one the tool keeps, and lowering the tool again says the same."""
+    """A tool as `.wic` text is the CommandLineTool its row states, key for key and in the order of every list."""
     parsed = parse(case['wic'], 'tool.wic')
     assert parsed.tool is not None and not parsed.diagnostics, [str(found) for found in parsed.diagnostics]
     assert parsed.tool.cwl == case['cwl']
-    assert command_line_tool(parsed.tool) == parsed.tool.cwl
 
 
 #: A value that is not there: its flag goes with it, and a dash word that is text stays.

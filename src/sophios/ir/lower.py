@@ -15,12 +15,11 @@ import difflib
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
-from typing import Final
+from typing import Final, cast
 
 from ..lang.diagnostics import Diagnostics, Locator
 from ..lang.error_codes import SophiosErrorCode
-from ..lang.names import check_written_name
-from ..lang.nodes import CwlRecord, Document, EdgeRef, InputValue, OpaqueCwl, Step, UnresolvedName, WicSidecar
+from ..lang.nodes import CwlRecord, EdgeRef, InputValue, OpaqueCwl, Step, UnresolvedName, WicSidecar
 from ..lang.parser import step_key
 from ..lang.spans import SourceSpan
 from .declarations import port_declaration
@@ -66,11 +65,11 @@ def lower(document: ResolvedDocument, here: Namespace = Namespace()) -> PhaseRes
         PhaseResult: The graph, and any diagnostics raised on the way.
     """
     diagnostics = Diagnostics()
-    identities = _step_identities(document.source, here, diagnostics)
-    if identities is None or not _every_name_is_present(document.source, diagnostics):
-        return PhaseResult(None, diagnostics)
-    _check_written_names(document, not here.parts, diagnostics)
-    defined = _edge_definitions(identities, [step.source for step in document.steps], diagnostics)
+    # Resolve read only a checked document: each step has an id, and each edge name one producer.
+    identities = tuple(StepId(here, index, step.id) for index, step in enumerate(document.source.steps, start=1))
+    defined = {binding.edge_def.name: PortId(identity, Direction.OUTPUT, AuthoredName(binding.name))
+               for identity, resolved in zip(identities, document.steps, strict=True)
+               for binding in resolved.source.outputs if binding.edge_def is not None}
     nodes: list[StepNode] = []
     children: list[WorkflowGraph] = []
 
@@ -86,10 +85,10 @@ def lower(document: ResolvedDocument, here: Namespace = Namespace()) -> PhaseRes
                 diagnostics._append(diagnostic)  # pylint: disable=protected-access
 
     passthrough = dict(document.source.passthrough)
-    workflow_inputs = _workflow_ports(document, 'inputs', diagnostics)
+    workflow_inputs = _workflow_ports(document, 'inputs')
     relays = {given.name: tuple(binding.sink for node in nodes for binding in node.bindings
                                 if given.name in _input_names(binding)) for given in workflow_inputs}
-    workflow_outputs = _workflow_ports(document, 'outputs', diagnostics)
+    workflow_outputs = _workflow_ports(document, 'outputs')
     output_mapping = []
     for port in workflow_outputs:
         source = _output_port(nodes, port.output_source, diagnostics, document.source.span, str(port.name))
@@ -190,39 +189,23 @@ def _resolved_step_node(identity: StepId, resolved: ResolvedStep, defined: dict[
 
 def _scatter_ports(source: Step, identity: StepId, inputs: tuple[Port, ...],
                    diagnostics: Diagnostics, *, calls_workflow: bool) -> tuple[PortName, ...]:
-    """The ports an authored `scatter:` names, in the order written.
+    """The ports an authored `scatter:`, a name or a list of them as Check made sure, names, in the order written.
 
     A name must be an input of the step itself; on a subworkflow call those
     are exactly the inputs the subworkflow declares. Any other name is
-    `wic032`, as is an entry that is not a name at all and a `scatter:` that is
-    neither a name nor a list of them. A name the compiler generates for a port
-    inside the subworkflow never resolves, so a caller cannot depend on how its
-    callee is laid out.
+    `wic032`. A name the compiler generates for a port inside the subworkflow
+    never resolves, so a caller cannot depend on how its callee is laid out.
     """
     scatter = dict(source.interpreted).get('scatter')
-    locator = Locator(step=source.id, index=identity.index)
-    if scatter is not None and not isinstance(scatter, (str, list)):
-        diagnostics.error(SophiosErrorCode.UNKNOWN_SCATTER_PORT,
-                          f"step '{source.id}' has `scatter: {scatter!r}`, which names no input. "
-                          "`scatter:` is an input name or a list of them.",
-                          source.span, locator)
-    written: list[object] = [scatter] if isinstance(scatter, str) else (
-        list(scatter) if isinstance(scatter, list) else [])
     ports: dict[str, PortName] = {str(port.id.port): port.id.port for port in inputs}
     found: list[PortName] = []
-    for text in written:
-        if not isinstance(text, str):
-            diagnostics.error(SophiosErrorCode.UNKNOWN_SCATTER_PORT,
-                              f"step '{source.id}' has the scatter entry {text!r}, which is not "
-                              "a name. Each `scatter:` entry names one of the step's inputs.",
-                              source.span, locator)
-            continue
+    for text in cast(list[str], [scatter] if isinstance(scatter, str) else scatter or []):
         if text in ports:
             found.append(ports[text])
             continue
         diagnostics.error(SophiosErrorCode.UNKNOWN_SCATTER_PORT,
                           _unknown_scatter(source.id, text, list(ports), calls_workflow),
-                          source.span, locator)
+                          source.span, Locator(step=source.id, index=identity.index))
     return tuple(found)
 
 
@@ -261,7 +244,7 @@ def _with_defaults_resolved(value: InputValue, directory: Path | None) -> InputV
                                        for key, field in value.fields))
 
 
-def _workflow_ports(document: ResolvedDocument, side: str, diagnostics: Diagnostics) -> tuple[WorkflowPort, ...]:
+def _workflow_ports(document: ResolvedDocument, side: str) -> tuple[WorkflowPort, ...]:
     """The ports the document declares under `side`, its `inputs:` or its `outputs:`."""
     raw: object = dict(document.source.passthrough).get(side)
     if not isinstance(raw, dict):
@@ -273,16 +256,6 @@ def _workflow_ports(document: ResolvedDocument, side: str, diagnostics: Diagnost
         if isinstance(declaration_raw, dict) and 'default' in declaration_raw:
             declaration_raw = {**declaration_raw,
                                'default': _resolved_default(declaration_raw['default'], document.directory)}
-        if output and isinstance(declaration_raw, dict):
-            rejected = sorted(key for key in ('linkMerge', 'pickValue') if key in declaration_raw)
-            if isinstance(declaration_raw.get('outputSource'), list):
-                rejected.append('a list outputSource')
-            if rejected:
-                diagnostics.error(
-                    SophiosErrorCode.STEP_INPUT_RECORD,
-                    f"workflow output {str(name)!r} uses {', '.join(rejected)}, which Sophios does not "
-                    'read; an output names one step/port',
-                    document.source.span)
         # Asserted, not reduced via `boundary_declaration`: it is already a
         # boundary declaration by where it's written, and reducing it would
         # discard fields the author wrote at the boundary on purpose.
@@ -362,92 +335,6 @@ def _inference_rules(sidecar: WicSidecar | None) -> tuple[tuple[str, str], ...]:
     if not isinstance(raw, dict):
         return ()
     return tuple((str(name), str(rule)) for name, rule in raw.items())
-
-
-def _step_identities(document: Document, here: Namespace,
-                     diagnostics: Diagnostics) -> tuple[StepId, ...] | None:
-    """One occurrence identity per step, or None when a step lacks an id.
-
-    A repeated `id` is not an error: sequence-form `steps:` invokes one tool twice.
-    """
-    identities: list[StepId] = []
-    for index, step in enumerate(document.steps, start=1):
-        if not step.id:
-            diagnostics.error(SophiosErrorCode.EMPTY_STEP_ID,
-                              'a step needs an id before it can be lowered', step.span)
-            return None
-        identities.append(StepId(here, index, step.id))
-    return tuple(identities)
-
-
-def _every_name_is_present(document: Document, diagnostics: Diagnostics) -> bool:
-    """Report every position where the document left a name empty, all under
-    one error code, so lowering stays total rather than raising `ValueError`.
-    """
-    before = len(diagnostics)
-    for index, step in enumerate(document.steps, start=1):
-        for name, value in step.inputs:
-            if not name:
-                diagnostics.error(SophiosErrorCode.EMPTY_NAME,
-                                  f"step '{step.id}' binds an input with no name", step.span,
-                                  Locator(step=step.id, index=index))
-            references = value.sources if isinstance(value, CwlRecord) else (value,)
-            for reference in references:
-                if isinstance(reference, EdgeRef) and not reference.name:
-                    diagnostics.error(SophiosErrorCode.EMPTY_NAME,
-                                      f"'!*' on '{step.id}.{name}' names no edge", reference.span,
-                                      Locator(step=step.id, index=index, port=name))
-        for binding in step.outputs:
-            if not binding.name:
-                diagnostics.error(SophiosErrorCode.EMPTY_NAME,
-                                  f"step '{step.id}' declares an out: entry with no name",
-                                  binding.span, Locator(step=step.id, index=index))
-            if binding.edge_def is not None and not binding.edge_def.name:
-                diagnostics.error(SophiosErrorCode.EMPTY_NAME,
-                                  f"'!&' on '{step.id}.{binding.name}' defines no edge",
-                                  binding.edge_def.span,
-                                  Locator(step=step.id, index=index, port=binding.name))
-    return len(diagnostics) == before
-
-
-def _check_written_names(document: ResolvedDocument, root: bool, diagnostics: Diagnostics) -> None:
-    """Report each step id, workflow input and output, and the root's own name that
-    `sophios.lang.names` does not let a document write."""
-    source = document.source
-    for index, step in enumerate(source.steps, start=1):
-        if (problem := check_written_name(step.id)) is not None:
-            diagnostics.error(SophiosErrorCode.INVALID_NAME, f'step id {step.id!r} {problem}', step.span,
-                              Locator(step=step.id, index=index))
-    passthrough = dict(source.passthrough)
-    for side, what in (('inputs', 'input'), ('outputs', 'output')):
-        declared = passthrough.get(side)
-        for name in declared if isinstance(declared, dict) else ():
-            if (problem := check_written_name(str(name))) is not None:
-                diagnostics.error(SophiosErrorCode.INVALID_NAME, f'workflow {what} {str(name)!r} {problem}',
-                                  source.span)
-    if root and (problem := check_written_name(document.name)) is not None:
-        diagnostics.error(SophiosErrorCode.INVALID_NAME, f'workflow name {document.name!r} {problem}',
-                          source.span)
-
-
-def _edge_definitions(identities: tuple[StepId, ...], steps: Sequence[Step],
-                      diagnostics: Diagnostics) -> dict[str, PortId]:
-    """Which port defines each explicit edge name, reporting any defined twice."""
-    defined: dict[str, PortId] = {}
-    for step_id, step in zip(identities, steps, strict=True):
-        for binding in step.outputs:
-            if binding.edge_def is None:
-                continue
-            name = binding.edge_def.name
-            if name in defined:
-                diagnostics.error(
-                    SophiosErrorCode.DUPLICATE_EDGE_DEF,
-                    f"'&{name}' is defined more than once. An edge name identifies one producer.",
-                    binding.edge_def.span,
-                    Locator(step=step.id, index=step_id.index, port=binding.name))
-                continue
-            defined[name] = PortId(step_id, Direction.OUTPUT, AuthoredName(binding.name))
-    return defined
 
 
 def _resolve(value: InputValue, port: Port, defined: dict[str, PortId], diagnostics: Diagnostics) -> Resolution:

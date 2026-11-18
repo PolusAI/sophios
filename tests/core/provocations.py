@@ -11,14 +11,6 @@ from typing import Any, Final
 from unittest import mock
 
 from sophios.lang import SophiosError, SophiosErrorCode, resolve_lang_version
-from sophios.wic_types import Yaml
-
-
-def _compile_minimal(yml: Yaml) -> None:
-    """Compile with the real tool registry, imported here because loading it discovers plugins."""
-    from .compile_harness import compile_info
-
-    compile_info(yml, 'provoke')
 
 
 def _provoke_script_argument_mismatch() -> None:
@@ -108,9 +100,6 @@ COMPILED: Final[dict[SophiosErrorCode, Callable[[], object]]] = {
         resolve_lang_version, None, ('0.0.1', '0.0.2'), known=('0.0.1', '0.0.2')),
     SophiosErrorCode.INVALID_INFERENCE: _provoke_invalid_inference,
     SophiosErrorCode.WORKFLOW_RUN_FAILED: _provoke_workflow_run_failed,
-    # A step id with a `~`, which the compiled CWL joins names with.
-    SophiosErrorCode.INVALID_NAME: partial(
-        _compile_minimal, {'steps': [{'id': 'a~b', 'run': 'touch', 'in': {'filename': {'wic_inline_input': 'x'}}}]}),
     **{code: partial(_import_edited, code) for code in IMPORT_EDITS},
 }
 
