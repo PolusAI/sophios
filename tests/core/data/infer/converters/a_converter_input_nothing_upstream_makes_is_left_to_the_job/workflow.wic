@@ -1,0 +1,4 @@
+# One input of the converter reads the zip; nothing upstream makes the other, so the job gives it.
+steps:
+- id: mk_zip
+- id: use_amber

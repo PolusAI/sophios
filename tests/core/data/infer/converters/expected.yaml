@@ -1,6 +1,11 @@
-two_insertions_reach_one_fixed_point:
+two_insertions_each_read_their_own_maker:
   policy: {insert_steps_automatically: true}
   inserted: 2
+  edges:
+    insert_steps_automatically_conv_1@5.file: mk_1@1.file
+    use_1@2.file: insert_steps_automatically_conv_1@5.file
+    insert_steps_automatically_conv_2@6.file: mk_2@3.file
+    use_2@4.file: insert_steps_automatically_conv_2@6.file
 a_call_output_feeds_a_converter:
   policy: {insert_steps_automatically: true}
   inserted: 1
@@ -8,3 +13,52 @@ a_break_stops_the_search:
   policy: {insert_steps_automatically: true}
   inserted: 0
   inputs: [use_1~file]
+a_converter_that_reads_two_upstream_outputs:
+  policy: {insert_steps_automatically: true}
+  inserted: 1
+  edges:
+    insert_steps_automatically_gro_amb@4.top: mk_zip@1.file
+    insert_steps_automatically_gro_amb@4.crd: mk_crd@2.file
+    use_amber@3.top: insert_steps_automatically_gro_amb@4.top
+    use_amber@3.crd: insert_steps_automatically_gro_amb@4.crd
+a_converter_with_nothing_upstream_is_not_inserted:
+  policy: {insert_steps_automatically: true}
+  inserted: 0
+  inputs: [use_amber~file]
+a_converter_input_nothing_upstream_makes_is_left_to_the_job:
+  policy: {insert_steps_automatically: true}
+  inserted: 1
+  edges:
+    insert_steps_automatically_gro_amb@3.top: mk_zip@1.file
+    use_amber@2.file: insert_steps_automatically_gro_amb@3.file
+  inputs: [insert_steps_automatically_gro_amb~crd]
+two_converters_that_qualify_are_a_guess:
+  policy: {insert_steps_automatically: true}
+  inserted: 1
+  diagnostics:
+  - {code: INFERENCE_GUESS, step: use_amber, index: 2, port: file, severity: note, message: {contains: [use_amber.file <- insert_steps_automatically_a.file (1 other fits)]}}
+two_converters_that_qualify_fail_under_strict:
+  policy: {insert_steps_automatically: true, strict: true}
+  refused: true
+  diagnostics:
+  - {code: INFERENCE_GUESS, step: use_amber, index: 2, port: file, severity: error, message: {contains: [use_amber.file <- insert_steps_automatically_a.file was guessed, 1 other fits]}}
+a_converter_written_in_wic:
+  policy: {insert_steps_automatically: true}
+  inserted: 1
+  edges:
+    insert_steps_automatically_zip_amb@3.file: mk_zip@1.file
+    use_amber@2.file: insert_steps_automatically_zip_amb@3.file
+a_converter_never_reads_a_converter_ports_in_one_order:
+  policy: {insert_steps_automatically: true}
+  inserted: 1
+  inputs: [use~p2]
+a_converter_never_reads_a_converter_ports_in_the_other:
+  policy: {insert_steps_automatically: true}
+  inserted: 1
+  inputs: [use~p2]
+a_converter_with_an_optional_input:
+  policy: {insert_steps_automatically: true}
+  inserted: 1
+  edges:
+    insert_steps_automatically_zip_amb@4.file: mk_zip@1.file
+    use_amber@3.file: insert_steps_automatically_zip_amb@4.file

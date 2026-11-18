@@ -29,8 +29,7 @@ real-time declarations.
    the graph after the front end.
 4. **Link** composes child graphs, places authored references at their
    lowest common ancestor, and discharges deferred obligations.
-5. **Infer** adds the missing edges, and converter steps when asked. Its
-   fixed-point loop is local to this phase; nothing before it is rerun.
+5. **Infer** adds the missing edges, and converter steps when asked, in one pass.
 6. **Declare namespaces** gives every workflow the `$namespaces` the `format`
    CURIEs of its promoted ports need, reading the registry as Resolve does,
    and reports `wic031` where a prefix is bound two ways by the sources that
@@ -100,22 +99,20 @@ on both endpoints.
 ## Inference
 
 Infer reads a complete graph and an explicit `InferencePolicy` (disabled,
-naming conventions and their renames, format rules, insertion, strictness,
-the iteration limit). For each required unbound input it scans the earlier
-steps backwards and takes, in the most recent step with a match, the first declared match by
+naming conventions and their renames, format rules, insertion, strictness). For each required unbound input it
+scans the earlier steps backwards and takes, in the most recent step with a match, the first declared match by
 `types_match` and the format rule, recording the alternatives so that a
 `wic043` note can count what else fitted. `types_match` is a candidate
 heuristic and has no authority to reject an authored reference; that is the
 relation above.
 
-Speculative insertion is a constrained search: when no output matches an
-input by format, the catalog of tools named `insert_steps_automatically_*`
-is searched for one that accepts a format seen and produces the format
-wanted, and one synthesized `StepNode` is inserted. The grown graph is
-inferred again in the next iteration; no document is rewritten and nothing is
-recompiled from scratch. The loop transforms immutable graphs, so a failed
-speculation cannot leak into another compilation, and exhausting the limit is
-`wic022`.
+Insertion adds an ordinary step: when no output matches an input, the tools
+named `insert_steps_automatically_*` are read, and one that has an output
+fitting the input and a required input of its own fitting an output already
+upstream (the relation the backward scan uses) is inserted before the step,
+wired by that same scan; the job gives what the scan does not find. Inference looks only backwards, so the step
+after the insertion is read again and nothing decided before it changes: one
+pass, no loop. Two such converters are a guess, reported as `wic043`.
 
 A linear step order is a total order, and the compiler's job is to promote it
 to the topological order the DAG needs by adding edges. More than one order

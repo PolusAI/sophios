@@ -1,0 +1,5 @@
+# An optional input of a converter is never wired, whatever upstream could fill it.
+steps:
+- id: mk_zip
+- id: mk_crd
+- id: use_amber

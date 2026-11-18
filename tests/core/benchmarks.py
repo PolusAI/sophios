@@ -14,7 +14,7 @@ if __package__ in (None, ''):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from core.hermetic import compile_hermetic, nested_workflow
-from core.synthetic_tools import SYNTHETIC_TOOLS, insertion_registry
+from core.synthetic_tools import SYNTHETIC_TOOLS
 from core.test_setup import load_test_registry, workflow_paths
 
 from sophios.ir import frontdoor
@@ -40,7 +40,6 @@ def _compile_corpus_file(path: Path) -> None:
 
 
 _CORPUS: Final = sorted(path for paths in workflow_paths().values() for path in paths.values())
-_SPECULATIVE_YML, _SPECULATIVE_TOOLS = insertion_registry()
 _DEEP_NESTING_YML: Final = nested_workflow(15)
 _WIDE_INFERENCE_YML: Final = {'steps': [{'id': 'mk_file'} for _ in range(100)]}
 
@@ -58,16 +57,6 @@ CASES: Final[tuple[Case, ...]] = tuple(
          run=partial(_compile_corpus_file, path))
     for path in _CORPUS
 ) + (
-    Case('speculative_insertion',
-         "A workflow with two branches, each needing one whitelisted-format-"
-         "converter insertion. Two or more whitelisted converter tools put a "
-         "compilation on this path, whose cost is O(2^n). The corpus never "
-         "reaches it. This case times "
-         "two real insertions and the fixed-point passes they force, so it is "
-         "the one number on this list that moves with the insertion search "
-         "rather than with per-step cost.",
-         run=lambda: compile_hermetic(_SPECULATIVE_YML, 'oracle', tools=_SPECULATIVE_TOOLS,
-                                      insert_steps_automatically=True)),
     Case('deep_nesting',
          "A workflow partitioned fifteen levels deep with "
          "hermetic.subworkflow_step. Namespacing cost grows with depth and "

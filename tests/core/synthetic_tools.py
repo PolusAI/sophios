@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from typing import Final, cast
 
 from sophios.lang.cwl import CWL_VERSION
-from sophios.wic_types import Cwl, StepId, Tool, Tools, Yaml
+from sophios.wic_types import Cwl, StepId, Tool, Tools
 
 #: 'global', because the compiler looks a step's tool up under its `wic: namespace:`, which defaults to 'global'.
 SYNTHETIC_NS: Final = 'global'
@@ -155,18 +155,6 @@ STEMS: Final[tuple[str, ...]] = tuple(sorted(_SPECS))
 def registered(tools: Mapping[str, Cwl], base: Tools = SYNTHETIC_TOOLS) -> Tools:
     """`base` plus each of `tools` under its stem, as `get_tools_cwl` registers a plugin's."""
     return {**base, **{StepId(stem, SYNTHETIC_NS): Tool(f'/synthetic/{stem}.cwl', cwl) for stem, cwl in tools.items()}}
-
-
-def insertion_registry() -> tuple[Yaml, Tools]:
-    """Two branches, each needing exactly one whitelisted-converter insertion: the O(2^n) speculative path."""
-    specs: dict[str, Cwl] = {}
-    for k in (1, 2):
-        source, sink = f'edam:format_src{k}', f'edam:format_dst{k}'
-        specs |= {f'mk_{k}': clt({}, {'file': {'type': 'File', 'format': source}}),
-                  f'use_{k}': clt({'file': {'type': 'File', 'format': sink}}, {}),
-                  f'insert_steps_automatically_conv_{k}': clt({'file': {'type': 'File', 'format': source}},
-                                                              {'file': {'type': 'File', 'format': sink}})}
-    return {'steps': [{'id': f'{kind}_{k}'} for k in (1, 2) for kind in ('mk', 'use')]}, registered(specs, {})
 
 
 def _ports_of(stem: str, section: str) -> dict[str, Cwl]:

@@ -1,0 +1,5 @@
+# A converter with two inputs, as mm-workflows has: it is inserted once, reads both makers, and feeds both inputs.
+steps:
+- id: mk_zip
+- id: mk_crd
+- id: use_amber

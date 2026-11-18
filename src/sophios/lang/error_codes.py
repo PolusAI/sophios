@@ -11,7 +11,7 @@ is Nextflow support (kind `target`: the workflow is fine, the Nextflow target
 cannot run it yet). One type so a caller matches on one `except`; separate
 ranges so an API code does not point at the .wic reference. An `nf-sNNN` code
 is retired, never reused, when the Nextflow target learns its construct, so the
-range is the Nextflow target's support table.
+range is the Nextflow target's support table. A `wic0NN` code is retired the same way (`wic022`).
 """
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -156,10 +156,6 @@ class SophiosErrorCode(StrEnum):
         'Name a directory you can write to with `--basepath` and `--outdir`; from Python, '
         '`run(basepath=...)` and `run(outdir=...)` take another.',
         kind=Kind.MACHINE)
-    FIXED_POINT_NOT_REACHED = _explained(
-        'wic022',
-        'Inference did not settle within its iteration limit.',
-        'Bind the inputs explicitly with `!&` and `!*` or workflow inputs, or drop `--insert_steps_automatically`.')
     INCOMPATIBLE_INPUT_REFERENCE = _explained(
         'wic023',
         'A reference whose type can never feed the input it binds, such as a `string` into a `File`.',

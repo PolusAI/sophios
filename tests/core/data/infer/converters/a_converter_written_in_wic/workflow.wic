@@ -1,0 +1,4 @@
+# A converter written in .wic is read when an input needs one, as a .cwl one is.
+steps:
+- id: mk_zip
+- id: use_amber

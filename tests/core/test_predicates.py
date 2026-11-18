@@ -1,5 +1,5 @@
 """Claims about a single compilation, which need no relation between two: **made-name injectivity**, that distinct
-authored steps and ports never get one made name. Edge soundness and the fixed-point guard are tested elsewhere."""
+authored steps and ports never get one made name. Edge soundness is tested elsewhere."""
 import copy
 import pytest
 from hypothesis import example, given
