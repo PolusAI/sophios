@@ -133,8 +133,9 @@ def test_a_script_of_objects_compiles_to_the_document_stated_and_writes_what_com
     """tests/core/data/python_api/builder.py compiles to builder.cwl and builder_job.yml beside it, as its comments
     say. The bundle `write_wic` writes names each step's tool file by its stem and never the script, leaves a tool file
     of that stem that is the same tool as it is, and the child declares the interface its parent binds by name
-    (tests/core/data/pairs compiles such bundles); each writer of the compiled workflow writes the in-memory documents
-    and no `.wic`, `write()` to the current directory by default."""
+    (tests/core/data/pairs compiles such bundles), and leaves open the workflow input Python gave a value, which is the
+    job's; each writer of the compiled workflow writes the in-memory documents and no `.wic`, `write()` to the current
+    directory by default."""
     builder = import_python_file('builder', PYTHON_API / 'builder.py')
     with pytest.warns(UserWarning, match=r'Prefer workflow\.inputs\.message, or workflow\.inputs\.message\.as_type'):
         workflow = builder.workflow()
@@ -151,6 +152,7 @@ def test_a_script_of_objects_compiles_to_the_document_stated_and_writes_what_com
     assert [step.get('run', step['id']) for step in read_wic(written)['steps']] == [
         'emit_text.cwl', 'child.wic', 'write_dir.cwl', 'cat.cwl']
     assert '__step__' not in written and 'builder.py' not in written
+    assert read_wic(written)['inputs'] == {'message': {'type': 'string'}}  # `hello` is the job's
     assert read_wic((tmp_path / 'bundle' / 'child.wic').read_text(encoding='utf-8'))['inputs'] == {
         'file': {'type': 'File'}}
 

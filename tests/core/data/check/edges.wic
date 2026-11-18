@@ -1,0 +1,14 @@
+# A name defined twice is reported, and a `wic:` sidecar `out:` entry, inert passthrough as basic.wic relies on,
+# neither defines it a second time nor masks the real duplicate.
+wic:
+  steps:
+    (1, a):
+      out:
+      - f: {wic_anchor: e}
+steps:
+- id: a
+  out:
+  - f: !& e
+- id: b
+  out:
+  - f: !& e

@@ -233,7 +233,6 @@ class _Machine:
         self.spec = {'engine': 'running', 'said': '', 'processes': 0, 'missing': [], 'fails': [], **spec}
         self.commands: list[list[str]] = []
         monkeypatch.setattr(subprocess, 'run', self.run)
-        monkeypatch.setattr(sys, 'platform', 'linux')
         monkeypatch.setattr(shutil, 'which', lambda name, *_a, **_k: (
             None if name in self.spec['missing'] else f'/usr/bin/{name}'))
         monkeypatch.setattr(preflight, 'PLATFORM_LACKS_RUNNERS', preflight.PLATFORM_LACKS_RUNNERS

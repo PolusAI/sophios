@@ -61,11 +61,13 @@ def array_input_scatter() -> Workflow:
 
 
 def renamed_output() -> Workflow:
-    """A workflow output names the step that produces it as the user named it."""
+    """A workflow output names the step that produces it as the user named it, renamed after the output was bound:
+    the name is read when the workflow compiles, never captured when the output is bound."""
     touch = _step('touch', filename='empty.txt')
-    add = _step('append', 'add', file=touch.outputs.file, str='Hello')
+    add = _step('append', file=touch.outputs.file, str='Hello')
     workflow = Workflow([touch, add], 'renamed_output')
     workflow.outputs.file = add.outputs.file
+    add.process_name = 'add'
     return workflow
 
 

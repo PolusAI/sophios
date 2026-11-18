@@ -1,0 +1,24 @@
+# Every diagnostic Resolve gives each document, which breaks a rule of its own nodes, in order, by code, severity,
+# line, step and port: Check's, and no other, since nothing is looked up for a document it refuses.
+names.wic:
+- {code: EMPTY_NAME, severity: error, line: 4, step: s}
+- {code: EMPTY_NAME, severity: error, line: 9, step: u, port: f}
+- {code: EMPTY_NAME, severity: error, line: 12, step: v, port: f}
+empty_step_id.wic:
+- {code: EMPTY_STEP_ID, severity: error, line: 4}
+invalid_step_id.wic:
+- {code: INVALID_NAME, severity: error, line: 3, step: a b}
+edges.wic:
+- {code: DUPLICATE_EDGE_DEF, severity: error, line: 14, step: b, port: f}
+scatter.wic:
+- {code: UNKNOWN_SCATTER_PORT, severity: error, line: 4, step: mk_file}
+- {code: UNKNOWN_SCATTER_PORT, severity: error, line: 7, step: mk_file}
+- {code: UNKNOWN_SCATTER_PORT, severity: error, line: 10, step: mk_file}
+- {code: UNKNOWN_SCATTER_PORT, severity: error, line: 13, step: mk_file}
+- {code: UNKNOWN_SCATTER_PORT, severity: error, line: 16, step: mk_file}
+merged_outputs.wic:
+- {code: STEP_INPUT_RECORD, severity: error, message: {contains: ["'merged'", linkMerge]}}
+- {code: STEP_INPUT_RECORD, severity: error, message: {contains: ["'picked'", pickValue]}}
+- {code: STEP_INPUT_RECORD, severity: error, message: {contains: ["'two_sources'", a list outputSource]}}
+- {code: STEP_INPUT_RECORD, severity: error, message: {contains: ["'one_listed'", a list outputSource]}}
+- {code: STEP_INPUT_RECORD, severity: error, message: {contains: ["'none_listed'", a list outputSource]}}

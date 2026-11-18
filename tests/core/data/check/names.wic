@@ -1,0 +1,12 @@
+# `parse` accepts these empty names, and the types refuse them: each is wic027 before anything is resolved, not a
+# ValueError. `!& ""` and `!* ""` agree: neither puts '' into the edge table as a live producer name.
+steps:
+- id: s
+  in:
+    "": !* e
+- id: u
+  out:
+  - f: !& ""
+- id: v
+  in:
+    f: !* ""

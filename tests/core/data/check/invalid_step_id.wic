@@ -1,0 +1,4 @@
+# A step id Sophios cannot write is wic045 before any tool is looked up for it, so no step says its process is absent.
+steps:
+- id: a b
+  in: {}

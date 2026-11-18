@@ -25,14 +25,12 @@ from .synthetic_tools import SYNTHETIC_TOOLS
 #: Budgets; raise them for a dispatch run, never lower one to make a property pass.
 COVERAGE: Final = budget(500)
 ORACLE: Final = budget(100)
-PARTITION: Final = budget(50)
 
 #: The oracle suite: test files whose properties compile against SYNTHETIC_TOOLS alone, so the weekly property lane
 #: deepens them on a bare hosted runner.
 ORACLE_FILES: Final = (
     'tests/core/test_predicates.py',
     'tests/core/test_reference_compatibility.py',
-    'tests/core/test_canonical_path.py',
     'tests/core/test_emit.py',
     'tests/core/test_resolve.py',
     'tests/core/test_infer_phase.py',
