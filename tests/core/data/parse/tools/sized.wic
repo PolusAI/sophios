@@ -1,0 +1,10 @@
+# A size, a number that is one, and a list of ports only cwltool can read.
+script: 3
+needs:
+  cores: .inf
+  ram: |
+    4G
+docker: a b
+inputs:
+- $import: ports.yml
+outputs: nope

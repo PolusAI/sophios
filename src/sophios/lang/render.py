@@ -11,7 +11,7 @@ collection is re-spelled rather than handed raw to the dumper.
 """
 from dataclasses import dataclass
 from datetime import date, datetime
-from typing import get_args
+from typing import Any, get_args
 
 import yaml
 
@@ -26,10 +26,21 @@ from .nodes import (
     OutputBinding,
     RawCwlRef,
     Step,
+    ToolDocument,
     UnresolvedName,
     WicSidecar,
+    Word,
 )
-from .parser import SIDECAR_WRAPPER_KEY
+from .parser import SIDECAR_WRAPPER_KEY, Grammar
+
+
+def _spelled(word: Word, typed: bool = False) -> str:
+    """A word of a tool's line as it is written: an input between braces, text with its braces doubled, and in a
+    line as typed a word that was read between quotes between them again."""
+    if word.input is not None:
+        return f'{{{word.input.name}}}'
+    text = word.text.replace('{', '{{').replace('}', '}}')
+    return ('"%s"' if "'" in text else "'%s'") % text if typed and word.quoted else text
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,14 +71,16 @@ class _Writer:
 
     tagged: bool
 
-    def document(self, document: Document) -> dict[str, object]:
-        """Key order follows the .wic reference: `wic:`, then `steps:`, then the rest."""
+    def document(self, document: Document | ToolDocument) -> dict[str, object]:
+        """Key order follows the .wic reference: `wic:`, then `steps:` or a tool's own keys, then the rest."""
         body: dict[str, object] = {}
 
         if document.sidecar is not None:
             body['wic'] = self.sidecar(document.sidecar)
 
-        if document.steps or document.steps_as_mapping:
+        if isinstance(document, ToolDocument):
+            body |= self.tool(document)
+        elif document.steps or document.steps_as_mapping:
             # Emitted in the surface form it was parsed from, so a round-trip
             # does not silently restyle a file.
             body['steps'] = (
@@ -84,6 +97,22 @@ class _Writer:
             body[key] = self.plain(value)
 
         return body
+
+    def tool(self, tool: ToolDocument) -> dict[str, object]:
+        """A tool's own keys, each as it is written: the command as a line where every word of it can be typed, else
+        as the list of its words; a port as its type or its line alone where it says nothing more."""
+        words = tool.command or ()
+        typed = all(word.input or word.quoted or not Grammar.NEEDS_A_QUOTE.search(word.text) for word in words)
+        inputs = {port.name: fields['type'] if [*fields] == ['type'] and not isinstance(fields['type'], dict)
+                  else fields for port in tool.inputs for fields in [dict(port.fields)]}
+        outputs = {port.name: dict(port.fields) if port.line is None else line if not port.fields
+                   else {'from': line, **dict(port.fields)}
+                   for port in tool.outputs for line in [''.join(map(_spelled, port.line or ()))]}
+        said: dict[str, Any] = {'command': tool.command if tool.command is None else ' '.join(
+            _spelled(word, True) for word in words) if typed else [*map(_spelled, words)],
+            'script': tool.script, 'inputs': inputs, 'outputs': outputs, 'docker': tool.docker,
+            'needs': dict(tool.needs)}
+        return {key: self.plain(value) for key, value in said.items() if value not in (None, {})}
 
     def step(self, step: Step) -> dict[str, object]:
         """One step's keys, minus its id."""
@@ -235,15 +264,15 @@ _WicDumper.add_representer(_Tagged, _represent_tagged)
 # --------------------------------------------------------------------------
 
 
-def render(document: Document) -> str:
-    """Render a document to `.wic` source text, in the tagged spelling."""
+def render(document: Document | ToolDocument) -> str:
+    """Render a document, a workflow or a tool, to `.wic` source text, in the tagged spelling."""
     body = _Writer(tagged=True).document(document)
     if not body:
         return ''
     return yaml.dump(body, Dumper=_WicDumper, sort_keys=False, default_flow_style=False, width=10_000)
 
 
-def to_json(document: Document) -> dict[str, object]:
+def to_json(document: Document | ToolDocument) -> dict[str, object]:
     """Project a document into JSON-serialisable data, desugared.
 
     This is what a consumer without YAML tags sees, and what the exported

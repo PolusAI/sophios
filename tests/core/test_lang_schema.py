@@ -24,7 +24,8 @@ VALIDATOR: Final = jsonschema.Draft202012Validator(wic_schema())
 _SHAPE_CODES: Final = frozenset({
     SophiosErrorCode.EXPECTED_MAPPING, SophiosErrorCode.EXPECTED_SEQUENCE, SophiosErrorCode.EXPECTED_SCALAR,
     SophiosErrorCode.MISSING_STEP_ID, SophiosErrorCode.EMPTY_STEP_ID, SophiosErrorCode.MALFORMED_WIC_STEP_KEY,
-    SophiosErrorCode.UNKNOWN_WIC_KEY, SophiosErrorCode.MALFORMED_WIC_VALUE, SophiosErrorCode.UNSUPPORTED_CWL_VERSION})
+    SophiosErrorCode.UNKNOWN_WIC_KEY, SophiosErrorCode.MALFORMED_WIC_VALUE, SophiosErrorCode.UNSUPPORTED_CWL_VERSION,
+    SophiosErrorCode.MALFORMED_TOOL_VALUE})
 
 #: A `cwlVersion` value: each version CWL ever named, drafts and snapshots among them, and anything else.
 _VERSIONS = st.one_of(st.sampled_from(sorted(ALLUPDATES)), st.text('v1.023-dev ', max_size=8), st.floats(0, 2),
@@ -32,11 +33,19 @@ _VERSIONS = st.one_of(st.sampled_from(sorted(ALLUPDATES)), st.text('v1.023-dev '
 
 
 #: Shapes the parser reports, each alone, as a drawn document seldom holds one fault without another.
-_ALONE: Final = (
+_ALONE: Final[tuple[dict[str, Any], ...]] = (
     {'steps': 'nope'}, {'steps': {'s': 3}}, {'steps': {'s': {'in': 3}}}, {'steps': {'s': {'out': 3}}},
     {'steps': {'s': {'out': [['s']]}}}, {'wic': 3}, {'wic': {'steps': 3}}, {'wic': {'steps': {'not a key': {'x': 1}}}},
     {'wic': {'scatter': ['x']}}, {'steps': [{'touch': {'in': {'f': 'x'}}}]}, {'steps': [{'touch': None}]},
-    {'steps': [{'in': {'value': 'something'}}]}, {'steps': [{'id': ''}]})
+    {'steps': [{'in': {'value': 'something'}}]}, {'steps': [{'id': ''}]},
+    # A tool: in an inline body, CWL's list of ports (a port named twice is held to its shape, and being named twice
+    # is no fault of shape), a value that ends in a line break, and keys that say nothing.
+    {'steps': {'s': {'run': {'command': 3}}}}, {'steps': [{'id': 's', 'run': {'script': 'x', 'docker': 'a b'}}]},
+    {'command': 'echo', 'inputs': [{'type': 'string'}]}, {'command': 'echo', 'outputs': [{'id': 'o', 'from': 3}]},
+    {'command': 'echo', 'outputs': [{'id': 's', 'type': 'int'}, {'id': 's', 'from': 3}]},
+    {'command': 'echo', 'inputs': [{'id': 'a', 'type': 'int'}, {'id': 'a', 'type': 'int'}]},
+    {'command': 'echo', 'inputs': [{'id': 'a#'}]}, {'script': 'x', 'needs': {'ram': '4G\n'}},
+    {'script': 'x', 'docker': 'a:1\n'}, {'command': 'echo', 'inputs': None, 'outputs': None, 'needs': {}})
 
 
 def _tag_free(path: Path) -> Any:
@@ -76,8 +85,8 @@ def test_the_schema_refuses_exactly_what_the_parser_reports(document: dict[str, 
     if 'cwlVersion' in document:
         assert ((SophiosErrorCode.UNSUPPORTED_CWL_VERSION in {d.code for d in result.diagnostics})
                 == (document['cwlVersion'] not in tuple(UPDATES)))
-    if not result.diagnostics.has_errors and result.document is not None:
-        projection = json.loads(json.dumps(to_json(result.document)))
+    if not result.diagnostics.has_errors and (written := result.document or result.tool) is not None:
+        projection = json.loads(json.dumps(to_json(written)))
         assert VALIDATOR.is_valid(projection), list(VALIDATOR.iter_errors(projection))
 
 

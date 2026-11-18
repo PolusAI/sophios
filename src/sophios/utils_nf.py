@@ -24,7 +24,7 @@ from .ir.resolved import (
 )
 from .ir.types import AuthoredName, PortDeclaration, PortType
 from .lang.cwl import (
-    LINK_MERGES, PICK_VALUES, SCATTER_METHODS, Process, Written, canonical, fields_set, inherited,
+    EXPRESSION, LINK_MERGES, PICK_VALUES, SCATTER_METHODS, Process, Written, canonical, fields_set, inherited,
     ports_named, required, requirement as requirement_of,
 )
 from .lang.diagnostics import Diagnostic, Locator, Severity, SophiosError
@@ -116,8 +116,7 @@ class _Unsupported(ValueError):
 def _computed_or_invalid(value: Any, computed: SophiosErrorCode) -> SophiosErrorCode:
     """Why `value` is not the literal CWL wants there: `computed`, for an expression the target does not evaluate,
     or else a value CWL itself does not take."""
-    expression = isinstance(value, str) and ("$(" in value or "${" in value)
-    return computed if expression else SophiosErrorCode.NF_INVALID_CWL
+    return computed if isinstance(value, str) and EXPRESSION.search(value) else SophiosErrorCode.NF_INVALID_CWL
 
 
 def _refuse_separate_without_prefix(prefix: str | None, separate: bool | None) -> None:
@@ -314,7 +313,6 @@ _INPUT_EXPRESSION = re.compile(
 )
 # One token of a string CWL interpolates: an escape it rewrites (`\$(`, `\${`, `\\`), or a reference.
 _INTERPOLATION = re.compile(rf"\\(?P<escaped>\$[({{]|\\)|{_INPUT_EXPRESSION.pattern}")
-_EXPRESSION_START = re.compile(r"\$[({]")
 
 
 def _literal(text: str) -> NfLiteral:
@@ -326,7 +324,7 @@ def _literal(text: str) -> NfLiteral:
 
 def _template(text: str) -> NfTemplate:
     _literal(text)  # refuses what no literal can be
-    interpolated = "$(" in text or "${" in text  # cwltool interpolates only these, and strips them
+    interpolated = EXPRESSION.search(text)  # cwltool interpolates only these, and strips them
     if interpolated:
         text = text.strip()
     segments: list[NfTemplateSegment] = []
@@ -342,7 +340,7 @@ def _template(text: str) -> NfTemplate:
     segments.append(NfLiteral(text[offset:]))
     # A `$` not followed by `(` or `{` is plain text, as in CWL. A space stands in for each token, so the text on
     # its two sides cannot join into an expression's start: `{$$(inputs.x){$` is `{$`, a reference and `{$`.
-    if interpolated and _EXPRESSION_START.search(_INTERPOLATION.sub(" ", text)):
+    if interpolated and EXPRESSION.search(_INTERPOLATION.sub(" ", text)):
         raise _Unsupported(
             SophiosErrorCode.NF_EXPRESSION,
             f"{text!r} contains an unsupported CWL expression; the supported forms are $(inputs.<name>) "

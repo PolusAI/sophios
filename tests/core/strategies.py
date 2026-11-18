@@ -128,6 +128,30 @@ def documents(draw: st.DrawFn) -> str:
 
 
 @st.composite
+def tools(draw: st.DrawFn) -> str:
+    """A well-formed tool: a command as a line or as a list, or a script; inputs as types or as CWL ports, named as
+    CWL names them; an output as a stream, a pattern or a port; a container, what it needs, and CWL kept beside."""
+    names = draw(st.lists(st.sampled_from(['v', 'in-file', 'in.file', '1st', 'x_1']), min_size=1, max_size=3,
+                          unique=True))
+    words = [draw(identifiers), *(word for name in names for word in (
+        *draw(st.sampled_from([[], ['-n'], ["'-v'"], ["'a b'"], ['{{x}}']])), f'{{{name}}}'))]
+    script = draw(st.booleans()) and all(name.isidentifier() for name in names)
+    lines = ['script: |', '  echo "$v" {x} | wc', '  cat'] if script else [
+        'command: ' + (str([word.strip("'") for word in words if word != "'-v'"]) if draw(st.booleans())
+                       else ' '.join(words)), 'arguments: [last]']
+    lines.append('inputs:')
+    for index, name in enumerate(names):  # the first names the output `named`, which an array cannot
+        kind = draw(st.sampled_from(['string', '{type: array, items: string}'])) if index else 'string'
+        lines += [f'  {name}: string' if kind == 'string' else f'  {name}: {{type: {kind}}}'] if (
+            script or draw(st.booleans())) else [f'  {name}:', f'    type: {kind}', '    doc: d']
+    out = draw(st.sampled_from(['stdout', '"*.txt"', '{type: File, outputBinding: {glob: x}}']))
+    lines += ['outputs:', f'  out: {out}', f'  named: {{from: "{{{names[0]}}}.txt", doc: d}}']
+    lines += draw(st.sampled_from([[], ['docker: debian:bookworm-slim'], ['needs: {cores: 2, ram: 4G}', 'label: x'],
+                                   ['wic: {lang_version: 0.1.0}']]))
+    return '\n'.join(lines) + '\n'
+
+
+@st.composite
 def scalar_spellings(draw: st.DrawFn) -> tuple[str, str | None]:
     """A scalar as YAML text, and the tag YAML resolves it to but cannot construct (None where YAML reads it): integers
     in each 1.1 base, floats, booleans, nulls, dates with month 0-14 and day 0-40, `0x_`, `0b_`. Quoted, it is text."""
@@ -165,6 +189,25 @@ def _or_any(shape: SearchStrategy[Any]) -> SearchStrategy[Any]:
     return st.one_of(shape, shape, _ANY)
 
 
+#: A port of a tool, as a CWL port that is of its shape or is not, and as a type, a line or another value.
+_PORT = st.sampled_from([{'type': 'int'}, {'from': 'x'}, {'from': 3}, {'type': 'int', 'inputBinding': 3}])
+_PORTS = _PORT | st.sampled_from(['string', ['File'], 'stdout']) | _SHAPE_SCALARS
+#: A tool's own keys, each with its shape or another; an inline `run:` body draws them too.
+_KEYS = st.fixed_dictionaries({}, optional={
+    'command': _or_any(st.sampled_from(['echo', ['echo', 'x'], 'echo {a} | {'])), 'script': _or_any(st.just('echo')),
+    'inputs': st.dictionaries(_SHAPE_NAMES, _PORTS, max_size=2) | _SHAPE_SCALARS,
+    'outputs': st.dictionaries(_SHAPE_NAMES, _PORTS, max_size=2) | _SHAPE_SCALARS,
+    'docker': _or_any(st.sampled_from(['a:1', 'a:1\n', 'a b'])), 'baseCommand': _ANY,
+    'needs': _or_any(st.fixed_dictionaries({}, optional={
+        'cores': _ANY | st.sampled_from([2, 0, '$(1)']), 'ram': _ANY | st.sampled_from(['4G', '0G', '064G', '4G\n']),
+        'gpus': _ANY}))})
+#: Its ports in CWL's list form, each named by an `id:` or not, are drawn where the mapping says what runs: in a
+#: workflow the schema leaves a list of ports open, and the parser reports an entry of one that has no name.
+_LISTED = st.lists(_PORTS | st.builds(lambda name, port: {'id': name, **port},
+                                      _SHAPE_NAMES | st.sampled_from(['f#', 3]), _PORT), max_size=2)
+_TOOL = _KEYS | st.builds(lambda tool, inputs, outputs: {'command': 'echo', **tool, 'inputs': inputs,
+                                                         'outputs': outputs}, _KEYS, _LISTED, _LISTED)
+
 #: A step body: `in:` values are any value or a construct, and an `out:` entry a name, a list or one `!&`.
 _BODY = st.fixed_dictionaries({}, optional={
     'in': _or_any(st.dictionaries(_SHAPE_NAMES, _ANY | st.sampled_from(sorted(Grammar.DESUGARED_KEYS)).map(
@@ -172,7 +215,7 @@ _BODY = st.fixed_dictionaries({}, optional={
     'out': _SHAPE_SCALARS | st.dictionaries(_SHAPE_NAMES, _ANY, max_size=1) | st.lists(
         _SHAPE_NAMES | st.lists(_SHAPE_NAMES, max_size=1) | st.dictionaries(
             _SHAPE_NAMES, st.just({'wic_anchor': 'e'}), max_size=1), max_size=2),
-    'run': _ANY, 'label': _ANY})
+    'run': _ANY | _TOOL, 'label': _ANY})
 _IDS = _SHAPE_NAMES | st.lists(_SHAPE_NAMES, max_size=1) | st.dictionaries(_SHAPE_NAMES, _ANY, max_size=1)
 _STEPS = _or_any(st.dictionaries(_SHAPE_NAMES, _or_any(_BODY), max_size=2) | st.lists(
     st.builds(lambda name, body: {'id': name, **body}, _IDS, _BODY)
@@ -193,10 +236,11 @@ def _wic(depth: int) -> SearchStrategy[Any]:
 
 def shapes() -> SearchStrategy[dict[str, Any]]:
     """A tag-free document over the parser's own keys, as YAML loads it: each place holds its shape or another, so most
-    are malformed. Not drawn, where the two readers disagree (each pinned where tested): a name YAML types, as `1`;
-    an `out:` entry binding anything but an edge definition, a construct around a collection, `out:` under
-    `wic: steps:`."""
-    return st.fixed_dictionaries({}, optional={'steps': _STEPS, 'wic': _wic(2), 'label': _ANY})
+    are malformed; a workflow, or with `command:` or `script:` a tool. Not drawn, where the two readers disagree (each
+    pinned where tested): a name YAML types, as `1`; an `out:` entry binding anything but an edge definition, a
+    construct around a collection, `out:` under `wic: steps:`."""
+    return st.builds(lambda document, tool: document | tool, st.fixed_dictionaries({}, optional={
+        'steps': _STEPS, 'wic': _wic(2), 'label': _ANY}), st.just({}) | _TOOL)
 
 
 def cwl_types(*atoms: Any) -> SearchStrategy[Any]:

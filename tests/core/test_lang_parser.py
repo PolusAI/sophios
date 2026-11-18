@@ -24,10 +24,13 @@ from sophios.lang import (
     EdgeRef,
     InlineLiteral,
     InputValue,
+    Port,
     RawCwlRef,
     Step,
+    ToolDocument,
     UnresolvedName,
     WicSidecar,
+    Word,
     parse,
     render,
     to_json,
@@ -40,18 +43,31 @@ from . import provocations
 from .budgets import FAST, budget
 from .cases import DATA, case_dirs, diagnostic as as_written
 from .test_setup import workflow_paths
-from .strategies import documents, identifiers, input_lines, pinned, scalar_spellings
+from .strategies import documents, identifiers, input_lines, pinned, scalar_spellings, shapes
 from .wic_reading import YamlWithSophiosTagsOpaque
 
 #: The exported schema, as an editor validates a document's JSON projection with it.
 SCHEMA_VALIDATOR: Final = jsonschema.Draft202012Validator(wic_schema())
 
 
-def reading(node: Any) -> Any:  # pylint: disable=too-many-return-statements  # one per node kind
+def reading(node: Any) -> Any:  # pylint: disable=too-many-return-statements,too-many-branches  # one per node kind
     """`node` as plain data, the form a family's expected.yaml states it in: each node its AST fields by name, empty
-    ones left out; a construct its tag around what it carries; a name itself; a `wic:` step key [index, name]; and a
-    NaN, which equals nothing, the text NaN."""
+    ones left out; a construct its tag around what it carries; a name itself; a `wic:` step key [index, name]; a port
+    of a tool the CWL it writes, with the `line` an output says; a word of a tool its text, `{quoted: text}` when
+    quoted and `{input: name}` for a value; and a NaN, which equals nothing, the text NaN."""
     match node:
+        case ToolDocument():
+            return _fields(command=node.command and [reading(word) for word in node.command], script=node.script,
+                           inputs={port.name: reading(port) for port in node.inputs} or None,
+                           outputs={port.name: reading(port) for port in node.outputs} or None, docker=node.docker,
+                           needs=node.needs, wic=node.sidecar and reading(node.sidecar),
+                           passthrough=node.passthrough)
+        case Port():
+            return reading(dict(node.fields)) | (
+                {} if node.line is None else {'line': [reading(part) for part in node.line]})
+        case Word():
+            return {'input': node.input.name} if node.input is not None else {'quoted': node.text} if node.quoted \
+                else node.text
         case Document():
             return _fields(steps=[reading(step) for step in node.steps], wic=node.sidecar and reading(node.sidecar),
                            passthrough=node.passthrough)
@@ -59,7 +75,8 @@ def reading(node: Any) -> Any:  # pylint: disable=too-many-return-statements  # 
             return _fields(id=node.id, inputs=node.inputs,
                            outputs=[out.name if out.edge_def is None else {out.name: reading(out.edge_def)}
                                     for out in node.outputs],
-                           interpreted=node.interpreted, passthrough=node.passthrough)
+                           interpreted=node.interpreted, passthrough=node.passthrough,
+                           tool=node.tool and reading(node.tool))
         case WicSidecar():
             return _fields(steps=[[key.index, key.name, reading(child)] for key, child in node.steps],
                            entries=node.entries)
@@ -103,12 +120,15 @@ def test_a_document_reads_as_its_family_states(family: Path, expected: dict[str,
         assert [[d['code'], d['line'], d['column']] for d in found] == report, name
         assert {d['severity'] for d in found} <= {'error'}, name
         if name in expected.get('reads', {}):
-            assert reading(result.document) == expected['reads'][name], name
+            assert reading(result.document or result.tool) == expected['reads'][name], name
         else:
-            assert result.document is not None, name
+            assert (result.document or result.tool) is not None, name
 
 
 _tag_pool = st.sampled_from(['', '!ii ', '!& ', '!* ', '!cwl ', '!foo ', '!x '])
+#: A line of a tool, as text: words, quotes, braces, placeholders that name an input or none, and what a shell reads.
+_LINES = st.lists(st.sampled_from(['x', '-n', '{a}', '{b-c}', '{z}', '{', '}}', "'", '"q"', '|', '$(a)', '*', '\\']),
+                  max_size=6).map(' '.join)
 
 
 @st.composite
@@ -148,7 +168,10 @@ def adversarial_yaml(draw: st.DrawFn) -> str:
 
 @pytest.mark.fast
 @given(st.one_of(st.text(max_size=400), st.text('abcdefghijklmnopqrstuvwxyz!&*i {}[]:#-', max_size=120),
-                 adversarial_yaml()))
+                 adversarial_yaml(), shapes().map(json.dumps), st.builds(
+                     'command: {}\ninputs: {{a: {}, b-c: File}}\noutputs: {{o: "{}"}}\n{}: [{}]\n'.format,
+                     _LINES, st.sampled_from(['string', 'boolean', '"File[]"', '!ii x', '']), _LINES,
+                     st.sampled_from(['arguments', 'script', 'requirements', 'steps', 'needs']), _LINES)))
 # Hypothesis's failure database does not travel to CI, so what it once found by luck is pinned.
 @example('!: :')                   # an unknown tag on a mapping key, the position the tag rule first missed
 @example('!foo x: y')              # the same, spelled legibly
@@ -164,7 +187,7 @@ def test_parsing_is_total(text: str) -> None:
     they come in reading order however many passes made them; and what it accepts, YAML loads with the Sophios tags
     opaque. The reverse is allowed (`!ii 2020-13-45` is wic009), but the parser is never more permissive than YAML."""
     result = parse(text, 'fuzz.wic')
-    assert result.document is not None or result.diagnostics
+    assert (result.document or result.tool) is not None or result.diagnostics
     reports = [(d.severity, d.code, d.message, d.span) for d in result.diagnostics]
     assert len(reports) == len(set(reports)), f'duplicate diagnostics: {reports}'
     positions = []

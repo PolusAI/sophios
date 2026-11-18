@@ -1,0 +1,18 @@
+# An inline body that says what runs is a tool, read as a document is: what it cannot say is refused at its own words.
+steps:
+- id: count
+  run:
+    command: wc -l {text} | {nmae}
+    inputs: {text: File}
+    outputs: {n: stdout}
+    docker: [a, b]
+- id: lost
+  run:
+    script: echo
+    command: echo {nmae}
+- id: plain
+  run: {class: CommandLineTool, baseCommand: echo, inputs: {}, outputs: {}}
+wic:
+  implementations:
+    one:
+      command: echo hi

@@ -101,7 +101,7 @@ jobs:
         timeout-minutes: 30
         run: >-
           pytest tests/core/test_lang_parser.py tests/core/test_lang_render.py tests/core/test_lang_schema.py
-          tests/core/test_lang_version.py
+          tests/core/test_lang_version.py tests/core/test_tools.py
           tests/core/test_diagnostics.py::test_a_step_id_outside_the_allowed_characters_is_refused_at_its_line
           tests/core/test_diagnostics.py::test_a_diagnostic_is_one_json_object_it_can_be_rebuilt_from
           -m "not skip_pypi_ci" --hypothesis-seed="$HYPOTHESIS_SEED" --junitxml=property-reports/language.xml

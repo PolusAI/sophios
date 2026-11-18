@@ -1,0 +1,4 @@
+# A port of the list form that is no mapping with an id is as malformed as one of the mapping form.
+command: x
+inputs: [a, b]
+outputs: [{type: File}]

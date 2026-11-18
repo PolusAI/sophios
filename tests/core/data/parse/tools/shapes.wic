@@ -1,0 +1,8 @@
+# Each key of a tool has its shape, and a value that is not of it is refused where it is written and read as unsaid.
+command: [sort, 3, {a: b}]
+docker: |
+  debian:12
+needs: {gpus: 1, cores: .nan, ram: 0G}
+inputs: {f: File, staged, n: 3, bound: {type: string, inputBinding: 3}}
+outputs: {o: 3, p: {from: [x]}}
+requirements: 3

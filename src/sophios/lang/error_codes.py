@@ -321,6 +321,25 @@ class SophiosErrorCode(StrEnum):
         'would refuse the run too.',
         'Correct what the message names, at the position it gives; `cwltool --validate` on the tool reports the '
         'same.')
+    TOOL_DOCUMENT = _explained(
+        'wic058',
+        'A tool (`command:` or `script:`) with a line Sophios cannot write out as CWL: a second defining key, a '
+        'word that needs a shell or joins a value to text, a placeholder that names no input, or a place a line '
+        'writes (`baseCommand`, a `position`, a requirement, the command line of a script) that is written beside '
+        'it.',
+        'Correct the word, the input or the key the message points at; anything a line cannot say is CWL, written '
+        'beside it (.wic reference §2.4).')
+    MALFORMED_TOOL_VALUE = _explained(
+        'wic059',
+        "One of a tool's own keys (`command`, `script`, `inputs`, `outputs`, `docker`, `needs`) with a value of the "
+        'wrong shape, as in `command: 3` or `needs: {gpus: 1}`.',
+        'Write the value in the shape .wic reference §2.4 gives for its key.')
+    LANG_VERSION_TOO_OLD = _explained(
+        'wic060',
+        'Syntax of a newer language version than the one the compile is pinned to: a tool (`command:` or '
+        '`script:`) is lang_version 0.1.0 syntax.',
+        'Remove the pin (`wic: lang_version:`, `--lang_version` or `compile(lang_version=)`), or set it to the '
+        'version the message names.')
 
     # --- Python API. The document is valid; the call was not. ---
     INVALID_INPUT_VALUE = _explained(

@@ -106,6 +106,8 @@ COMPILED: Final[dict[SophiosErrorCode, Callable[[], object]]] = {
     SophiosErrorCode.UNKNOWN_LANG_VERSION: partial(resolve_lang_version, '9.9.9'),
     SophiosErrorCode.LANG_VERSION_CONFLICT: partial(
         resolve_lang_version, None, ('0.0.1', '0.0.2'), known=('0.0.1', '0.0.2')),
+    # Tool syntax, which is lang_version 0.1.0, under a compile pinned to 0.0.1.
+    SophiosErrorCode.LANG_VERSION_TOO_OLD: partial(resolve_lang_version, '0.0.1', needs=[('0.1.0', None)]),
     SophiosErrorCode.INVALID_INFERENCE: _provoke_invalid_inference,
     SophiosErrorCode.WORKFLOW_RUN_FAILED: _provoke_workflow_run_failed,
     # A step id with a `~`, which the compiled CWL joins names with.
