@@ -57,6 +57,7 @@ The guide's own story, in the order the chapters use it:
 | `word_count` (with `word_count.cwl`) | a tool file beside the workflow, named by path | [Steps and tools](steps-and-tools.md) |
 | `greet_many` | three steps scattered over three people | [Scatter and conditions](scatter-and-conditions.md) |
 | `greeting_if` | a step run only when a workflow input is true | [Scatter and conditions](scatter-and-conditions.md) |
+| `tool_document` (with `tally_words.wic`) | a tool written in `.wic`, named by path; `tally_words.py` is the same tool built in Python | [Steps and tools](steps-and-tools.md) |
 | `record` | two outputs merged into one input, and an inline tool | [Types and records](types-and-records.md) |
 | `nested` (with `make_greeting.wic`) | a workflow used as a step | [Subworkflows](subworkflows.md) |
 | `watched` | a real-time analysis declaration | [Real-time analysis](realtime-analysis.md) |
@@ -89,10 +90,10 @@ python greeting_if.py
 `naming_renamed` need their `.cwl` files copied beside them, and `nested` needs `make_greeting.wic` beside it and your
 project directory on `search_paths_wic`. The others run as they are.
 
-The tool-builder example, `examples/scripts/count_words.py`, is Python only,
-since a `.wic` file cannot hold a tool built in memory; it is shown in full
-in [Writing tools in Python](tool-builder.md), and a test in the repository
-holds it to what that page says.
+The tool-builder example, `examples/scripts/count_words.py`, is Python only;
+it is shown in full in [Writing tools in Python](tool-builder.md), and a test
+in the repository holds it to what that page says. `tally_words.py` and
+`tally_words.wic` are one tool, which `tool_document` runs.
 
 ## Adding a pair
 

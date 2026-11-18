@@ -445,7 +445,16 @@ two schemes meet, and every workflow connects them without a written line.
 
 One more refinement exists for collections whose file formats are declared:
 `--insert_steps_automatically`, `insert_steps=True` in Python, inserts a
-converter step when no output's format fits, steered by the configuration's
+converter step when no output fits an input. A converter is an ordinary step
+of a tool named `insert_steps_automatically_*`, `.cwl` or `.wic`: it is put
+before the step it feeds when one of its outputs fits that input and one of
+its own required inputs fits an output already upstream, by the same rule as any
+edge, so a converter with nothing upstream to read is never inserted. The job
+gives its other inputs, as for any step. A converter reads what the author
+wrote and never another converter, in whatever order a step declares its
+ports. If two
+converters qualify, the first by name is inserted and the `wic043` note
+counts the other (an error under `--inference_strict`). The search is steered by the configuration's
 `inference_rules`, `format_rules=` in Python. Python reads no configuration:
 its format rules are empty unless you pass them, its renamings start from the
 three Sophios ships, and it inserts

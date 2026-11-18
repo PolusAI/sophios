@@ -15,7 +15,7 @@ means `touch.cwl`. Sophios looks for it in the directories listed under
 `search_paths_cwl` in its configuration, `~/wic/global_config.json`, which
 [Install](install.md) wrote with one directory, `~/wic/cwl_adapters/`.
 Every directory is searched recursively, and every `.cwl` file found there
-can be named by its stem. To use tools of your own by name, add their
+can be named by its stem, as can a `.wic` tool document (below) that has no `.cwl` of the same stem. To use tools of your own by name, add their
 directory to that list; [Configuration](configuration.md) shows how.
 
 A name no search path provides stops the compile at the step. Name a tool
@@ -147,9 +147,24 @@ the search paths, so the workflow runs on any machine whose configuration
 lists that collection. Name it by path when the tool belongs to this
 project and travels with the workflow, as `word_count.cwl` does here.
 
-You do not have to write tool files by hand. [Writing tools in
-Python](tool-builder.md) builds this same tool in a few lines of Python, and
-writes the file for you.
+You do not have to write the CWL by hand. A tool file can be a `.wic`
+document, which says what runs and what it takes and leaves the CWL to
+Sophios. Here is a word counter in it, saved as `tally_words.wic`:
+
+```{literalinclude} cookbook/tally_words.wic
+:language: yaml
+:caption: tally_words.wic
+```
+
+A step names it as it names any tool: by path (`run: tally_words.wic`), or by
+name once its folder is on the search paths, where it is found beside the
+`.cwl` tools. A `.wic` file with `command:` or `script:` is a tool and one with
+`steps:` is a workflow; [the `.wic` reference](wic-reference.md#24-a-tool-document)
+gives the grammar, and the two forms of this tool, `tool_document.wic` and
+`tool_document.py`, run it in the greeting. A tool document needs `lang_version`
+0.1.0, which an unpinned compile uses. [Writing tools in
+Python](tool-builder.md) builds the same tool in Python, and writes the file for
+you.
 
 ## Other places a tool can come from
 
@@ -159,8 +174,8 @@ one-off tool; [Types and records](types-and-records.md) uses one. The inline
 tool is written out as its own file beside the compiled workflow.
 
 A tool file holds one CWL `CommandLineTool`, or a packed document whose
-`main` entry is one. A file whose class is `Workflow` cannot be a step
-(`wic013`): call it as a `.wic` subworkflow instead, or run it on its own as
+`main` entry is one, or is a `.wic` tool document. A file whose class is
+`Workflow` cannot be a step (`wic013`): call it as a `.wic` subworkflow instead, or run it on its own as
 the next section shows.
 
 ## Run a CWL workflow you already have

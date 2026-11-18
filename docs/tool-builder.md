@@ -289,6 +289,31 @@ in the image, or writes `counts.txt`, is found out by running. Validate at
 the tool boundary, then compile the workflow: a mistake in the tool is
 reported against the tool, not against the step that runs it.
 
+## The same tool as a document
+
+`.command()` and `.script()` say what runs the way a `.wic` tool does
+([`.wic` reference §2.4](wic-reference.md#24-a-tool-document)), and
+`Output.of()` is its output line. The words of `.command()` are text and the
+tool's own inputs, and each input they name is placed by them, so it takes no
+`position`; the flag, separator and the rest of its binding are kept:
+
+```{literalinclude} cookbook/tally_words.py
+:language: python
+:caption: tally_words.py
+```
+
+```{literalinclude} cookbook/tally_words.wic
+:language: yaml
+:caption: tally_words.wic
+```
+
+The two are one tool: Python builds the same objects the parser reads, and one
+lowering writes the CWL. `Output.of(inputs.bam, '.bai')` is the file named as
+`bam` is, with `.bai` after it. `.script(text)` runs bash on the text with each
+input in the variable of its name, and owns the whole command line, so
+`.argument()` and `.base_command()` beside it are refused. A tool built with
+`.command()` or `.script()` is `lang_version` 0.1.0 syntax, as the file is.
+
 ## Into a workflow
 
 ```python
@@ -296,7 +321,7 @@ count = Step(word_count)
 counter = Step(word_count, step_name='count_greeting')
 ```
 
-`Step` takes a built `CommandLineTool` as it takes a tool file. `step_name=`
+`Step` takes a built `CommandLineTool` as it takes a tool file, `.cwl` or `.wic`. `step_name=`
 names the step, which otherwise takes the tool's name. The step's inputs
 and outputs are the tool's, by name, and inference connects it like any
 other step. The compiled workflow carries the tool as it carries every

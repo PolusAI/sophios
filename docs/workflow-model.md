@@ -184,13 +184,13 @@ explains how to read them.
 ## Versions
 
 The language has a version, `lang_version`, and the compile reports which
-one it read a document under, `0.0.1` today: printed as
-`Sophios lang_version: 0.0.1` on the command line, and as
+one it read a document under, `0.1.0` today: printed as
+`Sophios lang_version: 0.1.0` on the command line, and as
 `CompiledWorkflow.lang_version` in Python. The compiled CWL does not carry
-it. A file may pin one (`wic: {lang_version: 0.0.1}`), a compile may set one
+it. A file may pin one (`wic: {lang_version: 0.1.0}`), a compile may set one
 (`--lang_version`, `compile(lang_version=...)`), and without either a
 document is read under the newest version that accepts it. Two pins that disagree in one
-compilation are `wic018`, and an unknown version is `wic017`.
+compilation are `wic018`, and an unknown version is `wic017`. A tool document is 0.1.0 syntax, so a compile pinned to 0.0.1 that reaches one is `wic060`.
 
 ## One model, two forms
 

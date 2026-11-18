@@ -16,13 +16,22 @@ tools each step runs, the diagnostics, the resolved language version and the
 real-time declarations.
 
 1. **Parse** (`sophios.lang`) turns YAML into the versioned AST. Unknown CWL
-   stays opaque. The front door (`sophios.ir.frontdoor`) parses each `.wic`
+   stays opaque. A document with `command:` or `script:` is read as a
+   `ToolDocument`, a place for each word and port, and lowered once, by
+   `lang/commandline.py`, to the `CommandLineTool` it means; the parser keeps
+   that CWL on the node. The front door (`sophios.ir.frontdoor`) parses each `.wic`
    file once, follows the steps to the files they reach, registers inline
-   `run:` bodies and `run:` paths, and builds the bundle. The Python API
+   `run:` bodies and `run:` paths, and builds the bundle. A tool root becomes a
+   workflow of one step that runs it. The Python API
    builds its bundle from the `Document` it constructs, with no parse.
 2. **Resolve** pairs each step with its process (a tool, a workflow, an
    implementation, an inline body) from an immutable registry snapshot, applying `wic: steps:` contributions. It
-   discovers nothing and parses nothing.
+   discovers nothing and parses nothing. A registry `Tool` reads its one file
+   the first time anything asks, a `.cwl` through the CWL loader and a `.wic`
+   through `parse()` and its lowering, so every consumer sees one kind of
+   tool, and a registry key is fixed once, when discovery finds the file (a
+   `.cwl` beside a `.wic` of one stem keeps the stem). The compiler reads the
+   version the tools need after the front end, `wic060` if the pin is lower.
 3. **Lower** builds an immutable `WorkflowGraph`: steps with complete port
    declarations, authored bindings, the workflow boundary, child graphs for
    subworkflows, and the real-time declarations. The compiler takes those out of
@@ -112,7 +121,8 @@ fitting the input and a required input of its own fitting an output already
 upstream (the relation the backward scan uses) is inserted before the step,
 wired by that same scan; the job gives what the scan does not find. Inference looks only backwards, so the step
 after the insertion is read again and nothing decided before it changes: one
-pass, no loop. Two such converters are a guess, reported as `wic043`.
+pass, no loop. A converter reads the authored steps only, never another converter. Two such converters are a
+guess, reported as `wic043`.
 
 A linear step order is a total order, and the compiler's job is to promote it
 to the topological order the DAG needs by adding edges. More than one order

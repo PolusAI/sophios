@@ -91,6 +91,10 @@ line by line.
 A file that is already a plain CWL workflow is not a Sophios document; pass it
 with `--allow_raw_cwl` to run it as it is ([Steps and tools](steps-and-tools.md)).
 
+A document whose keys include `command:` or `script:` is a tool, not a workflow
+(§2.4). Passed to `sophios` as the root, it compiles as a workflow of one step
+that runs it, with the tool's ports as the workflow's inputs.
+
 ## 2. Steps
 
 ### 2.1 Two ways to write `steps:`
@@ -185,18 +189,28 @@ three ways:
   the step (`run: tools/make_file.cwl`); a value ending in `.cwl` or `.wic`
   is a path, and when no file is there it is read as a stem;
 - a registry stem, as the step name would name it (`run: touch`);
-- an inline `CommandLineTool` body (`run: {class: CommandLineTool, ...}`).
+- an inline body: a `CommandLineTool` (`run: {class: CommandLineTool, ...}`)
+  or a tool document (`run: {command: ..., inputs: ...}`, §2.4).
 
 A `.cwl` file, on a search path or named by `run:`, is one `CommandLineTool`,
 or a packed document (`$graph`) whose `main` is one: the step runs `main`. A
 packed document with no `main` is `wic013`. A stem nothing on the search
 paths provides is `wic013`. An inline body is written out as its own tool file
 beside the compiled workflow, at the workflow's CWL version; a `cwlVersion`
-inside it is ignored.
+inside it is ignored. An inline tool document is named `<step id>.wic`.
+
+A tool is one file, whatever its language, and it is read once, when a step
+first needs it. A `.wic` tool is found on the search paths beside the `.cwl`
+tools; when a `.wic` and a `.cwl` share a stem, the `.cwl` is the tool of that
+name, and the `.wic` is reached by its path. Reading a tool reads that file
+only: a tool never follows a step or imports another file.
 
 A step's process is a tool or a `.wic` subworkflow. A CWL file whose `class`
 is `Workflow`, however it is named, is `wic013`: write it as a `.wic`
-subworkflow and call that, or run it on its own with `--allow_raw_cwl`.
+subworkflow and call that, or run it on its own with `--allow_raw_cwl`. So is
+a `.wic` workflow that a step names from the tool search paths: call it as
+`run: <name>.wic` beside the document. A Python `Step(clt_path=...)` that
+names a `.wic` workflow is `api004`.
 
 Naming a process by stem keeps a workflow short and lets it run on machines
 whose tools live in different directories; a path suits a tool kept beside
@@ -213,7 +227,7 @@ steps:
 
 | Code | When | Fix |
 |---|---|---|
-| `wic013` | no search path provides the stem, the file is a CWL `Workflow`, a packed document has no `main`, subworkflows call each other in a cycle, or a subworkflow's ports are written in list form with `$import` or `$include` | put the tool on a search path, name it by path, call a `.wic` subworkflow instead, break the cycle, or write the ports as a mapping |
+| `wic013` | no search path provides the stem, the file is a CWL `Workflow` or a `.wic` workflow found among the tools, a packed document has no `main`, subworkflows call each other in a cycle, or a subworkflow's ports are written in list form with `$import` or `$include` | put the tool on a search path, name it by path, call a `.wic` subworkflow instead, break the cycle, or write the ports as a mapping |
 
 [Steps and tools](steps-and-tools.md) shows each way of naming a tool.
 
@@ -221,6 +235,103 @@ A step that runs the `cwl_subinterpreter` adapter is not a step of the
 compiled workflow but a real-time analysis declaration, checked as such and
 reported as `wic044` when it is malformed or its analysis does not compile;
 [Real-time analysis](realtime-analysis.md) describes it.
+
+### 2.4 A tool document
+
+A tool is a short way to write a CWL `CommandLineTool`: you write what runs and
+what it takes, and Sophios writes the CWL. A `.wic` file is a tool when it
+has `command:` or `script:`, as `steps:` makes it a workflow; a document with
+two of these keys is `wic058` at the second. A tool document has no `class:`
+and no `cwlVersion:`: Sophios writes them, and a `class:` you write is
+replaced. A tool is `lang_version` 0.1.0 syntax ([language
+specification](dev/language_spec.md)).
+
+```yaml
+command: grep -n {pattern} {file}
+inputs:
+  pattern: string
+  file: File
+outputs:
+  matches: stdout
+docker: debian:bookworm-slim
+```
+
+A line, such as `command:` or an output's `stdout`, is written out as CWL that was not there and
+never changes CWL that is. Every key that is not Sophios's own is CWL, in
+CWL's spelling, copied: `label`, `doc`, `arguments`, `requirements`, `hints`,
+`stdin`, `stdout`, `successCodes`, and the rest.
+
+| Key | Value | Becomes |
+|---|---|---|
+| `command` | a command line as you would type it, with `{name}` for an input, or a list of words | `baseCommand`, an input's `position` (and its `prefix`, from a flag before it), `arguments` |
+| `script` | a shell script as written | the script as a file in the working directory, run by bash, each input an environment variable |
+| `inputs` | a name for each input, with its type (`string`, `File[]`, `int?`), or a CWL port | `inputs` |
+| `outputs` | a name for each output, with a line (below) or a CWL port | `outputs` |
+| `docker` | an image | a `DockerRequirement` under `hints` |
+| `needs` | `{cores: 4, ram: 64G}` | a `ResourceRequirement` under `requirements`; `ram` is a size such as `64G` (`M`, `G` or `T`), a number of mebibytes or a CWL expression |
+
+**The command.** Words are separated by spaces. A word is text, a quoted text
+(`'-w'`, `"x y"`), or `{name}`, the value of the input `name`; a brace that is
+text is written twice, `{{`. The words of text before the first input or flag
+are the program (`baseCommand`); a command that starts with a flag, as an
+image's entry point does, has none. A dash word directly before `{name}` is
+that input's flag: `-n {pattern}` is the input with `prefix: -n`. To keep a
+dash word as text, quote it (`wc '-w' {text}`). Any other word of text after
+the program is a CWL argument. An optional input that is null writes nothing,
+flag included; a `true` boolean writes its flag alone, so a boolean needs the
+flag written before it; an array writes the flag once and then each item. A
+value is a word of its own: it is never joined to text or put in quotes, and a
+shell character outside quotes (`| & ; < > ( ) ` $ * ? [ ] \`) is refused, as
+no shell reads the line. Write `script:` when you need a shell. To join a flag
+to its value (`--out=VALUE`), give the input its own `inputBinding:` with
+`prefix: --out=` and `separate: false`; the command line then adds only the
+`position`.
+
+**The script.** `script:` runs your text with bash from a file, with each
+input in the environment variable of its name: an array is its items between
+spaces, a null is unset, a `true` boolean is set and empty. An input name is
+therefore letters, digits and `_` with a small letter in it. A value never
+becomes part of the script's text.
+
+**An output line** is `stdout`, `stderr`, or a pattern: text with `{name}` for
+an input, naming the file the tool leaves in its working directory
+(`{in-file}.idx`; a `File` or `Directory` input is its file name, and an
+output of one `Directory` input alone is a `Directory`). A line that holds an
+input needs that input to have one value: an array, an optional input or an input
+of several types is refused. To add a `doc:` or `label:` beside a line, write
+the port as a mapping with the line under `from:`. Anything a line cannot say,
+such as an output of another type, is a CWL port with `type:` and
+`outputBinding:`.
+
+**Places.** A line writes some places of the CWL, and the CWL you write must
+leave them alone: the same place written twice is `wic058`, never a merge or
+a last-one-wins. `command:` writes `baseCommand`, and an input's `position`
+and `prefix`; `docker:` and `needs:` write their requirement, which then must
+not be under `requirements:` or `hints:`; an output line writes its `type` and
+`outputBinding`. `script:` owns the whole command line, `env name=value ...
+bash .script.sh`, so these are `wic058` beside it: `arguments:`,
+`baseCommand:`, an `inputBinding` anywhere in an input (in the port, its type,
+an array's `items` or a record's `fields`), a record input, and an entry named
+`.script.sh` in `requirements:` or `hints:`. CWL you add beside a line
+stands as written: beside `command:` your `arguments:` are kept, after the
+line's own, and a `script:` adds its file to the `listing:` of your
+`InitialWorkDirRequirement`. The CWL then means exactly what CWL v1.2 says.
+
+The parser reports a place for each word and each port, one line of a
+one-line command or output; a command written over several lines, as a block
+or folded scalar, is reported at the whole value.
+
+In Python, [`CommandLineTool.command()` and
+`.script()`](tool-builder.md#the-same-tool-as-a-document) and `Output.of()`
+build the same tool from objects, which the same lowering turns into CWL.
+
+| Code | When | Fix |
+|---|---|---|
+| `wic058` | a line Sophios cannot write as CWL: a second defining key, a word that needs a shell or joins a value to text, a `{name}` that names no input, or a place a line writes that you also wrote | correct the word, the input or the key the message names; what a line cannot say is CWL, written beside it |
+| `wic059` | one of a tool's own keys has a value of the wrong shape, as `command: 3` or `needs: {gpus: 1}` | write the value in the shape the table gives |
+| `wic060` | a compile pinned to `lang_version` 0.0.1 reaches a tool | remove the pin, or set it to the version the message names |
+
+[Steps and tools](steps-and-tools.md) uses a tool document in a workflow.
 
 ## 3. Inputs
 
@@ -736,7 +847,8 @@ nothing under it is an empty block.
 
 - `lang_version` pins the language version the document is read as (see the
   [language specification](dev/language_spec.md)). An unknown version is
-  `wic017`; two pins that disagree within one compilation are `wic018`. A
+  `wic017`; two pins that disagree within one compilation are `wic018`; a pin
+  below 0.1.0 on a compile that reaches a tool is `wic060`. A
   `cwlVersion:` Sophios cannot run (anything but `v1.0`, `v1.1` or `v1.2`) is
   `wic035`; the compiled workflow always says `v1.2`.
 - `namespace` on a `wic: steps:` entry selects the search-path namespace the

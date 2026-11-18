@@ -1,6 +1,6 @@
 # The language specification
 
-**Version:** `lang_version` 0.0.1. **Substrate:** CWL v1.2.
+**Version:** `lang_version` 0.1.0. **Substrate:** CWL v1.2.
 
 What must an implementation of the Sophios language do? This page is for
 people who implement or change Sophios: what the language does with CWL, how
@@ -69,6 +69,15 @@ so a field the schema has and the matrix lacks fails the build. The field-by-fie
 support is rendered in the "Sophios" column of [Nextflow](../nextflow.md). A field outside these five classes on a
 step's tool is passthrough wholesale: Sophios does not classify
 `CommandLineTool` fields.
+
+A tool written in `.wic` is the one place Sophios owns a command line: its
+`command:`, `script:`, `docker:`, `needs:`, port lines and output lines are
+Sophios-owned syntax that `sophios.lang.commandline.command_line_tool`
+lowers once to a `CommandLineTool`, and every other key of the document is CWL,
+copied. A line adds CWL and never changes CWL that is there: a place a line
+writes that the author wrote too is `wic058`, found by one walk over a table
+of owned places, and `script:` owns the whole command line. The result means
+what CWL v1.2 says.
 
 ### 1.1 The native rows of `Workflow`
 
@@ -260,8 +269,11 @@ language error.
 
 ## 6. Versioning
 
-`lang_version` is 0.0.1, defined against CWL v1.2; the language version and
-its CWL substrate move together. The version tag is optional and expected to
+`lang_version` is 0.1.0 (0.0.1 is still read), defined against CWL v1.2; the
+language version and its CWL substrate move together. 0.1.0 added the tool
+document (`command:` or `script:`, [`.wic` reference §2.4](../wic-reference.md#24-a-tool-document)):
+a compile pinned to 0.0.1 that reaches a tool is `wic060`, and a file with no
+tool compiles unchanged under either. The version tag is optional and expected to
 stay unused: an untagged file is compiled at the highest `lang_version`
 under which it compiles. A file using only long-standing syntax resolves to
 the newest version; one using syntax a later version dropped resolves to the
@@ -272,7 +284,7 @@ construct valid under two versions with different meanings.
 The version chosen is always reported: on the command line and on
 `CompiledWorkflow.lang_version`. The emitted CWL does not carry it, so it
 stays plain CWL. It can be pinned
-per file (`wic: {lang_version: 0.0.1}`) or set for a whole compilation
+per file (`wic: {lang_version: 0.1.0}`) or set for a whole compilation
 (`--lang_version`, `Workflow.compile(lang_version=...)`); the explicit setting
 beats any tag, and one compilation resolves to exactly one version tree-wide.
 An unknown version is `wic017`; pins that disagree within one compilation are
