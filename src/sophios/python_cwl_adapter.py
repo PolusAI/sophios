@@ -4,9 +4,10 @@ from pathlib import Path
 import sys
 from types import ModuleType
 from typing import Any
-from .lang.cwl import CWL_VERSION
+from .lang.commandline import command_line_tool
 from .lang.diagnostics import SophiosError
 from .lang.error_codes import SophiosErrorCode
+from .lang.nodes import Port, ToolDocument, Word
 
 DRIVER_SCRIPT = '/python_cwl_driver.py'
 TYPES_SCRIPT = '/workflow_types.py'
@@ -107,39 +108,24 @@ def generate_CWL_CommandLineTool(module_inputs: dict[str, Any], module_outputs: 
     Returns:
         dict[str, Any]: A CWL CommandLineTool with the given inputs and outputs.
     """
-    yaml_tree: dict[str, Any] = {}
-    yaml_tree['cwlVersion'] = CWL_VERSION
-    yaml_tree['class'] = 'CommandLineTool'
-    yaml_tree['$namespaces'] = {'edam': 'https://edamontology.org/'}
-    yaml_tree['baseCommand'] = 'python3'
-
+    python = ('format', 'edam:format_2330')
+    fixed = (Port('driver_script', (('type', 'string'), python, ('default', DRIVER_SCRIPT))),
+             Port('workflow_types', (('type', 'string'), python, ('default', TYPES_SCRIPT))),
+             Port('script', (('type', 'File'), python)))
+    # The command line says where each input goes: the driver's three, then `--name value` for each of the script's.
+    given = tuple(Port(name, tuple((key, value) for key, value in port.items() if key != 'inputBinding'))
+                  for name, port in module_inputs.items())
     requirements: dict[str, Any] = {'InlineJavascriptRequirement': {}}
     if python_script_docker_pull:
         requirements['DockerRequirement'] = {'dockerPull': python_script_docker_pull}
-    yaml_tree['requirements'] = requirements
-
-    def input_binding(position: int, prefix: str = '') -> dict[str, Any]:
-        if prefix == '':
-            return {'inputBinding': {'position': position}}
-        return {'inputBinding': {'position': position, 'prefix': f'--{prefix}'}}
-
-    inputs: dict[str, Any] = {}
-    inputs['driver_script'] = {'type': 'string', 'format': 'edam:format_2330',
-                               **input_binding(1), 'default': DRIVER_SCRIPT}
-    inputs['workflow_types'] = {'type': 'string', 'format': 'edam:format_2330',
-                                **input_binding(2), 'default': TYPES_SCRIPT}
-    inputs['script'] = {'type': 'File', 'format': 'edam:format_2330', **input_binding(3)}
-    for i, (arg_key, arg_val) in enumerate(module_inputs.items()):
-        inputs[arg_key] = {**arg_val, **input_binding(i+4, arg_key)}
-    yaml_tree['inputs'] = inputs
-
-    outputs: dict[str, Any] = {}
-    for arg_key, (glob_pattern, arg_val) in module_outputs.items():
-        outputs[arg_key] = {**arg_val, 'outputBinding': {'glob': glob_pattern}}
-    yaml_tree['outputs'] = outputs
-
-    yaml_tree['stdout'] = 'stdout'
-    return yaml_tree
+    return command_line_tool(ToolDocument(
+        (Word('python3'), *(Word(input=port) for port in fixed),
+         *(word for port in given for word in (Word(f'--{port.name}'), Word(input=port)))),
+        inputs=(*fixed, *given),
+        outputs=tuple(Port(name, (*port.items(), ('outputBinding', {'glob': glob})))
+                      for name, (glob, port) in module_outputs.items()),
+        passthrough=(('$namespaces', {'edam': 'https://edamontology.org/'}), ('requirements', requirements),
+                     ('stdout', 'stdout'))))
 
 
 def get_module(python_script_mod: str, python_script_path: Path, yml_args: dict[str, Any]) -> ModuleType:

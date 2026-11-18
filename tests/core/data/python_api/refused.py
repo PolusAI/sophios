@@ -5,7 +5,7 @@ import shutil
 from decimal import Decimal
 from pathlib import Path
 
-from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Outputs, cwl
+from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
 from sophios.api.python.workflow import Step, StepInput, Workflow
 
 HERE = Path(__file__).resolve().parent
@@ -173,6 +173,26 @@ def cwl_workflow_as_a_tool() -> None:
 
 def wic_workflow_as_a_tool() -> None:
     Step(clt_path=HERE.parent / 'compiler' / 'tools' / 'by_path.wic')
+
+
+# What Python says that no tool can mean, refused where the tool says it.
+
+def an_output_line_names_an_array() -> None:
+    own = Inputs(xs=Input('string[]'))
+    CommandLineTool('t', own, Outputs(o=Output.of(own.xs, '.txt'))).command('echo', own.xs).to_cwl_document()
+
+
+def a_word_is_an_input_of_another_tool() -> None:
+    own, other = Inputs(v=Input('string')), Inputs(v=Input('string'))
+    CommandLineTool('t', own, Outputs()).command('echo', other.v).to_cwl_document()
+
+
+def what_runs_is_said_once() -> None:
+    CommandLineTool('t', Inputs(), Outputs()).script('env').command('env')
+
+
+def a_script_input_is_a_shell_variable_of_the_shell() -> None:
+    CommandLineTool('t', Inputs(PATH=Input('string')), Outputs()).script('env').to_cwl_document()
 
 
 # Names Sophios cannot write: a step's name is an id of the compiled CWL, a workflow's the stem of its files.

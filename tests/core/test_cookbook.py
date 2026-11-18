@@ -51,7 +51,10 @@ def _pairs() -> list[tuple[str, Callable[[], Workflow], Path, list[dict[str, Any
         stated = yaml.safe_load((DATA / 'pairs' / f'{directory.name}.yaml').read_text(encoding='utf-8'))
         for stem, build in sorted(builders.items()):
             if isinstance(build, Path):
-                build = import_python_file(f'{directory.name}_{stem}', build).workflow
+                module = import_python_file(f'{directory.name}_{stem}', build)
+                if hasattr(module, 'tool'):
+                    continue  # a tool the cookbook shows twice, which tests/core/test_tools.py holds to one tool
+                build = module.workflow
             default = stated.pop(stem, {})
             for each in (default, *default.get('under', [])):
                 assert set(each) <= _STATED, f'{directory.name}.yaml: {stem} states {sorted(set(each) - _STATED)}'

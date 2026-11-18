@@ -12,9 +12,10 @@ from typing import Any, ClassVar, Final, Self
 from cwl_utils.parser import cwl_v1_2 as _cwl_v12
 
 from sophios.lang.cwl import canonical_type, required
+from sophios.lang.spans import SourceSpan
 
 from ._tool_builder_support import _merge_if_set, _render, _render_doc
-from ._utils import validate_python_identifier_name
+from ._utils import caller_span, validate_python_identifier_name
 
 #: No `default` given: `None` is a default a tool can state.
 _UNSET: Final = object()
@@ -994,6 +995,9 @@ class OutputSpec(_IOFacetMixin):
     binding_extra: dict[str, Any] = field(default_factory=dict)
     extra: dict[str, Any] = field(default_factory=dict)
     name: str | None = None
+    #: What `of()` was given, and the line of the user's that gave it: the output line of a `.wic` tool, which says
+    #: the type too.
+    _line: tuple[tuple[str | InputSpec, ...], SourceSpan] | None = None
 
     def __init__(
         self,
@@ -1058,6 +1062,7 @@ class OutputSpec(_IOFacetMixin):
             streamable_value=streamable,
             load_listing_value=load_listing,
             binding_extra=dict(binding_extra or {}),
+            _line=None,
         )
 
     @classmethod
@@ -1088,6 +1093,23 @@ class OutputSpec(_IOFacetMixin):
         """
         return cls("stderr", **kwargs)
 
+    @classmethod
+    def of(cls, *parts: "str | InputSpec", **kwargs: Any) -> "OutputSpec":
+        """Make the output that a name made of text and inputs finds: the twin of an output line in a `.wic` tool.
+
+        `Output.of(inputs.bam, ".bai")` is the file called as the input `bam` is, with `.bai` after it;
+        `Output.of("*.txt")` the file that pattern matches; `Output.of(inputs.out)`, for a Directory input, that
+        directory.
+
+        Args:
+            parts (str | InputSpec): The pieces of the name in order: text, or one of the tool's `inputs`.
+            kwargs (Any): The other constructor arguments, such as `label`.
+
+        Returns:
+            OutputSpec: The output.
+        """
+        return cls("File", **kwargs)._replace(_line=(tuple(part for part in parts if part != ""), caller_span()))
+
     def to_dict(self) -> dict[str, Any]:
         """Render the output as one entry of the tool's `outputs`.
 
@@ -1109,7 +1131,7 @@ class OutputSpec(_IOFacetMixin):
             _cwl_v12.CommandOutputParameter,
             {} if self.load_listing_value is None else {"loadListing": self.load_listing_value},
             id=self.name,
-            type_=self._type(),
+            type_=self._type() if self._line is None else None,  # a line says its type: a File, or a Directory
             outputBinding=binding.to_dict() or None,
             **self._facets(),
         )

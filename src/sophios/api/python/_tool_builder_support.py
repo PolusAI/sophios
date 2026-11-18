@@ -41,19 +41,6 @@ def _render_doc(value: str | list[str] | None) -> str | list[str] | None:
             return None
 
 
-def _contains_expression(value: Any) -> bool:
-    """Whether a value holds a CWL expression, `$(...)` or `${...}`."""
-    match value:
-        case str():
-            return "$(" in value or "${" in value
-        case list():
-            return any(map(_contains_expression, value))
-        case dict():
-            return any(map(_contains_expression, value.values()))
-        case _:
-            return False
-
-
 def _warn_raw_escape_hatch(context: str) -> None:
     warnings.warn(
         (

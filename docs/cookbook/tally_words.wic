@@ -1,0 +1,5 @@
+command: wc -w {text}
+inputs: {text: File}
+outputs: {counts: stdout}
+stdout: counts.txt
+docker: debian:bookworm-slim
