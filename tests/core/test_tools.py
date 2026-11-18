@@ -3,6 +3,7 @@ read where it is written; a command line means its words, and an output line its
 evaluators; a script is run as written; a line adds CWL and changes none; and a tool is one tool through every door
 that reaches it. What a tool cannot say is stated, with its place, in tests/core/data/parse/tools, and what each means
 in tests/core/data/tool_lowering.yaml."""
+import inspect
 import io
 import json
 import tempfile
@@ -10,10 +11,12 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import yaml
 from cwl_utils.expression import do_eval
 from hypothesis import assume, example, given
 from hypothesis import strategies as st
 
+from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs
 from sophios.api.python.workflow import Step, Workflow
 from sophios.compiler import CompileSettings, compile_source
 from sophios.input_output import dump_wic_yaml
@@ -23,11 +26,14 @@ from sophios.lang.commandline import command_line_tool
 from sophios.lang.cwl import canonical_type
 from sophios.lang.diagnostics import SophiosError
 from sophios.plugins import get_tools_cwl
-from sophios.utils_cwl import make_tool
+from sophios.python_cwl_adapter import generate_CWL_CommandLineTool, import_python_file
+from sophios.utils_cwl import make_tool, validate
 
 from .budgets import FAST, budget
 from .cases import cases
+from .helpers import REPO_ROOT
 from .hermetic import cwl_tree
+from .strategies import pinned
 
 #: Input names as a tool may write them: a CWL id holds more than an identifier does.
 NAMES = ['v', 'x_1', 'in-file', 'in.file', '1st', 'naïve', 'Sample', 'a+b']
@@ -386,15 +392,15 @@ def _version_refusal(version: str) -> SophiosErrorCode | None:
 @budget(30)  # pylint: disable-next=too-many-locals
 def test_a_tool_is_one_tool_through_every_door(case: tuple[str, str | None, SophiosErrorCode | None],
                                                setting: str | None) -> None:
-    """A tool named as the root, by `run:`, written as an inline body, found by its stem on the tool search paths,
-    given to a Python `Step` by its path or by its name, and read by `Workflow.from_wic` as the root, by `run:`, as an
-    inline body and by its stem, is each time the same CommandLineTool, or is refused with the same code; as the root
-    its ports are the workflow's inputs, by name, type and default, each at the line of the tool that declares it.
-    Nothing tells one door's tool from another's: the registry discovery gives holds each tool as a file it reads when
-    a step runs it, whatever it is written in. The version is chosen as for a workflow: a setting that is no version is
-    refused before anything is read, and a tool is refused for what it cannot say before its version is held to the
-    setting or to the pin the tool writes (a tool needs 0.1.0). Python reads a file when it is given one, and compiles
-    under the setting."""
+    """A tool named as the root, by `run:`, written as an inline body, found by its stem on the tool search paths
+    (written with the suffix or without), given to a Python `Step` by its path or by its name, and read by
+    `Workflow.from_wic` as the root, by `run:`, as an inline body and by its stem (with the suffix or without), is each
+    time the same CommandLineTool, or is refused with the same code; as the root its ports are the workflow's inputs,
+    by name, type and default, each at the line of the tool that declares it. Nothing tells one door's tool from
+    another's: the registry discovery gives holds each tool as a file it reads when a step runs it, whatever it is
+    written in. The version is chosen as for a workflow: a setting that is no version is refused before anything is
+    read, and a tool is refused for what it cannot say before its version is held to the setting or to the pin the
+    tool writes (a tool needs 0.1.0). Python reads a file when it is given one, and compiles under the setting."""
     text, pin, fault = case
     expected = _version_refusal(setting) if setting == '9.9.9' else fault or _version_refusal(setting or pin or '0.1.0')
     in_python = fault or _version_refusal(setting or pin or '0.1.0')
@@ -409,6 +415,7 @@ def test_a_tool_is_one_tool_through_every_door(case: tuple[str, str | None, Soph
             path.write_text(text, encoding='utf-8')
         (base / 'run.wic').write_text('steps:\n- id: tool\n  run: tool.wic\n', encoding='utf-8')
         (base / 'stem.wic').write_text('steps:\n- id: named\n', encoding='utf-8')
+        (base / 'suffixed.wic').write_text('steps:\n- id: named.wic\n', encoding='utf-8')
         (base / 'inline.wic').write_text('steps:\n- id: tool\n  run:\n' + ''.join(
             f'    {line}\n' for line in text.splitlines()), encoding='utf-8')
 
@@ -419,15 +426,17 @@ def test_a_tool_is_one_tool_through_every_door(case: tuple[str, str | None, Soph
             return Workflow.from_wic(base / root, tool_registry=index())
         doors: dict[str, Any] = {root: (lambda root=root: compile_source(
             bundle_from_disk(base / root, {}, index()), CompileSettings(lang_version=setting), quiet=True))
-            for root in ('tool.wic', 'run.wic', 'stem.wic', 'inline.wic')}
+            for root in ('tool.wic', 'run.wic', 'stem.wic', 'suffixed.wic', 'inline.wic')}
         doors |= {
             'Step': lambda: Workflow([Step(clt_path=base / 'adapters' / 'named.wic')], 'w').compile(
-                lang_version=setting, tool_registry=index()),
+                lang_version=setting),
             'Step, by its name': lambda: Workflow([Step(clt_path=Path('named.cwl'), tool_registry=index())],
                                                   'w').compile(lang_version=setting, tool_registry=index()),
             'from_wic, by run:': lambda: read('run.wic').compile(lang_version=setting),
             'from_wic, an inline body': lambda: read('inline.wic').compile(lang_version=setting),
-            'from_wic, by its stem': lambda: read('stem.wic').compile(lang_version=setting, tool_registry=index())}
+            'from_wic, by its stem': lambda: read('stem.wic').compile(lang_version=setting, tool_registry=index()),
+            'from_wic, by its suffixed stem': lambda: read('suffixed.wic').compile(lang_version=setting,
+                                                                                   tool_registry=index())}
         if 'default' not in text:  # a Python workflow port carries only a type (api006)
             doors['from_wic'] = lambda: read('tool.wic').compile(lang_version=setting)
         tools, codes = {}, {}
@@ -479,3 +488,126 @@ def test_a_tool_found_once_is_the_tool_of_its_stem_for_every_door(tmp_path: Path
     root = compile_source(bundle_from_disk(tmp_path / 'elsewhere' / 'grep.wic', {}, registry()), CompileSettings(),
                           quiet=True)
     assert cwl_tree(root).children[0].cwl['baseCommand'] == 'echo-from-wic'
+
+
+@pytest.mark.fast
+@given(st.sampled_from(['', '.txt', '.bam.bai', '*.out', '$(x)']))
+@budget(20)
+def test_an_output_line_names_its_file_whatever_says_what_runs(after: str) -> None:
+    """`Output.of()` is the file its pieces name, whether the tool says what runs with `command()` or only with
+    `base_command()`, which says no line for the tool to lower."""
+    said_ports, base_ports = Inputs(v=Input('string')), Inputs(v=Input('string', position=1))
+    said = CommandLineTool('t', said_ports, Outputs(o=Output.of(said_ports.v, after))).command(
+        'echo', said_ports.v).to_cwl_document()
+    base = CommandLineTool('t', base_ports, Outputs(o=Output.of(base_ports.v, after))).base_command(
+        'echo').to_cwl_document()
+    assert base['outputs'] == said['outputs'] != {}
+
+
+def _cookbook() -> list[tuple[dict[str, Any], CommandLineTool, bool, int]]:
+    """Each tool the cookbook shows twice: a `.py` whose function is `tool()`, and the `.wic` of its stem."""
+    return [(yaml.safe_load(path.with_suffix('.wic').read_text(encoding='utf-8')), module.tool(), False, 0)
+            for path in sorted((REPO_ROOT / 'docs' / 'cookbook').glob('*.py'))
+            if hasattr(module := import_python_file(f'cookbook_tool_{path.stem}', path), 'tool')]
+
+
+def _directory_twin() -> tuple[dict[str, Any], CommandLineTool, bool, int]:
+    """A tool whose output is the Directory its one input is: the output line names an input that is a Directory,
+    which is its own name, and a Directory itself."""
+    ports = Inputs(d=Input('Directory'))
+    return ({'command': 'ls {d}', 'inputs': {'d': 'Directory'}, 'outputs': {'o': '{d}'}},
+            CommandLineTool('t', ports, Outputs(o=Output.of(ports.d))).command('ls', ports.d), True, 0)
+
+
+@st.composite  # pylint: disable-next=too-many-locals
+def _twins(draw: st.DrawFn) -> tuple[dict[str, Any], CommandLineTool, bool, int]:
+    """One tool as a `.wic` document and as the calls that build it; whether it holds an expression; and the line of
+    this file on which the calls say what runs. Its command is any the command-line property draws, over names
+    Python can declare, or a script over the same inputs; its output is a stream or a line; and beside them stand a
+    container hint, what it needs as a number or a size, and CWL of the author's."""
+    typed, listed, declared, _job, _argv_ = draw(commands(['v', 'x_1', 'sample', 'out']).filter(  # pylint: disable=no-member
+        lambda case: case[1] is not None))
+    script = draw(st.booleans())
+    kinds = {name: port['type'] if isinstance(port, dict) else port for name, port in declared.items()}
+    bound = {} if script else {name: port['inputBinding'] for name, port in declared.items() if isinstance(port, dict)}
+    ports = Inputs(**{name: Input(kind, flag=bound[name]['prefix'], separate=bound[name]['separate'])
+                      if name in bound else Input(kind) for name, kind in kinds.items()})
+    named = draw(st.sampled_from([None, *(name for name, kind in kinds.items() if kind in ('string', 'int'))]))
+    after = draw(st.sampled_from(['', '.txt', '}', '\\\\x']))
+    tool: dict[str, Any] = {'script': 'echo "$v"\n'} if script else {'command': ' '.join(typed)}
+    tool |= {'inputs': {name: {'type': kind, 'inputBinding': bound[name]} if name in bound else kind
+                        for name, kind in kinds.items()},
+             'outputs': {'out': f'{{{named}}}{_braced(after)}' if named else 'stdout'}}
+    built = CommandLineTool('t', ports, Outputs(out=Output.of(ports[named], after) if named else Output.stdout()))
+    words = [ports[word[1:-1]] if word[0] == '{' and word[1:-1] in kinds else word.replace('{{', '{').replace(
+        '}}', '}') for word in listed or ()]
+    said_at = inspect.currentframe().f_lineno + 1  # type: ignore[union-attr]
+    built = built.script('echo "$v"\n') if script else built.command(*words)
+    if image := draw(st.sampled_from([None, 'debian:bookworm-slim'])):
+        tool['docker'], built = image, built.docker(image, as_hint=True)
+    if needs := draw(st.sampled_from([None, (4, 64, 64), (2, '512M', 512), (1, '02G', 2048), (8, '1T', 1048576)])):
+        tool['needs'], built = {'cores': needs[0], 'ram': needs[1]}, built.resources(cores=needs[0], ram=needs[2])
+    if not script and (argument := draw(st.sampled_from([None, '$(runtime.cores)', 'plain']))):
+        tool['arguments'], built = [argument], built.argument(argument)
+    if declares := draw(st.sampled_from([None, 'requirements', 'hints'])):
+        tool[declares] = [{'class': 'InlineJavascriptRequirement'}]
+        built = built.inline_javascript(as_hint=declares == 'hints')
+    return tool, built, bool(declares or named) or any(mark in json.dumps(tool) for mark in ('$(', '${')), said_at
+
+
+@pytest.mark.needs_cwltool
+@pytest.mark.fast
+@given(_twins())
+@pinned(*_cookbook(), _directory_twin())
+@budget(100)
+def test_a_tool_in_wic_and_in_python_is_one_tool(case: tuple[dict[str, Any], CommandLineTool, bool, int]) -> None:
+    """A tool written as `.wic` and built with `command()` or `script()` and `Output.of()` is one CommandLineTool,
+    which cwltool accepts, with one rule for the JavaScript requirement: a tool that holds an expression declares it
+    once, as a requirement or as a hint. The cookbook's tool pairs are held to it. A place both surfaces say twice
+    (`baseCommand` beside a command, `arguments` beside a script) is refused by both with the tool's code: the `.wic`
+    at the key written twice, Python at the line that says what runs."""
+    tool, built, javascript, said_at = case
+    lowered = _tool(tool)
+    assert _said(lowered) == _said(built.to_cwl_document())
+    validate('tool.cwl', lowered)
+    if not said_at:
+        return  # a pair the cookbook states holds no place to say twice
+    declared = [*_said(lowered).get('requirements', {}), *_said(lowered).get('hints', {})]
+    assert declared.count('InlineJavascriptRequirement') == int(javascript)
+    key, twice = ('arguments', ['x']) if 'script' in tool else ('baseCommand', 'ls')
+    written = dump_wic_yaml(tool | {key: twice})
+    assert [(found.code, found.span and found.span.start_line) for found in parse(written, 'twice.wic').diagnostics] \
+        == [(SophiosErrorCode.TOOL_DOCUMENT, 1 + [row.partition(':')[0] for row in written.splitlines()].index(key))]
+    with pytest.raises(SophiosError) as refused:
+        (built.argument('x') if 'script' in tool else built.base_command('ls')).to_cwl_document()
+    found, = refused.value.diagnostics
+    assert found.code is SophiosErrorCode.TOOL_DOCUMENT and found.span is not None
+    assert (found.span.file, found.span.start_line) == (str(Path(__file__).resolve()), said_at)
+
+
+@pytest.mark.needs_cwltool
+@pytest.mark.fast
+@given(st.dictionaries(st.sampled_from(['plain', 'in-file', 'in.file', '1st', 'a b', 'a$b', 'x{y}', 'naïve', "it's"]),
+                       st.sampled_from([
+                           {'type': 'string'}, {'type': 'int'}, {'type': 'boolean'}, {'type': 'string[]'},
+                           {'type': 'string?', 'inputBinding': {'position': 9, 'prefix': '-x'}}]), max_size=4),
+       st.booleans())
+@budget(50)
+def test_a_python_script_tool_passes_each_input_as_its_flag(inputs: dict[str, Any], docker: bool) -> None:
+    """The tool of a `python_script` step runs `python3` on the driver, the types and the script, then `--name value`
+    for each input the script declares, whatever the input is called and whatever binding its declaration carries:
+    the tool is built from the ports themselves, never from text that is read again."""
+    values = {'string': 'v', 'int': 3, 'boolean': True, 'string[]': ['p', 'q'], 'string?': 'o'}
+    tool = generate_CWL_CommandLineTool(inputs, {'out': ('*.txt', {'type': 'File'})}, 'img:1' if docker else '')
+    argv = ['python3', '/python_cwl_driver.py', '/workflow_types.py', 's.py']
+    for name, port in inputs.items():
+        value = values[port['type']]
+        argv += [f'--{name}'] if value is True else [f'--{name}', *map(str, value if isinstance(value, list)
+                                                                       else [value])]
+    with tempfile.TemporaryDirectory() as scratch:
+        (Path(scratch) / 's.py').write_text('', encoding='utf-8')
+        line = _argv(tool, {name: values[port['type']] for name, port in inputs.items()} | {'script': {
+            'class': 'File', 'location': (Path(scratch) / 's.py').as_uri(),
+            'format': 'https://edamontology.org/format_2330'}})
+    assert [*line[:3], Path(line[3]).name, *line[4:]] == argv
+    assert tool['outputs'] == {'out': {'type': 'File', 'outputBinding': {'glob': '*.txt'}}}

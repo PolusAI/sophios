@@ -10,6 +10,7 @@
         "greeting_if",
         "greeting_input",
         "raw_cwl",
+        "tally_words",
         "when",
         "workflow_input"
     ],

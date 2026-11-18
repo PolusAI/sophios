@@ -52,7 +52,6 @@ from ._tool_builder_specs import (
 )
 from ._tool_builder_support import (
     _validate_path,
-    _contains_expression,
     _merge_if_set,
     _render,
     _render_doc,
@@ -63,7 +62,13 @@ from ._tool_builder_support import (
     dump_wic_yaml,
     validate_cwl_document,
 )
-from ...lang.cwl import CWL_VERSION
+from ._utils import caller_span
+from ...lang.commandline import command_line_tool
+from ...lang.cwl import CWL_VERSION, declare_javascript
+from ...lang.diagnostics import SophiosError
+from ...lang.error_codes import SophiosErrorCode
+from ...lang.nodes import Port, ToolDocument, Word
+from ...lang.spans import SourceSpan
 
 if TYPE_CHECKING:
     from .workflow import Step
@@ -112,6 +117,9 @@ class CommandLineTool:
     _namespaces: dict[str, str] = field(default_factory=dict, init=False)
     _schemas: list[str] = field(default_factory=list, init=False)
     _extra: dict[str, Any] = field(default_factory=dict, init=False)
+    #: What runs, when `command()` or `script()` says it, and the line of the user's that says so: the words, each
+    #: text or one of `inputs`, or the script.
+    _runs: tuple[tuple[str | InputSpec, ...] | str, SourceSpan] | None = field(default=None, init=False)
 
     def __post_init__(self) -> None:
         if not isinstance(self.inputs, Inputs):
@@ -278,6 +286,54 @@ class CommandLineTool:
             CommandLineTool: This tool, for chaining.
         """
         self._base_command = list(parts)
+        return self
+
+    def command(self, *words: str | InputSpec) -> "CommandLineTool":
+        """Say what runs as a command line, word by word: the twin of `command:` in a `.wic` tool.
+
+        `command("grep", "-n", inputs.pattern, inputs.file)` runs `grep` with the input `pattern` behind its flag
+        `-n` and the input `file` after it. The words say where each input goes, so an input they name is given no
+        `position`; its other binding fields (`flag`, `separate`, `item_separator`) are kept. `base_command()` is
+        said by the first words, and is refused beside them.
+
+        Args:
+            words (str | InputSpec): Text, or one of this tool's `inputs`, such as `inputs.pattern`.
+
+        Returns:
+            CommandLineTool: This tool, for chaining.
+
+        Raises:
+            SophiosError: `wic058`, when `command()` or `script()` has already said what runs.
+        """
+        return self._runs_as(words)
+
+    def script(self, text: str) -> "CommandLineTool":
+        """Say what runs as a shell script: the twin of `script:` in a `.wic` tool.
+
+        bash runs `text` as it is, and finds each input in the variable of its name: `$reads` for the input
+        `reads`. The whole command line is the script's, so `argument()` and `base_command()` are refused beside it.
+
+        Args:
+            text (str): The script, which is never read or changed.
+
+        Returns:
+            CommandLineTool: This tool, for chaining.
+
+        Raises:
+            SophiosError: `wic058`, when `command()` or `script()` has already said what runs.
+        """
+        return self._runs_as(text)
+
+    def _runs_as(self, runs: tuple[str | InputSpec, ...] | str) -> "CommandLineTool":
+        """Say what runs, at the line of the user's that says it; a tool says it once, as a `.wic` tool has one of
+        `command:` and `script:`."""
+        span = caller_span()
+        if self._runs is not None:
+            raise SophiosError.error(
+                SophiosErrorCode.TOOL_DOCUMENT,
+                "`command()` and `script()` say what runs, and this tool says it already: a tool says it once",
+                span=span)
+        self._runs = runs, span
         return self
 
     def stdin(self, value: str) -> "CommandLineTool":
@@ -876,9 +932,14 @@ class CommandLineTool:
         `requirements` and `hints` are written as lists, a one-word base command
         as a string. When any field holds an expression (`$(` or `${`) and no
         `InlineJavascriptRequirement` is declared, one is added to `requirements`.
+        A tool that says what runs with `command()` or `script()`, or an output with `Output.of()`, is the
+        document a `.wic` tool of the same lines means, with its `inputs` and `outputs` as mappings by name.
 
         Returns:
             dict[str, Any]: The document, ready to dump as YAML or JSON.
+
+        Raises:
+            SophiosError: `wic058`, at the Python line that says it, for a line the tool cannot mean.
         """
         requirements = [{"class": name, **payload} for name, payload in self._requirements.items()]
         hints = [{"class": name, **payload} for name, payload in self._hints.items()]
@@ -902,12 +963,34 @@ class CommandLineTool:
         if self._schemas:
             document["$schemas"] = list(self._schemas)
         document.update(_render(self._extra))
-        if _contains_expression(document):
-            # `requirements` is written even when it stays empty because a hint declares the requirement.
-            requirements = document.setdefault("requirements", [])
-            if all(item["class"] != "InlineJavascriptRequirement" for item in requirements + hints):
-                requirements.append({"class": "InlineJavascriptRequirement"})
-        return document
+        runs, said = self._runs or (None, None)
+        if runs is None and all(output._line is None for output in self.outputs.values()):
+            declare_javascript(document)
+            return document
+
+        # The node a `.wic` tool of the same lines parses to, and its one lowering: each port is made from the object
+        # that declares it, and a word that is a value is the port of the object it was given.
+        def port(name: str, written: dict[str, Any], line: tuple[Word, ...] | None = None) -> Port:
+            return Port(name, tuple((key, value) for key, value in written.items() if key != "id"), line)
+
+        ports = {id(spec): port(name, written)
+                 for (name, spec), written in zip(self.inputs.items(), document.pop("inputs"))}
+
+        def words(parts: tuple[str | InputSpec, ...], span: SourceSpan) -> tuple[Word, ...]:
+            for part in parts:
+                if not isinstance(part, str) and id(part) not in ports:
+                    raise SophiosError.error(
+                        SophiosErrorCode.TOOL_DOCUMENT,
+                        f"{part.name or 'an Input'} is no input of this tool: a word is text, or one of the `inputs` "
+                        "the tool was made with, such as `inputs.pattern`", span=span)
+            return tuple(Word(part, span=span) if isinstance(part, str) else Word(input=ports[id(part)], span=span)
+                         for part in parts)
+
+        outputs = tuple(port(name, written, spec._line and words(*spec._line))
+                        for (name, spec), written in zip(self.outputs.items(), document.pop("outputs")))
+        return command_line_tool(ToolDocument(
+            words(runs, said) if isinstance(runs, tuple) and said else None, runs if isinstance(runs, str) else None,
+            tuple(ports.values()), outputs, passthrough=tuple(document.items()), span=said))
 
     def to_cwl_yaml(self) -> str:
         """Render the tool as CWL YAML text, the document of `to_cwl_document()`.

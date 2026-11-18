@@ -67,3 +67,5 @@ greet_many:
       - when: $(inputs["str"] != null && inputs["file"] != null)
       - when: $(inputs["file"] != null)
         run: {successCodes: [0, 1], outputs: {output: {type: 'string?'}}}
+tool_document:
+  notes: ['note [wic043] tally_words.text <- append.file (1 other fits)']
