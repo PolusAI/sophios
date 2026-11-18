@@ -1,0 +1,4 @@
+# Both converters qualify: the first by name is inserted and the choice is a wic043 note.
+steps:
+- id: mk_zip
+- id: use_amber

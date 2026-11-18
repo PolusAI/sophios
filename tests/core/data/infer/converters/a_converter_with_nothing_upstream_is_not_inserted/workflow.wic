@@ -1,0 +1,4 @@
+# The converter reads a zip and nothing upstream makes one, so the input stays a workflow input.
+steps:
+- id: mk_other
+- id: use_amber

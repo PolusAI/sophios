@@ -1,5 +1,6 @@
-"""Pure fixed-point edge inference over a linked workflow graph."""
+"""Pure edge inference over a linked workflow graph, in one pass."""
 from collections import Counter
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 
 from ..lang import OpaqueCwl, SophiosErrorCode
@@ -7,7 +8,7 @@ from ..lang.diagnostics import Diagnostics, Locator
 from .complete import call_interfaces, promote_outputs
 from .declarations import feeding_declaration, input_rank, layered, output_rank, required
 from .names import Names
-from .resolve import RegistrySnapshot, ResolvedPort, process_ports
+from .resolve import RegistrySnapshot, ToolDefinition, process_ports
 from .stepin import direct_sink
 from .types import (
     AuthoredName,
@@ -19,7 +20,6 @@ from .types import (
     PortDeclaration,
     PortId,
     PortName,
-    RegistryKey,
     StepId,
     StepNode,
     WorkflowGraph,
@@ -36,48 +36,30 @@ class InferencePolicy:
     renaming_conventions: tuple[tuple[str, str], ...] = ()
     insert_steps_automatically: bool = False
     format_rules: tuple[tuple[str, str], ...] = ()
-    iteration_limit: int = 100
     #: A choice between equal candidates is an error rather than a note.
     strict: bool = False
 
 
-@dataclass(frozen=True, slots=True, order=True)
-class Insertion:
-    """One registry process Infer may insert speculatively."""
-
-    key: RegistryKey
-    inputs: tuple[ResolvedPort, ...]
-    outputs: tuple[ResolvedPort, ...]
-
-
 @dataclass(frozen=True, slots=True)
 class InsertionCatalog:
-    """An immutable, deterministically ordered converter whitelist."""
+    """The converters Infer may insert: the tools named `insert_steps_automatically_*`, in key order, each read
+    when an input needs one, whatever language it is written in."""
 
-    entries: tuple[Insertion, ...] = ()
+    tools: tuple[ToolDefinition, ...] = ()
 
     @classmethod
     def from_registry(cls, registry: RegistrySnapshot) -> 'InsertionCatalog':
-        """Project whitelisted converter interfaces from a registry snapshot, read as Resolve reads a tool's."""
-        return cls(tuple(sorted(
-            Insertion(tool.key, process_ports(tool.cwl.get('inputs'), output=False),
-                      process_ports(tool.cwl.get('outputs'), output=True))
-            for tool in registry.tools
-            if tool.key.name.startswith('insert_steps_automatically_') and isinstance(tool.cwl, dict))))
+        """The converters of a registry snapshot."""
+        return cls(tuple(tool for tool in registry.tools if tool.key.name.startswith('insert_steps_automatically_')))
 
 
 def infer(graph: WorkflowGraph, policy: InferencePolicy = InferencePolicy(),
           catalog: InsertionCatalog = InsertionCatalog()) -> PhaseResult:
-    """Infer missing edges, with speculative insertion as the only loop."""
+    """Infer the missing edges, inserting a converter step where one is wanted and the policy allows."""
     diagnostics = Diagnostics()
-    for _pass in range(policy.iteration_limit):
-        graph, inserted = _infer_tree(graph, policy, catalog, diagnostics)
-        if not inserted:
-            _unbound_scatter(graph, diagnostics)
-            return PhaseResult(None if diagnostics.has_errors else graph, diagnostics)
-    diagnostics.error(SophiosErrorCode.FIXED_POINT_NOT_REACHED,
-                      f'Inference did not reach a fixed point within {policy.iteration_limit} iteration(s).')
-    return PhaseResult(None, diagnostics)
+    graph = _infer_tree(graph, policy, catalog, diagnostics)
+    _unbound_scatter(graph, diagnostics)
+    return PhaseResult(None if diagnostics.has_errors else graph, diagnostics)
 
 
 def types_match(in_type: OpaqueCwl, out_type: OpaqueCwl) -> bool:
@@ -94,62 +76,70 @@ def types_match(in_type: OpaqueCwl, out_type: OpaqueCwl) -> bool:
 
 
 def _infer_tree(graph: WorkflowGraph, policy: InferencePolicy, catalog: InsertionCatalog,
-                diagnostics: Diagnostics) -> tuple[WorkflowGraph, bool]:
-    children: list[WorkflowGraph] = []
-    for child in graph.children:
-        inferred_child, inserted = _infer_tree(child, policy, catalog, diagnostics)
-        children.append(inferred_child)
-        if inserted:
-            return replace(graph, children=tuple(children) + graph.children[len(children):]), True
-    current = call_interfaces(replace(graph, children=tuple(children)))
-    if policy.disabled:
-        return current, False
-    return _infer_local(current, policy, catalog, diagnostics)
+                diagnostics: Diagnostics) -> WorkflowGraph:
+    children = tuple(_infer_tree(child, policy, catalog, diagnostics) for child in graph.children)
+    current = call_interfaces(replace(graph, children=children))
+    return current if policy.disabled else _infer_local(current, policy, catalog, diagnostics)
 
 
 # pylint: disable-next=too-many-locals
 def _infer_local(graph: WorkflowGraph, policy: InferencePolicy, catalog: InsertionCatalog,
-                 diagnostics: Diagnostics) -> tuple[WorkflowGraph, bool]:
-    """Infer the missing edges of one workflow, or insert one step and stop.
+                 diagnostics: Diagnostics) -> WorkflowGraph:
+    """Infer the missing edges of one workflow, front to back.
 
-    A pass that inserts is discarded and rerun on the grown graph, so the
-    choices it made are reported only by the pass that keeps them.
+    An input nothing fits is given a converter, when the policy allows one, as an ordinary step before its
+    step, wired as any step is; the input is then read again. Inference only looks backwards, so nothing decided
+    before the step changes.
     """
     linked_edges = list(graph.linked_edges)
     workflow_inputs = list(graph.workflow_inputs)
     input_mapping = list(graph.input_mapping)
     shorthand_relays = list(graph.shorthand_relays)
     bound = _bound(graph)
-    choices: list[tuple[StepNode, Port, PortId, tuple[PortId, ...]]] = []
+    steps = list(graph.steps)
+    choices: list[tuple[StepNode, Port, PortId, int]] = []
 
-    for position, step in enumerate(graph.steps):
+    def link(step: StepNode, port: Port, source: PortId | None, others: int) -> None:
+        """Feed `port` from `source`, a guess when `others` fit too; with no source, the job gives it."""
+        if source is not None:
+            linked_edges.append(Edge(source, port.id, port.span, inferred=True))
+            if others:
+                choices.append((step, port, source, others))
+            return
+        name = DerivedName(step.id, port.id.port)
+        workflow_inputs.append(WorkflowPort(name, feeding_declaration(step, port)))
+        input_mapping.append((name, (port.id,)))
+        shorthand_relays.append(name)
+
+    position = 0
+    while position < len(steps):
+        step = steps[position]
         for port in step.inputs:
             if port.id in bound or not required(port.declaration):
                 continue
-            source, alternatives, attempted = _candidate(graph.steps, position, port, policy)
-            if source is not None:
-                linked_edges.append(Edge(source, port.id, port.span, inferred=True))
-                if alternatives:
-                    choices.append((step, port, source, alternatives))
-                continue
-            insertion = _insertion_candidate(attempted, port, catalog)
-            if policy.insert_steps_automatically and insertion is not None:
-                return _insert(graph, position, insertion, policy), True
-            name = DerivedName(step.id, port.id.port)
-            workflow_inputs.append(WorkflowPort(name, feeding_declaration(step, port)))
-            input_mapping.append((name, (port.id,)))
-            shorthand_relays.append(name)
+            source, alternatives = _candidate(steps, position, port, policy)
+            others = len(alternatives)
+            if source is None and (fitting := _converters(steps, position, port, catalog, policy)):
+                for own, (fed, guesses) in _reads(steps, position, fitting[0], policy):
+                    link(fitting[0], own, fed, len(guesses))
+                steps.insert(position, fitting[0])
+                position += 1
+                source, alternatives = _candidate(steps, position, port, policy)
+                others = len(alternatives) + len(fitting) - 1
+            link(step, port, source, others)
+        position += 1
 
+    graph = replace(graph, steps=tuple(steps))
     repeated = _repeated(graph)
     linked_edges = _refuse_duplicates(graph, linked_edges, diagnostics, repeated)
     wired = {edge.sink for edge in linked_edges}
-    for step, port, source, alternatives in choices:
+    for step, port, source, others in choices:
         if port.id in wired:
-            _note_choice(diagnostics, policy, step, port, source, len(alternatives), repeated)
+            _note_choice(diagnostics, policy, step, port, source, others, repeated)
     return promote_outputs(replace(graph, linked_edges=tuple(linked_edges),
                                    workflow_inputs=tuple(workflow_inputs),
                                    input_mapping=tuple(input_mapping),
-                                   shorthand_relays=tuple(shorthand_relays))), False
+                                   shorthand_relays=tuple(shorthand_relays)))
 
 
 def _refuse_duplicates(graph: WorkflowGraph, edges: list[Edge],
@@ -259,10 +249,9 @@ def _unbound_scatter(graph: WorkflowGraph, diagnostics: Diagnostics,
 
 
 # pylint: disable-next=too-many-locals
-def _candidate(steps: tuple[StepNode, ...], position: int, sink: Port, policy: InferencePolicy
-               ) -> tuple[PortId | None, tuple[PortId, ...], tuple[Port, ...]]:
-    """The source inferred for `sink`, the equal candidates it was chosen over,
-    and every output looked at.
+def _candidate(steps: Sequence[StepNode], position: int, sink: Port, policy: InferencePolicy
+               ) -> tuple[PortId | None, tuple[PortId, ...]]:
+    """The source inferred for `sink`, and the equal candidates it was chosen over.
 
     The most recent producer with a match wins, and within it the first
     declared match (unless naming conventions single one out); a subworkflow
@@ -272,14 +261,11 @@ def _candidate(steps: tuple[StepNode, ...], position: int, sink: Port, policy: I
     """
     sink_type = layered(sink.type, input_rank(steps[position], sink.id.port)).canonical
     sink_formats = _formats(sink.declaration)
-    attempted: list[Port] = []
     chosen: Port | None = None
     alternatives: list[PortId] = []
     for producer in reversed(steps[:position]):
         matches: list[Port] = []
         for output in reversed(producer.outputs):
-            if chosen is None:
-                attempted.append(output)
             output_type = layered(output.type, output_rank(producer)).canonical
             output_formats = _formats(output.declaration)
             if (types_match(sink_type, output_type)
@@ -296,9 +282,7 @@ def _candidate(steps: tuple[StepNode, ...], position: int, sink: Port, policy: I
         breaks = {name for name, rule in producer.inference_rules if rule == 'break'}
         if any(output.id.port in breaks for output in producer.outputs):
             break
-    if chosen is None:
-        return None, (), tuple(attempted)
-    return chosen.id, tuple(alternatives), tuple(attempted)
+    return (None, ()) if chosen is None else (chosen.id, tuple(alternatives))
 
 
 def _first_declared(matches: list[Port]) -> Port:
@@ -376,39 +360,42 @@ def _leaf(name: PortName) -> str:
     return _leaf(name.port) if isinstance(name, DerivedName) else name
 
 
-def _insertion_candidate(attempted: tuple[Port, ...], sink: Port,
-                         catalog: InsertionCatalog) -> Insertion | None:
-    sink_formats = _formats(sink.declaration)
-    if not sink_formats:
-        return None
-    previous_formats = {
-        value
-        for output in attempted
-        for value in _formats(output.declaration)
-    }
-    matches = []
-    for insertion in catalog.entries:
-        accepted = {value for port in insertion.inputs for value in _formats(port.declaration)}
-        produced = {value for port in insertion.outputs for value in _formats(port.declaration)}
-        if previous_formats & accepted and set(sink_formats) & produced:
-            matches.append(insertion)
-    return min(matches) if matches else None
+def _converters(steps: Sequence[StepNode], position: int, sink: Port, catalog: InsertionCatalog,
+                policy: InferencePolicy) -> list[StepNode]:
+    """The converters that would feed `sink`, in key order, each as the step that would stand before `steps[position]`.
+
+    A converter qualifies when one of its outputs fits `sink` and one of its own required inputs fits an output
+    upstream of it, by the relation `_candidate` draws edges with: it converts something already there. The job
+    gives the inputs nothing upstream fits, as for any step.
+    """
+    return [converter for converter in (_converter(steps, tool, policy) for tool in catalog.tools)
+            if any(fed for _, (fed, _) in _reads(steps, position, converter, policy))
+            and _candidate([*steps[:position], converter, steps[position]], position + 1, sink, policy)[0]]
 
 
-def _insert(graph: WorkflowGraph, position: int, insertion: Insertion,
-            policy: InferencePolicy) -> WorkflowGraph:
-    identity = StepId(graph.namespace,
-                      max((step.id.index for step in graph.steps), default=0) + 1,
-                      insertion.key.name)
-    inputs = tuple(Port(PortId(identity, Direction.INPUT, AuthoredName(port.name)), port.declaration.type,
-                        port.declaration) for port in insertion.inputs)
-    outputs = tuple(Port(PortId(identity, Direction.OUTPUT, AuthoredName(port.name)), port.declaration.type,
-                         port.declaration) for port in insertion.outputs)
+def _reads(steps: Sequence[StepNode], position: int, converter: StepNode,
+           policy: InferencePolicy) -> list[tuple[Port, tuple[PortId | None, tuple[PortId, ...]]]]:
+    """Each required input of `converter` standing before `steps[position]`, with what `_candidate` finds for it.
+
+    A converter reads the steps the author wrote, never one inserted for another input: a converter never needs
+    another converter.
+    """
+    upstream = [step for step in steps[:position] if not step.synthesized]
+    return [(port, _candidate([*upstream, converter], len(upstream), port, policy))
+            for port in converter.inputs if required(port.declaration)]
+
+
+def _converter(steps: Sequence[StepNode], tool: ToolDefinition, policy: InferencePolicy) -> StepNode:
+    """The converter `tool` as the step that would stand after `steps`, its ports read as Resolve reads a tool's."""
+    identity = StepId(steps[0].id.namespace, max((step.id.index for step in steps), default=0) + 1, tool.key.name)
+    declared = process_ports(tool.cwl.get('inputs'), output=False), process_ports(tool.cwl.get('outputs'), output=True)
+    inputs, outputs = (tuple(Port(PortId(identity, direction, AuthoredName(port.name)), port.declaration.type,
+                                  port.declaration) for port in ports)
+                       for direction, ports in zip((Direction.INPUT, Direction.OUTPUT), declared))
     format_rules = dict(policy.format_rules)
     rules = tuple((port.name, format_rules.get(str(port.declaration.format), 'default'))
-                  for port in insertion.outputs if port.declaration.has_format)
-    inserted = StepNode(identity, insertion.key, inputs, outputs, inference_rules=rules, synthesized=True)
-    return replace(graph, steps=(*graph.steps[:position], inserted, *graph.steps[position:]))
+                  for port in declared[1] if port.declaration.has_format)
+    return StepNode(identity, tool.key, inputs, outputs, inference_rules=rules, synthesized=True)
 
 
 def _formats(declaration: PortDeclaration | None) -> tuple[OpaqueCwl, ...]:

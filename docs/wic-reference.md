@@ -789,8 +789,7 @@ subworkflow the pin goes on the inner step the row's path names.
 `--inference_disable` turns inference off, and
 `--no_inference_naming_conventions` turns the names off. The
 configuration's `inference_rules` refine inference too;
-`--insert_steps_automatically` lets it insert a converter step, and inference
-that does not settle within its iteration limit is `wic022`.
+`--insert_steps_automatically` lets it insert a converter step.
 [Edge inference](edge-inference.md) gives the exact rule.
 
 Inference exists because, in the straight stretches of a workflow, writing
@@ -815,5 +814,4 @@ steps:
 |---|---|---|
 | `wic043` | a note: another output also fitted, so the edge was guessed | draw the workflow, with `--graphviz` or `Workflow.draw()`, and pin the wrong ones with `!&` and `!*`; `--inference_strict` makes it an error |
 | `wic055` | two inputs of one tool step would read one output, and an inferred one lacks the format evidence | write the edge each input should read, with `!&` and `!*` |
-| `wic022` | inference did not settle within its iteration limit | bind the inputs explicitly, or drop `--insert_steps_automatically` |
 

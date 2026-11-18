@@ -85,9 +85,8 @@ SPELLED: Final = {'inference.disabled': (['--inference_disable'], True),
                   'policy.success_codes': (['--partial_failure_success_codes', '3'], (0, 3))}
 
 UNDELIVERABLE_BY_SENTINEL: Final = frozenset({
-    # Values in global_config.json, not CLI flags, which main reads from that explicit configuration; and
-    # inference's iteration limit, which nothing sets.
-    'inference.format_rules', 'inference.renaming_conventions', 'inference.iteration_limit',
+    # Values in global_config.json, not CLI flags, which main reads from that explicit configuration.
+    'inference.format_rules', 'inference.renaming_conventions',
 })
 
 _DELIVERABLE: Final = [field for field in _settings_fields()

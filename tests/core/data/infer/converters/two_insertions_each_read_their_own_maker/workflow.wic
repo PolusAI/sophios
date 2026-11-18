@@ -1,0 +1,6 @@
+# Two branches, each needing exactly one converter between its maker and its user.
+steps:
+- id: mk_1
+- id: use_1
+- id: mk_2
+- id: use_2
