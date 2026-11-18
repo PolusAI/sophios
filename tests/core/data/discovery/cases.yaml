@@ -94,3 +94,18 @@
   files: [a/dup, zz/sub/dup]
   found: {global: {dup: zz/sub/dup}}
   warnings: {global: {dup: [a/dup, zz/sub/dup]}}
+- id: a-wic-on-a-tool-path-is-a-tool-by-its-place
+  why: A tool search path indexes the names and paths of its .wic files too, and reads none; the last of a repeated
+    stem wins, as for a .cwl (get_tools_cwl).
+  files: [a/only.wic, a/twin.wic, b/twin.wic, b/plain]
+  found: {global: {plain: b/plain, only: a/only, twin: b/twin}}
+  warnings: {global: {twin: [a/twin, b/twin]}}
+- id: a-cwl-is-never-replaced-by-a-wic-of-its-stem
+  why: A .cwl is the tool its stem names wherever a .wic of that stem is found, before it or after, and the .wic is
+    no duplicate (get_tools_cwl); mm-workflows keeps a workflow .wic beside each tool the compiler inserts.
+  files: [a/echo.wic, b/echo.cwl, c/echo.wic, a/late.cwl, z/late.wic]
+  found: {global: {late: a/late, echo: b/echo}}
+- id: a-search-path-of-wic-tools-alone-holds-tools
+  why: A tool search path that holds only .wic tools is no empty one, and nothing is said on stdout (get_tools_cwl).
+  files: [a/only.wic, b/more.wic]
+  found: {global: {only: a/only, more: b/more}}

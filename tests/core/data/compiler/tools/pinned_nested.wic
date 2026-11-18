@@ -1,0 +1,4 @@
+# A tool is 0.1.0 syntax wherever in the workflow a step runs it.
+wic: {lang_version: 0.0.1}
+steps:
+- id: nested.wic

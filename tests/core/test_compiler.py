@@ -64,12 +64,14 @@ def test_an_example_runs_under_cwltool_as_stated(folder: Path, tmp_path: Path,
 
 def _tools(directory: Path) -> Tools:
     """The synthetic tools, each tool beside the example under its stem, and each in a folder beside it under that
-    folder's name as its namespace, read from its file as discovery reads it."""
+    folder's name as its namespace, read from its file as discovery reads it; a `.wic` in such a folder is indexed
+    by its place, as discovery indexes one on a tool search path, and read when a step runs it."""
     return {**SYNTHETIC_TOOLS, **{
         StepId(path.stem, SYNTHETIC_NS if path.parent == directory else path.parent.name): Tool(
             str(path), yaml.safe_load(path.read_text(encoding='utf-8')),
             from_file=True)
-        for path in [*directory.glob('*.cwl'), *directory.glob('*/*.cwl')]}}
+        for path in [*directory.glob('*.cwl'), *directory.glob('*/*.cwl')]},
+        **{StepId(path.stem, path.parent.name): Tool(str(path)) for path in directory.glob('*/*.wic')}}
 
 
 def _written(directory: Path) -> dict[str, Any]:

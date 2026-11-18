@@ -1,0 +1,4 @@
+# A workflow that runs a tool written in .wic.
+steps:
+- id: grep
+  run: grep.wic

@@ -20,7 +20,7 @@ from sophios.ir.artifacts import CompilationResult
 from sophios.post_compile import inline_artifact_runs
 from sophios.runtime_inputs import output_target_inputs, runner_job_inputs
 from sophios.lang.cwl import canonical_type
-from sophios.lang import Document, render
+from sophios.lang import Document, parse, render
 from sophios.wic_types import Json, StepId, Tool, Tools
 
 from .ast_strategies import SUBWORKFLOW_BODIES, documents
@@ -86,8 +86,9 @@ def _file_door(path: Path, workflow_paths: WorkflowPaths, tools: Tools) -> tuple
 
 
 def _named_outputs(path: Path) -> list[str]:
-    """The outputs `path` declares, which `Workflow.compile()` narrows its CWL to."""
-    outputs = read_wic(path.read_text(encoding='utf-8'), path.name).get('outputs')
+    """The outputs `path` declares, which `Workflow.compile()` narrows its CWL to; a tool's are its ports'."""
+    text = path.read_text(encoding='utf-8')
+    outputs = None if parse(text, path.name).tool else read_wic(text, path.name).get('outputs')
     return list(outputs) if isinstance(outputs, dict) else []
 
 

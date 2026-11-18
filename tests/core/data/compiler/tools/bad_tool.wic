@@ -1,0 +1,2 @@
+command: grep {patern}
+inputs: {pattern: string}

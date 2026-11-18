@@ -1,0 +1,6 @@
+steps:
+- id: count
+  run:
+    script: wc -l < "$text" > count.txt
+    inputs: {text: File}
+    outputs: {count: count.txt}

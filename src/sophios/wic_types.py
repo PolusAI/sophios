@@ -1,8 +1,13 @@
 from dataclasses import dataclass
 from functools import cached_property
+from pathlib import Path
 from typing import Any, Final, Literal, NamedTuple, TypeAlias, TypedDict, get_args
 
-from .lang.cwl import Process, Written, load_process, read_tool
+from .lang.cwl import Process, Written, load_process, read_tool, tool_text
+from .lang.diagnostics import SophiosError
+from .lang.error_codes import SophiosErrorCode
+from .lang.nodes import ToolDocument
+from .lang.parser import parse
 
 # See https://mypy.readthedocs.io/en/stable/kinds_of_types.html#type-aliases
 
@@ -31,19 +36,48 @@ class Tool:
     #: The tool's process; None for a tool file, which `cwl` reads when first asked, so only a tool a step runs
     #: has to be readable.
     _cwl: Cwl | None = None
-    #: Whether the file at `run_path` is the tool, read from it, and not a path a tool written elsewhere is named by.
+    #: Whether the file at `run_path` is the tool's own CWL, and not a path a tool written elsewhere is named by, nor a
+    #: `.wic` it is lowered from.
     from_file: bool = False
+    #: The tool written in `.wic` that `cwl` is the lowering of, for a tool given with its CWL; a tool file says it
+    #: when it is read.
+    written: ToolDocument | None = None
 
     @cached_property
+    def _read(self) -> tuple[Cwl, ToolDocument | None]:
+        """The tool's process, and the `.wic` tool it was lowered from. A `.cwl` is read by the CWL loader, a `.wic` by
+        `parse()`, which lowers the tool it says once. Reading parses the one file and nothing else: it cannot follow
+        a step, import a module or open another file, so a workflow is refused before anything it names is reached."""
+        if self._cwl is not None:
+            return self._cwl, self.written
+        if not self.run_path.endswith('.wic'):
+            return read_tool(self.run_path), None
+        parsed = parse(tool_text(self.run_path), Path(self.run_path).name)  # named as a workflow's file is
+        if parsed.diagnostics.has_errors:
+            raise SophiosError(parsed.diagnostics)
+        if parsed.tool is None:
+            raise SophiosError.error(
+                SophiosErrorCode.INVALID_TOOL,
+                f'{self.run_path} is a workflow, and a step runs a tool, which says `command:` or `script:`. '
+                'A workflow is a step\'s `run: <name>.wic` beside the document, or `Workflow.from_wic` in Python')
+        assert parsed.tool.cwl is not None  # a tool the parse accepted was lowered
+        return parsed.tool.cwl, parsed.tool
+
+    @property
     def cwl(self) -> Cwl:
-        """The tool's process.
+        """The tool's process, read from its file when first asked, whatever language the file is written in.
 
         Raises:
-            SophiosError: `wic001` for a tool file that is not YAML.
+            SophiosError: `wic001` for a tool file that is not YAML; what `parse()` reports of a `.wic` tool that
+                says what no tool means; `api004` for a `.wic` that is a workflow (a step reports it as `wic013`).
         """
-        if self._cwl is None:
-            return read_tool(self.run_path)
-        return self._cwl
+        return self._read[0]
+
+    @property
+    def document(self) -> ToolDocument | None:
+        """The tool as `.wic` says it, when it is written in `.wic`; None for CWL. It is what the language version a
+        tool is syntax in is read from, and it is read when `cwl` is."""
+        return self._read[1]
 
     @cached_property
     def loaded(self) -> tuple[Process, Written]:

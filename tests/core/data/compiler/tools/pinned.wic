@@ -1,0 +1,4 @@
+wic: {lang_version: 0.0.1}
+steps:
+- id: grep
+  run: grep.wic

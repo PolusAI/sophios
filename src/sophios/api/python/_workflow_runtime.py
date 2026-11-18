@@ -36,14 +36,13 @@ from sophios.ir.refusals import NotLowered
 from sophios.ir.resolved import ResolvedWorkflow, bind
 from sophios.ir.types import AuthoredName
 from sophios.lang import CwlRecord, Diagnostic, Diagnostics, Document, ParseResult, Severity, SophiosError, render
-from sophios.lang.cwl import SCATTER_METHODS, ports_named
+from sophios.lang.cwl import SCATTER_METHODS, ports_named, tool_process
 from sophios.lang.diagnostics import report
 from sophios.lang import Step as LangStep
 from sophios.lang.error_codes import SophiosErrorCode
 # Re-exported by `workflow`, which reaches the run settings only through this adapter.
 from sophios.runners import Cwltool, Nextflow, Runner, RunSettings, Toil  # pylint: disable=unused-import
 from sophios.runtime_inputs import output_target_inputs, resolve_file_formats, runner_job_inputs
-from sophios.lang.cwl import read_tool, tool_process
 from sophios.wic_types import DEFAULT_BASEPATH, GraphSettings, Json, StepId, Tool, Tools, Yaml
 
 from ._inference import Inference
@@ -137,23 +136,29 @@ def populate_parameters(
 
 
 def load_clt(clt_path: Path, tool_registry: Tools) -> tuple[CWLCommandLineTool, dict[str, Any]]:
-    """Load a CWL CommandLineTool from disk or a fallback registry.
+    """Load a tool, written in CWL or in `.wic`, from disk or a fallback registry, which then holds it under its stem.
 
     Raises:
         InvalidCLTError: If the tool cannot be loaded from disk or the registry.
+        SophiosError: What the tool file is refused for, a `.wic` that is a workflow (`api004`) among them.
     """
     stepid = StepId(clt_path.stem, "global")
 
     if clt_path.exists():
         try:
             # The process first: a packed document with no `main` is refused by name, not as "invalid".
-            yaml_file = read_tool(str(clt_path))
-            clt = load_document_by_uri(clt_path)
+            tool = Tool(str(clt_path), from_file=clt_path.suffix != '.wic')
+            yaml_file = tool.cwl
+            clt = load_document_by_yaml(yaml_file, str(clt_path)) if tool.document else load_document_by_uri(clt_path)
         except SophiosError:
             raise
         except Exception as exc:
             raise InvalidCLTError(f"invalid cwl file: {clt_path}") from exc
-        tool_registry[stepid] = Tool(str(clt_path), yaml_file, from_file=True)
+        # A registry key is fixed when its tool is found: a `.wic` never takes the key of a tool discovery named.
+        if tool.document is None:
+            tool_registry[stepid] = tool
+        else:
+            tool_registry.setdefault(stepid, tool)
         return clt, yaml_file
 
     if stepid in tool_registry:

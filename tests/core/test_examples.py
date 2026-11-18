@@ -65,11 +65,13 @@ large_workflows: list[str] = config_ci.get("large_workflows", [])
 
 
 def _is_workflow_document(yml_path: Path) -> bool:
-    """Whether the file has steps or a `wic: implementations:` block, as `parse` reads it (not `read_wic`: an includer
-    fragment carries diagnostics and is still a workflow document)."""
-    document = parse(yml_path.read_text(encoding='utf-8'), str(yml_path)).document
+    """Whether the file has steps or a `wic: implementations:` block, or is a tool, which compiles as the root of one
+    step, as `parse` reads it (not `read_wic`: an includer fragment carries diagnostics and is still a workflow
+    document)."""
+    parsed = parse(yml_path.read_text(encoding='utf-8'), str(yml_path))
+    document = parsed.document
     if document is None:
-        return False
+        return parsed.tool is not None
     return (bool(document.steps) or document.steps_as_mapping
             or (document.sidecar is not None and 'implementations' in dict(document.sidecar.entries)))
 

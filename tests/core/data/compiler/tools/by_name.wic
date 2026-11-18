@@ -1,0 +1,6 @@
+# A `.wic` found by its name on a tool search path is a tool by its place: this one is a workflow.
+wic:
+  steps:
+    (1, flow): {wic: {namespace: named}}
+steps:
+- id: flow

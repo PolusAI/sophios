@@ -17,13 +17,14 @@ from ..lang import (
     EdgeRef,
     InlineLiteral,
     InputValue,
+    OpaqueCwl,
     ParseResult,
     RawCwlRef,
     Step,
+    ToolDocument,
     UnresolvedName,
     parse,
 )
-from ..lang.cwl import read_tool
 from ..python_cwl_adapter import generate_CWL_CommandLineTool, get_module
 from ..wic_types import StepId, Tool, Tools
 from .resolve import (RegistrySnapshot, generated_process_id, inline_run_name, namespace_of, path_from_root,
@@ -63,11 +64,26 @@ class _Reading:
     read: dict[Path, ParseResult] = field(default_factory=dict)
     run_names: dict[tuple[Path, str], str] = field(default_factory=dict)
     pins: list[str] = field(default_factory=list)
+    #: The registry's index: the tools discovery found, which no file this reading reaches replaces.
+    tools: Tools = field(default_factory=dict)
 
-    def bundle(self, parsed: ParseResult, name: str, tools: Tools) -> SourceBundle:
-        """Freeze what was read into the bundle."""
+    def bundle(self, parsed: ParseResult, name: str) -> SourceBundle:
+        """Freeze what was read into the bundle.
+
+        A root that is a tool is the workflow of one step that runs it, as an author would write it: `run:` names the
+        tool, and each port of the tool is an input of the workflow of its own name, so the job of the workflow is the
+        job of the tool.
+        """
+        if (tool := parsed.tool) is not None and tool.cwl is not None and not parsed.diagnostics.has_errors:
+            self.generated[StepId(name, 'global')] = _written_tool(self.root_directory / f'{name}.wic', tool)
+            step = Step(name, tuple((port.name, UnresolvedName(port.name, port.span)) for port in tool.inputs),
+                        interpreted=(('run', f'{name}.wic'),), span=tool.span)
+            inputs: OpaqueCwl = {port.name: {key: value for key, value in port.fields if key in ('type', 'default')}
+                                 for port in tool.inputs}
+            parsed = ParseResult(Document((step,), passthrough=(('inputs', inputs),), span=tool.span, port_spans=tuple(
+                ('inputs', port.name, port.span) for port in tool.inputs if port.span)), parsed.diagnostics)
         registry = RegistrySnapshot.from_tools(
-            {**tools, **self.generated}, workflows=self.workflows, directories=self.directories,
+            {**self.tools, **self.generated}, workflows=self.workflows, directories=self.directories,
             run_names=self.run_names, root_directory=self.root_directory)
         return SourceBundle(parsed, name, registry, tuple(self.pins))
 
@@ -83,8 +99,8 @@ def bundle_from_source(source: str, name: str,
     and they keep theirs.
     """
     here = Path('.').resolve()
-    reading = _Reading(yml_paths, here, here)
-    return reading.bundle(_visit(source, f'{name}.wic', None, reading), name, tools)
+    reading = _Reading(yml_paths, here, here, tools=tools)
+    return reading.bundle(_visit(source, f'{name}.wic', None, reading), name)
 
 
 def bundle_from_disk(yml_path: Path,
@@ -96,9 +112,9 @@ def bundle_from_disk(yml_path: Path,
     well-formed is syntax, reported with positions. Whether its steps exist
     here, and whether their ports line up, is for the passes that follow.
     """
-    reading = _Reading(yml_paths, yml_path.parent, yml_path.resolve().parent)
+    reading = _Reading(yml_paths, yml_path.parent, yml_path.resolve().parent, tools=tools)
     parsed = _visit(yml_path.read_text(encoding='utf-8'), yml_path.name, yml_path.resolve(), reading)
-    return reading.bundle(parsed, yml_path.stem, tools)
+    return reading.bundle(parsed, yml_path.stem)
 
 
 def _visit(source: str, file: str, path: Path | None, reading: _Reading) -> ParseResult:
@@ -151,21 +167,34 @@ def _reach(document: Document, document_dir: Path, reading: _Reading) -> None:
             if child_path is None:
                 continue
             # Keyed by the call site's namespace, matching how `_resolve_process` builds its `RegistryKey`.
-            _register_workflow((namespace, child_path.stem), child_path.resolve(), reading)
+            _register_document((namespace, child_path.stem), child_path.resolve(), reading)
     for _name, body in (document.sidecar.implementations if document.sidecar else ()):
         _reach(body, document_dir, reading)
 
 
-def _register_workflow(key: tuple[str, str], path: Path, reading: _Reading) -> None:
-    """Register the workflow at ``path`` under ``key``, parsing the file only if nothing has.
+def _register_document(key: tuple[str, str], path: Path, reading: _Reading) -> None:
+    """Register the document at ``path`` under ``key``, parsing the file only if nothing has: a workflow, or a tool
+    written in `.wic`, which is a tool of that name unless the index holds one: the index names each tool once.
 
     A file called under two namespaces still gets both registry entries.
     """
+    tool_key = StepId(key[1], key[0])
     if key in reading.workflows:
         return
-    reading.workflows[key] = reading.read[path] if path in reading.read else _visit(
+    parsed = reading.read[path] if path in reading.read else _visit(
         path.read_text(encoding='utf-8'), path.name, path, reading)
+    if parsed.tool is not None:
+        if tool_key not in reading.tools:
+            reading.generated[tool_key] = _written_tool(path, parsed.tool, parsed.diagnostics.has_errors)
+        return
+    reading.workflows[key] = parsed
     reading.directories[key] = path.parent
+
+
+def _written_tool(path: Path, tool: ToolDocument, refused: bool = False) -> Tool:
+    """The tool the `.wic` at ``path`` says, with the CWL its parse lowered; a tool the parse refused is left to be
+    read, and refused, when a step runs it."""
+    return Tool(str(path)) if refused or tool.cwl is None else Tool(str(path), tool.cwl, written=tool)
 
 
 def _register_run(step: Step, namespace: str, document_dir: Path, reading: _Reading) -> bool:
@@ -185,9 +214,13 @@ def _register_run(step: Step, namespace: str, document_dir: Path, reading: _Read
     run = dict(step.interpreted).get('run')
     if isinstance(run, dict):
         name = inline_run_name(step.id, run, path_from_root(document_dir, reading.root_directory))
-        body = {**deepcopy(run), 'cwlVersion': CWL_VERSION}
         # Written in the document, so its relative references are read beside it, as the step's own file would be.
-        reading.generated[StepId(name, namespace)] = Tool(str(document_dir / f'{Path(step.id).stem}.cwl'), body)
+        beside = document_dir / Path(step.id).stem
+        if step.tool is not None and step.tool.cwl is not None:  # a tool written in `.wic`, lowered by the parse
+            reading.generated[StepId(name, namespace)] = _written_tool(Path(f'{beside}.wic'), step.tool)
+        else:
+            reading.generated[StepId(name, namespace)] = Tool(
+                f'{beside}.cwl', {**deepcopy(run), 'cwlVersion': CWL_VERSION})
         return True
     # Any other string names a registry entry, not a file.
     if not isinstance(run, str) or not run.endswith(('.cwl', '.wic')):
@@ -198,9 +231,9 @@ def _register_run(step: Step, namespace: str, document_dir: Path, reading: _Read
     name = run_path_name(run, path_from_root(target, reading.root_directory))
     reading.run_names[(document_dir, run)] = name
     if run.endswith('.cwl'):
-        reading.generated[StepId(name, namespace)] = Tool(str(target), read_tool(str(target)), from_file=True)
+        reading.generated[StepId(name, namespace)] = Tool(str(target), from_file=True)
     else:
-        _register_workflow((namespace, name), target, reading)
+        _register_document((namespace, name), target, reading)
     return True
 
 

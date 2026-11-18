@@ -3,6 +3,7 @@ import sys
 from collections.abc import Iterator
 from copy import deepcopy
 from dataclasses import dataclass
+from itertools import chain
 from pathlib import Path
 
 
@@ -17,14 +18,14 @@ from .ir.namespaces import declare_namespaces
 from .ir.frontdoor import SourceBundle
 from .ir.pipeline import front_end
 from .ir.realtime import extract
-from .ir.resolve import RegistrySnapshot, ToolCheck, ToolDefinition
+from .ir.resolve import RegistrySnapshot, ToolCheck, ToolDefinition, version_pins
 from .ir.names import NAMESPACE_SEPARATOR, Names
 from .ir.policy import RunPolicy
 from .ir.resolved import ResolvedWorkflow, non_boolean_whens, resolve
 from .ir.types import RegistryKey, StepId, StepNode, WorkflowGraph
 from .lang import versions
 from .lang.diagnostics import Diagnostic, Diagnostics, Locator, Severity, SophiosError
-from .lang.nodes import CwlRecord, UnresolvedName
+from .lang.nodes import CwlRecord, ToolDocument, UnresolvedName
 from .lang.cwl import inputs_read
 from .lang.parser import step_key
 from .lang.error_codes import SophiosErrorCode
@@ -60,6 +61,7 @@ def compile_source(bundle: SourceBundle,
     front = front_end(bundle.parsed, bundle.registry, name=bundle.name, check=_tool_check())
     if front.graph is None:
         raise SophiosError(front.diagnostics)
+    selected_version = _tools_version(selected_version, settings, bundle, front.graph)
     if not front.graph.steps:
         raise SophiosError.error(SophiosErrorCode.SUBWORKFLOW_INVALID,
                                  'workflows must define at least one step')
@@ -85,6 +87,27 @@ def compile_source(bundle: SourceBundle,
     if not quiet:
         print('finishing compilation of', bundle.name)
     return CompilationResult(graph, tools, selected_version, diagnostics, realtime, policy=settings.policy)
+
+
+def _tools_version(selected: str, settings: CompileSettings, bundle: SourceBundle, graph: WorkflowGraph) -> str:
+    """The version the compile runs under once the tools its steps run are read: the ones written in `.wic` may pin a
+    version, and are syntax in one."""
+    written = list(_written(graph, bundle.registry))
+    if not written:
+        return selected
+    return versions.resolve(
+        settings.lang_version, (*bundle.lang_version_pins, *chain.from_iterable(map(version_pins, written))),
+        needs=[(versions.TOOLS_SINCE, tool.span) for tool in written])
+
+
+def _written(graph: WorkflowGraph, registry: RegistrySnapshot) -> Iterator[ToolDocument]:
+    """The tool of each tool step at any depth that is written in `.wic`."""
+    for step in graph.steps:
+        called = graph.child(step.id)
+        if called is not None:
+            yield from _written(called, registry)
+        elif (definition := registry.tool(step.run)) is not None and definition.source.document is not None:
+            yield definition.source.document
 
 
 def _tool_check() -> ToolCheck:
