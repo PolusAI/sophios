@@ -11,7 +11,7 @@ is Nextflow support (kind `target`: the workflow is fine, the Nextflow target
 cannot run it yet). One type so a caller matches on one `except`; separate
 ranges so an API code does not point at the .wic reference. An `nf-sNNN` code
 is retired, never reused, when the Nextflow target learns its construct, so the
-range is the Nextflow target's support table. A `wic0NN` code is retired the same way (`wic022`).
+range is the Nextflow target's support table. A `wic0NN` code is retired the same way (`wic014`, `wic022`).
 """
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -113,10 +113,6 @@ class SophiosErrorCode(StrEnum):
         "`implementations` with none chosen, or ports only the CWL runner can read.",
         'Do what the message names: put the tool or `.wic` file on a search path of the config (`search_paths_cwl`, '
         '`search_paths_wic`), give the workflow steps, or break the cycle (.wic reference §2.3).')
-    SCRIPT_ARGUMENT_MISMATCH = _explained(
-        'wic014',
-        'The arguments given to a Python script step do not match its declared inputs.',
-        'Bind exactly the inputs the script declares.')
     CONTAINER_ENGINE_UNAVAILABLE = _explained(
         'wic015',
         'The container engine cannot be used: not installed, not running, not yours to use, or overloaded. '

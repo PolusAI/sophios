@@ -2,7 +2,6 @@
 what it cannot hold, say what each becomes (tests/core/data/from_wic); over generated documents and the corpus, a file
 the file door compiles is refused with `api006` alone or compiles to equal output, and `write_wic` round-trips."""
 # pylint: disable=redefined-outer-name  # `corpus_registry` is a pytest fixture
-import shutil
 import tempfile
 from dataclasses import replace
 from pathlib import Path
@@ -252,18 +251,13 @@ IN_REPO: Final = (REPO_ROOT / 'docs' / 'tutorials', REPO_ROOT / 'examples')
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize('case, expected', case_dirs('from_wic/refused', 'project', 'refused', 'raises'))
-def test_a_document_python_cannot_hold_is_refused_whole(case: Path, expected: dict[str, Any],
-                                                        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+@pytest.mark.parametrize('case, expected', case_dirs('from_wic/refused', 'refused', 'raises'))
+def test_a_document_python_cannot_hold_is_refused_whole(case: Path, expected: dict[str, Any]) -> None:
     """A document that compiles but holds what the Python API cannot is `api006`, once per construct, each saying
     what to write instead, in one raise; a document that does not compile raises its own error. expected.yaml states
     each diagnostic, or the exception a document held today raises. The in-repo workflows refused are `REFUSED`, and
     every other one builds."""
     root = case / 'root.wic'
-    if 'project' in expected:  # run in place, from a copy
-        shutil.copytree(DATA / Path(expected['project']).parts[0], tmp_path / 'project')
-        root = tmp_path / 'project' / Path(*Path(expected['project']).parts[1:])
-        monkeypatch.chdir(root.parent)
     with pytest.raises(SophiosError if 'refused' in expected else ValueError) as caught:
         Workflow.from_wic(root, tool_registry=TOOLS,
                           workflow_paths={'global': {path.stem: path for path in root.parent.glob('*.wic')}})

@@ -8,10 +8,9 @@ from typing import Any
 import pytest
 import yaml
 
-from sophios.python_cwl_adapter import import_python_file
 
 from .cases import DATA, match
-from .helpers import REPO_ROOT
+from .helpers import REPO_ROOT, import_python_file
 from .test_setup import home_with_shipped_tools, use_home
 
 

@@ -123,10 +123,6 @@ def lower(document: ResolvedDocument, here: Namespace = Namespace()) -> PhaseRes
     return PhaseResult(graph, diagnostics)
 
 
-#: Bound on a `python_script` step to build its tool, never passed to it.
-_GENERATION_PARAMETERS: Final = ('script', 'dockerPull')
-
-
 def _record_only_inputs(resolved: ResolvedStep, declared: Mapping[AuthoredName, object]) -> tuple[str, ...]:
     """The inputs a step binds by record that its process does not declare.
 
@@ -146,12 +142,9 @@ def _resolved_step_node(identity: StepId, resolved: ResolvedStep, defined: dict[
     source = resolved.source
     declared_inputs = {AuthoredName(port.name): port.declaration for port in resolved.process.inputs}
     declared_outputs = {AuthoredName(port.name): port.declaration for port in resolved.process.outputs}
-    # A generated process consumes `script`/`dockerPull` to build its tool;
-    # neither survives into the tool's declared interface.
-    consumed = _GENERATION_PARAMETERS if resolved.process.generated else ()
     extra = _record_only_inputs(resolved, declared_inputs)
     for name, _ in source.inputs:
-        if name not in declared_inputs and name not in consumed and name not in extra:
+        if name not in declared_inputs and name not in extra:
             diagnostics.error(
                 SophiosErrorCode.UNDECLARED_PORT,
                 f"step '{source.id}' binds '{name}', which its resolved process does not declare",

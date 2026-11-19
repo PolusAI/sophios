@@ -33,14 +33,13 @@ from sophios.api.python.workflow import (Cwltool, InvalidInputValueError, Invali
                                          Nextflow, RunPolicy, RunResult, RunState, RunStatus, SophiosError, Step,
                                          StepInput, Toil, Workflow, WorkflowRunError)
 from sophios.lang.diagnostics import lines as printed_lines
-from sophios.python_cwl_adapter import import_python_file
 from sophios.runners import RunSettings
 from sophios.wic_types import Json, Tools
 
 from .budgets import budget
 from .cases import DATA
 from .test_setup import corpus_config
-from .helpers import ADAPTERS, adapter_step, echo_workflow, no_preflight, python_process
+from .helpers import ADAPTERS, adapter_step, echo_workflow, import_python_file, no_preflight, python_process
 from .wic_reading import read_wic
 
 PYTHON_API: Final = DATA / 'python_api'

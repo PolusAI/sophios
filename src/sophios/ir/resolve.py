@@ -149,7 +149,6 @@ class ResolvedProcess:
     outputs: tuple[ResolvedPort, ...]
     declaration: OpaqueCwl
     child: 'ResolvedDocument | None' = None
-    generated: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -235,8 +234,7 @@ def _resolve_process(step: Step, index: int, sidecar: WicSidecar | None, registr
                      directory: Path | None, check: ToolCheck | None) -> ResolvedProcess | None:
     namespace = namespace_of(sidecar)
     run = dict(step.interpreted).get('run')
-    generated = step.id == 'python_script'
-    name = generated_process_id(step) if generated else _stem(run if isinstance(run, str) else step.id)
+    name = _stem(run if isinstance(run, str) else step.id)
     own_name = _own_run_name(step, registry, directory)
     own_key = RegistryKey(namespace, own_name or name)
     key = own_key if registry.tool(own_key) is not None or registry.workflow(own_key) is not None \
@@ -286,7 +284,6 @@ def _resolve_process(step: Step, index: int, sidecar: WicSidecar | None, registr
         process_ports(cwl.get('inputs', {}), output=False),
         process_ports(cwl.get('outputs', {}), output=True),
         deepcopy(cwl),
-        generated=generated,
     )
 
 
@@ -391,14 +388,6 @@ def _hashed(stem: str, identity: str) -> str:
     return f'{stem}_{sha256(identity.encode("utf-8")).hexdigest()[:8]}'
 
 
-def generated_process_id(step: Step) -> str:
-    """A stable identity for a generated Python tool, independent of process state."""
-    payload = [(name, _input_identity(value)) for name, value in step.inputs]
-    digest = sha256(json.dumps(payload, sort_keys=True, separators=(',', ':'),
-                               default=str).encode('utf-8')).hexdigest()[:16]
-    return f'python_script_{digest}'
-
-
 def _select_implementation(document: Document,
                            registry: RegistrySnapshot) -> tuple[Document | None, Diagnostics]:
     diagnostics = Diagnostics()
@@ -426,20 +415,6 @@ def _select_implementation(document: Document,
         return None, diagnostics
     _copy_diagnostics(diagnostics, source.parsed.diagnostics)
     return source.parsed.document, diagnostics
-
-
-def _input_identity(value: InputValue) -> tuple[object, ...]:
-    match value:
-        case InlineLiteral(value=literal):
-            return ('literal', literal)
-        case EdgeRef(name=name):
-            return ('edge', name)
-        case RawCwlRef(expression=expression):
-            return ('cwl', expression)
-        case UnresolvedName(name=name):
-            return ('name', name)
-        case CwlRecord(sources=sources, fields=fields):
-            return ('record', [_input_identity(source) for source in sources], fields)
 
 
 def process_ports(raw: object, *, output: bool) -> tuple[ResolvedPort, ...]:

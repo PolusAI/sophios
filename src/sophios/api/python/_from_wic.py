@@ -224,10 +224,6 @@ def _read_process(resolved: ResolvedStep, bundle: SourceBundle, reading: _Readin
     span = step.span
     interpreted = dict(step.interpreted)
     run = interpreted.get('run')
-    if process.generated:
-        reading.refuse(span, f'step {step.id!r} is a python_script step; build its tool with '
-                       'sophios.api.python.tool_builder and make it a Step')
-        return
     if process.child is not None:
         if isinstance(run, str) and run.endswith('.wic'):
             reading.refuse(span, f'step {step.id!r}: run: {run} names a workflow; a nested Python Workflow is '

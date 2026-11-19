@@ -25,12 +25,11 @@ from sophios.lang import SophiosErrorCode, ToolDocument, parse
 from sophios.lang.cwl import canonical_type
 from sophios.lang.diagnostics import SophiosError
 from sophios.plugins import get_tools_cwl
-from sophios.python_cwl_adapter import generate_CWL_CommandLineTool, import_python_file
 from sophios.utils_cwl import make_tool, validate
 
 from .budgets import FAST, budget
 from .cases import cases
-from .helpers import REPO_ROOT
+from .helpers import REPO_ROOT, import_python_file
 from .hermetic import cwl_tree
 from .strategies import pinned
 
@@ -580,31 +579,3 @@ def test_a_tool_in_wic_and_in_python_is_one_tool(case: tuple[dict[str, Any], Com
     found, = refused.value.diagnostics
     assert found.code is SophiosErrorCode.TOOL_DOCUMENT and found.span is not None
     assert (found.span.file, found.span.start_line) == (str(Path(__file__).resolve()), said_at)
-
-
-@pytest.mark.needs_cwltool
-@pytest.mark.fast
-@given(st.dictionaries(st.sampled_from(['plain', 'in-file', 'in.file', '1st', 'a b', 'a$b', 'x{y}', 'naïve', "it's"]),
-                       st.sampled_from([
-                           {'type': 'string'}, {'type': 'int'}, {'type': 'boolean'}, {'type': 'string[]'},
-                           {'type': 'string?', 'inputBinding': {'position': 9, 'prefix': '-x'}}]), max_size=4),
-       st.booleans())
-@budget(50)
-def test_a_python_script_tool_passes_each_input_as_its_flag(inputs: dict[str, Any], docker: bool) -> None:
-    """The tool of a `python_script` step runs `python3` on the driver, the types and the script, then `--name value`
-    for each input the script declares, whatever the input is called and whatever binding its declaration carries:
-    the tool is built from the ports themselves, never from text that is read again."""
-    values = {'string': 'v', 'int': 3, 'boolean': True, 'string[]': ['p', 'q'], 'string?': 'o'}
-    tool = generate_CWL_CommandLineTool(inputs, {'out': ('*.txt', {'type': 'File'})}, 'img:1' if docker else '')
-    argv = ['python3', '/python_cwl_driver.py', '/workflow_types.py', 's.py']
-    for name, port in inputs.items():
-        value = values[port['type']]
-        argv += [f'--{name}'] if value is True else [f'--{name}', *map(str, value if isinstance(value, list)
-                                                                       else [value])]
-    with tempfile.TemporaryDirectory() as scratch:
-        (Path(scratch) / 's.py').write_text('', encoding='utf-8')
-        line = _argv(tool, {name: values[port['type']] for name, port in inputs.items()} | {'script': {
-            'class': 'File', 'location': (Path(scratch) / 's.py').as_uri(),
-            'format': 'https://edamontology.org/format_2330'}})
-    assert [*line[:3], Path(line[3]).name, *line[4:]] == argv
-    assert tool['outputs'] == {'out': {'type': 'File', 'outputBinding': {'glob': '*.txt'}}}
