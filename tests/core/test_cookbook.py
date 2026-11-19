@@ -19,12 +19,11 @@ from sophios.lang.diagnostics import Diagnostic, SophiosError, lines
 from sophios.ir.artifacts import CompilationResult
 from sophios.ir.frontdoor import bundle_from_disk
 from sophios.post_compile import inline_artifact_runs
-from sophios.python_cwl_adapter import import_python_file
 from sophios.runtime_inputs import output_target_inputs, runner_job_inputs
 from sophios.wic_types import Json
 
 from .cases import DATA, diagnostic, match
-from .helpers import REPO_ROOT, shipped_tools
+from .helpers import REPO_ROOT, import_python_file, shipped_tools
 from .hermetic import cwl_tree
 from .test_setup import home_with_shipped_tools, use_home
 from .wic_reading import read_wic
