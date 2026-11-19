@@ -153,17 +153,14 @@ def get_tools_cwl(config: Json, validate_plugins: bool = False,
             for path in wic_paths:
                 _record(written, StepId(Path(path).stem, plugin_ns), os.path.abspath(path))
 
-            for cwl_path_str in cwl_paths:
-                if 'biobb_md' in cwl_path_str:
+            for path in cwl_paths:
+                if 'biobb_md' in path:
                     continue  # biobb_md is deprecated (in favor of biobb_gromacs)
-                stem = Path(cwl_path_str).stem
-
                 if validate_plugins:
-                    validate_cwl(cwl_path_str)
-
-                cwl_path_abs = os.path.abspath(cwl_path_str)
-                _record(definitions, StepId(stem, plugin_ns), cwl_path_abs)
-                tools_cwl[StepId(stem, plugin_ns)] = Tool(cwl_path_abs, from_file=True)
+                    validate_cwl(path)
+                key, cwl_path_abs = StepId(Path(path).stem, plugin_ns), os.path.abspath(path)
+                _record(definitions, key, cwl_path_abs)
+                tools_cwl[key] = Tool(cwl_path_abs, from_file=True)
     # The one place the same-stem rule is applied, so every door finds the tool the index names.
     for key, files in written.items():
         if key not in tools_cwl:
