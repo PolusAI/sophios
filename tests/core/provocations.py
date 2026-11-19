@@ -6,19 +6,10 @@ import tempfile
 from collections.abc import Callable
 from functools import partial
 from pathlib import Path
-from types import ModuleType
 from typing import Any, Final
 from unittest import mock
 
 from sophios.lang import SophiosError, SophiosErrorCode, resolve_lang_version
-
-
-def _provoke_script_argument_mismatch() -> None:
-    from sophios.python_cwl_adapter import check_args_match_inputs
-
-    module = ModuleType('provoked_script')
-    module.inputs = {'expected': int}  # type: ignore[attr-defined]
-    check_args_match_inputs(module, {'unexpected': 1})
 
 
 def _provoke_invalid_inference() -> None:
@@ -94,7 +85,6 @@ def _import_edited(code: SophiosErrorCode) -> None:
 
 #: Codes neither a parsed document nor a fixture family states: each callable raises SophiosError carrying its code.
 COMPILED: Final[dict[SophiosErrorCode, Callable[[], object]]] = {
-    SophiosErrorCode.SCRIPT_ARGUMENT_MISMATCH: _provoke_script_argument_mismatch,
     SophiosErrorCode.UNKNOWN_LANG_VERSION: partial(resolve_lang_version, '9.9.9'),
     SophiosErrorCode.LANG_VERSION_CONFLICT: partial(
         resolve_lang_version, None, ('0.0.1', '0.0.2'), known=('0.0.1', '0.0.2')),

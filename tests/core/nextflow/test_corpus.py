@@ -8,10 +8,9 @@ import sophios.input_output as io
 import sophios.plugins
 from sophios.nf_reader import read_nextflow
 from sophios.nf_types import NfWorkflowOutputConnection
-from sophios.python_cwl_adapter import import_python_file
 
 from ..test_python_api_workflow import _step_registry_injected
-from ..helpers import REPO_ROOT, python_process
+from ..helpers import REPO_ROOT, import_python_file, python_process
 from .testkit import execute_nextflow
 
 CHECKOUTS = REPO_ROOT.parent

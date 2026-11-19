@@ -24,7 +24,8 @@ from sophios.compute import RunConfig
 from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Outputs, cwl
 from sophios.api.python.workflow import Step, Workflow
 from sophios.run_status import RunState, RunStatus
-from sophios.python_cwl_adapter import import_python_file
+
+from .helpers import import_python_file
 
 pytestmark = [pytest.mark.skip_pypi_ci, pytest.mark.skipif(
     'SOPHIOS_SLURM_DRIVER' not in os.environ,

@@ -49,14 +49,14 @@ def _graphs(graph: WorkflowGraph) -> tuple[WorkflowGraph, ...]:
 
 
 def _resolves_from_the_registry_alone(document: Any) -> None:
-    """Every non-generated process is the tool the registry holds under the name its step authored, run path and both
+    """Every process is the tool the registry holds under the name its step authored, run path and both
     interfaces, recursively through child workflows: not the key the resolver returned, which a resolver answering
     every lookup with one tool would report too."""
     for step in document.steps:
         process = step.process
         if process.child is not None:
             _resolves_from_the_registry_alone(process.child)
-        elif not process.generated:
+        else:
             stem = step.source.id
             assert process.key.name == stem
             assert process.run_path == SYNTHETIC_TOOLS[LegacyStepId(stem, SYNTHETIC_NS)].run_path

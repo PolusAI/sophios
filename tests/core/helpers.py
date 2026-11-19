@@ -1,9 +1,10 @@
-"""Setup many tests repeat: files written under a directory, the command line run in-process, the shipped tools
-as Python API steps, a real-time analysis declared, a run kept off the container engine, a test run under
-each CWL runner, and the example workflows of tests/core/data/examples read and run."""
+"""Setup many tests repeat: files written under a directory, a Python file imported, the command line run
+in-process, the shipped tools as Python API steps, a real-time analysis declared, a run kept off the container
+engine, a test run under each CWL runner, and the example workflows of tests/core/data/examples read and run."""
 from collections.abc import Callable
 import functools
 import hashlib
+import importlib.util
 import io
 import json
 import os
@@ -11,6 +12,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from types import ModuleType
 from typing import Any, Final, Iterable, Mapping
 from urllib.parse import unquote, urlsplit
 
@@ -37,6 +39,16 @@ def write_tree(root: Path, files: Mapping[str, str]) -> Path:
         (target := root / relative).parent.mkdir(parents=True, exist_ok=True)
         target.write_text(text, encoding='utf-8')
     return root
+
+
+def import_python_file(name: str, path: Path) -> ModuleType:
+    """The module the Python file at path defines, imported under name."""
+    spec = importlib.util.spec_from_file_location(name, path.absolute())
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 def search_config(path: Path, cwl: Iterable[Path | str], wic: Iterable[Path | str] = (), **extra: Any) -> Path:
