@@ -75,7 +75,8 @@ spells them, through `sophios/ir/names.py`:
 ```
 
 A written name matches `[A-Za-z0-9_-][A-Za-z0-9_.-]*` (`sophios/lang/names.py`,
-checked by Lower and by `Step` and `Workflow`, `wic045`), so it contains
+checked by `sophios.ir.check` before Resolve, and by `Step` and `Workflow`,
+`wic045`), so it contains
 neither `~` nor `@`: a made name, a numbered id and an authored name never
 share a text, and the compiled CWL never holds one id twice. A root's name
 contains no `~`, so two roots in one directory never share a file. The spelling
