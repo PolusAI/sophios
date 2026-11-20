@@ -63,6 +63,11 @@ class Needs:
     #: The values the run is given, each with where its relative paths are read from.
     jobs: tuple[Job, ...] = ()
 
+    @property
+    def images(self) -> list[str]:
+        """The image each container requirement names."""
+        return [req.dockerPull or req.dockerImageId or 'an image built by the run' for req in self.containers]
+
 
 def needs(documents: Sequence[Path], jobs: Sequence[Job] = ()) -> Needs:
     """Read what running `documents` with `jobs` needs, as cwl-docker-extract reads it (no `$schemas` are fetched)."""
@@ -116,7 +121,7 @@ def check(found: Needs, run: RunSettings) -> None:
         problems.append(problem)
     problems += _program_problems(found, run)
     if found.containers:
-        problems += engine_problems(_image_names(found), run)
+        problems += engine_problems(found.images, run)
     if problems:
         raise SophiosError(problems)
 
@@ -140,7 +145,7 @@ def pull(found: Needs, run: RunSettings) -> None:
             cmd = ['cwl-docker-extract', '-s', '--dir', run.runner.pull_dir or str(Path.cwd()), str(document)]
         else:
             cmd = ['cwl-docker-extract', '--force-download', '--container-engine', engine, str(document)]
-        _fetch(cmd, f'pull {_images(_image_names(found))}', engine)
+        _fetch(cmd, f'pull {_images(found.images)}', engine)
     if engine != 'singularity':
         _load_and_import(found, engine)
 
@@ -428,11 +433,6 @@ def _docker_socket() -> Path | None:
     if host is None:
         return DEFAULT_DOCKER_SOCKET
     return Path(host.removeprefix('unix://')) if host.startswith('unix://') else None
-
-
-def _image_names(found: Needs) -> list[str]:
-    """The image each container requirement of `found` names."""
-    return [req.dockerPull or req.dockerImageId or 'an image built by the run' for req in found.containers]
 
 
 def _images(images: Sequence[str]) -> str:
