@@ -19,7 +19,7 @@ import yaml
 from cwl_utils.parser import CommandLineTool as CWLCommandLineTool
 from cwl_utils.parser import load_document_by_uri, load_document_by_yaml
 
-from sophios import backends, cli, compiler, drawing, input_output, plugins, post_compile as pc, preflight, realtime
+from sophios import backends, cli, compiler, drawing, input_output, post_compile as pc, preflight, realtime
 from sophios import run_local, run_setup, targets
 from sophios.input_output import SHIPPED_RENAMINGS
 from sophios.run_local import RunHandle
@@ -597,7 +597,6 @@ def _run_request(workflow: "Workflow", options: RunOptions, *, refuse_realtime: 
     """
     row = targets.target(options.run.runner.target)
     logger.info("Running %s", workflow.process_name)
-    plugins.logging_filters()
     result, analyses = _compiled_for_run(workflow, options, refuse_realtime=refuse_realtime, check=False)
     lowered, bound = _lowered_for_run(row, workflow, result)
     report(lowered.notes)

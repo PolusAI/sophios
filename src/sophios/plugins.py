@@ -1,6 +1,5 @@
 import copy
 from dataclasses import replace
-import logging
 import glob
 import os
 from pathlib import Path
@@ -16,30 +15,6 @@ from .lang.diagnostics import SophiosError
 from .lang.error_codes import SophiosErrorCode
 from .wic_types import DEFAULT_BASEPATH, Cwl, StepId, Tool, Tools, Json
 from .ir.artifacts import CompilationArtifact
-
-
-# Filter out schema-salad's "... previously defined" warning (ref_resolver.py): a tool that names an input and an
-# output alike, as append.cwl's `file`, gives both one id, since CWL scopes them together, and still runs. Emit
-# writes each tool as authored, so no compiled document adds a duplicate of its own.
-class NoPreviouslyDefinedFilter(logging.Filter):
-    # pylint:disable=too-few-public-methods
-    def filter(self, record: logging.LogRecord) -> bool:
-        return not record.getMessage().endswith('previously defined')
-
-
-class NoResolvedFilter(logging.Filter):
-    # pylint:disable=too-few-public-methods
-    def filter(self, record: logging.LogRecord) -> bool:
-        message = record.getMessage()
-        return not (message.startswith("Resolved '") and "' to '" in message)
-
-
-def logging_filters() -> None:
-    """Install logging filters that silence known-noisy cwltool/salad log messages."""
-    logger_salad = logging.getLogger("salad")
-    logger_salad.addFilter(NoPreviouslyDefinedFilter())
-    logger_cwltool = logging.getLogger("cwltool")
-    logger_cwltool.addFilter(NoResolvedFilter())
 
 
 def validate_cwl(cwl_path_str: str) -> None:
