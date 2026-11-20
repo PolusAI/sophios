@@ -23,9 +23,10 @@ from hypothesis import example, given, strategies as st
 from jsonschema import Draft202012Validator
 
 from sophios import compute
+from sophios.api.python._workflow_runtime import service_pipeline
 from sophios.compute import RunConfig
 from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
-from sophios.api.python.workflow import Step, Workflow
+from sophios.api.python.workflow import Step, StepInput, Workflow
 from sophios.lang.diagnostics import SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
 from sophios.run_status import RunState, RunStatus
@@ -33,7 +34,7 @@ from sophios.wic_types import Yaml
 
 from .budgets import budget
 from .cases import cases, match
-from .helpers import REPO_ROOT, live_workflow, python_process
+from .helpers import REPO_ROOT, autoseg, live_workflow, python_process
 
 DOCS = REPO_ROOT / 'docs'
 
@@ -80,6 +81,109 @@ def test_the_request_carries_the_compiled_workflow_and_every_path_as_written(out
     named = '' if on_workflow else 'write~'
     assert request['inputs'] == {f'{named}out': {'class': 'Directory', 'location': out},
                                  f'{named}model': {'class': 'File', 'location': model}}
+
+
+#: Text of the kinds a path holds, `/`, `~`, `$` and `:` among them, but a URL, which the Nextflow target refuses.
+_PATHS: typing.Final = st.lists(st.sampled_from('/.~$: ') | st.text(max_size=3), max_size=6).map(''.join).filter(
+    lambda text: '://' not in text)
+
+
+@pytest.mark.fast
+@budget(50)
+@given(_PATHS, _PATHS, _PATHS, st.sampled_from(['step', 'scattered', 'workflow']), st.booleans())
+@example('plate1', 'models', 'segmentation', 'step', True)
+@example('/projects/lab/plate1', '/projects/lab/models', 'segmentation', 'workflow', False)
+@example('plate1', 'models', '/projects/lab/masks', 'scattered', True)
+@example('~/plate1', '$HOME/models', 'seg/p1', 'step', False)
+def test_a_nextflow_request_is_the_service_form_with_every_path_as_written_and_each_output_folder_by_its_name(
+        plate: str, models: str, folder: str, bound: str, basepath: bool) -> None:
+    """`target='nextflow'`: the engine, the one file of the pipeline's service form, and its parameters, each path a
+    location as written; the service is the one authority on paths. An output folder, which only the pipeline knows to
+    be one, is sent as the empty Directory the service makes, by its name, which the service checks; one given an
+    absolute path is refused, naming the input, since only a CWL run writes there in place. The request is one the
+    vendored schema takes. Each value is bound on the step, scattered over two output folders, or on the workflow."""
+    scatter, on_workflow = bound == 'scattered', bound == 'workflow'
+    workflow = autoseg(plate, [folder, 'segmentation-b'] if scatter else folder, models, on_workflow)
+    config = RunConfig('results').basepath('/projects/lab') if basepath else None
+    names = ('input', 'output', 'model') if on_workflow else ('autoseg_input', 'autoseg_output', 'autoseg_model')
+    if folder.startswith('/'):
+        with pytest.raises(compute.RequestRefused) as refused:
+            compute.build_request(workflow, config, target='nextflow')
+        assert refused.value.messages == (
+            f"input {names[1]}: {folder} is an output folder given an absolute path, which only target='cwl' writes "
+            "there, in place: give it a name, such as 'masks', and it lands in the outputs folder under that name",)
+        return
+    request = compute.build_request(workflow, config, target='nextflow')
+    made = [{'class': 'Directory', 'basename': name, 'listing': []} for name in ([folder, 'segmentation-b'])]
+    assert request == {
+        'id': request['id'], 'engine': 'nextflow',
+        'workflow': {'files': {'main.nf': service_pipeline(workflow).script}},
+        'inputs': {names[0]: {'class': 'Directory', 'location': plate}, names[1]: made if scatter else made[0],
+                   names[2]: {'class': 'Directory', 'location': models}},
+        **({'workflowOutDir': 'results', 'basepath': '/projects/lab'} if basepath else {})}
+    assert Draft202012Validator(compute.SCHEMA).is_valid(request)
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('writable', [True, False])
+@pytest.mark.parametrize('folder', ['plate1', '/projects/lab/plate1'])
+@pytest.mark.parametrize(('kind', 'glob'), [('File', 'report.txt'), ('File', '$(inputs.data.basename)/report.txt'),
+                                            ('Directory', '$(inputs.data.basename)'),
+                                            ('Directory', '$(inputs.data.basename)/sub')])
+def test_an_output_folder_is_a_folder_its_tool_stages_writable_and_returns_by_a_directory_output(
+        kind: str, glob: str, folder: str, writable: bool) -> None:
+    """The service's rule: a Directory input is an output folder when its tool stages it writable and a Directory
+    output's glob names it, as the folder itself or a path in it. CWL sends every folder at its location, for the
+    service to find; Nextflow sends an output folder as the empty folder the service makes, refusing an absolute path,
+    and any other at its location, one staged read-only too, so the tool reads the folder it is given."""
+    inputs = Inputs(data=Input(cwl.directory, position=1))
+    tool = CommandLineTool('count', inputs, Outputs(out=Output(getattr(cwl, kind.lower()), glob=glob)))
+    step = Step(tool.base_command('ls').stage(inputs.data, writable=writable), step_name='count')
+    step.inputs.data = folder
+    workflow = Workflow([step], 'count')
+    workflow.outputs.out = step.outputs.out
+    assert compute.build_request(workflow)['inputs'] == {'count~data': {'class': 'Directory', 'location': folder}}
+    output_folder = writable and kind == 'Directory'
+    if output_folder and folder.startswith('/'):
+        with pytest.raises(compute.RequestRefused, match=f'^\\[cmp001\\] input count_data: {folder} is an output'):
+            compute.build_request(workflow, target='nextflow')
+        return
+    made = {'class': 'Directory', 'basename': folder, 'listing': []}
+    assert compute.build_request(workflow, target='nextflow')['inputs'] == {
+        'count_data': made if output_folder else {'class': 'Directory', 'location': folder}}
+
+
+@pytest.mark.fast
+def test_a_nextflow_request_sends_an_input_only_a_steps_when_reads() -> None:
+    """A step input its tool does not declare, which only the step's `when` reads, is a workflow input the pipeline
+    takes as a parameter, as every other is, and never an output folder."""
+    echo = CommandLineTool('echo', Inputs(word=Input(cwl.string, position=1)),
+                           Outputs(out=Output(cwl.file, glob='out.txt'))).base_command('echo').stdout('out.txt')
+    gated, told = Step(echo, step_name='gated'), Step(echo, step_name='told')
+    workflow = Workflow([gated, told], 'gated')
+    gated.inputs.word = 'hi'
+    told.inputs.word = workflow.inputs.go
+    gated.inputs.go = StepInput(source=workflow.inputs.go)
+    gated.when = '$(inputs.go == "yes")'
+    workflow.inputs.go = 'yes'
+    workflow.outputs.told = told.outputs.out
+    assert compute.build_request(workflow, target='nextflow')['inputs'] == {'go': 'yes', 'gated_word': 'hi'}
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('target', ['Nextflow', 'nf', 'CWL', 'toil'])
+def test_a_target_the_compile_refuses_is_refused_as_the_compile_refuses_it(target: str) -> None:
+    """`target` mirrors `Workflow.compile`'s, in `build_request` and in `request_for`: any other value is its
+    ValueError, not a request for the other engine."""
+    unknown = typing.cast(typing.Any, target)
+    with pytest.raises(ValueError) as compiled:
+        _workflow().compile(target=unknown)
+    with pytest.raises(ValueError) as built:
+        compute.build_request(_workflow(), target=unknown)
+    with pytest.raises(ValueError) as sent:
+        compute.request_for('r1', {'class': 'Workflow', 'cwlVersion': 'v1.2'}, {}, target=unknown)
+    assert (str(built.value) == str(sent.value) == str(compiled.value)
+            == f'unknown target {target!r}; the targets are cwl, nextflow')
 
 
 #: The service's id rule, and the fit of each name outside it a case pins, by hand from the rule.
@@ -152,12 +256,12 @@ def test_a_request_is_refused_or_sent_as_the_vendored_schema_says() -> None:
     """The vendored schema is a JSON Schema 2020-12 document that takes its own example. Every field it refuses is a
     line in its words, all at once, each where it is and what the field is; a workflow with a real-time analysis is
     refused before sending, naming the analysis, rather than dropped. The constructor and every setter of RunConfig,
-    each given a valid value, reach exactly the schema's top-level properties but id, workflow and inputs, each under
-    its own name; the keywords of `leader` and `steps` are the properties of its Leader and Steps, camelCased; the
-    folder is left out of the request without one, for the run's own folder, so `basepath`, which requires it, is then
-    refused before sending, saying what to do; and no setter touches where the outputs go. Called again, a setter
-    replaces what it is passed again and keeps the rest; what no setter sets is left out of the request, for the
-    service's own settings. The vendored schema and RunConfig cannot drift apart."""
+    each given a valid value, reach exactly the schema's top-level properties but id, engine, workflow and inputs, which
+    the workflow and its target give, each under its own name; the keywords of `leader` and `steps` are the properties
+    of its Leader and Steps, camelCased; the folder is left out of the request without one, for the run's own folder, so
+    `basepath`, which requires it, is then refused before sending, saying what to do; and no setter touches where the
+    outputs go. Called again, a setter replaces what it is passed again and keeps the rest; what no setter sets is left
+    out of the request, for the service's own settings. The vendored schema and RunConfig cannot drift apart."""
     Draft202012Validator.check_schema(compute.SCHEMA)
     assert Draft202012Validator(compute.SCHEMA).is_valid(compute.SCHEMA['examples'][0])
     with pytest.raises(compute.RequestRefused) as refused:
@@ -168,7 +272,8 @@ def test_a_request_is_refused_or_sent_as_the_vendored_schema_says() -> None:
         "leader.memory: '8GB' is not the leader's memory, as Slurm writes it: a whole number with K, M, G or T, "
         'such as 8G',
         "leader.time: '3 days' is not a Slurm time limit: M, M:S, H:M:S, D-H, D-H:M or D-H:M:S, such as 3-00:00:00",
-        "logLevel: 'LOUD' is not Toil's log level: DEBUG, INFO (the default), WARNING or ERROR",
+        "logLevel: 'LOUD' is not Toil's log level: DEBUG, INFO (the default), WARNING or ERROR; a Nextflow run does "
+        'not use it',
         "steps.partition: 'a b' is not a Slurm partition of this cluster: letters, digits, '_', '.' or '-'"]
     request = compute.build_request(_workflow(), RunConfig('results')
                                     .leader(partition='normal', time='1-00:00:00', memory='8G')
@@ -181,7 +286,7 @@ def test_a_request_is_refused_or_sent_as_the_vendored_schema_says() -> None:
     workflow = {'class': 'Workflow', 'cwlVersion': 'v1.2'}
     core = {'id': 'r1', 'workflow': workflow, 'inputs': {}}
     named = compute.request_for('r1', workflow, {}, _set_every_field(RunConfig(workflow_out_dir='results')))
-    assert set(named) == set(properties)
+    assert set(named) == set(properties) - {'engine'}
     assert named == core | {'workflowOutDir': 'results'} | _VALID
     with pytest.raises(compute.RequestRefused) as refused:
         compute.request_for('r1', workflow, {}, _set_every_field(RunConfig()))
@@ -332,6 +437,24 @@ def _answered(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str
     printed = capsys.readouterr()
     return {'returns': [_seen(value) for value in returned], 'stdout': printed.out, 'stderr': printed.err,
             'raises': raised, 'pauses': pauses, 'calls': [[method, path, *limits] for method, path, limits in calls]}
+
+
+@pytest.mark.fast
+def test_a_nextflow_run_is_refused_in_one_line_by_a_service_of_contract_3_0_0_and_never_sent(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    """3.0.0 runs no Nextflow, and would refuse the request at every field it does not know: one line says what to do,
+    and nothing is posted; a service of 3.1.0 is sent the request."""
+    calls = _serving(monkeypatch, {
+        ('GET', 'openapi.json'): [_answer(200, {'info': {'version': version}}) for version in ('3.0.0', '3.1.0')],
+        ('POST', 'runs'): _answer(201, {'id': 'x', 'state': 'QUEUED', 'slurmJobId': '7'})})
+    workflow = autoseg('plate1', 'segmentation', 'models', False)
+    with pytest.raises(compute.RequestRefused) as refused:
+        compute.Service('unix:///api.sock').submit(workflow, target='nextflow')
+    assert refused.value.messages == (
+        'the compute service at unix:///api.sock speaks contract 3.0.0, which runs no Nextflow, as 3.1.0 does: '
+        "upgrade the service, or submit with target='cwl'",)
+    assert compute.Service('unix:///api.sock').submit(workflow, target='nextflow').id == 'x'
+    assert [call[:2] for call in calls] == [('GET', 'openapi.json'), ('GET', 'openapi.json'), ('POST', 'runs')]
 
 
 class _Driver(BaseHTTPRequestHandler):

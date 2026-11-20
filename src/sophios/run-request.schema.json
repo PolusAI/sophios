@@ -1,12 +1,15 @@
 {
 	"$schema": "https://json-schema.org/draft/2020-12/schema",
 	"title": "RunRequest",
-	"description": "What to run and where. id names the run: the client chooses it, new for each run, and the same request sent again under the same id is the same run. Only id, workflow and inputs are required, and workflowOutDir with basepath; the outputs go into the run's own folder unless workflowOutDir names one, and leader, steps and logLevel default to the driver's settings. The driver checks every POST /runs body against this schema, served at GET /run-request.schema.json, before anything else; a request of the right shape is then checked against the cluster.",
+	"description": "What to run and where. id names the run: the client chooses it, new for each run, and the same request sent again under the same id is the same run. engine says what runs the workflow, Toil (a CWL workflow) unless it names nextflow (a Nextflow pipeline). Only id, workflow and inputs are required, and workflowOutDir with basepath; the outputs go into the run's own folder unless workflowOutDir names one, and leader, steps and logLevel default to the driver's settings. The driver checks every POST /runs body against this schema, served at GET /run-request.schema.json, before anything else; a request of the right shape is then checked against the cluster.",
 	"$comment": "Each pattern ends with (?!\\n)$, not $: in Python's re, which jsonschema uses, $ also matches before a final line break, and in JavaScript it does not. Written so, a pattern takes the same strings in both.",
 	"type": "object",
 	"required": ["id", "workflow", "inputs"],
 	"dependentRequired": { "basepath": ["workflowOutDir"] },
 	"additionalProperties": false,
+	"if": { "required": ["engine"], "properties": { "engine": { "enum": ["nextflow"] } } },
+	"then": { "properties": { "workflow": { "$ref": "#/$defs/NextflowWorkflow" } } },
+	"else": { "properties": { "workflow": { "$ref": "#/$defs/CwlWorkflow" } } },
 	"properties": {
 		"id": {
 			"$ref": "#/$defs/Id"
@@ -16,23 +19,16 @@
 			"type": "string",
 			"pattern": "^/"
 		},
+		"engine": {
+			"description": "what runs the workflow: toil (the default), a CWL workflow with Toil; or nextflow, a Nextflow pipeline with Nextflow",
+			"enum": ["toil", "nextflow"]
+		},
 		"workflow": {
-			"description": "a CWL Workflow or CommandLineTool with every step's run inline, as one document",
-			"type": "object",
-			"required": ["class", "cwlVersion"],
-			"properties": {
-				"class": {
-					"description": "Workflow or CommandLineTool",
-					"enum": ["Workflow", "CommandLineTool"]
-				},
-				"cwlVersion": {
-					"description": "v1.0, v1.1 or v1.2",
-					"enum": ["v1.0", "v1.1", "v1.2"]
-				}
-			}
+			"description": "for toil, a CWL Workflow or CommandLineTool with every step's run inline, as one document (CwlWorkflow); for nextflow, the pipeline's files (NextflowWorkflow)",
+			"type": "object"
 		},
 		"inputs": {
-			"description": "the CWL job: the workflow's inputs by name. Every File and Directory location is a path on the cluster (absolute, or relative to basepath), a file:// URL, or an http(s) URL. An output folder is a Directory input that a tool stages writable and returns as an output, and a run's output folders are all names or all absolute paths. Given a name, one folder name such as segmentation, it is made empty in the run and lands in the outputs folder under that name, never read against basepath. Given an absolute path, its tool writes it there, in place, never copied: it must be missing (its parent exists, and the driver creates it) or empty, used by no run that has not ended, and needs cwlVersion v1.1 or later; a tool that cannot write it in place without changing what else the run reads is refused, saying why. A run whose output folders are absolute paths returns them alone, and plain values, and sends no workflowOutDir: any other output that can hold a File or a Directory is refused. Every output of any other run lands in the outputs folder",
+			"description": "for toil, the CWL job: the workflow's inputs by name. Every File and Directory location is a path on the cluster (absolute, or relative to basepath), a file:// URL, or an http(s) URL. An output folder is a Directory input that a tool stages writable and returns as an output, and a run's output folders are all names or all absolute paths. Given a name, one folder name such as segmentation, it is made empty in the run and lands in the outputs folder under that name, never read against basepath. Given an absolute path, its tool writes it there, in place, never copied: it must be missing (its parent exists, and the driver creates it) or empty, used by no run that has not ended, and needs cwlVersion v1.1 or later; a tool that cannot write it in place without changing what else the run reads is refused, saying why. A run whose output folders are absolute paths returns them alone, and plain values, and sends no workflowOutDir: any other output that can hold a File or a Directory is refused. Every output of any other run lands in the outputs folder. For nextflow, the pipeline's params: each File or Directory with a location or path, at any depth, is a path checked as a CWL job's is, which the pipeline gets as a string, the absolute path; an empty Directory, {\"class\": \"Directory\", \"basename\": \"<one folder name>\", \"listing\": []}, at any depth, is a folder made empty in the run, which the pipeline gets as its absolute path; no other File or Directory without a location is taken; every other value is the pipeline's own, as it is",
 			"type": "object"
 		},
 		"workflowOutDir": {
@@ -46,11 +42,45 @@
 			"$ref": "#/$defs/Steps"
 		},
 		"logLevel": {
-			"description": "Toil's log level: DEBUG, INFO (the default), WARNING or ERROR",
+			"description": "Toil's log level: DEBUG, INFO (the default), WARNING or ERROR; a Nextflow run does not use it",
 			"enum": ["DEBUG", "INFO", "WARNING", "ERROR"]
 		}
 	},
 	"$defs": {
+		"CwlWorkflow": {
+			"description": "a CWL Workflow or CommandLineTool with every step's run inline, as one document",
+			"required": ["class", "cwlVersion"],
+			"properties": {
+				"class": {
+					"description": "Workflow or CommandLineTool",
+					"enum": ["Workflow", "CommandLineTool"]
+				},
+				"cwlVersion": {
+					"description": "v1.0, v1.1 or v1.2",
+					"enum": ["v1.0", "v1.1", "v1.2"]
+				}
+			}
+		},
+		"NextflowWorkflow": {
+			"description": "a Nextflow pipeline, run as nextflow run main.nf with the driver's configuration alone",
+			"required": ["files"],
+			"additionalProperties": false,
+			"properties": {
+				"files": {
+					"description": "the pipeline's files, by name, each its text: main.nf, the one Nextflow runs, and any it includes, at most 2000. No nextflow.config: the driver writes the run's configuration. A name is at most 255 bytes, its folders' included, and one that is the folder of other files is not also a file",
+					"type": "object",
+					"required": ["main.nf"],
+					"maxProperties": 2000,
+					"propertyNames": {
+						"description": "a relative path of names of letters, digits, '.', '_' and '-', separated by '/', none starting with '.', such as modules/segment.nf",
+						"pattern": "^[A-Za-z0-9_-][A-Za-z0-9._-]*(/[A-Za-z0-9_-][A-Za-z0-9._-]*)*(?!\\n)$"
+					},
+					"additionalProperties": {
+						"type": "string"
+					}
+				}
+			}
+		},
 		"Id": {
 			"description": "1 to 128 letters, digits, '.', '_' or '-', starting with a letter or digit",
 			"type": "string",
@@ -67,7 +97,7 @@
 			"pattern": "^([0-9]+-[0-9]+(:[0-9]+){0,2}|[0-9]+(:[0-9]+){0,2})(?!\\n)$"
 		},
 		"Leader": {
-			"description": "The Toil leader's Slurm job, which lives as long as the run. Each field defaults to the driver's setting.",
+			"description": "The leader's Slurm job, which runs Toil or Nextflow, and lives as long as the run. Each field defaults to the driver's setting.",
 			"type": "object",
 			"additionalProperties": false,
 			"properties": {
@@ -86,7 +116,7 @@
 			}
 		},
 		"Steps": {
-			"description": "Where Toil sends the workflow's step jobs, and how long each may run. A tool's resources and GPUs come from its CWL. Setting partition requires gpuPartition (from the request or the driver's settings): Toil would otherwise send GPU steps to partition too. Each field defaults to the driver's setting; time then defaults to the run's leader.time.",
+			"description": "Where the workflow's step jobs go, each Toil step's and each Nextflow task's, and how long each may run. A tool's resources and GPUs come from its CWL, a Nextflow process's from its directives (accelerator for GPUs), and a process that asks for GPUs goes to gpuPartition, else to partition. Setting partition requires gpuPartition (from the request or the driver's settings): Toil would otherwise send GPU steps to partition too. Each field defaults to the driver's setting; time then defaults to the run's leader.time.",
 			"type": "object",
 			"additionalProperties": false,
 			"properties": {

@@ -7,6 +7,7 @@ images without entrypoints when asked.
 """
 from dataclasses import dataclass, replace
 from collections.abc import Collection
+from functools import partial
 from typing import Generic, TypeVar
 from pathlib import Path
 import tempfile
@@ -57,25 +58,38 @@ class Lowered(Generic[ModelT]):
 
 @dataclass(frozen=True, slots=True)
 class Prepared:
-    """A run ready to start: the name of the workflow the runner gets, its analyses' plans, and the documents
-    written for it."""
+    """A run's files, written: the name of the workflow the runner gets, its analyses' plans, the documents written
+    for it, and the folders its machine makes before it starts."""
 
     name: str
     plans: tuple[realtime.Plan, ...]
     documents: tuple[Path, ...]
+    folders: tuple[str, ...] = ()
+
+
+# pylint: disable-next=too-many-arguments
+def write(artifact: CompilationArtifact, analyses: tuple[realtime.Analysis, ...], basepath: Path, *,
+          inputs_file: str, root_dir: Path, output_targets: Collection[str],
+          empty_directory: EmptyDirectory) -> Prepared:
+    """Write `artifact` and `analyses` under `basepath` as they are given, and nothing elsewhere.
+
+    `artifact` is written as it is: a tree from the command line, one document under
+    `--cwl_inline_runtag` and from Python. Its job is the values bound in the workflow, as `targets.for_run` made
+    them for the runner, under the inputs file's. Each of `output_targets` (`runtime_inputs.output_target_inputs`)
+    is a name for the run to create, written in the job as `empty_directory` gives the runner an empty directory.
+    """
+    input_output.write_artifacts_to_disk(artifact, basepath, inputs_file, output_targets=output_targets,
+                                         empty_directory=empty_directory)
+    plans = realtime.write(analyses, basepath, artifact.name, root_dir)
+    return Prepared(artifact.name, plans, (basepath / f'{artifact.name}.cwl', *realtime.documents(analyses, basepath)))
 
 
 # pylint: disable-next=too-many-arguments
 def prepare(artifact: CompilationArtifact, analyses: tuple[realtime.Analysis, ...], basepath: Path,
             settings: Settings, output_targets: Collection[str], *,
             empty_directory: EmptyDirectory = directory_literal) -> Prepared:
-    """Write `artifact` and `analyses` under `basepath` as they are given, and make the machine ready to run them.
-
-    `artifact` is written as it is: a tree from the command line, one document under
-    `--cwl_inline_runtag` and from Python. Its job is the values bound in the workflow, as `targets.for_run` made
-    them for the runner, under the inputs file's. The pre-flight reads `settings.bound`, the same values as written.
-    Each of `output_targets` (`runtime_inputs.output_target_inputs`) is a name for the run to create, written in the
-    job as `empty_directory` gives the runner an empty directory.
+    """`write`, then make this machine ready to run what it wrote. The pre-flight reads `settings.bound`, the same
+    values as written.
 
     A check (`settings.check`) writes them into a temporary directory instead, removed
     when the check ends, so it leaves `basepath` as it found it.
@@ -102,27 +116,22 @@ def inputs_job(inputs_file: str, named: str, output_targets: Collection[str] = (
 def _prepare(artifact: CompilationArtifact, analyses: tuple[realtime.Analysis, ...], basepath: Path,
              settings: Settings, output_targets: Collection[str], *, empty_directory: EmptyDirectory) -> Prepared:
     """`prepare`, writing under `basepath`."""
-    input_output.write_artifacts_to_disk(artifact, basepath, settings.run.inputs_file, output_targets=output_targets,
-                                         empty_directory=empty_directory)
-    plans = realtime.write(analyses, basepath, artifact.name, settings.root_dir)
+    inputs_file, root_dir = settings.run.inputs_file, settings.root_dir
+    write_here = partial(write, basepath=basepath, inputs_file=inputs_file, root_dir=root_dir,
+                         output_targets=output_targets, empty_directory=empty_directory)
     # The pre-flight reads the CWL the runner will get, so it runs after the write.
-    documents = (basepath / f'{artifact.name}.cwl', *realtime.documents(analyses, basepath))
-    extra = inputs_job(settings.run.inputs_file, settings.inputs_file_named, output_targets)
+    written = write_here(artifact, analyses)
+    extra = inputs_job(inputs_file, settings.inputs_file_named, output_targets)
     # The inputs file wins over a value bound in the workflow for the same input when the job is written.
     bound = runner_job_inputs(settings.bound, output_targets)
     jobs = (preflight.Job({key: value for key, value in bound.items() if extra is None or key not in extra.values},
-                          settings.root_dir, 'the workflow'), *((extra,) if extra else ()))
-    preflight.ready(documents, settings.run, jobs, pulling=settings.pull and not settings.check)
-    if settings.check:
-        return Prepared(artifact.name, plans, documents)
-    if settings.run.runner.remove_entrypoints:
-        plugins.remove_entrypoints(settings.run.runner.container_engine,
-                                   (artifact, *(analysis.artifact for analysis in analyses)))
-        artifact = plugins.dockerPull_append_noentrypoint_artifact(artifact)
-        # The images are built from the ones the pre-flight pulled, so the rewrite is written over the first write.
-        input_output.write_artifacts_to_disk(artifact, basepath, settings.run.inputs_file,
-                                             output_targets=output_targets, empty_directory=empty_directory)
-        analyses = tuple(replace(a, artifact=plugins.dockerPull_append_noentrypoint_artifact(a.artifact))
-                         for a in analyses)
-        plans = realtime.write(analyses, basepath, artifact.name, settings.root_dir)
-    return Prepared(artifact.name, plans, documents)
+                          root_dir, 'the workflow'), *((extra,) if extra else ()))
+    preflight.ready(written.documents, settings.run, jobs, pulling=settings.pull and not settings.check)
+    if settings.check or not settings.run.runner.remove_entrypoints:
+        return written
+    plugins.remove_entrypoints(settings.run.runner.container_engine,
+                               (artifact, *(analysis.artifact for analysis in analyses)))
+    # The images are built from the ones the pre-flight pulled, so the rewrite is written over the first write.
+    return write_here(plugins.dockerPull_append_noentrypoint_artifact(artifact), tuple(
+        replace(analysis, artifact=plugins.dockerPull_append_noentrypoint_artifact(analysis.artifact))
+        for analysis in analyses))

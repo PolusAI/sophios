@@ -278,7 +278,6 @@ def _main(args: argparse.Namespace, unknown_args: list[str]) -> None:
     if unknown_args and not (args.run_local or args.generate_run_script):
         cli.parser.error(f'{" ".join(unknown_args)} would go to the runner, which this command does not run. '
                          'Add --run_local or --generate_run_script, or remove them')
-    plugins.logging_filters()
 
     # `--yaml` is required unless one of the generate modes was asked for.
     # Checked here rather than by argparse: the requirement is conditional on

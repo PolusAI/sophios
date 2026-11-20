@@ -1,5 +1,6 @@
 from importlib.resources import files
 import json
+import logging
 import os
 from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
@@ -26,6 +27,12 @@ _URI_SCHEME: Final = re.compile(r'^[A-Za-z][A-Za-z0-9+.-]+:')
 #: cwltool's extension schemas, by CWL version, as `cwltool --enable-ext` registers them.
 _EXTENSIONS: Final = (('v1.0', 'extensions.yml'), ('v1.1', 'extensions-v1.1.yml'), ('v1.2', 'extensions-v1.2.yml'))
 _EXTENSION_NAMESPACE: Final = 'http://commonwl.org/cwltool'
+
+# schema-salad warns that an id is "previously defined" where an input and an output of one process share a name,
+# as `outDir` does in a Polus plugin and `file` in the shipped `append.cwl`. cwltool runs such a tool as it runs any
+# other, so the warning is no one's to act on, and no process that imports this module says it: each one that loads
+# a document here, and the runner's own (`run_local.cwltool_main`), whose module imports the compiler.
+logging.getLogger('salad').addFilter(lambda record: not record.getMessage().endswith('previously defined'))
 
 
 class PackError(Exception):

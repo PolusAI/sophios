@@ -8,7 +8,7 @@ find a target here, by the name `--target` and `target=` give it, and nowhere el
 The names alone are `wic_types.TargetName`, which the command line's parser reads without importing a target.
 """
 from collections.abc import Mapping
-from pathlib import Path
+from pathlib import Path, PurePath
 from types import MappingProxyType
 from typing import Any, Final, Protocol, TypeVar
 
@@ -126,8 +126,8 @@ class _Nextflow:
 TARGETS: Final[Mapping[str, Target[Any]]] = MappingProxyType({'cwl': _Cwl(), 'nextflow': _Nextflow()})
 
 
-def for_run(row: Target[Any], view: ResolvedWorkflow, root_dir: Path) -> ResolvedWorkflow:
-    """`view` for a local run of `row`: its values as the runner reads them, each relative path read against
+def for_run(row: Target[Any], view: ResolvedWorkflow, root_dir: PurePath) -> ResolvedWorkflow:
+    """`view` for a run of `row`: its values as the runner reads them, each relative path read against
     `root_dir` and written absolute, because a runner does not run where the workflow's paths are read."""
     return bind(view, values=absolute_paths(row.run_values(view), root_dir))
 

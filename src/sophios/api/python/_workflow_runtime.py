@@ -19,7 +19,7 @@ import yaml
 from cwl_utils.parser import CommandLineTool as CWLCommandLineTool
 from cwl_utils.parser import load_document_by_uri, load_document_by_yaml
 
-from sophios import backends, cli, compiler, drawing, input_output, plugins, post_compile as pc, preflight, realtime
+from sophios import backends, cli, compiler, drawing, input_output, post_compile as pc, preflight, realtime
 from sophios import run_local, run_setup, targets
 from sophios.input_output import SHIPPED_RENAMINGS
 from sophios.run_local import RunHandle
@@ -43,6 +43,9 @@ from sophios.lang.error_codes import SophiosErrorCode
 # Re-exported by `workflow`, which reaches the run settings only through this adapter.
 from sophios.runners import Cwltool, Nextflow, Runner, RunSettings, Toil  # pylint: disable=unused-import
 from sophios.runtime_inputs import output_target_inputs, resolve_file_formats, runner_job_inputs
+from sophios.input_output_nf import nextflow_params, render_nextflow
+from sophios.nf_types import ExecutableNextflowWorkflow
+from sophios.utils_nf import nextflow_names
 from sophios.wic_types import DEFAULT_BASEPATH, GraphSettings, Json, StepId, Tool, Tools, Yaml
 
 from ._inference import Inference
@@ -428,6 +431,49 @@ def service_document(workflow: "Workflow", *, tool_registry: Tools | None = None
     return ServiceDocument(copy.deepcopy(artifact.cwl), resolve_file_formats(artifact.job_inputs), result.realtime)
 
 
+class ServicePipeline(NamedTuple):
+    """What a remote service is sent to run `workflow` on Nextflow: see `service_pipeline`."""
+
+    #: The model the pipeline is rendered from.
+    nextflow_workflow: ExecutableNextflowWorkflow
+    #: The pipeline in its service form (design_docs/sophios_nextflow_backend.md §4.5), one file.
+    script: str
+    #: Its parameters, as `nextflow_params.json` holds them: every path as written.
+    params: Json
+    #: The real-time analyses the workflow declares, which no service runs.
+    realtime: tuple[Declaration, ...]
+
+
+def service_pipeline(workflow: "Workflow", *, tool_registry: Tools | None = None,
+                     inference: Inference = Inference()) -> ServicePipeline:
+    """Compile `workflow` to the pipeline a service runs on Nextflow, which publishes every output under its own name.
+
+    Raises:
+        SophiosError: The workflow does not compile, or an output's name is not one Nextflow keeps (`wic067`): a
+            client that attaches to the run later reads the outputs by the names the pipeline published. A workflow
+            that declares no output has its steps' outputs, each named `<step>~<port>`, which Nextflow never keeps.
+        NotLowered: The Nextflow target cannot run the workflow, as `compile(target="nextflow")` raises it.
+    """
+    result = compile_workflow_result(workflow, tool_registry=tool_registry, inference=inference)
+    view = _view(workflow, result)
+    executable = targets.TARGETS["nextflow"].lower(view).model
+    renamed = {name: published for published, name in nextflow_names(view)["outputs"].items() if published != name}
+
+    def refusal(name: str, published: str) -> str:
+        if "~" not in name:
+            return (f"workflow output {name!r} would be published as {published!r}, since Nextflow does not keep its "
+                    f"name, and a service reports each output by its published name; rename it, as to {published!r}")
+        step, port = name.rsplit("~", 1)
+        return (f"the workflow declares no output, so it returns the output {port!r} of its step {step!r} as {name!r}, "
+                f"a name Nextflow does not keep, and a service reports each output by its published name; declare "
+                f"each output to return, under a name Nextflow keeps, such as {published!r}")
+    if renamed:
+        raise SophiosError(Diagnostic(Severity.ERROR, SophiosErrorCode.NEXTFLOW_OUTPUT_RENAMED, refusal(*names))
+                           for names in renamed.items())
+    return ServicePipeline(executable, render_nextflow(executable, service=True), nextflow_params(executable),
+                           result.realtime)
+
+
 def compiled_workflow_from_result(
     workflow: "Workflow",
     result: CompilationResult,
@@ -577,12 +623,33 @@ class RunOptions:  # pylint: disable=too-many-instance-attributes
     lang_version: str | None = None
 
 
-def _realtime_refused(declarations: tuple[Declaration, ...]) -> SophiosError:
-    """`api008`, at each real-time analysis declaration: `run_async` never runs them."""
+def _realtime_refused(declarations: tuple[Declaration, ...], never: str = "run_async() never runs") -> SophiosError:
+    """`api008`, at each real-time analysis declaration: what `never` names never runs them."""
     return SophiosError(Diagnostic(
         Severity.ERROR, SophiosErrorCode.REALTIME_NOT_ASYNC,
-        f"this step declares the real-time analysis {declaration.analysis!r}, and run_async() never runs "
+        f"this step declares the real-time analysis {declaration.analysis!r}, and {never} "
         "real-time analyses", declaration.span) for declaration in declarations)
+
+
+def lowered_for_site(workflow: "Workflow", *, target: str, root: PurePath, tool_registry: Tools | None,
+                     inference: Inference) -> tuple[run_setup.Lowered[Any] | None, tuple[Diagnostic, ...]]:
+    """`workflow` compiled and lowered to `target`, as `run()` lowers it, for a run on another machine whose relative
+    paths are read against `root` there, printing nothing: the model (for CWL, the one document `compile()` returns)
+    and every note the compile and the target made, with `api008` at each real-time analysis, which no site runs; or
+    None and every refusal of the target, where `compile()` raises `NotLowered`.
+
+    Raises:
+        SophiosError: The workflow does not compile.
+        ValueError: No target has that name.
+    """
+    row = targets.target(target)
+    result = compile_workflow_result(workflow, tool_registry=tool_registry, inference=inference, quiet=True)
+    realtime_ = _realtime_refused(result.realtime, "a site never runs").diagnostics if result.realtime else ()
+    try:
+        lowered, _ = _lowered_for_run(row, workflow, result, root)
+    except NotLowered as refused:
+        return None, (*result.diagnostics, *refused.diagnostics, *realtime_)
+    return lowered, (*result.diagnostics, *lowered.notes, *realtime_)
 
 
 def _run_request(workflow: "Workflow", options: RunOptions, *, refuse_realtime: bool) -> backends.RunRequest:
@@ -597,7 +664,6 @@ def _run_request(workflow: "Workflow", options: RunOptions, *, refuse_realtime: 
     """
     row = targets.target(options.run.runner.target)
     logger.info("Running %s", workflow.process_name)
-    plugins.logging_filters()
     result, analyses = _compiled_for_run(workflow, options, refuse_realtime=refuse_realtime, check=False)
     lowered, bound = _lowered_for_run(row, workflow, result)
     report(lowered.notes)
@@ -630,12 +696,16 @@ def _compiled_for_run(workflow: "Workflow", options: RunOptions, *, refuse_realt
     return result, analyses
 
 
-def _lowered_for_run(row: targets.Target[Any], workflow: "Workflow",
-                     result: CompilationResult) -> tuple[run_setup.Lowered[Any], Yaml]:
-    """`result` lowered by `row` for a runner, which does not run where the workflow's relative paths are read, and
-    the values bound in the workflow as the author wrote their paths."""
+def _lowered_for_run(row: targets.Target[Any], workflow: "Workflow", result: CompilationResult,
+                     root: PurePath | None = None) -> tuple[run_setup.Lowered[Any], Yaml]:
+    """`result` lowered by `row` for a runner, which does not run where the workflow's relative paths are read, so
+    each is read against `root`, the working directory when None, and the values bound in the workflow as the author
+    wrote their paths. A CWL runner runs the one document `compile()` returns."""
     view = _view(workflow, result)
-    return row.lower(targets.for_run(row, view, Path.cwd())), row.run_values(view)
+    lowered = row.lower(targets.for_run(row, view, Path.cwd() if root is None else root))
+    if row.name == "cwl":
+        lowered = replace(lowered, model=pc.inline_artifact_runs(lowered.model))
+    return lowered, row.run_values(view)
 
 
 # pylint: disable-next=too-many-arguments
@@ -644,11 +714,10 @@ def _prepared(workflow: "Workflow", options: RunOptions, *,
               check: bool) -> backends.RunRequest:
     """Write what `options.run`'s runner reads and make the machine ready for it: the run's request.
 
-    A CWL runner runs the one document `compile()` returns, and each real-time analysis's too.
+    A CWL runner runs each real-time analysis as one document too, as it runs the workflow (`_lowered_for_run`).
     """
     run = options.run
     if run.runner.target == "cwl":
-        lowered = replace(lowered, model=pc.inline_artifact_runs(lowered.model))
         analyses = tuple(replace(analysis, artifact=pc.inline_artifact_runs(analysis.artifact))
                          for analysis in analyses)
     prepared = targets.backend(run.runner).prepare(
