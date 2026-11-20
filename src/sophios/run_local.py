@@ -6,6 +6,7 @@ backend launches as a child process, streams what it prints, and reports how it 
 """
 import atexit
 import json
+import logging
 import os
 import shlex
 import signal
@@ -27,7 +28,6 @@ from sophios.wic_types import Json
 from . import auto_gen_header, preflight, realtime, targets
 from .backends import Backend, Launch, RunRequest
 from .run_status import RunResult, RunState, RunStatus, StepStatus, WorkflowRunError
-from .plugins import logging_filters
 
 
 def generate_run_script(cmdline: str) -> None:
@@ -544,10 +544,12 @@ def cwltool_main() -> int:
     `cwltool.main.run`, not `main`: it stops the containers the run started when the run is sent SIGTERM.
     """
     import cwltool.main  # pylint: disable=import-outside-toplevel
-    logging_filters()
-    # cwltool writes its provenance as N-Triples naming no encoding, so on every run rdflib warns that it
-    # writes UTF-8 anyway. Silenced here, in the runner's own process, not by logging_filters, which
-    # also runs in the process of a Python program that calls Workflow.run().
+    # cwltool says what URI it resolved the workflow's path to, and writes its provenance as N-Triples naming no
+    # encoding, so on every run rdflib warns that it writes UTF-8 anyway. Both are silenced here, in the runner's
+    # own process, the only one that says them. schema-salad's warning of a shared id, which a compile gets too,
+    # is silenced by `utils_cwl`.
+    logging.getLogger('cwltool').addFilter(
+        lambda record: not (record.getMessage().startswith("Resolved '") and "' to '" in record.getMessage()))
     warnings.filterwarnings('ignore', message='NTSerializer always uses UTF-8 encoding', category=UserWarning)
     retval: int = cwltool.main.run(sys.argv[1:])
     return retval

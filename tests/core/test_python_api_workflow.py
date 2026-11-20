@@ -15,6 +15,7 @@ import traceback
 import warnings
 from types import SimpleNamespace
 from typing import Any, Callable, Final, Iterator, Literal, cast
+from unittest import TestCase
 from unittest.mock import Mock, patch
 
 from hypothesis import example, given, strategies as st
@@ -223,15 +224,19 @@ def _built_tools(draw: st.DrawFn) -> tuple[CommandLineTool, dict[str, Any]]:
           {'message': 'hello'}), None)  # a built tool becomes a step named for it
 @example((CommandLineTool('echo_tool', Inputs(message=Input(cwl.string, position=1)), Outputs(out=Output.stdout()))
           .base_command('echo').stdout('stdout.txt'), {'message': 'hi'}), 'say')  # `step_name` renames it and its path
+@example((CommandLineTool('emit', Inputs(out=Input(cwl.string, position=1)), Outputs(out=Output.stdout()))
+          .base_command('echo').stdout('stdout.txt'), {'out': 'hi'}), None)  # an input and an output share an id
 @budget(15)
 def test_a_built_tool_is_one_step_through_every_door(drawn: tuple[CommandLineTool, dict[str, Any]],
                                                      step_name: str | None) -> None:
     """Each in-memory door, binding by attribute or `step_inputs=`, writes nothing and makes the step `Step(clt_path=)`
     makes of the tool's file: named `step_name` or for the tool, with a path of that name, compiling alike; and the
-    job holds plain values, a numpy float a Python one."""
+    job holds plain values, a numpy float a Python one. No door logs a line: schema-salad's warning that an input
+    and an output of one name share an id is no one's to act on."""
     tool, values = drawn
     name = step_name or tool.name
-    with tempfile.TemporaryDirectory() as directory, pytest.MonkeyPatch.context() as monkeypatch:
+    with (tempfile.TemporaryDirectory() as directory, pytest.MonkeyPatch.context() as monkeypatch,
+          TestCase().assertNoLogs()):
         monkeypatch.chdir(directory)
         steps = [_bind(Step(tool, step_name=step_name), **values), _bind(tool.to_step(step_name=step_name), **values),
                  _bind(Step.from_cwl_document(tool.to_cwl_document(), process_name=step_name), **values),
