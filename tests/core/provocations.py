@@ -2,6 +2,8 @@
 nothing provokes is dead on arrival: each callable of COMPILED raises a SophiosError carrying its code, or
 test_lang_parser's census fails."""
 # pylint: disable=import-outside-toplevel  # the compiler and API load lazily, so enumerating codes stays cheap
+import os
+import sys
 import tempfile
 from collections.abc import Callable
 from functools import partial
@@ -9,6 +11,8 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any, Final
 from unittest import mock
+
+import pytest
 
 from sophios.lang import SophiosError, SophiosErrorCode, resolve_lang_version
 
@@ -65,6 +69,35 @@ IMPORT_EDITS: Final[dict[SophiosErrorCode, tuple[str, str, str, str]]] = {
 }
 
 
+def _provoke_site(call: str = 'check', engine: str = 'docker', site: str = 'Machine', **options: Any) -> None:
+    """A site's `check` of a one-step workflow, or its `attach` of no run, on a site that is this computer: `ssh
+    <host>` a local `bash`, with no login profile, as the site's own tests make it, and nothing of Sophios replaced.
+    `bin` is the empty `root`, so it holds no runner, and this computer has no Slurm; the problems are raised as
+    Sophios raises any error."""
+    from sophios import sites
+    from sophios.api.python.workflow import Workflow
+
+    from .helpers import adapter_step
+
+    if sys.platform == 'win32':
+        pytest.skip('Sophios on Windows itself makes no site (wic061), so no other site code fires there')
+    with tempfile.TemporaryDirectory() as root, mock.patch.dict(os.environ, {'HOME': root}), \
+            mock.patch.object(sites, '_transport', return_value=['bash', '-c']):
+        machine = getattr(sites, site)('provoke', root=root, bin=root, container_engine=engine)
+        if call == 'attach':
+            machine.attach('provoke-20261109T000000-00000000')
+        raise SophiosError(machine.check(Workflow([adapter_step('touch', filename='empty.txt')], 'provoke'),
+                                         **options))
+
+
+def _provoke_site_unreachable() -> None:
+    """No ssh to run: the transport, a command no computer has; on Windows itself, the site is refused when made."""
+    from sophios import sites
+
+    with mock.patch.object(sites, '_transport', return_value=['sophios-no-such-ssh']):
+        sites.Machine('provoke', root='/r', bin='/b').attach('provoke-20261109T000000-00000000')
+
+
 def import_edited(directory: str, file: str, old: str, new: str, workflow: Any = None) -> Any:
     """Write the pipeline of `workflow`, by default a one-step workflow, into `directory`, replace `old` in one of
     its files with `new`, and import it. A surrogate such as `\\udcff` in `new` is written as the byte it escapes."""
@@ -100,6 +133,15 @@ COMPILED: Final[dict[SophiosErrorCode, Callable[[], object]]] = {
         resolve_lang_version, None, ('0.0.1', '0.0.2'), known=('0.0.1', '0.0.2')),
     SophiosErrorCode.INVALID_INFERENCE: _provoke_invalid_inference,
     SophiosErrorCode.WORKFLOW_RUN_FAILED: _provoke_workflow_run_failed,
+    SophiosErrorCode.SITE_UNREACHABLE: _provoke_site_unreachable,
+    SophiosErrorCode.SITE_RUNNER: _provoke_site,
+    SophiosErrorCode.SITE_RUN_UNKNOWN: partial(_provoke_site, 'attach'),
+    # touch's container on a Podman machine, under Nextflow.
+    SophiosErrorCode.SITE_NEXTFLOW_CONTAINER: partial(_provoke_site, engine='podman', target='nextflow'),
+    # touch declares no memory.
+    SophiosErrorCode.SITE_DEFAULT_MEMORY: _provoke_site,
+    # This computer has no sbatch.
+    SophiosErrorCode.SITE_SLURM: partial(_provoke_site, site='Slurm'),
     **{code: partial(_import_edited, code) for code in IMPORT_EDITS},
 }
 

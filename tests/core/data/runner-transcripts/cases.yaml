@@ -4,6 +4,7 @@
   stderr: ["\e[1;30mWARNING\e[0m \e[33m[job echo_2] exited with status: 127\e[0m",
       "\e[1;30mWARNING\e[0m \e[33m[job echo_2] completed permanentFail\e[0m"]
   exit: 5
+  names_summary: true
   failures: ["Failure! step 'echo_2' exited with status 127, which means its command was not found: the tool's
       baseCommand is not installed in its container image, or on this machine for a tool with none. Its own messages are
       above, under its name."]
@@ -14,6 +15,7 @@
       'INFO [job b] completed success', 'WARNING [job c] was terminated by signal: SIGKILL',
       'WARNING [job c] completed permanentFail', 'WARNING [job d] completed permanentFail']
   exit: 5
+  names_summary: true
   failures:
   - "Failure! step 'a' exited with status 3. Its own messages are above, under its name."
   - "Failure! step 'c' was ended by SIGKILL, which means it was killed, usually for running out of memory: give the
@@ -24,6 +26,7 @@
 - id: no-step
   why: *cwltool
   exit: 5
+  names_summary: true
   failures: &generic ['Failure! Above, the first ERROR line, or the error the runner itself raised, says why the run
       failed.']
 - id: toil-names-no-step
@@ -41,6 +44,12 @@
       '    }', '}']
   exit: 0
   summary: {echo~stdout: {class: File, path: /out/stdout}}
+- id: cwltool-leaves-its-own-summary
+  why: cwltool writes the summary it is given (--write-summary), which the stand-in cannot, so it is there before the
+      run; Sophios reads the outputs from it and leaves it as cwltool wrote it (CwltoolBackend.writes_summary).
+  left: '{"echo~stdout": "é"}'
+  exit: 0
+  summary: {echo~stdout: é}
 - id: nextflow-127
   why: The step is read from Nextflow's lines, by its Sophios name,
       and the exit code is Nextflow's (nextflow_failed_steps).
