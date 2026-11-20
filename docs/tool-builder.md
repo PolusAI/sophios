@@ -61,7 +61,6 @@ python count_words.py
 ```
 
 ```text
-Resolved 'word_count.cwl' to 'file:///home/you/sophios-tutorial/word_count.cwl'
  starting compilation of count_words
 finishing compilation of count_words
 ...

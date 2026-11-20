@@ -15,6 +15,7 @@ import traceback
 import warnings
 from types import SimpleNamespace
 from typing import Any, Callable, Final, Iterator, Literal, cast
+from unittest import TestCase
 from unittest.mock import Mock, patch
 
 from hypothesis import example, given, strategies as st
@@ -40,7 +41,7 @@ from sophios.wic_types import Json, Tools
 from .budgets import budget
 from .cases import DATA
 from .test_setup import corpus_config
-from .helpers import ADAPTERS, adapter_step, echo_workflow, no_preflight, python_process
+from .helpers import ADAPTERS, adapter_step, echo_workflow, live_workflow, no_preflight, python_process
 from .wic_reading import read_wic
 
 PYTHON_API: Final = DATA / 'python_api'
@@ -223,15 +224,19 @@ def _built_tools(draw: st.DrawFn) -> tuple[CommandLineTool, dict[str, Any]]:
           {'message': 'hello'}), None)  # a built tool becomes a step named for it
 @example((CommandLineTool('echo_tool', Inputs(message=Input(cwl.string, position=1)), Outputs(out=Output.stdout()))
           .base_command('echo').stdout('stdout.txt'), {'message': 'hi'}), 'say')  # `step_name` renames it and its path
+@example((CommandLineTool('emit', Inputs(out=Input(cwl.string, position=1)), Outputs(out=Output.stdout()))
+          .base_command('echo').stdout('stdout.txt'), {'out': 'hi'}), None)  # an input and an output share an id
 @budget(15)
 def test_a_built_tool_is_one_step_through_every_door(drawn: tuple[CommandLineTool, dict[str, Any]],
                                                      step_name: str | None) -> None:
     """Each in-memory door, binding by attribute or `step_inputs=`, writes nothing and makes the step `Step(clt_path=)`
     makes of the tool's file: named `step_name` or for the tool, with a path of that name, compiling alike; and the
-    job holds plain values, a numpy float a Python one."""
+    job holds plain values, a numpy float a Python one. No door logs a line: schema-salad's warning that an input
+    and an output of one name share an id is no one's to act on."""
     tool, values = drawn
     name = step_name or tool.name
-    with tempfile.TemporaryDirectory() as directory, pytest.MonkeyPatch.context() as monkeypatch:
+    with (tempfile.TemporaryDirectory() as directory, pytest.MonkeyPatch.context() as monkeypatch,
+          TestCase().assertNoLogs()):
         monkeypatch.chdir(directory)
         steps = [_bind(Step(tool, step_name=step_name), **values), _bind(tool.to_step(step_name=step_name), **values),
                  _bind(Step.from_cwl_document(tool.to_cwl_document(), process_name=step_name), **values),
@@ -405,12 +410,13 @@ class _Ended:  # pylint: disable=too-few-public-methods
 # pylint: disable-next=too-many-locals  # one run, followed from the documents to the runner
 def test_run_writes_what_compile_returns_and_hands_the_runner_its_own_flags(monkeypatch: pytest.MonkeyPatch,
                                                                             tmp_path: Path) -> None:
-    """`run()` writes the one document `compile()` returns and its job, and nothing else: a workflow that declares
-    its outputs runs with those alone, and a relative path, bound in Python, in a step inputs file (which binds values
-    as written) or as a `StepInput` default, names the file in the working directory, absolute. It prepares that
-    document in its basepath with docker, the images built without entrypoints when told, every embedded tool's and a
-    hint's too; and hands the runner its own flags, never the Python API's: `quiet` is on unless told otherwise and
-    never a positional, and any spelling of yes for `generate_run_script` writes run.sh without running."""
+    """`run()` writes the one document `compile()` returns and its job, and nothing else: a workflow that declares its
+    outputs runs with those alone, and a relative path, bound in Python, in a step inputs file (which binds values as
+    written) or as a `StepInput` default, names the file in the working directory, absolute. It prepares that document
+    in its basepath with docker, the images built without entrypoints when told, every embedded tool's, a hint's and a
+    real-time analysis's too; and hands the runner its own flags, never the Python API's: `quiet` is on unless told
+    otherwise and never a positional, and any spelling of yes for `generate_run_script` writes run.sh without
+    running."""
     monkeypatch.chdir(tmp_path)
     Path('inputs').mkdir()
     Path('data.txt').write_text('hello\n', encoding='utf-8')
@@ -444,6 +450,9 @@ def test_run_writes_what_compile_returns_and_hands_the_runner_its_own_flags(monk
         **compiled.cwl_job_inputs, 'cat~f': here, 'read~f': here}
     assert {(tuple(path.resolve() for path in documents), run.runner.container_engine, run.runner.ignore_install)
             for documents, run in prepared} == {(((tmp_path / 'base' / 'exact.cwl').resolve(),), 'docker', False)}
+    live_workflow('live').run(runner=Cwltool(remove_entrypoints=True), generate_run_script=True)
+    (analysis,) = (tmp_path / 'autogenerated' / 'realtime').rglob('*.cwl')
+    assert 'docker.io/library/debian:bookworm-slim-noentrypoint' in analysis.read_text(encoding='utf-8')
 
     requests: list[RunRequest] = []
 
