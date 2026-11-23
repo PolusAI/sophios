@@ -18,7 +18,7 @@ from sophios.lang.diagnostics import SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
 from sophios.wic_types import Yaml
 
-from .cases import DATA, match
+from .cases import DATA, diagnostic, match
 from .helpers import stated
 from .hermetic import cwl_tree
 from .test_compiler import _tools
@@ -30,7 +30,7 @@ TREE = DATA / 'inline'
 def _compiled(root: str) -> CompilationArtifact:
     """`root` of the inline tree compiled, its children the other `.wic` files beside it."""
     others = {'global': {path.stem: path for path in TREE.glob('*.wic') if path.name != root}}
-    return cwl_tree(compile_source(bundle_from_disk(TREE / root, others, _tools(TREE)), CompileSettings(), quiet=True))
+    return cwl_tree(compile_source(bundle_from_disk(TREE / root, others, _tools(TREE)), CompileSettings()))
 
 
 def _runs(form: CompilationArtifact) -> list[str]:
@@ -43,29 +43,32 @@ def _runs(form: CompilationArtifact) -> list[str]:
 
 
 @pytest.mark.fast
-def test_the_inline_tree_flattens_to_the_document_it_states(capsys: pytest.CaptureFixture[str]) -> None:
+def test_the_inline_tree_flattens_to_the_document_it_states() -> None:
     """Flattened, the tree is the document expected.yaml states, with the root's interface and job unchanged, and
-    each kept call said once, with its reason; the flags apply shape first and do not depend on each other."""
+    each kept call noted once, with its reason; the flags apply shape first and do not depend on each other."""
     nested = _compiled('workflow.wic')
     expected = stated(TREE)
-    flat = post_compile.flatten_subworkflows(nested)
-    assert match(expected['said'], capsys.readouterr().err.splitlines())
+    flat, notes = post_compile.flatten_subworkflows(nested)
+    assert match(expected['notes'], [diagnostic(found) for found in notes])
     assert match(expected['flat'], flat.cwl)
     assert (list(flat.cwl['inputs']), list(flat.cwl['outputs']), flat.job_inputs) == \
         (list(nested.cwl['inputs']), list(nested.cwl['outputs']), nested.job_inputs)
-    assert post_compile.apply_inline_options(nested, subworkflows=False, runtag=False) is nested
+    unchanged, no_notes = post_compile.apply_inline_options(nested, subworkflows=False, runtag=False)
+    assert unchanged is nested and not no_notes
     forms = {'nested': nested, '--cwl_inline_subworkflows': flat,
-             '--cwl_inline_runtag': post_compile.apply_inline_options(nested, subworkflows=False, runtag=True),
-             'both': post_compile.apply_inline_options(nested, subworkflows=True, runtag=True)}
+             '--cwl_inline_runtag': post_compile.apply_inline_options(nested, subworkflows=False, runtag=True)[0],
+             'both': post_compile.apply_inline_options(nested, subworkflows=True, runtag=True)[0]}
     assert {name: _runs(form) for name, form in forms.items()} == expected['runs']
     assert [step['id'] for step in forms['both'].cwl['steps']] == [step['id'] for step in flat.cwl['steps']]
     # A child whose requirements a script listed after the compile keeps its call: flattening reads the mapping only.
     listed = replace(nested, children=tuple(
         replace(child, cwl={**child.cwl, 'requirements': [{'class': 'EnvVarRequirement', 'envDef': {'A': 'b'}}]})
         if child.namespace == ('plain',) else child for child in nested.children))
-    assert [step['id'] for step in post_compile.flatten_subworkflows(listed).cwl['steps']][1] == 'plain'
-    assert match({'contains': [{'contains': ["step 'plain'", 'requirements are written as a list']}]},
-                 capsys.readouterr().err.splitlines())
+    flat_listed, listed_notes = post_compile.flatten_subworkflows(listed)
+    assert [step['id'] for step in flat_listed.cwl['steps']][1] == 'plain'
+    assert match({'contains': [{'code': 'SUBWORKFLOW_NOT_INLINED', 'step': 'plain',
+                                'message': {'contains': ["step 'plain'", 'requirements are written as a list']}}]},
+                 [diagnostic(found) for found in listed_notes])
 
 
 @pytest.mark.fast
@@ -81,9 +84,9 @@ def test_an_embedded_tool_keeps_the_defaults_its_own_version_gave_it() -> None:
         if 'refused' in expected:
             with pytest.raises(SophiosError) as caught:
                 post_compile.inline_artifact_runs(swapped)
-            (diagnostic,) = caught.value.diagnostics
-            assert diagnostic.code is SophiosErrorCode.UNSUPPORTED_CWL_VERSION, name
-            assert expected['refused'] in diagnostic.message, name
+            (found,) = caught.value.diagnostics
+            assert found.code is SophiosErrorCode.UNSUPPORTED_CWL_VERSION, name
+            assert expected['refused'] in found.message, name
             continue
         (step,) = post_compile.inline_artifact_runs(swapped).cwl['steps']
         assert 'cwlVersion' not in step['run'], name
@@ -128,7 +131,7 @@ def test_the_inline_flags_on_the_command_line(  # pylint: disable=too-many-local
     assert document['outputs']['append_twice~append@2~file']['outputSource'] == f'{flat_ids[2]}/file'
     assert (list(document['inputs']), list(document['outputs'])) == (list(default['inputs']), list(default['outputs']))
     assert (flat / 'multistep3_inputs.yml').read_text() == (nested / 'multistep3_inputs.yml').read_text()
-    assert 'Warning!' not in capsys.readouterr().err
+    assert '[wic070]' not in capsys.readouterr().err
 
     both = _cli(tmp_path / 'both', monkeypatch, 'multistep3', '--cwl_inline_subworkflows', '--cwl_inline_runtag')
     assert sorted(path.name for path in both.iterdir()) == ['multistep3.cwl', 'multistep3_inputs.yml']
@@ -146,6 +149,6 @@ def test_the_inline_flags_on_the_command_line(  # pylint: disable=too-many-local
         call = next(each for each in _document(written, workflow)['steps'] if each['id'] == step)
         assert (written / call['run']).is_file() and _document(written, workflow)['requirements'][
             'SubworkflowFeatureRequirement'] == {}
-        kept[name] = [line for line in capsys.readouterr().err.splitlines() if line.startswith('Warning!')]
+        kept[name] = [line for line in capsys.readouterr().err.splitlines() if '[wic070]' in line]
     assert match({'scattered': [{'contains': ["step 'fail'", 'carries `scatter`']}],
                   'gated': [{'contains': ["step 'append_twice'", 'carries `when`']}]}, kept)

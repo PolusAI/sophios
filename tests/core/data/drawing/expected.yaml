@@ -37,7 +37,7 @@
   - [sub@4~inner~touch, sub@4~inner~cat, {color: black}]
   - [sub@5~inner~touch, sub@5~inner~cat, {color: black}]
   ranks: [[3, [sub@4~cat, sub@4~inner]], [3, [sub@5~cat, sub@5~inner]], [2, [touch, echo]]]
-  said: ['Warning! plain.wic: wic: graphviz: ranksame entry (2, echo) addresses no step of',
+  said: ['plain.wic:', 'note [wic068]', 'wic: graphviz: ranksame entry (2, echo) addresses no step of',
          there is no step 2; the document has 1 step. The entry is ignored.]
 - flags: [--graph_label_stepname]
   palette: black

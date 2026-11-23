@@ -131,7 +131,7 @@ def compiled_case(data: Yaml) -> CompilationResult:
     """
     document, tools = _case_document(data)
     registry = {StepId(run["id"], SYNTHETIC_NS): Tool(f"{run['id']}.cwl", copy.deepcopy(run)) for run in tools}
-    return compile_source(bundle(document, "wf", registry), CompileSettings(), quiet=True)
+    return compile_source(bundle(document, "wf", registry), CompileSettings())
 
 
 def lowered(result: CompilationResult, values: Yaml | None = None) -> ExecutableNextflowWorkflow:
@@ -151,7 +151,7 @@ def refusal_of(root: Path) -> NotLowered:
     tools and the other workflows of its directory, given the values of the `.yml` of its name beside it, if any."""
     tools = get_tools_cwl({"search_paths_cwl": {"global": [str(root.parent)]}})
     others = {"global": {path.stem: path for path in root.parent.glob("*.wic") if path != root}}
-    result = compile_source(bundle_from_disk(root, others, tools), CompileSettings(), quiet=True)
+    result = compile_source(bundle_from_disk(root, others, tools), CompileSettings())
     job = root.with_suffix(".yml")
     try:
         lowered(result, yaml.safe_load(job.read_text(encoding="utf-8")) if job.exists() else None)

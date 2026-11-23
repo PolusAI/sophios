@@ -1,10 +1,9 @@
 """Resolve a parsed document against an explicit immutable registry snapshot.
 
-Resolution does no discovery, performs no filesystem access, and parses
-nothing.  Parsed workflows and process definitions are values in
-``RegistrySnapshot``; changing the environment cannot change the result of
-resolving the same two values.  It prints one stderr line for each
-``wic: steps:`` key that addresses no step; the key is ignored.
+Resolution does no discovery and parses no workflow: workflows are values in
+``RegistrySnapshot``, and each tool file in it is read when a step first runs
+it.  A ``wic: steps:`` key or ``ranksame`` entry that addresses no step is
+recorded as a ``wic068`` note and ignored.
 """
 from collections import Counter
 from collections.abc import Callable, Sequence
@@ -15,7 +14,6 @@ from hashlib import sha256
 import json
 import os
 from pathlib import Path
-import sys
 from typing import Iterable, Mapping
 
 from ..lang import (
@@ -191,16 +189,19 @@ def resolve(document: Document, registry: RegistrySnapshot, *, name: str = 'work
     if selected is None:
         return Resolved(None, selection_diagnostics)
     document = selected
-    reported: set[str] = set()
-    _report_stale_keys(document.sidecar, document, name, reported)
-    resolved, diagnostics = _resolve_document(document, registry, name, (), reported, registry.root_directory, check)
+    reported: set[tuple[str, str]] = set()
+    diagnostics = Diagnostics()
+    _report_stale_keys(document.sidecar, document, name, reported, diagnostics)
+    resolved, doc_diagnostics = _resolve_document(
+        document, registry, name, (), reported, registry.root_directory, check)
+    _copy_diagnostics(diagnostics, doc_diagnostics)
     _copy_diagnostics(diagnostics, selection_diagnostics)
     return Resolved(resolved if not diagnostics.has_errors else None, diagnostics)
 
 
 # pylint: disable-next=too-many-arguments,too-many-positional-arguments,too-many-locals
 def _resolve_document(document: Document, registry: RegistrySnapshot, name: str,
-                      trail: tuple[RegistryKey, ...], reported: set[str],
+                      trail: tuple[RegistryKey, ...], reported: set[tuple[str, str]],
                       directory: Path | None, check: ToolCheck | None) \
         -> tuple[ResolvedDocument, Diagnostics]:
     counts = Counter(step.id for step in document.steps)
@@ -217,7 +218,7 @@ def _resolve_document(document: Document, registry: RegistrySnapshot, name: str,
 
 # pylint: disable-next=too-many-arguments,too-many-positional-arguments
 def _resolve_steps(checked: CheckedDocument, sidecars: tuple[WicSidecar | None, ...], registry: RegistrySnapshot,
-                   name: str, trail: tuple[RegistryKey, ...], reported: set[str], directory: Path | None,
+                   name: str, trail: tuple[RegistryKey, ...], reported: set[tuple[str, str]], directory: Path | None,
                    check: ToolCheck | None, diagnostics: Diagnostics) -> tuple[ResolvedDocument, Diagnostics]:
     """The process each step of a checked document runs: the one stage of Resolve that looks anything up, so it is
     handed only a document `check` made."""
@@ -230,7 +231,7 @@ def _resolve_steps(checked: CheckedDocument, sidecars: tuple[WicSidecar | None, 
 
 # pylint: disable-next=too-many-arguments,too-many-positional-arguments,too-many-locals
 def _resolve_process(step: Step, index: int, sidecar: WicSidecar | None, registry: RegistrySnapshot,
-                     trail: tuple[RegistryKey, ...], diagnostics: Diagnostics, reported: set[str],
+                     trail: tuple[RegistryKey, ...], diagnostics: Diagnostics, reported: set[tuple[str, str]],
                      directory: Path | None, check: ToolCheck | None) -> ResolvedProcess | None:
     namespace = namespace_of(sidecar)
     run = dict(step.interpreted).get('run')
@@ -290,7 +291,7 @@ def _resolve_process(step: Step, index: int, sidecar: WicSidecar | None, registr
 # pylint: disable-next=too-many-arguments,too-many-positional-arguments,too-many-locals
 def _resolve_workflow(step: Step, sidecar: WicSidecar | None, workflow: WorkflowSource,
                       registry: RegistrySnapshot, trail: tuple[RegistryKey, ...],
-                      diagnostics: Diagnostics, reported: set[str],
+                      diagnostics: Diagnostics, reported: set[tuple[str, str]],
                       check: ToolCheck | None) -> ResolvedProcess | None:
     key = workflow.key
     if key in trail:
@@ -308,7 +309,7 @@ def _resolve_workflow(step: Step, sidecar: WicSidecar | None, workflow: Workflow
     if source is None:
         return None
     for stale in (parsed.document.sidecar, sidecar) if source is inherited else (source.sidecar,):
-        _report_stale_keys(stale, source, key.name, reported)
+        _report_stale_keys(stale, source, key.name, reported, diagnostics)
     child, child_diagnostics = _resolve_document(source, registry, key.name, trail + (key,), reported,
                                                  workflow.directory, check)
     _copy_diagnostics(diagnostics, child_diagnostics)
@@ -638,8 +639,8 @@ def graphviz_entry(sidecar: WicSidecar | None) -> GraphvizEntry:
 
 
 def _report_stale_keys(sidecar: WicSidecar | None, document: Document, name: str,
-                       reported: set[str]) -> None:
-    """Print, once each, a line for every ``wic: steps:`` key and ``graphviz: ranksame:`` entry
+                       reported: set[tuple[str, str]], diagnostics: Diagnostics) -> None:
+    """Record, once each, a `wic068` note for every ``wic: steps:`` key and ``graphviz: ranksame:`` entry
     of `sidecar` that addresses no step of `document`. They are ignored, as they always were."""
     if sidecar is None:
         return
@@ -650,12 +651,12 @@ def _report_stale_keys(sidecar: WicSidecar | None, document: Document, name: str
         reason = _stale_key_reason(key, ids)
         if reason is None:
             continue
-        file = (span or sidecar.span or _CONTRIBUTION_SPAN).file
-        line = (f'Warning! {file}: {where} {noun} {key} addresses no step of {name!r}: '
-                f'{reason}. The {noun} is ignored.')
-        if line not in reported:
-            reported.add(line)
-            print(line, file=sys.stderr)
+        at = span or sidecar.span
+        message = f'{where} {noun} {key} addresses no step of {name!r}: {reason}. The {noun} is ignored.'
+        seen = ((at or _CONTRIBUTION_SPAN).file, message)
+        if seen not in reported:
+            reported.add(seen)
+            diagnostics.note(SophiosErrorCode.STALE_STEP_KEY, message, at)
 
 
 def namespace_of(sidecar: WicSidecar | None) -> str:

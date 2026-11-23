@@ -100,7 +100,7 @@ def compile_hermetic(yml: Yaml, name: str = 'oracle', *,
     inference = replace(sophios.compiler.CompileSettings().inference,
                         insert_steps_automatically=insert_steps_automatically, strict=inference_strict)
     return sophios.compiler.compile_source(bundle(yml, name, SYNTHETIC_TOOLS if tools is None else tools),
-                                           sophios.compiler.CompileSettings(inference), quiet=True)
+                                           sophios.compiler.CompileSettings(inference))
 
 
 def compile_hermetic_source(source: str, name: str = 'oracle', *, tools: Tools | None = None) -> CompilationResult:
@@ -109,14 +109,14 @@ def compile_hermetic_source(source: str, name: str = 'oracle', *, tools: Tools |
     parsed = parse(source, f'{name}.wic')
     return sophios.compiler.compile_source(
         SourceBundle(parsed, name, RegistrySnapshot.from_tools(SYNTHETIC_TOOLS if tools is None else tools), ()),
-        sophios.compiler.CompileSettings(), quiet=True)
+        sophios.compiler.CompileSettings())
 
 
 def compile_production(yml: Yaml, name: str = 'binding', *, tools: Tools | None = None) -> CompilationResult:
     """Compile with user-facing progress enabled (``quiet=False``)."""
     return sophios.compiler.compile_source(
         bundle(yml, name, SYNTHETIC_TOOLS if tools is None else tools),
-        sophios.compiler.CompileSettings(), quiet=False)
+        sophios.compiler.CompileSettings())
 
 
 def cwl_tree(result: CompilationResult) -> CompilationArtifact:

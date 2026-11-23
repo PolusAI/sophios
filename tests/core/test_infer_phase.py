@@ -44,7 +44,7 @@ def _inferred(case: Path, expected: dict[str, Any]) -> tuple[WorkflowGraph | Non
     if expected.get('compiled'):
         options = CompileSettings(replace(CompileSettings().inference, strict=policy.get('strict', False)))
         try:
-            compiled = compile_source(bundled, options, quiet=True)
+            compiled = compile_source(bundled, options)
         except SophiosError as error:
             return None, error.diagnostics
         return compiled.graph, compiled.diagnostics

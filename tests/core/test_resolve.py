@@ -11,7 +11,7 @@ import pytest
 from sophios.ir.resolve import RegistrySnapshot, resolve
 from sophios.lang import EdgeRef, InlineLiteral, RawCwlRef, UnresolvedName, parse
 
-from .cases import DATA, match
+from .cases import DATA, diagnostic, match
 from .helpers import stated
 from .synthetic_tools import SYNTHETIC_NS, SYNTHETIC_TOOLS
 
@@ -27,18 +27,19 @@ def _resolved(case: Path) -> Any:
         for path in case.glob('*.wic') if path.name != 'workflow.wic'})
     result = resolve(parsed.document, registry, name='workflow')
     assert result.document is not None, list(result.diagnostics)
-    return result.document
+    return result
 
 
 @pytest.mark.fast
 @pytest.mark.parametrize('theme', [pytest.param(path, id=path.name)
                                    for path in sorted((DATA / 'contributions').iterdir()) if path.is_dir()])
-def test_a_contribution_binds_each_case_as_its_theme_states(theme: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_a_contribution_binds_each_case_as_its_theme_states(theme: Path) -> None:
     """Each `expect` entry names the step at `step` (default 0) of the document `depth` calls below the root, each
     call its document's first step, and what it binds: `inputs` as `[construct, payload]` and `outputs` as
-    `[name, edge defined]`. `said` is every line printed on stderr (none, where it is left out)."""
+    `[name, edge defined]`. `notes` is every `wic068` note Resolve recorded (none, where it is left out)."""
     for name, expected in stated(theme).items():
-        document = _resolved(theme / name)
+        result = _resolved(theme / name)
+        document = result.document
         for entry in expected['expect']:
             found = document
             for _ in range(entry.get('depth', 0)):
@@ -48,4 +49,4 @@ def test_a_contribution_binds_each_case_as_its_theme_states(theme: Path, capsys:
                      'inputs': {port: [type(value).__name__, getattr(value, _PAYLOAD[type(value)])]
                                 for port, value in step.inputs}}
             assert match(entry, bound), (name, bound)
-        assert match(expected.get('said', []), capsys.readouterr().err.splitlines()), name
+        assert match(expected.get('notes', []), [diagnostic(found) for found in result.diagnostics]), name

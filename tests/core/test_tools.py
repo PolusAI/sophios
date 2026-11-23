@@ -421,7 +421,7 @@ def test_a_tool_is_one_tool_through_every_door(case: tuple[str, str | None, Soph
         def read(root: str) -> Workflow:
             return Workflow.from_wic(base / root, tool_registry=index())
         doors: dict[str, Any] = {root: (lambda root=root: compile_source(
-            bundle_from_disk(base / root, {}, index()), CompileSettings(lang_version=setting), quiet=True))
+            bundle_from_disk(base / root, {}, index()), CompileSettings(lang_version=setting)))
             for root in ('tool.wic', 'run.wic', 'stem.wic', 'suffixed.wic', 'inline.wic')}
         doors |= {
             'Step': lambda: Workflow([Step(clt_path=base / 'adapters' / 'named.wic')], 'w').compile(
@@ -479,10 +479,9 @@ def test_a_tool_found_once_is_the_tool_of_its_stem_for_every_door(tmp_path: Path
     assert command(by_name.compile(tool_registry=shared)) == 'echo-from-cwl'
     assert command(by_path.compile(tool_registry=shared)) == 'echo-from-cwl'
     suffixed = compile_source(bundle_from_disk(tmp_path / 'suffixed.wic',
-                              {}, registry()), CompileSettings(), quiet=True)
+                              {}, registry()), CompileSettings())
     assert cwl_tree(suffixed).children[0].cwl['baseCommand'] == 'echo-from-cwl'
-    root = compile_source(bundle_from_disk(tmp_path / 'elsewhere' / 'grep.wic', {}, registry()), CompileSettings(),
-                          quiet=True)
+    root = compile_source(bundle_from_disk(tmp_path / 'elsewhere' / 'grep.wic', {}, registry()), CompileSettings())
     assert cwl_tree(root).children[0].cwl['baseCommand'] == 'echo-from-wic'
 
 

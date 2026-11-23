@@ -216,12 +216,13 @@ def _compiled(yml_path: Path, args: argparse.Namespace, registry: CorpusRegistry
     """`yml_path` compiled for `args`, before the inline flags shape its artifact tree."""
     bundle = frontdoor.bundle_from_disk(Path(yml_path), yml_paths, registry.tools)
     settings, _graph_settings = sophios.cli.settings_from_args(args)
-    return sophios.compiler.compile_source(bundle, settings, quiet=True)
+    return sophios.compiler.compile_source(bundle, settings)
 
 
 def _inlined(artifact: CompilationArtifact, args: argparse.Namespace) -> CompilationArtifact:
     """`artifact`'s tree as the inline flags in `args` shape it: what `run_workflows` writes and runs."""
-    return apply_inline_options(artifact, subworkflows=args.cwl_inline_subworkflows, runtag=args.cwl_inline_runtag)
+    return apply_inline_options(
+        artifact, subworkflows=args.cwl_inline_subworkflows, runtag=args.cwl_inline_runtag)[0]
 
 
 # pylint: disable-next=too-many-arguments,too-many-locals
@@ -335,7 +336,7 @@ def _check_embedding_independence(graph: WorkflowGraph, nested: CompilationArtif
         assert sub_path is not None, f'{inside.name} is embedded but has no file of its own'
         try:
             alone = sophios.compiler.compile_source(frontdoor.bundle_from_disk(sub_path, yml_paths, registry.tools),
-                                                    options, quiet=True)
+                                                    options)
         except SophiosError as error:
             if _is_includer_fragment(error):  # `test_rand_fail`'s only child, `fail.wic`, is not standalone
                 continue
@@ -383,7 +384,7 @@ def _check_flatten_keeps_meaning(yml_path_str: str, nested: CompilationArtifact)
     """Flattening dissolves each call it can and nothing else: the root is a model written separately
     (`flatten_model`) up to renaming, its inputs, outputs and job inputs untouched, and each call left nested is one
     `_kept_calls` expects."""
-    flat = post_compile.flatten_subworkflows(nested)
+    flat, _ = post_compile.flatten_subworkflows(nested)
     remaining = [step['id'] for document in _artifacts(flat)
                  for step, child in zip(document.cwl.get('steps', []), document.children)
                  if child.cwl.get('class') == 'Workflow']
@@ -401,8 +402,8 @@ def _check_inline_flags_change_nothing(nested: CompilationArtifact) -> None:
     """`--cwl_inline_subworkflows` changes no document of a workflow that calls none, which is why `INLINE_CASES`
     runs no `flat` form of it. The flags shape only the compiled tree, so one compile serves every form."""
     for runtag in (False, True):
-        assert (_artifacts(apply_inline_options(nested, subworkflows=True, runtag=runtag))
-                == _artifacts(apply_inline_options(nested, subworkflows=False, runtag=runtag))), runtag
+        assert (_artifacts(apply_inline_options(nested, subworkflows=True, runtag=runtag)[0])
+                == _artifacts(apply_inline_options(nested, subworkflows=False, runtag=runtag)[0])), runtag
 
 
 @pytest.mark.cwl_corpus
@@ -457,7 +458,7 @@ def test_corpus_validates_in_cwltool_in_every_form(yml_path_str: str, yml_path: 
     in a v1.2 document with no `cwlVersion` of its own, ran without network access, and every download of the weekly
     lane failed. The large workflows are only validated, as the weekly lane always did."""
     nested = cwl_tree(_compile_corpus_workflow(yml_path_str, yml_path, corpus_registry))
-    flat = post_compile.flatten_subworkflows(nested)
+    flat, _ = post_compile.flatten_subworkflows(nested)
     for form, artifact in (('flat', flat), ('flat_embedded', inline_artifact_runs(flat))):
         sophios.input_output.write_artifacts_to_disk(artifact, tmp_path / form, output_targets=())
         assert validate_cwl(str(tmp_path / form / f'{nested.name}.cwl')) == 0, form

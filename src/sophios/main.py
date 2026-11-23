@@ -12,7 +12,7 @@ import graphviz
 import yaml
 
 from sophios.lang import wic_schema
-from sophios.lang.diagnostics import Diagnostics, SophiosError, report
+from sophios.lang.diagnostics import SophiosError, report
 from sophios.lang.error_codes import SophiosErrorCode
 from sophios.ir.artifacts import CompilationResult
 from sophios.ir.refusals import NotLowered
@@ -60,8 +60,9 @@ def _compile_loaded_document(yaml_path: str, bundle: SourceBundle,
                              settings: compiler.CompileSettings
                              ) -> tuple[CompilationResult, tuple[realtime.Analysis, ...]]:
     """Compile to a graph-derived result, and each real-time analysis it declares."""
+    print(' starting compilation of', bundle.name)
     try:
-        result = compiler.compile_source(bundle, settings, quiet=False)
+        result = compiler.compile_source(bundle, settings)
         analyses = realtime.compile_analyses(result.realtime, yml_paths, tools_cwl, settings)
     except SophiosError:
         # The library reports; only this adapter is allowed to exit. The
@@ -72,6 +73,7 @@ def _compile_loaded_document(yaml_path: str, bundle: SourceBundle,
         # traceback file, though: a reported failure is not a crash.
         print('Failed to compile', yaml_path, file=sys.stderr)
         raise
+    print('finishing compilation of', bundle.name)
     # The resolved language version is reported on every compile, not
     # only on failure — nobody should have to guess which language their
     # file was read as.
@@ -334,7 +336,8 @@ def _main(args: argparse.Namespace, unknown_args: list[str]) -> None:
         settings.inference, format_rules=tuple(global_config.get('inference_rules', {}).items()),
         renaming_conventions=tuple(io.renamings_of(global_config))))
     compilation, analyses = _compile_loaded_document(yaml_path, bundle, yml_paths, tools_cwl, settings)
-    report(compilation.diagnostics, args.diagnostics)
+    report((*compilation.diagnostics, *(note for analysis in analyses for note in analysis.diagnostics)),
+           args.diagnostics)
     target = targets.target(args.target)
     basepath, root_dir = Path(args.basepath), Path(args.yaml).parent.absolute()
     view = compiler.resolved_view(compilation)
@@ -350,8 +353,10 @@ def _main(args: argparse.Namespace, unknown_args: list[str]) -> None:
         raise SophiosError(refused.diagnostics) from None
     report(lowered.notes, args.diagnostics)
     if args.cwl_inline_subworkflows or args.cwl_inline_runtag:
-        lowered = replace(lowered, model=pc.apply_inline_options(
-            lowered.model, subworkflows=args.cwl_inline_subworkflows, runtag=args.cwl_inline_runtag))
+        inlined, inline_notes = pc.apply_inline_options(
+            lowered.model, subworkflows=args.cwl_inline_subworkflows, runtag=args.cwl_inline_runtag)
+        lowered = replace(lowered, model=inlined)
+        report(inline_notes, args.diagnostics)
 
     # A transparent background, for slides.
     drawing_graph = drawing.draw(compilation, graph_settings, yaml_path, background=None) if args.graphviz else None

@@ -1,8 +1,6 @@
 """The compiler, judged on example workflows in files: each example of tests/core/data/examples compiles to the CWL its
 expected.yaml states (every platform) and runs under cwltool to the outputs it states (POSIX); each example of
 tests/core/data/compiler compiles, or is refused, as its expected.yaml states."""
-import contextlib
-import io
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -35,8 +33,7 @@ def test_an_example_compiles_to_the_cwl_it_states(folder: Path, tmp_path: Path,
     would reverse it for every runner, so only a stated document catches it."""
     workflow = example_workflow(folder, tmp_path / 'example')
     monkeypatch.chdir(tmp_path / 'example')
-    with contextlib.redirect_stdout(io.StringIO()):
-        cwl = workflow.compile().cwl_workflow
+    cwl = workflow.compile().cwl_workflow
     expected = stated(folder)['compiled']
     steps = {step['id']: step for step in cwl['steps']}
     assert list(steps) == list(expected['steps'])
@@ -80,8 +77,7 @@ def _written(directory: Path) -> dict[str, Any]:
             for path in sorted(directory.iterdir(), key=lambda path: path.name)}
 
 
-def _compiled_as_stated(folder: Path, root: str, expected: Yaml, out: Path,
-                        capsys: pytest.CaptureFixture[str]) -> None:
+def _compiled_as_stated(folder: Path, root: str, expected: Yaml, out: Path) -> None:
     """The root `.wic` of the example `folder`, compiled as the command line reads it, checked against `expected`;
     what it writes goes into `out`."""
     others = {'global': {path.stem: path for path in folder.glob('*.wic') if path.name != root}}
@@ -89,13 +85,12 @@ def _compiled_as_stated(folder: Path, root: str, expected: Yaml, out: Path,
     options = replace(CompileSettings(), **expected.get('options', {}))
     if 'refused' in expected:
         with pytest.raises(SophiosError) as caught:
-            compile_source(bundled, options, quiet=True)
+            compile_source(bundled, options)
         assert match(expected['refused'], [diagnostic(found) for found in caught.value.diagnostics]), root
         return
-    result = compile_source(bundled, options, quiet=False)
+    result = compile_source(bundled, options)
     notes = [*result.diagnostics, *cwl_notes(resolved_view(result))]
     assert match(expected.get('notes', []), [diagnostic(found) for found in notes]), root
-    assert match(expected.get('said', []), capsys.readouterr().err.splitlines()), root
     write_artifacts_to_disk(cwl_tree(result), out, output_targets=output_target_inputs(resolved_view(result)))
     if 'nextflow' in expected:
         job = folder / 'job.yml'
@@ -112,20 +107,18 @@ def _compiled_as_stated(folder: Path, root: str, expected: Yaml, out: Path,
 @pytest.mark.fast
 @pytest.mark.parametrize('folder', [pytest.param(path, id=path.name)
                                     for path in sorted((DATA / 'compiler').iterdir()) if path.is_dir()])
-def test_a_compiler_example_compiles_as_it_states(folder: Path, tmp_path: Path,
-                                                  capsys: pytest.CaptureFixture[str]) -> None:
+def test_a_compiler_example_compiles_as_it_states(folder: Path, tmp_path: Path) -> None:
     """Each root `.wic` of a directory of tests/core/data/compiler, compiled as the command line reads it (the tools
     and workflows beside it, and the synthetic tools) under the compile `options` it states, is `refused` with the
-    diagnostics stated, by code, severity, step and port; or compiles with exactly the `notes` stated and the lines
-    `said` on stderr, writes the files `written` states into one directory shared by every root, so a root that
-    overwrote another's file fails it, as the `files` named for the root and no others; and, where `nextflow` is
-    stated, is refused by the Nextflow target, given the values the directory's `job.yml` holds for its inputs, as it
-    states, by step and subject."""
+    diagnostics stated, by code, severity, step and port; or compiles with exactly the `notes` stated, writes the
+    files `written` states into one directory shared by every root, so a root that overwrote another's file fails it,
+    as the `files` named for the root and no others; and, where `nextflow` is stated, is refused by the Nextflow
+    target, given the values the directory's `job.yml` holds for its inputs, as it states, by step and subject."""
     out = tmp_path / 'out'
     out.mkdir()
     roots: dict[str, Yaml] = stated(folder)
     for root, expected in roots.items():
-        _compiled_as_stated(folder, root, expected, out, capsys)
+        _compiled_as_stated(folder, root, expected, out)
     written = _written(out)
     for root, expected in roots.items():
         stem = Path(root).stem

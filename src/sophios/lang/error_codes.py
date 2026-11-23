@@ -339,6 +339,21 @@ class SophiosErrorCode(StrEnum):
         'step\'s output, named `<step>~<port>`, which a workflow that declares no output returns.',
         'Rename the output to the name the message gives, or to another that Nextflow keeps; in a workflow that '
         'declares no output, declare each output to return, under a name Nextflow keeps.')
+    STALE_STEP_KEY = _explained(
+        'wic068',
+        'Note: a `wic: steps:` key or `wic: graphviz: ranksame:` entry addresses no step of its workflow and is '
+        'ignored.',
+        'Update the key to `(index, name)` or an existing step id, or remove it.')
+    AMBIGUOUS_OUTPUT_SOURCE = _explained(
+        'wic069',
+        "Note: a workflow output's `outputSource` names a step id that more than one step has, so it refers to the "
+        'first.',
+        'Write `(index, name)/port` to name which occurrence the output reads.')
+    SUBWORKFLOW_NOT_INLINED = _explained(
+        'wic070',
+        'Note: under `--cwl_inline_subworkflows`, a subworkflow call stays a subworkflow because dissolving it would '
+        'change what the workflow means.',
+        'Remove the feature the message names if you want the call flattened, or leave it as a subworkflow.')
 
     # --- Python API. The document is valid; the call was not. ---
     INVALID_INPUT_VALUE = _explained(

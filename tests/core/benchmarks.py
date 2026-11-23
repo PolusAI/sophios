@@ -38,7 +38,7 @@ def _compile_corpus_file(path: Path) -> None:
     registry = load_test_registry()
     bundle = frontdoor.bundle_from_disk(path, registry.workflows, registry.tools)
     settings, _graph_settings = sophios.cli.settings_from_args(sophios.cli.get_args(str(path)))
-    sophios.compiler.compile_source(bundle, settings, quiet=True)
+    sophios.compiler.compile_source(bundle, settings)
 
 
 _CORPUS: Final = sorted(path for paths in workflow_paths().values() for path in paths.values())
