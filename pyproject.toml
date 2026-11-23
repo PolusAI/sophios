@@ -34,7 +34,6 @@ dependencies = [
     # 2.32.2 gives an adapter its pool through get_connection_with_tls_context,
     # which sophios.compute overrides to make every call over a Unix socket.
     "requests>=2.32.2",
-    "mergedeep",
     "cwl-utils>=0.32",
     # CommandInputParameter attr changed from `type_` to `type` and back to `type_`
     # between versions 0.30, 0.31, 0.32
@@ -47,16 +46,9 @@ dependencies = [
     # that, and an upper bound on a package whose parsers are regenerated from
     # an evolving schema costs more than it saves. See
     # https://github.com/common-workflow-language/cwl-utils/issues/470.
-    "pydantic>=2.6",
-    "pydantic[email]",
-    "docker",
-    # FYI also need uidmap to run podman rootless
-    "podman",
     # Pinned: a Toil release changes how every compiled workflow runs, so
     # raise this only after the weekly Toil lane passes on the new release.
     "toil[cwl]==9.5.0",
-    "fastapi",
-    "uvicorn"
 ]
 
 [project.readme]
@@ -69,7 +61,15 @@ Homepage = "https://github.com/PolusAI/sophios"
 
 [project.optional-dependencies]
 
+contrib = [
+    "pydantic>=2.6",
+    "pydantic[email]",
+    "fastapi",
+    "uvicorn",
+]
 test = [
+    "sophios[contrib]",
+    "mergedeep",
     "networkx",
     "pre-commit",
     "pytest",
@@ -81,7 +81,6 @@ test = [
     "scipy",
     "pylint",
     "autopep8",
-    "pre-commit",
     "hypothesis",
     "import-linter",
 ]
@@ -108,10 +107,6 @@ mypy-types = [
     "types-six",
     "types-urllib3"
 ]
-runners = [
-    "toil[cwl]",
-    "cwl-utils>=0.32",
-]
 # See docs/requirements.txt
 doc = [
     "sphinx",
@@ -119,8 +114,8 @@ doc = [
     "sphinx-autodoc-typehints",
 ]
 plots = ["matplotlib"]
-all_except_runner_src = ["sophios[test,doc,plots,mypy-types]"]
-all = ["sophios[test,doc,plots,mypy-types]"]
+all_except_runner_src = ["sophios[contrib,test,doc,plots,mypy-types]"]
+all = ["sophios[contrib,test,doc,plots,mypy-types]"]
 
 [project.scripts]
 sophios = "sophios.main:main"
@@ -223,7 +218,6 @@ module = [
     "scipy.*",
     "ruamel.*",
     "toil.*",
-    "podman.*",
 ]
 ignore_missing_imports = true
 

@@ -3,7 +3,7 @@ channels:
   - defaults
 
 dependencies:
-  - "python>=3.11"
+  - "python>=3.11,<3.15"
 # NOTE: cwltool needs nodejs for InlineJavascriptRequirement.
 # The same pin as system_deps.yml, for the reason given there.
   - nodejs=26

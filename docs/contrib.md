@@ -5,7 +5,8 @@ if you write workflows in `.wic` or Python, nothing here applies to you.
 Three peripheral surfaces ship in the `sophios` package under
 `sophios.contrib`, outside the core: the core never imports them, and no
 other page depends on them. They serve a builder that composes tools
-described by ICT files and sends the result to be compiled.
+described by ICT files and sends the result to be compiled. Install their
+dependencies with `python -m pip install 'sophios[contrib]'`.
 
 ## The REST API
 
