@@ -104,15 +104,8 @@ jobs:
         id: setup
         run: 'true'
 
-      - name: Generate Sophios Python API Workflows (*.py -> *.wic)
-        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
-        # Corpus preparation: the corpus cases compile the *.wic files it writes.
-        run: cd sophios/ && pytest tests/core/test_python_api_workflow.py -k test_compile_python_workflows
-
       - name: Run benchmarks
         id: benchmarks
-        # Gated on setup, not on the corpus preparation above: the table is
-        # still written when that step fails.
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         # `pipefail` carries Python's status across `tee`: a case that raised
         # fails the step once the whole table is written.

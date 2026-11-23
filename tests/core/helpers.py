@@ -13,7 +13,8 @@ import subprocess
 import sys
 from pathlib import Path
 from types import ModuleType
-from typing import Any, Final, Iterable, Mapping
+from typing import Any, Final, Iterable, Mapping, cast
+from unittest.mock import patch
 from urllib.parse import unquote, urlsplit
 
 import pytest
@@ -49,6 +50,16 @@ def import_python_file(name: str, path: Path) -> ModuleType:
     sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def python_workflow(path: Path, tools: Tools) -> Workflow:
+    """What `workflow()` in the Python file at `path` returns, a tool its script names by a path that does not resolve
+    from here found in `tools` by its stem."""
+    def step(*args: Any, **kwargs: Any) -> Step:
+        return Step(*args, **{'tool_registry': tools, **kwargs})
+
+    with patch('sophios.api.python.workflow.Step', step):
+        return cast(Workflow, import_python_file(path.stem, path).workflow())
 
 
 def search_config(path: Path, cwl: Iterable[Path | str], wic: Iterable[Path | str] = (), **extra: Any) -> Path:

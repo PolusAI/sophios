@@ -208,16 +208,8 @@ jobs:
       id: setup
       run: 'true'
 
-    # Corpus preparation, and the first thing a broken Python API example fails:
-    # only the steps that read the *.wic files it writes depend on it (they
-    # also check steps.corpus), so the other suites still report.
-    - name: Generate Sophios Python API Workflows (*.py -> *.wic)
-      id: corpus
-      if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
-      run: cd sophios/ && pytest tests/core/test_python_api_workflow.py -k test_compile_python_workflows
-
     - name: cwl-docker-extract (i.e. recursively docker pull)
-      if: ${{ !cancelled() && steps.setup.outcome == 'success' && steps.corpus.outcome == 'success' }}
+      if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
       # One compile and a round of docker pulls per corpus workflow, mostly
       # waiting on the registry: 2.2 min in series, so it gets the same
       # workers as the runs that follow it.
@@ -230,13 +222,13 @@ jobs:
 
     - name: PyTest Python API
       if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
-      run: cd sophios/ && pytest tests/core/test_python_api_workflow.py -k "not test_compile_python_workflows"
+      run: cd sophios/ && pytest tests/core/test_python_api_workflow.py
 
     # Workflow.from_wic and write_wic over every .wic root the config reaches.
     # No other lane runs this round trip over the mm-workflows and
     # image-workflows roots, so a break on those roots alone would be green.
     - name: PyTest Python API from .wic (corpus round trip)
-      if: ${{ !cancelled() && steps.setup.outcome == 'success' && steps.corpus.outcome == 'success' }}
+      if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
       run: cd sophios/ && pytest tests/core/test_python_api_from_wic.py
 
     - name: PyTest Contrib (REST core and WFB, ICT to CLT, WFB payload)
@@ -245,7 +237,7 @@ jobs:
       run: cd sophios/ && pytest tests/contrib --cwl_runner cwltool
 
     - name: PyTest Run Workflows
-      if: ${{ !cancelled() && steps.setup.outcome == 'success' && steps.corpus.outcome == 'success' }}
+      if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
       run: cd sophios/ && pytest tests/core/test_examples.py -k test_run_workflows_on_push -n "${PYTEST_WORKERS}" --cwl_runner cwltool --durations=0 # --cov
 
     # The corpus workflows the Nextflow target supports, compiled with it and

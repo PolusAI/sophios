@@ -191,14 +191,6 @@ jobs:
         id: setup
         run: 'true'
 
-      # Corpus preparation, and the first thing a broken Python API example fails:
-      # only the steps that read the *.wic files it writes depend on it (they
-      # also check steps.corpus), so the static checks still report.
-      - name: Generate Sophios Python API Workflows (*.py -> *.wic)
-        id: corpus
-        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
-        run: cd sophios/ && pytest tests/core/test_python_api_workflow.py -k test_compile_python_workflows
-
       - name: ShellCheck Script Quality
         if: ${{ runner.os == 'Linux' && !cancelled() && steps.setup.outcome == 'success' }}
         # "SC1017 (error): Literal carriage return. Run script through tr -d '\r' ."
@@ -236,7 +228,7 @@ jobs:
       # does; on POSIX, cwltool validates every form. cwltool would find each
       # defect only in run_workflows, behind a container pull.
       - name: PyTest CWL Corpus Forms
-        if: ${{ !cancelled() && steps.setup.outcome == 'success' && steps.corpus.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         run: cd sophios/ && pytest tests/core/test_examples.py -k "test_corpus_ and not weekly_corpus" # --cov --cov-config=.coveragerc_serial
         timeout-minutes: 20 # backup timeout for windows
 
@@ -268,11 +260,8 @@ jobs:
         timeout-minutes: 30
         run: cd sophios/ && pytest tests/core/test_lower.py tests/core/test_emit.py tests/core/test_resolve.py tests/core/test_infer_phase.py tests/core/test_compiler.py
 
-      # The Python API surfaces that used to be example scripts nothing executed:
-      # `search_paths_wic` reaches the corpus repositories and docs/tutorials,
-      # and docs/tutorials holds no .py files, so the "Generate Sophios Python
-      # API Workflows" step above never touched examples/. Compile-only — no
-      # container, no runner, no network — and about a second in total.
+      # What each shipped Python script makes. Compile-only: no container, no
+      # runner, no network, and about a second in total.
       - name: PyTest Example Surfaces
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         run: cd sophios/ && pytest tests/core/test_example_scripts.py

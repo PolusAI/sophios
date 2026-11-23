@@ -104,14 +104,6 @@ jobs:
         id: setup
         run: 'true'
 
-      # Corpus preparation, and the first thing a broken Python API example fails:
-      # only the steps that read the *.wic files it writes depend on it (they
-      # also check steps.corpus), so the static checks still report.
-      - name: Generate Sophios Python API Workflows (*.py -> *.wic)
-        id: corpus
-        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
-        run: cd sophios/ && pytest tests/core/test_python_api_workflow.py -k test_compile_python_workflows
-
       - name: ShellCheck Script Quality
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         # "SC1017 (error): Literal carriage return. Run script through tr -d '\r' ."
@@ -144,6 +136,6 @@ jobs:
       # does; on POSIX, cwltool validates every form. cwltool would find each
       # defect only in run_workflows, behind a container pull.
       - name: PyTest CWL Corpus Forms
-        if: ${{ !cancelled() && steps.setup.outcome == 'success' && steps.corpus.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         run: cd sophios/ && pytest tests/core/test_examples.py -k "test_corpus_ and not weekly_corpus" # --cov --cov-config=.coveragerc_serial
         timeout-minutes: 20 # backup timeout for windows

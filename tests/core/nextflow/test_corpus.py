@@ -9,8 +9,7 @@ import sophios.plugins
 from sophios.nf_reader import read_nextflow
 from sophios.nf_types import NfWorkflowOutputConnection
 
-from ..test_python_api_workflow import _step_registry_injected
-from ..helpers import REPO_ROOT, import_python_file, python_process
+from ..helpers import REPO_ROOT, python_process, python_workflow
 from .testkit import execute_nextflow
 
 CHECKOUTS = REPO_ROOT.parent
@@ -36,9 +35,7 @@ def _compile(source: Path, pipeline: Path, monkeypatch: pytest.MonkeyPatch) -> N
     # A Python workflow names its tools relative to its repository, as run_workflows.yml compiles it.
     tools = sophios.plugins.get_tools_cwl(io.read_config_from_disk(CONFIG))
     monkeypatch.chdir(source.parents[1])
-    with _step_registry_injected(tools):
-        built = import_python_file(source.stem, source).workflow()
-    built.compile(target="nextflow", tool_registry=tools).write(pipeline)
+    python_workflow(source, tools).compile(target="nextflow", tool_registry=tools).write(pipeline)
 
 
 @pytest.mark.nextflow
