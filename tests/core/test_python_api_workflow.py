@@ -10,7 +10,6 @@ from pathlib import Path
 import sys
 import tempfile
 import warnings
-from types import SimpleNamespace
 from typing import Any, Callable, Final, Literal, cast
 from unittest import TestCase
 from unittest.mock import Mock
@@ -274,7 +273,7 @@ def _reading_an_absent_file(directory: Path) -> Workflow:
     """`cat` of a file bound on the workflow's input, which is not there (`wic016`)."""
     step = Step(clt_path=PYTHON_API / 'cat.cwl')
     workflow = Workflow([step], 'wf')
-    step.inputs.f = workflow.inputs.file.as_type('File')
+    step.inputs.f = workflow.inputs.file
     workflow.inputs.file = str(directory / 'absent.txt')
     return workflow
 
@@ -357,8 +356,7 @@ def test_run_writes_what_compile_returns_and_hands_the_runner_its_own_flags(monk
     prepared: list[tuple[list[Path], RunSettings]] = []
     monkeypatch.setattr(python_runtime.preflight, 'ready',
                         lambda documents, settings, jobs=(), **_: prepared.append((documents, settings)))
-    monkeypatch.setattr(sophios.plugins.docker, 'from_env',
-                        lambda: SimpleNamespace(images=SimpleNamespace(build=lambda **_: None)))
+    monkeypatch.setattr(preflight, 'run_engine', lambda *_args, **_kwargs: None)
     workflow.run(basepath='base', runner=Cwltool(remove_entrypoints=True), generate_run_script=True)
     assert '--quiet' in (tmp_path / 'run.sh').read_text(encoding='utf-8').splitlines()[-1].split()
 
@@ -388,9 +386,8 @@ def test_run_writes_what_compile_returns_and_hands_the_runner_its_own_flags(monk
     monkeypatch.setattr(python_runtime.run_local, 'run', run)
     workflow.run(basepath=str(tmp_path), runner=Cwltool('--logLevel', 'INFO'), generate_run_script=True,
                  outdir=str(tmp_path / 'workflow_output'))
-    (request,) = requests
-    assert (request.run.runner.flags, request.run.generate_run_script, request.run.outdir, request.workflow_name,
-            request.basepath) == (('--logLevel', 'INFO'), True, str(tmp_path / 'workflow_output'), 'exact', tmp_path)
+    assert [(r.run.runner.flags, r.run.generate_run_script, r.run.outdir, r.workflow_name, r.basepath)
+            for r in requests] == [(('--logLevel', 'INFO'), True, str(tmp_path / 'workflow_output'), 'exact', tmp_path)]
 
 
 @pytest.mark.fast
@@ -402,8 +399,7 @@ def test_run_args_dict_means_its_typed_spelling_and_no_run_is_made_of_what_no_ru
     checked: list[RunSettings] = []
     monkeypatch.setattr(python_runtime.preflight, 'ready', lambda _documents, run, *_a, **_k: checked.append(run))
     monkeypatch.setattr(python_runtime.run_local, 'start', lambda *_args, **_kwargs: pytest.fail('ran'))
-    monkeypatch.setattr(sophios.plugins.docker, 'from_env',
-                        lambda: SimpleNamespace(images=SimpleNamespace(build=lambda **_: None)))
+    monkeypatch.setattr(preflight, 'run_engine', lambda *_args, **_kwargs: None)
     workflow = Workflow([adapter_step('echo', message='hello')], 'wf')
     for refused in (lambda: workflow.start(run_args_dict={'generate_run_script': 'yes'}),
                     lambda: workflow.run(target='nextflow', run_args_dict={'cachedir': 'cache', 'resume': ''}),

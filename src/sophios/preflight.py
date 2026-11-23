@@ -145,7 +145,7 @@ def pull(found: Needs, run: RunSettings) -> None:
             cmd = ['cwl-docker-extract', '-s', '--dir', run.runner.pull_dir or str(Path.cwd()), str(document)]
         else:
             cmd = ['cwl-docker-extract', '--force-download', '--container-engine', engine, str(document)]
-        _fetch(cmd, f'pull {_images(found.images)}', engine)
+        run_engine(cmd, f'pull {_images(found.images)}', engine)
     if engine != 'singularity':
         _load_and_import(found, engine)
 
@@ -166,14 +166,14 @@ def _load_and_import(found: Needs, engine: str) -> None:
             if image_id is None:
                 raise SophiosError([_unavailable(f'a dockerImport requirement of {import_source} names no '
                                                  'dockerImageId to import it as')])
-            _fetch([engine, 'import', str(import_source), str(image_id)],
-                   f'import {image_id} from {import_source}', engine)
+            run_engine([engine, 'import', str(import_source), str(image_id)],
+                       f'import {image_id} from {import_source}', engine)
 
 
 def _load_archive(engine: str, source: str) -> None:
     """`<engine> load -i <source>`; a `source` that is not a file is an http(s) URL, fetched first (as cwltool does)."""
     if os.path.exists(source):
-        _fetch([engine, 'load', '-i', source], f'load {source}', engine)
+        run_engine([engine, 'load', '-i', source], f'load {source}', engine)
     elif urlparse(source).scheme in ('http', 'https'):
         with tempfile.TemporaryDirectory() as directory:
             archive = Path(directory) / 'image.tar'
@@ -185,15 +185,19 @@ def _load_archive(engine: str, source: str) -> None:
             except requests.RequestException as error:
                 raise SophiosError([_unavailable(f'could not download {source}, which a dockerLoad requirement '
                                                  f'names ({error})')]) from error
-            _fetch([engine, 'load', '-i', str(archive)], f'load {source}', engine)
+            run_engine([engine, 'load', '-i', str(archive)], f'load {source}', engine)
     else:
         raise SophiosError([_unavailable(f'a dockerLoad requirement names {source}, which is neither a file '
                                          'nor an http(s) URL')])
 
 
-def _fetch(cmd: list[str], doing: str, engine: str) -> None:
-    """Run `cmd`, which `doing` describes; when it exits non-zero, quote the engine's last error line."""
-    proc = sub.run(cmd, check=False, stderr=sub.PIPE, text=True, errors='replace')
+def run_engine(cmd: list[str], doing: str, engine: str) -> None:
+    """Run container-engine `cmd`, which `doing` describes; report missing binary or non-zero exit as `wic037`."""
+    try:
+        proc = sub.run(cmd, check=False, stderr=sub.PIPE, text=True, errors='replace')
+    except FileNotFoundError as error:
+        raise SophiosError([_unavailable(f'{engine} could not {doing} ({cmd[0]} is not installed or not on PATH)')]
+                           ) from error
     if proc.returncode != 0:
         raise SophiosError([_unavailable(f'{engine} could not {doing} ({cmd[0]} exited with status '
                                          f'{proc.returncode}: {_engine_said(proc.stderr)})')])

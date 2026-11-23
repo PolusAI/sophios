@@ -7,10 +7,7 @@ import sys
 import tempfile
 from typing import Any, Iterable, Iterator, TypeAlias
 
-import podman
-import docker
-
-from . import utils_cwl
+from . import preflight, utils_cwl
 from .lang.diagnostics import SophiosError
 from .lang.error_codes import SophiosErrorCode
 from .wic_types import DEFAULT_BASEPATH, Cwl, StepId, Tool, Tools, Json
@@ -164,24 +161,15 @@ def remove_entrypoints(container_engine: str, artifacts: Iterable[CompilationArt
 
     Without entrypoints, to switch between 1 and 2, simply comment out DockerRequirement ... that's it!
     """
+    if container_engine not in ('docker', 'podman'):
+        return
     pulls = sorted({pull for artifact in artifacts for pull in _docker_pulls(artifact)
                     if _noentrypoint_tag(pull) != pull})
-    if not pulls:
-        return
-    if container_engine == 'docker':
-        _build(docker.from_env().images, pulls)  # type: ignore
-    elif container_engine == 'podman':
-        with podman.PodmanClient() as client:  # the active podman machine, else the user's own socket
-            _build(client.images, pulls)
-
-
-def _build(images: Any, pulls: Iterable[str]) -> None:
-    """Build each of `pulls` as its no-entrypoint tag, with an empty ENTRYPOINT."""
     for pull in pulls:
+        tag = _noentrypoint_tag(pull)
         with tempfile.TemporaryDirectory() as tempdir:
             (Path(tempdir) / 'Dockerfile').write_text(f'FROM {pull}\nENTRYPOINT []\n', encoding='utf-8')
-            # podman-py names a random file when told none, one the context does not hold
-            images.build(path=tempdir, dockerfile='Dockerfile', tag=_noentrypoint_tag(pull))
+            preflight.run_engine([container_engine, 'build', '-t', tag, tempdir], f'build {tag}', container_engine)
 
 
 def _docker_pulls(artifact: CompilationArtifact) -> Iterator[str]:
