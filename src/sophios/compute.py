@@ -56,7 +56,7 @@ from . import targets
 from .api.python._inference import Inference
 from .api.python._workflow_runtime import ServicePipeline, service_document, service_pipeline
 from .backends import _cwl_objects
-from .nf_types import NfLiteral, NfWorkflowInputConnection
+from .nextflow.model import NfLiteral, NfWorkflowInputConnection
 from .run_status import RunState, RunStatus, StepStatus
 from .wic_types import Json, TargetName, Tools
 

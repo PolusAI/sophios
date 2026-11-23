@@ -5,7 +5,7 @@ admits one closed subset of CWL ``$( … )`` JavaScript. Every admitted
 expression means the same under JavaScript and under each target that
 renders it; nothing here evaluates JavaScript. Text outside the grammar or
 the typing rules is rejected with a ValueError naming the construct. The
-Nextflow target's Groovy rendering and reading are ``sophios.nf_expr``.
+Nextflow target's Groovy rendering and reading are ``sophios.nextflow.expr``.
 """
 
 from dataclasses import dataclass

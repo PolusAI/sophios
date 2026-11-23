@@ -4,9 +4,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from sophios.input_output import dump_wic_yaml
-from sophios.input_output_nf import write_nextflow_artifacts
+from sophios.nextflow.render import write_nextflow_artifacts
 from sophios.lang.diagnostics import Diagnostic
-from sophios.nf_types import ExecutableNextflowWorkflow
+from sophios.nextflow.model import ExecutableNextflowWorkflow
 from sophios.wic_types import Json
 
 

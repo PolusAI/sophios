@@ -16,7 +16,7 @@ from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Outp
 from sophios.input_output import SHIPPED_RENAMINGS
 from sophios.api.python.workflow import (Inference, InvalidInferenceError, RunResult, RunState, SophiosError,
                                          SophiosErrorCode, Step, Workflow)
-from sophios.nf_types import NfProcessConnection
+from sophios.nextflow.model import NfProcessConnection
 from sophios.wic_types import Json
 
 from .budgets import budget

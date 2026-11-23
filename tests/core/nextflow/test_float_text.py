@@ -10,7 +10,7 @@ import pytest
 
 from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
 from sophios.api.python.workflow import Step, StepInput, Workflow
-from sophios.input_output_nf import write_nextflow_artifacts
+from sophios.nextflow.render import write_nextflow_artifacts
 
 from .test_channels import _lower
 from .testkit import execute_nextflow

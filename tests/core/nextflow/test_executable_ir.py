@@ -11,12 +11,12 @@ from typing import Any, cast
 from hypothesis import example, given, strategies as st
 import pytest
 
-from sophios.input_output_nf import render_nextflow
+from sophios.nextflow.render import render_nextflow
 from sophios.lang.subset import Expr, Number, Op, Ref, Text, parse
-from sophios.nf_symbols import (
+from sophios.nextflow.symbols import (
     NEXTFLOW_SCRIPT_DECLARED_NAMES, NEXTFLOW_SCRIPT_NAMES, is_nextflow_identifier, normalize_nextflow_identifier,
 )
-from sophios.nf_types import (
+from sophios.nextflow.model import (
     ExecutableNextflowWorkflow,
     NfArrayBinding,
     NfBasenameReference,

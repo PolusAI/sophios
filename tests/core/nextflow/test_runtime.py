@@ -21,7 +21,7 @@ from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Outp
 from sophios.api.python._workflow_runtime import ServicePipeline, service_pipeline
 from sophios.api.python.workflow import Step, StepInput, Workflow
 from sophios.backends import recorded_outputs
-from sophios.nf_symbols import NEXTFLOW_SCRIPT_NAMES
+from sophios.nextflow.symbols import NEXTFLOW_SCRIPT_NAMES
 from sophios.run_status import RunState, RunStatus
 
 from ..budgets import budget

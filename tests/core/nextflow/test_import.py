@@ -23,7 +23,7 @@ from sophios.api.python._ports import ParameterNamespace
 from sophios.api.python.nextflow import import_nextflow
 from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
 from sophios.api.python.workflow import Inference, StepInput, Workflow
-from sophios.input_output_nf import (
+from sophios.nextflow.render import (
     NEXTFLOW_CONFIG,
     NEXTFLOW_PARAMS,
     NEXTFLOW_SCRIPT,
@@ -32,8 +32,8 @@ from sophios.input_output_nf import (
 )
 from sophios.lang.diagnostics import SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
-from sophios.nf_reader import read_nextflow
-from sophios.nf_types import ExecutableNextflowWorkflow
+from sophios.nextflow.reader import read_nextflow
+from sophios.nextflow.model import ExecutableNextflowWorkflow
 
 from ..budgets import budget
 from ..cases import DATA

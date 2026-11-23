@@ -12,16 +12,16 @@ from cwl_utils.expression import interpolate
 from hypothesis import example, given, strategies as st
 import pytest
 
-from sophios.input_output_nf import (
+from sophios.nextflow.render import (
     _render_glob,
     _shell_quote,
     render_nextflow,
     render_nextflow_config,
 )
 from sophios.lang.subset import Op, Ref, Text
-from sophios.nf_expr import groovy_literal
-from sophios.nf_symbols import is_nextflow_identifier, normalize_nextflow_identifier
-from sophios.nf_types import (
+from sophios.nextflow.expr import groovy_literal
+from sophios.nextflow.symbols import is_nextflow_identifier, normalize_nextflow_identifier
+from sophios.nextflow.model import (
     ExecutableNextflowWorkflow,
     NfCommand,
     NfEntry,
@@ -33,10 +33,10 @@ from sophios.nf_types import (
     NfTemplate,
     NfWorkflowInputConnection,
 )
-from sophios.utils_nf import _command as lower_command
-from sophios.utils_nf import _Tool
+from sophios.nextflow.tool import _command as lower_command
+from sophios.nextflow.tool import _Tool
 from sophios.wic_types import Tool
-from sophios.utils_nf import _template as lower_template
+from sophios.nextflow.tool import _template as lower_template
 
 from ..budgets import budget
 

@@ -12,7 +12,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Final, Protocol, TypeVar
 
-from . import input_output, input_output_nf, realtime
+from . import input_output, realtime
 from .backends import Backend, CwltoolBackend, NextflowBackend, ToilBackend
 from .compiler import cwl_notes
 from .ir import emit
@@ -20,11 +20,13 @@ from .ir.artifacts import CompilationArtifact
 from .ir.locations import absolute_paths
 from .ir.resolved import ResolvedWorkflow, bind
 from .lang.nodes import OpaqueCwl
-from .nf_types import ExecutableNextflowWorkflow
+from .nextflow import render as io_nf
+from .nextflow.lower import NEXTFLOW as _NEXTFLOW_LOWERING
+from .nextflow.model import ExecutableNextflowWorkflow
+from .nextflow.tool import local_locations_as_paths
 from .run_setup import Lowered
 from .runners import RUNNERS, Cwltool, Nextflow, Runner, Toil, build, named
 from .runtime_inputs import name_output_targets, output_target_inputs
-from .utils_nf import NEXTFLOW as _NEXTFLOW_LOWERING, local_locations_as_paths
 
 ModelT = TypeVar('ModelT')
 
@@ -111,7 +113,7 @@ class _Nextflow:
 
     def clear(self, basepath: Path) -> None:
         """The four files a write makes."""
-        input_output_nf.remove_nextflow_artifacts(basepath)
+        io_nf.remove_nextflow_artifacts(basepath)
 
     def write(self, lowered: Lowered[ExecutableNextflowWorkflow], analyses: tuple[realtime.Analysis, ...],
               basepath: Path, *, inputs_file: str, root_dir: Path) -> None:
@@ -119,7 +121,7 @@ class _Nextflow:
         # A real-time analysis watches cwltool's job directories, which a Nextflow run has none of, and an inputs
         # file is a CWL runner's: neither is written, and no relative path of theirs is read.
         del analyses, inputs_file, root_dir
-        input_output_nf.write_nextflow_artifacts(lowered.model, basepath)
+        io_nf.write_nextflow_artifacts(lowered.model, basepath)
 
 
 #: Every target, by name.

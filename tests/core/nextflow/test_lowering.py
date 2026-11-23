@@ -10,7 +10,7 @@ from hypothesis import example, given, strategies as st
 import pytest
 
 from sophios.api.python.workflow import Workflow
-from sophios.nf_types import NfFlag
+from sophios.nextflow.model import NfFlag
 
 from ..budgets import budget
 from .testkit import lowered_case, one_step, tool

@@ -10,10 +10,10 @@ import re
 from types import MappingProxyType
 from typing import Any, ClassVar, Final, Generic, TypeVar, get_args
 
-from .lang.cwl import LINK_MERGES, PICK_VALUES, PICKS_ONE, SCATTER_METHODS
-from .lang.subset import Expr, canonical, check, references, validate
-from .nf_expr import NF_FINITE_HELPER, NF_ROUND_HELPER
-from .nf_symbols import NEXTFLOW_SCRIPT_DECLARED_NAMES, validate_nextflow_identifier
+from ..lang.cwl import LINK_MERGES, PICK_VALUES, PICKS_ONE, SCATTER_METHODS
+from ..lang.subset import Expr, canonical, check, references, validate
+from .expr import NF_FINITE_HELPER, NF_ROUND_HELPER
+from .symbols import NEXTFLOW_SCRIPT_DECLARED_NAMES, validate_nextflow_identifier
 
 
 _T = TypeVar("_T")
