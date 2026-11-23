@@ -67,8 +67,7 @@ def _long_form(spec: Any) -> Any:
 def _compile_file(path: Path, workflow_paths: WorkflowPaths, tools: Tools) -> CompilationResult:
     """`path` compiled as the CLI reads it, with the settings `Workflow.compile()` uses."""
     return sophios.compiler.compile_source(
-        bundle_from_disk(path, workflow_paths, tools), sophios.compiler.CompileSettings(),
-        quiet=False)
+        bundle_from_disk(path, workflow_paths, tools), sophios.compiler.CompileSettings())
 
 
 def _file_door(path: Path, workflow_paths: WorkflowPaths, tools: Tools) -> tuple[Json, Json, list[str]]:
@@ -81,7 +80,11 @@ def _file_door(path: Path, workflow_paths: WorkflowPaths, tools: Tools) -> tuple
     if named and isinstance(cwl.get('outputs'), dict):
         cwl['outputs'] = {name: spec for name, spec in cwl['outputs'].items() if name in named}
     job = runner_job_inputs(artifact.job_inputs, output_target_inputs(sophios.compiler.resolved_view(result)))
-    return (cwl, job, list(map(str, result.diagnostics)))
+    # Stale `wic: steps:` keys and ambiguous string `outputSource` spellings exist only in `.wic` text;
+    # `Workflow.from_wic` reports them when loading the file, so compiling the resulting Python objects never does.
+    compile_notes = [str(note) for note in result.diagnostics if note.code not in (
+        SophiosErrorCode.STALE_STEP_KEY, SophiosErrorCode.AMBIGUOUS_OUTPUT_SOURCE)]
+    return (cwl, job, compile_notes)
 
 
 def _named_outputs(path: Path) -> list[str]:
@@ -215,22 +218,26 @@ def test_a_wic_file_and_its_python_objects_compile_alike(yml_path_str: str, yml_
 
 
 @pytest.mark.fast
-def test_a_document_of_every_construct_python_spells_is_read_as_stated(monkeypatch: pytest.MonkeyPatch,
-                                                                       tmp_path: Path) -> None:
-    """tests/core/data/from_wic/built/every_construct/root.wic is read into objects, warning of what is dropped, and
-    they compile as the file does and write back (`_compiles_alike_and_writes_back`); expected.yaml states the
-    inputs, the compiled steps, the declared analysis and what the bundle writes. Nothing is written beside it."""
+def test_a_document_of_every_construct_python_spells_is_read_as_stated(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """tests/core/data/from_wic/built/every_construct/root.wic is read into objects, warning of what is dropped and
+    reporting stale `wic: steps:` keys (`wic068`) without printing inference guesses (`wic043`), and they compile as
+    the file does and write back (`_compiles_alike_and_writes_back`); expected.yaml states the inputs, the compiled
+    steps, the declared analysis and what the bundle writes. Nothing is written beside it."""
     case = DATA / 'from_wic' / 'built' / 'every_construct'
     stated = yaml.safe_load((case / 'expected.yaml').read_text(encoding='utf-8'))
     workflow_paths = {'global': {path.stem: path for path in case.glob('*.wic')}}
     monkeypatch.chdir(tmp_path)
     with pytest.warns(UserWarning) as warned:
         workflow = Workflow.from_wic(case / 'root.wic', tool_registry=TOOLS, workflow_paths=workflow_paths)
+    load_err = capsys.readouterr().err
+    assert '[wic068]' in load_err and '[wic043]' not in load_err
     assert [str(warning.message) for warning in warned if 'dropped' in str(warning.message)] == [
         f'{text}: the Python API has no spelling for them, and it changes no CWL a Workflow compiles or runs'
         for text in stated['warns']]
     assert [port.name for port in workflow.inputs] == stated['inputs']
     root = _compiles_alike_and_writes_back(case / 'root.wic', workflow_paths, TOOLS, workflow, tmp_path / 'bundle')
+    assert '[wic043]' in capsys.readouterr().err
     assert match(stated['written'], read_wic(root.read_text(encoding='utf-8')))
     result = _workflow_runtime.compile_workflow_result(workflow)
     assert [step['id'] for step in cwl_tree(result).cwl['steps']] == stated['steps']

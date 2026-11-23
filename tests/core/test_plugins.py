@@ -329,14 +329,14 @@ def test_each_stem_resolves_to_the_last_file_found(tmp_path_factory: pytest.Temp
                                                    monkeypatch: pytest.MonkeyPatch,
                                                    capsys: pytest.CaptureFixture[str]) -> None:
     """Each case of data/discovery (see its README), under the filesystem's own listing and under it reversed:
-    discovery must not depend on it. A search path that holds no tool says so on stdout."""
+    discovery must not depend on it. A search path that holds no tool says so on stderr."""
     for case in (param.values[0] for param in cases('discovery', 'files', 'found', 'kinds', 'roots', 'warnings',
                                                     'links')):
         with monkeypatch.context() as listing_patches:
             _resolves(case, tmp_path_factory.mktemp('layout'), listing_patches, capsys)
     empty = tmp_path_factory.mktemp('empty')
     assert not sophios.plugins.get_tools_cwl({'search_paths_cwl': {'global': [str(empty)]}})
-    assert f'No cwl files found in {empty}' in capsys.readouterr().out
+    assert f'No cwl files found in {empty}' in capsys.readouterr().err
 
 
 def _resolves(case: Yaml, base: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
@@ -386,7 +386,7 @@ def test_a_tool_file_that_is_not_yaml_stops_only_the_workflow_that_runs_it(tmp_p
     tools = sophios.plugins.get_tools_cwl({'search_paths_cwl': {'global': [str(tmp_path)]}})
 
     def compiled(workflow: str) -> Any:
-        return cwl_tree(compile_source(bundle_from_disk(tmp_path / workflow, {}, tools), CompileSettings(), quiet=True))
+        return cwl_tree(compile_source(bundle_from_disk(tmp_path / workflow, {}, tools), CompileSettings()))
 
     assert [child.namespace for child in compiled('unused.wic').children] == [('echo',)]
     with pytest.raises(SophiosError) as raised:

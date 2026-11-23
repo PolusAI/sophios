@@ -13,7 +13,7 @@ a_positional_key_wins_over_an_id_key_for:
 an_id_key_from_the_parent_merges_over:
   expect:
   - {depth: 1, inputs: {name: [InlineLiteral, from_root.txt]}}
-  said: []
+  notes: []
 an_id_key_from_the_parent_wins_when_the:
   expect:
   - {depth: 1, inputs: {name: [InlineLiteral, from_root.txt], other: [InlineLiteral, o]}}

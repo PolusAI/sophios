@@ -16,6 +16,7 @@ from sophios.ir.lower import output_step
 from sophios.ir.resolve import RegistrySnapshot, ResolvedDocument, ResolvedStep, resolve
 from sophios.lang import (CwlRecord, Diagnostic, Document, EdgeRef, InlineLiteral, InputValue, RawCwlRef,
                           Severity, SophiosError, SophiosErrorCode, SourceSpan, UnresolvedName, WicSidecar, to_json)
+from sophios.lang.diagnostics import report
 from sophios.wic_types import StepId, Tools
 
 from ._ports import OutputParameter, _validate_namespace_name
@@ -75,10 +76,12 @@ def workflow_from_wic(path: Path, tool_registry: Tools,
     """
     bundle = bundle_from_disk(path, {namespace: dict(paths) for namespace, paths in workflow_paths.items()},
                               tool_registry)
-    compiler.compile_source(bundle, compiler.CompileSettings(), quiet=False)
+    result = compiler.compile_source(bundle, compiler.CompileSettings())
     assert bundle.parsed.document is not None  # the compile above raised otherwise
     resolved = resolve(bundle.parsed.document, bundle.registry, name=bundle.name)
     assert resolved.document is not None  # the compile above resolved it
+    report(tuple(note for note in result.diagnostics
+                 if note.code in (SophiosErrorCode.STALE_STEP_KEY, SophiosErrorCode.AMBIGUOUS_OUTPUT_SOURCE)))
 
     reading = _Reading()
     _read_document(resolved.document, bundle.parsed.document, bundle, reading)

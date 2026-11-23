@@ -74,7 +74,7 @@ def _compile_wic(root: Path, settings: sophios.compiler.CompileSettings) -> Comp
     """`root` compiled as the command line reads it, with the shipped tools and the `.wic` files beside it."""
     return sophios.compiler.compile_source(
         bundle_from_disk(root, {'global': {path.stem: path for path in root.parent.glob('*.wic')}}, shipped_tools()),
-        settings, quiet=True)
+        settings)
 
 
 def _bodies(diagnostics: Any) -> list[str]:

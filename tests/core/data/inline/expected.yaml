@@ -1,15 +1,15 @@
 # Each kept call, and why, said once; the flat root, its steps named for the calls they came from; and what each
 # step of each form runs.
-said:
-- {contains: ["step 'gated'", carries `when`]}
-- {contains: ["step 'required'", carries `requirements`]}
-- {contains: ["step 'labelled'", carries `label`]}
-- {contains: ["step 'opted_out'", 'wic: inlineable: false']}
-- {contains: ["step 'javascript'", different InlineJavascriptRequirement]}
-- {contains: ["step 'scattered'", carries `scatter`]}
-- {contains: ["step 'valued'", "input 'name' is bound to", not to a single source]}
-- {contains: ["step 'defaulted'", "input 'name' has a default"]}
-- {contains: [sealing.wic, "step 'sealed'", 'wic: inlineable: false']}
+notes:
+- {code: SUBWORKFLOW_NOT_INLINED, severity: note, step: gated, message: {contains: ["step 'gated'", carries `when`]}}
+- {code: SUBWORKFLOW_NOT_INLINED, severity: note, step: required, message: {contains: ["step 'required'", carries `requirements`]}}
+- {code: SUBWORKFLOW_NOT_INLINED, severity: note, step: labelled, message: {contains: ["step 'labelled'", carries `label`]}}
+- {code: SUBWORKFLOW_NOT_INLINED, severity: note, step: opted_out, message: {contains: ["step 'opted_out'", 'wic: inlineable: false']}}
+- {code: SUBWORKFLOW_NOT_INLINED, severity: note, step: javascript, message: {contains: ["step 'javascript'", different InlineJavascriptRequirement]}}
+- {code: SUBWORKFLOW_NOT_INLINED, severity: note, step: scattered, message: {contains: ["step 'scattered'", carries `scatter`]}}
+- {code: SUBWORKFLOW_NOT_INLINED, severity: note, step: valued, message: {contains: ["step 'valued'", "input 'name' is bound to", not to a single source]}}
+- {code: SUBWORKFLOW_NOT_INLINED, severity: note, step: defaulted, message: {contains: ["step 'defaulted'", "input 'name' has a default"]}}
+- {code: SUBWORKFLOW_NOT_INLINED, severity: note, step: sealed, file: sealing.wic, message: {contains: ["step 'sealed'", 'wic: inlineable: false']}}
 flat:
   requirements: {exact: {InlineJavascriptRequirement: {expressionLib: [var a = 1;]}, MultipleInputFeatureRequirement: {},
                          ScatterFeatureRequirement: {}, StepInputExpressionRequirement: {},

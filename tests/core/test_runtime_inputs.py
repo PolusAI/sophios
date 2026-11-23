@@ -75,8 +75,7 @@ def _written(tmp_path: Path, source: str, inputs_file: str = '') -> Path:
     tools = {StepId(tool.stem, 'global'): Tool(str(tool), yaml.safe_load(tool.read_text(encoding='utf-8')))
              for tool in DATA.glob('*.cwl')}
     siblings = {'global': {p.stem: p for p in DATA.glob('*.wic')}}
-    result = compile_source(bundle_from_disk(DATA / source, siblings, tools), CompileSettings(),
-                            quiet=True)
+    result = compile_source(bundle_from_disk(DATA / source, siblings, tools), CompileSettings())
     if inputs_file:
         write_tree(tmp_path, {'job.yml': inputs_file})
     cwl = targets.target('cwl')

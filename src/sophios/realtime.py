@@ -48,6 +48,7 @@ class Analysis:
     declaration: Declaration
     artifact: CompilationArtifact
     output_targets: frozenset[str]
+    diagnostics: tuple[Diagnostic, ...] = ()
 
 
 def compile_analyses(declarations: tuple[Declaration, ...],
@@ -70,7 +71,7 @@ def compile_analyses(declarations: tuple[Declaration, ...],
         source = yaml.dump(_wrapper(declaration), Dumper=io.NoAliasDumper, sort_keys=False, line_break='\n')
         try:
             bundle = frontdoor.bundle_from_source(source, f'{Path(declaration.analysis).stem}_only', yml_paths, tools)
-            result = compiler.compile_source(bundle, settings, quiet=True)
+            result = compiler.compile_source(bundle, settings)
         except SophiosError as e:
             raise SophiosError(Diagnostic(
                 Severity.ERROR, SophiosErrorCode.REALTIME_DECLARATION,
@@ -78,7 +79,7 @@ def compile_analyses(declarations: tuple[Declaration, ...],
                 declaration.span) for diagnostic in e.diagnostics) from e
         view = compiler.resolved_view(result)
         analyses.append(Analysis(name, declaration, emit.artifact_tree(view),
-                                 frozenset(output_target_inputs(view))))
+                                 frozenset(output_target_inputs(view)), tuple(result.diagnostics)))
     return tuple(analyses)
 
 

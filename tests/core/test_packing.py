@@ -34,7 +34,7 @@ PRINTED: Final = 'from-include\n' + (TOOLS / 'data.txt').read_text(encoding='utf
 
 
 def _compile(wic: Path, tools: Tools | None = None) -> CompilationArtifact:
-    return cwl_tree(compile_source(bundle_from_disk(wic, {}, tools or {}), CompileSettings(), quiet=True))
+    return cwl_tree(compile_source(bundle_from_disk(wic, {}, tools or {}), CompileSettings()))
 
 
 def _tool(artifact: CompilationArtifact, step: str) -> dict[str, Any]:

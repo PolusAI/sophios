@@ -340,7 +340,6 @@ def compile_workflow_result(  # pylint: disable=too-many-arguments
     lang_version: str | None = None,
     inference: Inference = Inference(),
     policy: RunPolicy = RunPolicy(),
-    quiet: bool = False,
 ) -> CompilationResult:
     """Compile a Python API workflow to the graph-derived internal result."""
     workflow._validate()
@@ -352,7 +351,7 @@ def compile_workflow_result(  # pylint: disable=too-many-arguments
         ParseResult(workflow_document(workflow), Diagnostics()),
         Path(workflow.process_name).stem,
         RegistrySnapshot.from_tools(merged_tools, workflows=_nested_documents(workflow)))
-    result = compiler.compile_source(bundle, settings, quiet=quiet)
+    result = compiler.compile_source(bundle, settings)
     _bound_values(workflow, compiler.resolved_view(result))  # refuses a value that does not coerce
     return result
 
@@ -533,12 +532,13 @@ def check_workflow(workflow: "Workflow", options: "RunOptions") -> tuple[Diagnos
     `Workflow.check`."""
     row = targets.target(options.run.runner.target)
     result, analyses = _compiled_for_run(workflow, options, refuse_realtime=False, check=True)
+    analysis_notes = tuple(note for analysis in analyses for note in analysis.diagnostics)
     try:
         lowered, bound = _lowered_for_run(row, workflow, result)
     except NotLowered as refused:
-        return (*result.diagnostics, *refused.diagnostics)
+        return (*result.diagnostics, *analysis_notes, *refused.diagnostics)
     _prepared(workflow, options, lowered=lowered, bound=bound, analyses=analyses, check=True)
-    return (*result.diagnostics, *lowered.notes)
+    return (*result.diagnostics, *analysis_notes, *lowered.notes)
 
 
 def _enabled(value: Any) -> bool:
@@ -643,7 +643,8 @@ def _run_request(workflow: "Workflow", options: RunOptions, *, refuse_realtime: 
     lowered, bound = _lowered_for_run(row, workflow, result)
     report(lowered.notes)
     request = _prepared(workflow, options, lowered=lowered, bound=bound, analyses=analyses, check=False)
-    return replace(request, diagnostics=(*result.diagnostics, *lowered.notes))
+    analysis_notes = tuple(note for analysis in analyses for note in analysis.diagnostics)
+    return replace(request, diagnostics=(*result.diagnostics, *analysis_notes, *lowered.notes))
 
 
 def _compiled_for_run(workflow: "Workflow", options: RunOptions, *, refuse_realtime: bool,
@@ -656,7 +657,7 @@ def _compiled_for_run(workflow: "Workflow", options: RunOptions, *, refuse_realt
             written, or it declares real-time analyses and `refuse_realtime` is set (`api008`).
     """
     result = compile_workflow_result(workflow, tool_registry=options.tool_registry, inference=options.inference,
-                                     policy=options.policy, lang_version=options.lang_version, quiet=check)
+                                     policy=options.policy, lang_version=options.lang_version)
     if not check:
         report(result.diagnostics)
     if refuse_realtime and result.realtime:
@@ -665,6 +666,8 @@ def _compiled_for_run(workflow: "Workflow", options: RunOptions, *, refuse_realt
         result.realtime, {namespace: dict(paths) for namespace, paths in (options.workflow_paths or {}).items()},
         _merged_known_tools(workflow, options.tool_registry),
         compile_settings(options.inference, policy=options.policy))
+    if not check:
+        report(tuple(note for analysis in analyses for note in analysis.diagnostics))
     if (problem := preflight.unwritable(Path(options.basepath), "the workflow and its run",
                                         "pass run() a basepath you can write to")) is not None:
         raise SophiosError([problem])

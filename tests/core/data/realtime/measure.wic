@@ -1,4 +1,9 @@
-# An analysis written as a workflow: each step is configured by the declaration, as `wic: steps:` would.
+# An analysis written as a workflow: each step is configured by the declaration, as `wic: steps:` would;
+# the stale key checks that real-time analyses surface `wic068` on stderr.
 steps:
 - id: count_lines
 - id: count_lines
+wic:
+  steps:
+    (9, ghost):
+      in: {log: !ii ignored}

@@ -15,7 +15,7 @@ from .synthetic_tools import SYNTHETIC_TOOLS
 
 
 def _compile_wic(wic: Path) -> CompilationArtifact:
-    return cwl_tree(compile_source(bundle_from_disk(wic, {}, SYNTHETIC_TOOLS), CompileSettings(), quiet=True))
+    return cwl_tree(compile_source(bundle_from_disk(wic, {}, SYNTHETIC_TOOLS), CompileSettings()))
 
 
 @pytest.mark.fast

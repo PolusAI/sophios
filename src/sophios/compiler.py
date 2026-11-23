@@ -1,5 +1,4 @@
 """The typed compiler boundary over the phase pipeline."""
-import sys
 from collections.abc import Iterator
 from copy import deepcopy
 from dataclasses import dataclass
@@ -45,18 +44,13 @@ class CompileSettings:
 
 
 def compile_source(bundle: SourceBundle,
-                   settings: CompileSettings,
-                   *,
-                   quiet: bool) -> CompilationResult:
+                   settings: CompileSettings) -> CompilationResult:
     """Compile a parsed root workflow and every workflow it reaches.
 
     The one door. A bundle read from files carries the spans of the text its
     author wrote, so a diagnostic names a position the reader can open; one
     the Python API built carries the span of the Python line that made each node.
-    `quiet` prints nothing, the plain warnings included.
     """
-    if not quiet:
-        print(' starting compilation of', bundle.name)
     selected_version = versions.resolve(settings.lang_version, bundle.lang_version_pins)
     front = front_end(bundle.parsed, bundle.registry, name=bundle.name, check=_tool_check())
     if front.graph is None:
@@ -67,9 +61,6 @@ def compile_source(bundle: SourceBundle,
                                  'workflows must define at least one step')
     authored, realtime = extract(front.graph)
     _check_unresolved_names(authored, settings.allow_raw_cwl)
-    if not quiet:
-        for note in dict.fromkeys(_authored_spelling_notes(authored)):
-            print(note, file=sys.stderr)
 
     prepared = complete(authored)
     linked = link(prepared)
@@ -82,10 +73,12 @@ def compile_source(bundle: SourceBundle,
         raise SophiosError(inferred.diagnostics)
     graph = declare_namespaces(inferred.graph, bundle.registry)
     names = Names.of(graph)
-    diagnostics = Diagnostics([*inferred.diagnostics, *dict.fromkeys(_when_notes(graph, names))])
+    diagnostics = Diagnostics([
+        *front.diagnostics, *linked.diagnostics, *inferred.diagnostics,
+        *dict.fromkeys(authored_spelling_notes(authored)),
+        *dict.fromkeys(_when_notes(graph, names)),
+    ])
     tools = dict(_tools(graph, _Descriptions(bundle.registry)))
-    if not quiet:
-        print('finishing compilation of', bundle.name)
     return CompilationResult(graph, tools, selected_version, diagnostics, realtime, policy=settings.policy)
 
 
@@ -158,31 +151,34 @@ def _tools(graph: WorkflowGraph, descriptions: '_Descriptions') -> Iterator[tupl
             yield from _tools(called, descriptions)
 
 
-def _authored_spelling_notes(graph: WorkflowGraph) -> list[str]:
-    """One plain line for each `outputSource` that names a step by an id more than one step
+def authored_spelling_notes(graph: WorkflowGraph) -> list[Diagnostic]:
+    """A `wic069` note for each `outputSource` that names a step by an id more than one step
     has: it means the first.
 
-    Such a spelling still compiles, so nothing here fails the compile; each line says what
-    to write instead. A document the Python API built names the script that built it.
+    Such a spelling still compiles, so nothing here fails the compile; each note says what
+    to write instead.
     """
-    notes: list[str] = []
+    notes: list[Diagnostic] = []
     spans = [step.span for step in graph.steps if step.span is not None]
     if not spans:
-        return [note for child in graph.children for note in _authored_spelling_notes(child)]
-    file = spans[0].file
-    sources = {port.name: port.output_source for port in graph.workflow_outputs}
+        return [note for child in graph.children for note in authored_spelling_notes(child)]
+    sources = {port.name: port for port in graph.workflow_outputs}
     ids = [step.id.name for step in graph.steps]
     for name, source in graph.output_mapping:
-        written = str(sources[name]).rsplit('/', 1)[0]
+        port = sources[name]
+        written = str(port.output_source).rsplit('/', 1)[0]
         key = step_key(written)
         if key is not None and key.index is not None or ids.count(source.step.name) == 1:
             continue
         position = [step.id for step in graph.steps].index(source.step) + 1
-        notes.append(f"Warning! {file}: output {str(name)!r} has outputSource '{sources[name]}', but "
-                     f'{ids.count(source.step.name)} steps have the id {written!r} and it means the first. '
-                     f"Write '({position}, {source.step.name})/{source.port}' to say so.")
+        notes.append(Diagnostic(
+            Severity.NOTE, SophiosErrorCode.AMBIGUOUS_OUTPUT_SOURCE,
+            f"output {str(name)!r} has outputSource '{port.output_source}', but "
+            f'{ids.count(source.step.name)} steps have the id {written!r} and it means the first. '
+            f"Write '({position}, {source.step.name})/{source.port}' to say so.",
+            port.span or graph.span, Locator(port=str(name))))
     for child in graph.children:
-        notes.extend(_authored_spelling_notes(child))
+        notes.extend(authored_spelling_notes(child))
     return notes
 
 

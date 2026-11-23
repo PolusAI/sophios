@@ -8,6 +8,8 @@
 wic:
   graphviz: {label: drawn}
   inlineable: false
+  steps:
+    (99, ghost): {in: {name: !ii ignored}}
 inputs:
   name: string
   names: string[]

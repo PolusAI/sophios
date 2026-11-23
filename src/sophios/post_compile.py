@@ -1,4 +1,3 @@
-import sys
 import copy
 from dataclasses import dataclass, replace
 from typing import Any, Final
@@ -6,7 +5,7 @@ from .wic_types import Cwl, Yaml
 from .ir.artifacts import CompilationArtifact
 from .ir.names import NAMESPACE_SEPARATOR
 from .lang.cwl import CwlVersion
-from .lang.diagnostics import SophiosError
+from .lang.diagnostics import Diagnostic, Locator, Severity, SophiosError
 from .lang.error_codes import SophiosErrorCode
 
 
@@ -178,11 +177,13 @@ class _Call:
         """The call step's id in the document it sits in."""
         return str(self.step['id'])
 
-    def announce(self, reason: str) -> None:
-        """Say on stderr, in one plain line, that this call stays a subworkflow and why."""
-        where = f'{self.inner.inlining.span}: ' if self.inner.inlining.span is not None else ''
-        print(f"Warning! {where}step '{self.id}' stays a subworkflow under --cwl_inline_subworkflows: {reason}.",
-              file=sys.stderr)
+    def note(self, reason: str) -> Diagnostic:
+        """A `wic070` note saying this call stays a subworkflow and why."""
+        return Diagnostic(
+            Severity.NOTE,
+            SophiosErrorCode.SUBWORKFLOW_NOT_INLINED,
+            f"step '{self.id}' stays a subworkflow under --cwl_inline_subworkflows: {reason}.",
+            self.inner.inlining.span, Locator(step=self.id))
 
     def written_keys(self) -> list[str]:
         """The keys on the emitted call besides `in` and `out`.
@@ -316,7 +317,7 @@ def _redirect(cwl: Yaml, redirects: dict[str, str]) -> None:
 
 
 # pylint: disable-next=too-many-locals
-def flatten_subworkflows(artifact: CompilationArtifact) -> CompilationArtifact:
+def flatten_subworkflows(artifact: CompilationArtifact) -> tuple[CompilationArtifact, tuple[Diagnostic, ...]]:
     """Replace every step that runs a workflow by that workflow's own steps, where that changes nothing.
 
     The result has one flat workflow in place of each call it could dissolve,
@@ -328,9 +329,10 @@ def flatten_subworkflows(artifact: CompilationArtifact) -> CompilationArtifact:
     moves with the steps: the classes in `DOCUMENT_FEATURES` to the root, the
     rest onto each step, where the step's own entry wins.
 
-    A call stays a nested subworkflow step, and one stderr line says why, when
-    it carries anything besides `in` and `out` (`scatter`, `when`, even the
-    one `--partial_failure_enable` adds, `requirements`...), when it is marked `wic: inlineable: false`, or when
+    A call stays a nested subworkflow step, returned as a `wic070` note,
+    when it carries anything besides `in` and `out`
+    (`scatter`, `when`, even the one `--partial_failure_enable` adds,
+    `requirements`...), when it is marked `wic: inlineable: false`, or when
     the boundary cannot be removed without guessing: an input bound to anything
     but one source, an input with a default, requirements or hints written as a
     list, a document feature declared differently from the caller's, a source
@@ -340,17 +342,19 @@ def flatten_subworkflows(artifact: CompilationArtifact) -> CompilationArtifact:
         artifact (CompilationArtifact): A compiled artifact tree.
 
     Returns:
-        CompilationArtifact: The same workflow with every dissolvable call replaced
-            by its steps; tools are still separate files.
+        tuple[CompilationArtifact, tuple[Diagnostic, ...]]: The workflow with every
+            dissolvable call replaced by its steps (tools stay separate files), and
+            a `wic070` note for each call that stayed nested.
     """
     if artifact.cwl.get('class') != 'Workflow' or all(
             child.cwl.get('class') != 'Workflow' for child in artifact.children):
-        return artifact
+        return artifact, ()
     cwl = copy.deepcopy(artifact.cwl)
     required = cwl.get('requirements')
     root: Cwl | None = dict(required or {}) if required is None or isinstance(required, dict) else None
     steps: list[Yaml] = []
     children: list[CompilationArtifact] = []
+    notes: list[Diagnostic] = []
     redirects: dict[str, str] = {}
     dissolved_any = False
     for step, child in zip(cwl['steps'], artifact.children):
@@ -358,13 +362,15 @@ def flatten_subworkflows(artifact: CompilationArtifact) -> CompilationArtifact:
             steps.append(step)
             children.append(child)
             continue
-        call = _Call(step, flatten_subworkflows(child))
+        flat_child, child_notes = flatten_subworkflows(child)
+        notes.extend(child_notes)
+        call = _Call(step, flat_child)
         try:
             if root is None:
                 raise _Stays("the workflow's own requirements are written as a list, which flattening does not read")
             dissolved_steps, dissolved_children, found = call.dissolved(root)
         except _Stays as stays:
-            call.announce(str(stays))
+            notes.append(call.note(str(stays)))
             steps.append(step)
             children.append(call.inner)
             continue
@@ -376,7 +382,7 @@ def flatten_subworkflows(artifact: CompilationArtifact) -> CompilationArtifact:
         cwl['$schemas'] = list(dict.fromkeys(
             list(cwl.get('$schemas', [])) + list(call.inner.cwl.get('$schemas', []))))
     if not dissolved_any:
-        return replace(artifact, children=tuple(children))
+        return replace(artifact, children=tuple(children)), tuple(notes)
     cwl['steps'] = steps
     _redirect(cwl, redirects)
     assert root is not None, 'a dissolved call has read the root requirements'
@@ -388,7 +394,7 @@ def flatten_subworkflows(artifact: CompilationArtifact) -> CompilationArtifact:
             cwl[key] = value
         else:
             cwl.pop(key, None)
-    return replace(artifact, cwl=cwl, children=tuple(children))
+    return replace(artifact, cwl=cwl, children=tuple(children)), tuple(notes)
 
 
 def inline_artifact_runs(artifact: CompilationArtifact) -> CompilationArtifact:
@@ -422,7 +428,7 @@ def inline_artifact_runs(artifact: CompilationArtifact) -> CompilationArtifact:
 
 
 def apply_inline_options(artifact: CompilationArtifact, *,
-                         subworkflows: bool, runtag: bool) -> CompilationArtifact:
+                         subworkflows: bool, runtag: bool) -> tuple[CompilationArtifact, tuple[Diagnostic, ...]]:
     """Apply what `--cwl_inline_subworkflows` and `--cwl_inline_runtag` ask for.
 
     Orthogonal: the first changes the shape (flat wherever a call can be
@@ -430,8 +436,9 @@ def apply_inline_options(artifact: CompilationArtifact, *,
     Shape first, so both together give one self-contained file, flat wherever
     it could be.
     """
+    notes: tuple[Diagnostic, ...] = ()
     if subworkflows:
-        artifact = flatten_subworkflows(artifact)
+        artifact, notes = flatten_subworkflows(artifact)
     if runtag:
         artifact = inline_artifact_runs(artifact)
-    return artifact
+    return artifact, notes

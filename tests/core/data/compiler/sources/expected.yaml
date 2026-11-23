@@ -1,7 +1,9 @@
 # What each step reads and each output names, as compiled. Written by hand from each root's comments.
 positions.wic:
-  notes: [{code: INFERENCE_GUESS, severity: note, step: count, index: 4, port: file}]
-  said: [{contains: ["output 'first'", "2 steps have the id 'mk_file'", "'(1, mk_file)/file'"]}]
+  notes:
+  - {code: INFERENCE_GUESS, severity: note, step: count, index: 4, port: file}
+  - {code: AMBIGUOUS_OUTPUT_SOURCE, severity: note, port: first,
+     message: {contains: ["output 'first'", "2 steps have the id 'mk_file'", "'(1, mk_file)/file'"]}}
   written:
     positions.cwl:
       steps:

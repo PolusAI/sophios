@@ -137,7 +137,7 @@ def test_a_drawn_workflow_compiles_by_every_law(workflow: Yaml) -> None:  # pyli
     assert (request['workflow'], request['inputs']) == (nested.cwl, nested.job_inputs)
     assert json.loads(json.dumps(request)) == request
 
-    flat = post_compile.flatten_subworkflows(nested)
+    flat, _ = post_compile.flatten_subworkflows(nested)
     for form in (nested, flat, post_compile.inline_artifact_runs(nested), post_compile.inline_artifact_runs(flat)):
         found = [hit for each in _documents(form)
                  for hit in re.findall(r'__step__|\.wic|___|_[0-9a-f]{8}\b|"sophios[^"]*":', json.dumps(each))]
