@@ -7,7 +7,7 @@ Import `CWL_VERSION` rather than writing a version literal.
 from collections.abc import Iterator, Mapping, Sequence
 from enum import Enum, StrEnum
 from itertools import chain
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 import re
 from typing import Any, Final, TypeAlias, TypeGuard, TypeVar
 
@@ -150,6 +150,8 @@ def load_process(document: dict[str, OpaqueCwl], run_path: str) -> tuple[Process
     Raises:
         SophiosError: `api004` with the loader's own message, for a document that is not a CWL process.
     """
+    if not isinstance(document, dict):
+        raise SophiosError.error(SophiosErrorCode.INVALID_TOOL, f'{run_path} is not a CWL mapping')
     # Read as the one version Sophios writes: a tool that states an older one is read alike.
     standard = {**document, 'cwlVersion': CWL_VERSION}
     written: Written = {section: {} for section in ('requirements', 'hints')}
@@ -167,8 +169,8 @@ def load_process(document: dict[str, OpaqueCwl], run_path: str) -> tuple[Process
                     if _is_extension(item) else None for place, item in items}
     if isinstance(arguments := document.get('arguments'), list):
         standard['arguments'] = [_separate_read_as_false(argument) for argument in arguments]
-    # A base with a scheme lets a tool's own types resolve, as the standard's loader checks no link across one.
-    base = PurePosixPath('/', Path(run_path).name).as_uri()
+    # The real file URI lets relative `$include` / `$import` resolve beside the tool; no link check across files.
+    base = Path(run_path).absolute().as_uri()
     try:
         process: Process = _standard.load_document_by_yaml(
             standard, base, _standard.LoadingOptions(fileuri=base, no_link_check=True))

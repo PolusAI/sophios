@@ -26,9 +26,9 @@ from sophios import preflight, run_local
 from sophios.backends import RunRequest
 from sophios.api.python import nextflow
 from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
-from sophios.api.python.workflow import (Cwltool, InvalidInputValueError, InvalidLinkError, InvalidStepError,
-                                         Nextflow, RunPolicy, RunResult, RunState, RunStatus, SophiosError, Step,
-                                         StepInput, Toil, Workflow, WorkflowRunError)
+from sophios.api.python.workflow import (Cwltool, InvalidCLTError, InvalidInputValueError, InvalidLinkError,
+                                         InvalidStepError, Nextflow, RunPolicy, RunResult, RunState, RunStatus,
+                                         SophiosError, Step, StepInput, Toil, Workflow, WorkflowRunError)
 from sophios.lang.diagnostics import lines as printed_lines
 from sophios.runners import RunSettings
 
@@ -96,8 +96,8 @@ def test_a_script_of_objects_compiles_to_the_document_stated_and_writes_what_com
 
 #: Every exception refused.yaml names, by its name.
 _RAISED: Final = {error.__name__: error for error in (AttributeError, ValueError, TypeError, SophiosError,
-                                                      InvalidLinkError, InvalidStepError, InvalidInputValueError,
-                                                      nextflow.NotLowered)}
+                                                      InvalidCLTError, InvalidLinkError, InvalidStepError,
+                                                      InvalidInputValueError, nextflow.NotLowered)}
 
 
 @pytest.mark.fast
