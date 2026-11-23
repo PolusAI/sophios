@@ -117,11 +117,9 @@ TOOLS: Final[Tools] = {
 
 
 def _held_today(document: Document) -> bool:
-    """Not yet, though the file compiles: a `schemed` step, loaded as `api004`, and a scatter over an unbound port,
-    raised as a bare ValueError rather than `api006`; tests/core/data/from_wic/refused/held_* state each, so this
-    expires."""
-    return not any(step.id == 'schemed'
-                   or not set(cast(list[str], dict(step.interpreted).get('scatter') or [])) <= dict(step.inputs).keys()
+    """Not yet, though the file compiles: a scatter over an unbound port, raised as a bare ValueError rather than
+    `api006`; tests/core/data/from_wic/refused/held_* states it, so this expires."""
+    return not any(not set(cast(list[str], dict(step.interpreted).get('scatter') or [])) <= dict(step.inputs).keys()
                    for step in document.steps)
 
 

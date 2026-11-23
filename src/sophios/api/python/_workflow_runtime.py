@@ -16,8 +16,6 @@ from typing import TYPE_CHECKING, Any, Final, NamedTuple, TypeVar
 
 import graphviz
 import yaml
-from cwl_utils.parser import CommandLineTool as CWLCommandLineTool
-from cwl_utils.parser import load_document_by_uri, load_document_by_yaml
 
 from sophios import backends, cli, compiler, drawing, input_output, post_compile as pc, preflight, realtime
 from sophios import run_local, run_setup, targets
@@ -36,7 +34,7 @@ from sophios.ir.refusals import NotLowered
 from sophios.ir.resolved import ResolvedWorkflow, bind
 from sophios.ir.types import AuthoredName
 from sophios.lang import CwlRecord, Diagnostic, Diagnostics, Document, ParseResult, Severity, SophiosError, render
-from sophios.lang.cwl import SCATTER_METHODS, ports_named, tool_process
+from sophios.lang.cwl import Process, SCATTER_METHODS, ports_named, tool_process
 from sophios.lang.diagnostics import report
 from sophios.lang import Step as LangStep
 from sophios.lang.error_codes import SophiosErrorCode
@@ -138,39 +136,41 @@ def populate_parameters(
         store.add(parameter_cls(name, parameter.type_, parent_obj=parent))
 
 
-def load_clt(clt_path: Path, tool_registry: Tools) -> tuple[CWLCommandLineTool, dict[str, Any]]:
+def _loaded(tool: Tool) -> tuple[Process, dict[str, Any]]:
+    """Load `tool` through the one cached tool loader (`Tool.loaded`), raising `InvalidCLTError` on `api004`."""
+    try:
+        process, _ = tool.loaded
+        return process, tool.cwl
+    except SophiosError as exc:
+        if all(item.code is SophiosErrorCode.INVALID_TOOL for item in exc.diagnostics):
+            raise InvalidCLTError(*(item.message for item in exc.diagnostics)) from exc
+        raise
+
+
+def load_clt(clt_path: Path, tool_registry: Tools) -> tuple[Process, dict[str, Any]]:
     """Load a tool, written in CWL or in `.wic`, from disk or a fallback registry, which then holds it under its stem.
 
     Raises:
         InvalidCLTError: If the tool cannot be loaded from disk or the registry.
-        SophiosError: What the tool file is refused for, a `.wic` that is a workflow (`api004`) among them.
+        SophiosError: What the tool file is refused for, such as a packed `$graph` with no `main`.
     """
     stepid = StepId(clt_path.stem, "global")
 
     if clt_path.exists():
-        try:
-            # The process first: a packed document with no `main` is refused by name, not as "invalid".
-            tool = Tool(str(clt_path), from_file=clt_path.suffix != '.wic')
-            yaml_file = tool.cwl
-            clt = load_document_by_yaml(yaml_file, str(clt_path)) if tool.document else load_document_by_uri(clt_path)
-        except SophiosError:
-            raise
-        except Exception as exc:
-            raise InvalidCLTError(f"invalid cwl file: {clt_path}") from exc
+        tool = Tool(str(clt_path), from_file=clt_path.suffix != '.wic')
+        loaded = _loaded(tool)
         # A registry key is fixed when its tool is found: a `.wic` never takes the key of a tool discovery named.
         if tool.document is None:
             tool_registry[stepid] = tool
         else:
             tool_registry.setdefault(stepid, tool)
-        return clt, yaml_file
+        return loaded
 
     if stepid in tool_registry:
         tool = tool_registry[stepid]
         logger.info("%s does not exist, but %s was found in the provided tool registry.", clt_path, clt_path.stem)
         logger.info("Using file contents from %s", tool.run_path)
-        yaml_file = tool.cwl
-        clt = load_document_by_yaml(yaml_file, tool.run_path)
-        return clt, yaml_file
+        return _loaded(tool)
 
     logger.warning("Warning! %s does not exist, and", clt_path)
     logger.warning("%s was not found in the provided tool registry.", clt_path.stem)
@@ -181,18 +181,14 @@ def load_clt_document(
     document: Mapping[str, Any],
     *,
     run_path: Path,
-) -> tuple[CWLCommandLineTool, dict[str, Any]]:
+) -> tuple[Process, dict[str, Any]]:
     """Load an in-memory CWL CommandLineTool document.
 
     Raises:
         InvalidCLTError: If the CWL document cannot be parsed.
     """
     yaml_file = tool_process(yaml.safe_load(yaml.safe_dump(dict(document), sort_keys=False)), str(run_path))
-    try:
-        clt = load_document_by_yaml(yaml_file, str(run_path))
-    except Exception as exc:
-        raise InvalidCLTError(f"invalid cwl document for: {run_path}") from exc
-    return clt, yaml_file
+    return _loaded(Tool(str(run_path), yaml_file))
 
 
 def workflow_document(workflow: "Workflow") -> Document:

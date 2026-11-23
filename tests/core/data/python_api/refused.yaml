@@ -27,7 +27,7 @@ merge_into_a_file: {raises: SophiosError, code: INCOMPATIBLE_INPUT_REFERENCE, na
 two_tools_one_stem: &stem {raises: InvalidStepError, code: INVALID_STEP, names: ["'cat'", "'shipped_cat'", "stem 'cat'"]}
 two_tools_one_stem_written: *stem
 cwl_workflow_as_a_tool: {raises: SophiosError, code: SUBWORKFLOW_INVALID, names: [say.cwl, nested Workflow, --allow_raw_cwl]}
-wic_workflow_as_a_tool: {raises: SophiosError, code: INVALID_TOOL, names: [by_path.wic, Workflow.from_wic]}
+wic_workflow_as_a_tool: {raises: InvalidCLTError, code: INVALID_TOOL, names: [by_path.wic, Workflow.from_wic]}
 an_output_line_names_an_array: {raises: SophiosError, code: TOOL_DOCUMENT, names: ['{xs}', an array]}
 a_word_is_an_input_of_another_tool: {raises: SophiosError, code: TOOL_DOCUMENT, names: [no input of this tool]}
 what_runs_is_said_once: {raises: SophiosError, code: TOOL_DOCUMENT, names: [says it already]}

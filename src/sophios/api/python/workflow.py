@@ -8,14 +8,13 @@ import warnings
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, ClassVar, Final, Literal, cast, overload
+from typing import Any, ClassVar, Final, Literal, overload
 
 import graphviz
-from cwl_utils.parser import CommandLineTool as CWLCommandLineTool
 
 from sophios.lang import CwlRecord, EdgeRef, InputValue, OpaqueCwl, UnresolvedName, nodes
 from sophios.lang.compatibility import TypeRelation, reference_relation
-from sophios.lang.cwl import ScatterMethod
+from sophios.lang.cwl import Process, ScatterMethod
 from sophios.lang.diagnostics import Diagnostic, SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
 from sophios.lang.names import check_written_name
@@ -379,7 +378,7 @@ class Step(_ProcessBase):
     (``step.x = ...``) binds the input of that name; there is no string-keyed method.
     """
 
-    clt: CWLCommandLineTool
+    clt: Process
     clt_path: Path
     process_name: str
     cwl_version: str
@@ -558,7 +557,7 @@ class Step(_ProcessBase):
     def _initialize_loaded_tool(
         self,
         *,
-        clt: CWLCommandLineTool,
+        clt: Process,
         yaml_file: dict[str, Any],
         clt_path: Path,
         cfg_yaml: Mapping[str, Any],
@@ -572,7 +571,7 @@ class Step(_ProcessBase):
         self.clt = clt
         self.clt_path = clt_path
         self.process_name = resolved_name
-        self.cwl_version = cast(str, clt.cwlVersion)
+        self.cwl_version = str(yaml_file.get("cwlVersion") or clt.cwlVersion)
         self.yaml = yaml_file
         self.cfg_yaml = dict(cfg_yaml)
         self._tool_registry = tool_registry
