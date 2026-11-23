@@ -2,8 +2,8 @@
 
 A row is a target's whole contract: how it lowers a compilation, refusing what it cannot run with a `NotLowered`
 whose diagnostics carry their codes; and how it writes what it lowered; its runners are those of
-`sophios.runners`. The command line, `Workflow.compile`, `check`, `run`, `start` and `run_async`, and the run path
-find a target here, by the name `--target` and `target=` give it, and nowhere else.
+`sophios.runtime.runners`. The command line, `Workflow.compile`, `check`, `run`, `start` and `run_async`, and the run
+path find a target here, by the name `--target` and `target=` give it, and nowhere else.
 
 The names alone are `wic_types.TargetName`, which the command line's parser reads without importing a target.
 """
@@ -12,8 +12,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Final, Protocol, TypeVar
 
-from . import input_output, realtime
-from .backends import Backend, CwltoolBackend, NextflowBackend, ToilBackend
+from . import input_output
 from .compiler import cwl_notes
 from .ir import emit
 from .ir.artifacts import CompilationArtifact
@@ -24,9 +23,11 @@ from .nextflow import render as io_nf
 from .nextflow.lower import NEXTFLOW as _NEXTFLOW_LOWERING
 from .nextflow.model import ExecutableNextflowWorkflow
 from .nextflow.tool import local_locations_as_paths
-from .run_setup import Lowered
-from .runners import RUNNERS, Cwltool, Nextflow, Runner, Toil, build, named
-from .runtime_inputs import name_output_targets, output_target_inputs
+from .runtime import realtime
+from .runtime.backends import Backend, CwltoolBackend, NextflowBackend, ToilBackend
+from .runtime.inputs import name_output_targets, output_target_inputs
+from .runtime.runners import RUNNERS, Cwltool, Nextflow, Runner, Toil, build, named
+from .runtime.setup import Lowered
 
 ModelT = TypeVar('ModelT')
 

@@ -9,9 +9,9 @@ from datetime import datetime
 from enum import Enum
 from pathlib import Path
 
-from .lang.diagnostics import Diagnostic, Severity, SophiosError
-from .lang.error_codes import SophiosErrorCode
-from .wic_types import Json
+from ..lang.diagnostics import Diagnostic, Severity, SophiosError
+from ..lang.error_codes import SophiosErrorCode
+from ..wic_types import Json
 
 
 class RunState(Enum):

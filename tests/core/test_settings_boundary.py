@@ -12,7 +12,7 @@ import sophios.cli
 import sophios.compiler
 import sophios.drawing
 import sophios.main
-from sophios.runners import Cwltool, Nextflow, RunSettings, Toil
+from sophios.runtime.runners import Cwltool, Nextflow, RunSettings, Toil
 from sophios.wic_types import GraphSettings
 
 from .cases import DATA

@@ -20,9 +20,9 @@ import pytest
 from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
 from sophios.api.python._workflow_runtime import ServicePipeline, service_pipeline
 from sophios.api.python.workflow import Step, StepInput, Workflow
-from sophios.backends import recorded_outputs
+from sophios.runtime.backends import recorded_outputs
 from sophios.nextflow.symbols import NEXTFLOW_SCRIPT_NAMES
-from sophios.run_status import RunState, RunStatus
+from sophios.runtime.status import RunState, RunStatus
 
 from ..budgets import budget
 from ..cases import DATA, case_dirs

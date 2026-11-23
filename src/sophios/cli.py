@@ -7,8 +7,8 @@ from . import __version__
 from .compiler import CompileSettings
 from .ir.policy import RunPolicy
 from .lang.error_codes import SophiosErrorCode
-from . import runners
-from .runners import Cwltool, RunSettings, runners_of
+from .runtime import runners
+from .runtime.runners import Cwltool, RunSettings, runners_of
 from .wic_types import DEFAULT_BASEPATH, TARGET_NAMES, GraphSettings
 
 

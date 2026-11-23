@@ -17,11 +17,8 @@ from typing import TYPE_CHECKING, Any, Final, NamedTuple, TypeVar
 import graphviz
 import yaml
 
-from sophios import backends, cli, compiler, drawing, input_output, post_compile as pc, preflight, realtime
-from sophios import run_local, run_setup, targets
+from sophios import cli, compiler, drawing, input_output, post_compile as pc, targets
 from sophios.input_output import SHIPPED_RENAMINGS
-from sophios.run_local import RunHandle
-from sophios.run_status import RunResult
 from sophios.ir.artifacts import CompilationResult
 from sophios.ir.complete import coerce_job_value
 from sophios.ir.frontdoor import SourceBundle
@@ -38,12 +35,15 @@ from sophios.lang.cwl import Process, SCATTER_METHODS, ports_named, tool_process
 from sophios.lang.diagnostics import report
 from sophios.lang import Step as LangStep
 from sophios.lang.error_codes import SophiosErrorCode
+from sophios.runtime import backends, local, preflight, realtime, setup
+from sophios.runtime.inputs import output_target_inputs, resolve_file_formats, runner_job_inputs
+from sophios.runtime.local import RunHandle
 # Re-exported by `workflow`, which reaches the run settings only through this adapter.
-from sophios.runners import Cwltool, Nextflow, Runner, RunSettings, Toil  # pylint: disable=unused-import
-from sophios.runtime_inputs import output_target_inputs, resolve_file_formats, runner_job_inputs
 from sophios.nextflow.lower import nextflow_names
 from sophios.nextflow.model import ExecutableNextflowWorkflow
 from sophios.nextflow.render import nextflow_params, render_nextflow
+from sophios.runtime.runners import Cwltool, Nextflow, Runner, RunSettings, Toil  # pylint: disable=unused-import
+from sophios.runtime.status import RunResult
 from sophios.wic_types import DEFAULT_BASEPATH, GraphSettings, Json, StepId, Tool, Tools, Yaml
 
 from ._inference import Inference
@@ -675,7 +675,7 @@ def _compiled_for_run(workflow: "Workflow", options: RunOptions, *, refuse_realt
 
 
 def _lowered_for_run(row: targets.Target[Any], workflow: "Workflow",
-                     result: CompilationResult) -> tuple[run_setup.Lowered[Any], Yaml]:
+                     result: CompilationResult) -> tuple[setup.Lowered[Any], Yaml]:
     """`result` lowered by `row` for a runner, which does not run where the workflow's relative paths are read, and
     the values bound in the workflow as the author wrote their paths."""
     view = _view(workflow, result)
@@ -684,7 +684,7 @@ def _lowered_for_run(row: targets.Target[Any], workflow: "Workflow",
 
 # pylint: disable-next=too-many-arguments
 def _prepared(workflow: "Workflow", options: RunOptions, *,
-              lowered: run_setup.Lowered[Any], bound: Yaml, analyses: tuple[realtime.Analysis, ...],
+              lowered: setup.Lowered[Any], bound: Yaml, analyses: tuple[realtime.Analysis, ...],
               check: bool) -> backends.RunRequest:
     """Write what `options.run`'s runner reads and make the machine ready for it: the run's request.
 
@@ -697,7 +697,7 @@ def _prepared(workflow: "Workflow", options: RunOptions, *,
                          for analysis in analyses)
     prepared = targets.backend(run.runner).prepare(
         lowered, analyses, Path(options.basepath),
-        run_setup.Settings(run, Path.cwd(), bound, inputs_file_named="inputs_file", check=check))
+        setup.Settings(run, Path.cwd(), bound, inputs_file_named="inputs_file", check=check))
     return backends.RunRequest(workflow.process_name, Path(options.basepath), run,
                                env=dict(options.user_env_vars or {}), realtime_plans=prepared.plans)
 
@@ -707,25 +707,25 @@ def start_workflow(workflow: "Workflow", options: RunOptions) -> RunHandle:
     if options.run.generate_run_script:
         raise ValueError("generate_run_script writes run.sh instead of starting the run: call run() for it")
     request = _run_request(workflow, options, refuse_realtime=False)
-    return run_local.start(request)
+    return local.start(request)
 
 
 def run_workflow(workflow: "Workflow", options: RunOptions) -> RunResult | None:
     """Compile and run `workflow`, and wait for it: see `Workflow.run`."""
     request = _run_request(workflow, options, refuse_realtime=False)
     if request.run.generate_run_script:
-        run_local.run(request)
+        local.run(request)
         return None
-    return run_local.start(request).collect()
+    return local.start(request).collect()
 
 
 async def run_workflow_async(workflow: "Workflow", options: RunOptions) -> RunResult | None:
     """`run_workflow`, awaited: see `Workflow.run_async`."""
     request = await asyncio.to_thread(_run_request, workflow, options, refuse_realtime=True)
     if request.run.generate_run_script:
-        run_local.run(request)
+        local.run(request)
         return None
-    handle = run_local.start(request)
+    handle = local.start(request)
     waiting = asyncio.ensure_future(asyncio.to_thread(handle.wait))
     try:
         await asyncio.shield(waiting)

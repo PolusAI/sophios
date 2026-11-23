@@ -12,7 +12,7 @@ import pytest
 import yaml
 from schema_salad.fetcher import DefaultFetcher
 
-from sophios import run_local
+from sophios.runtime import local
 from sophios.api.python.workflow import Step, Workflow
 from sophios.compiler import CompileSettings, compile_source
 from sophios.ir.artifacts import CompilationArtifact
@@ -137,7 +137,7 @@ def test_a_tool_that_refers_to_files_beside_it_is_written_packed_by_every_door(
         assert docker == {'dockerImageId': 'built_here', 'dockerFile': 'FROM alpine:3.20\nRUN echo built\n'}, flags
         assert flags or tool['cwlVersion'] == 'v1.0'
 
-    monkeypatch.setattr(run_local, 'generate_run_script', lambda _cmdline: None)
+    monkeypatch.setattr(local, 'generate_run_script', lambda _cmdline: None)
     no_preflight(monkeypatch)
     relcat = TOOLS / 'relcat.cwl'
     compiled = Workflow([Step(clt_path=relcat)], 'py').compile().cwl_workflow

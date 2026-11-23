@@ -24,10 +24,11 @@ from pathlib import Path
 from collections.abc import Mapping
 from typing import IO, Final
 
-from sophios.wic_types import Json
-from . import auto_gen_header, preflight, realtime, targets
+from ..wic_types import Json
+from .. import auto_gen_header, targets
+from . import preflight, realtime
 from .backends import Backend, Launch, RunRequest
-from .run_status import RunResult, RunState, RunStatus, StepStatus, WorkflowRunError
+from .status import RunResult, RunState, RunStatus, StepStatus, WorkflowRunError
 
 
 def generate_run_script(cmdline: str) -> None:

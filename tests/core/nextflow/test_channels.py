@@ -12,7 +12,7 @@ import pytest
 from sophios.api.python._workflow_runtime import compile_workflow_result
 from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
 from sophios.api.python.workflow import Step, Workflow
-from sophios.backends import recorded_outputs
+from sophios.runtime.backends import recorded_outputs
 from sophios.nextflow.render import NF_INPUT_FUNCTION, NF_PARSER_MESSAGE, NF_STUB_MESSAGE, write_nextflow_artifacts
 from sophios.nextflow.model import NF_INPUT_HELPER, ExecutableNextflowWorkflow, NfWorkflowInputConnection
 

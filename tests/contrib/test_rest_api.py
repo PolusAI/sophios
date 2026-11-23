@@ -13,10 +13,10 @@ import yaml
 
 from core.budgets import budget
 from core.cases import match
-from sophios import preflight
+from sophios.runtime import preflight
 from sophios.contrib.converter import update_payload_missing_inputs_outputs, wfb_to_wic
 from sophios.contrib.rest import api
-from sophios.runners import Cwltool, RunSettings
+from sophios.runtime.runners import Cwltool, RunSettings
 from sophios.utils_yaml import Key
 from sophios.wic_types import Json
 

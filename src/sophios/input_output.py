@@ -10,7 +10,7 @@ from ruamel.yaml import YAML as _RuamelYAML
 from ruamel.yaml.nodes import ScalarNode as _RuamelScalarNode
 
 from . import auto_gen_header
-from .runtime_inputs import EmptyDirectory, directory_literal, runner_job_inputs
+from .runtime.inputs import EmptyDirectory, directory_literal, runner_job_inputs
 from .ir.artifacts import CompilationArtifact
 from .ir.locations import absolute_paths
 from .lang.diagnostics import SophiosError

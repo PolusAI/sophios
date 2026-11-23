@@ -55,9 +55,9 @@ from jsonschema import Draft202012Validator
 from . import targets
 from .api.python._inference import Inference
 from .api.python._workflow_runtime import ServicePipeline, service_document, service_pipeline
-from .backends import _cwl_objects
 from .nextflow.model import NfLiteral, NfWorkflowInputConnection
-from .run_status import RunState, RunStatus, StepStatus
+from .runtime.backends import _cwl_objects
+from .runtime.status import RunState, RunStatus, StepStatus
 from .wic_types import Json, TargetName, Tools
 
 if TYPE_CHECKING:

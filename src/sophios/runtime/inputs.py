@@ -9,10 +9,10 @@ from typing import Any, TypeAlias
 
 from cwl_utils.parser.cwl_v1_2 import Dirent, InitialWorkDirRequirement
 
-from sophios.edam import resolve_file_format
-from sophios.ir.resolved import InputRef, ResolvedWorkflow, Through, tool_steps
-from sophios.lang.cwl import Process, inputs_read, ports_named, required, requirement
-from sophios.wic_types import Json, Tool
+from ..edam import resolve_file_format
+from ..ir.resolved import InputRef, ResolvedWorkflow, Through, tool_steps
+from ..lang.cwl import Process, inputs_read, ports_named, required, requirement
+from ..wic_types import Json, Tool
 
 
 #: An empty directory of a given name, as a runner takes one in a job.

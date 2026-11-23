@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 
-from sophios import preflight
+from sophios.runtime import preflight
 
 #: Skips a test that starts the stand-in where a script cannot be its own program.
 POSIX_ONLY = pytest.mark.skipif(sys.platform == 'win32', reason='the stand-in runner is a script with a shebang')

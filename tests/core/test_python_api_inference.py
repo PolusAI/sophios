@@ -142,7 +142,7 @@ def test_each_door_connects_the_input_the_docs_say(consumer: str, enabled: bool,
     feed, tie = _documented(consumer, inference)
     with tempfile.TemporaryDirectory() as directory, pytest.MonkeyPatch.context() as monkeypatch:
         monkeypatch.setattr(python_runtime.preflight, "ready", lambda *args, **kwargs: None)
-        monkeypatch.setattr(python_runtime.run_local, "start", lambda request: _Completed())
+        monkeypatch.setattr(python_runtime.local, "start", lambda request: _Completed())
         if tie and strict:
             for door in (lambda: _workflow(consumer).compile(inference=inference),
                          lambda: _workflow(consumer).run(basepath=str(Path(directory, "run")), inference=inference)):

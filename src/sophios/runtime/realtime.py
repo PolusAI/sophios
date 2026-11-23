@@ -25,16 +25,16 @@ from typing import Any, Final
 
 import yaml
 
-from . import compiler
-from . import input_output as io
-from .ir import emit, frontdoor
-from .ir.artifacts import CompilationArtifact
-from .ir.realtime import Declaration
-from .lang.diagnostics import Diagnostic, Severity, SophiosError
-from .lang.error_codes import SophiosErrorCode
-from .runtime_inputs import output_target_inputs
-from .utils_yaml import Key
-from .wic_types import Tools, Yaml
+from .. import compiler
+from .. import input_output as io
+from ..ir import emit, frontdoor
+from ..ir.artifacts import CompilationArtifact
+from ..ir.realtime import Declaration
+from ..lang.diagnostics import Diagnostic, Severity, SophiosError
+from ..lang.error_codes import SophiosErrorCode
+from .inputs import output_target_inputs
+from ..utils_yaml import Key
+from ..wic_types import Tools, Yaml
 
 #: The directory, under the base path and under the cachedir, that holds each analysis's files.
 DIRECTORY: Final = 'realtime'

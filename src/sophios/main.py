@@ -18,8 +18,9 @@ from sophios.ir.artifacts import CompilationResult
 from sophios.ir.refusals import NotLowered
 from . import input_output as io
 from . import post_compile as pc
-from . import backends, cli, compiler, drawing, plugins, preflight, realtime, run_local, run_setup, targets
-from .runners import RunSettings
+from . import cli, compiler, drawing, plugins, targets
+from .runtime import backends, local, preflight, realtime, setup
+from .runtime.runners import RunSettings
 from .ir import frontdoor
 from .ir.frontdoor import SourceBundle
 from .wic_types import Json, Tools
@@ -195,7 +196,7 @@ def _run(args: argparse.Namespace, run: RunSettings, workflow_name: str,
     """
     request = backends.RunRequest(workflow_name, Path(args.basepath), run, documents, realtime_plans=realtime_plans)
     try:
-        retval = run_local.run(request)
+        retval = local.run(request)
     except KeyboardInterrupt:
         # 130 is the shell's exit code for SIGINT.
         sys.exit(130)
@@ -221,7 +222,7 @@ def _pass_through(args: argparse.Namespace, run: RunSettings) -> None:
         Path(args.basepath).mkdir(parents=True, exist_ok=True)
         report(_draw(None, str(workflow), workflow.stem, Path(args.basepath)), args.diagnostics)
     if _is_local_run(args):
-        extra = run_setup.inputs_job(args.inputs_file, '--inputs_file')
+        extra = setup.inputs_job(args.inputs_file, '--inputs_file')
         # `--check` stops after the checks, having pulled nothing.
         preflight.ready([workflow], run, (extra,) if extra else (), pulling=not args.check)
         if args.check:
@@ -368,7 +369,7 @@ def _main(args: argparse.Namespace, unknown_args: list[str]) -> None:
 
     if _is_local_run(args):
         prepared = targets.backend(run.runner).prepare(lowered, analyses, basepath,
-                                                       run_setup.Settings(run, root_dir, bound, check=args.check))
+                                                       setup.Settings(run, root_dir, bound, check=args.check))
         draw_after_write()
         if args.check:
             _checked(prepared.name)

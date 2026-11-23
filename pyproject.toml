@@ -119,7 +119,7 @@ all = ["sophios[contrib,test,doc,plots,mypy-types]"]
 
 [project.scripts]
 sophios = "sophios.main:main"
-cwltool_filterlog = "sophios.run_local:cwltool_main"
+cwltool_filterlog = "sophios.runtime.local:cwltool_main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
@@ -299,15 +299,15 @@ layers = ["sophios.api", "sophios.compiler", "sophios.ir", "sophios.lang"]
 name = "The public Python API reaches the compiler only through its runtime adapter"
 type = "forbidden"
 source_modules = ["sophios.api.python.workflow", "sophios.api.python.tool_builder"]
-forbidden_modules = ["sophios.compiler", "sophios.ir", "sophios.plugins", "sophios.run_local",
-                     "sophios.backends", "sophios.input_output", "sophios.main", "sophios.cli",
-                     "sophios.post_compile", "sophios.preflight"]
+forbidden_modules = ["sophios.compiler", "sophios.ir", "sophios.plugins", "sophios.runtime.local",
+                     "sophios.runtime.backends", "sophios.input_output", "sophios.main", "sophios.cli",
+                     "sophios.post_compile", "sophios.runtime.preflight"]
 allow_indirect_imports = true
 
 [[tool.importlinter.contracts]]
 name = "The run path takes values, never the command line's arguments"
 type = "forbidden"
-source_modules = ["sophios.run_setup", "sophios.backends", "sophios.run_local", "sophios.targets"]
+source_modules = ["sophios.runtime", "sophios.targets"]
 forbidden_modules = ["sophios.main", "sophios.cli"]
 
 [[tool.importlinter.contracts]]

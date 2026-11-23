@@ -14,7 +14,7 @@ from sophios.ir.frontdoor import bundle_from_disk
 from sophios.ir.refusals import NotLowered
 from sophios.ir.resolved import bind
 from sophios.lang.diagnostics import SophiosError
-from sophios.runtime_inputs import output_target_inputs
+from sophios.runtime.inputs import output_target_inputs
 from sophios.nextflow.lower import NEXTFLOW
 from sophios.wic_types import StepId, Tool, Tools, Yaml
 

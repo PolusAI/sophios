@@ -19,7 +19,8 @@ import pytest
 import yaml
 from hypothesis import assume, example, given, strategies as st
 
-from sophios import compiler, preflight
+from sophios import compiler
+from sophios.runtime import preflight
 from sophios.lang.diagnostics import Diagnostic, Diagnostics, Locator, Severity, SophiosError
 from sophios.lang.error_codes import EXPLANATIONS, Kind, SophiosErrorCode
 from sophios.lang.spans import SourceSpan

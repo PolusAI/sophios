@@ -42,8 +42,8 @@ Codes in parentheses are the codes Sophios prints with each diagnostic.
 - `run_args_dict` is deprecated: it still works, and warns once per call; [Running](docs/running.md) maps each
   key. `ignore_docker_install` and `ignore_docker_processes` now take effect, where they were parsed and left
   over, and a key of the command line that no run reads is dropped with its value.
-- Internals: a run is one `RunSettings` (`sophios.runners`) built alike by the command line and Python, which
-  `RunRequest` and `run_setup.Settings` carry; `preflight.RunSettings` is gone. A `wic021` for `outdir` says
+- Internals: a run is one `RunSettings` (`sophios.runtime.runners`) built alike by the command line and Python, which
+  `RunRequest` and `runtime.setup.Settings` carry; `preflight.RunSettings` is gone. A `wic021` for `outdir` says
   `give outdir a directory you can write to` from both doors.
 
 ### Nextflow

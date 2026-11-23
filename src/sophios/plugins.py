@@ -7,9 +7,10 @@ import sys
 import tempfile
 from typing import Any, Iterable, Iterator, TypeAlias
 
-from . import preflight, utils_cwl
+from . import utils_cwl
 from .lang.diagnostics import SophiosError
 from .lang.error_codes import SophiosErrorCode
+from .runtime import preflight
 from .wic_types import DEFAULT_BASEPATH, Cwl, StepId, Tool, Tools, Json
 from .ir.artifacts import CompilationArtifact
 

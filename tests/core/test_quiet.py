@@ -9,8 +9,8 @@ from typing import Any, Final, Iterator, cast
 import pytest
 import yaml
 
-from sophios import run_local
-from sophios.runners import named
+from sophios.runtime import local
+from sophios.runtime.runners import named
 from sophios.api.python.workflow import Step, Workflow
 
 from .cases import DATA
@@ -52,7 +52,7 @@ def test_quiet_changes_only_what_cwltool_is_told(project: Path, monkeypatch: pyt
     and the document it writes is the one `compile()` returns. From the command line and from `run()`, cwltool gets
     `--quiet` only when the run is quiet, Toil never, and neither runner is told to keep a tool's streams anywhere."""
     commands: list[str] = []
-    monkeypatch.setattr(run_local, 'generate_run_script', commands.append)
+    monkeypatch.setattr(local, 'generate_run_script', commands.append)
     say, own = Step(clt_path=project / 'tools' / 'say.cwl'), Step(clt_path=project / 'tools' / 'own.cwl')
     inline = Step.from_cwl_document(_read(project / 'local' / 'local.cwl'), process_name='inline')
     for quiet in (True, False):

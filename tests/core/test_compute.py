@@ -29,7 +29,7 @@ from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Outp
 from sophios.api.python.workflow import Step, StepInput, Workflow
 from sophios.lang.diagnostics import SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
-from sophios.run_status import RunState, RunStatus
+from sophios.runtime.status import RunState, RunStatus
 from sophios.wic_types import Yaml
 
 from .budgets import budget

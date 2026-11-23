@@ -12,7 +12,7 @@ import yaml
 from sophios import compiler
 from sophios import input_output
 from sophios.post_compile import inline_artifact_runs
-from sophios.runtime_inputs import output_target_inputs, runner_job_inputs
+from sophios.runtime.inputs import output_target_inputs, runner_job_inputs
 from sophios.wic_types import Json, Tools
 from sophios.contrib import converter
 from sophios import plugins, targets

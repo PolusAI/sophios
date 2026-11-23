@@ -19,7 +19,7 @@ from sophios.lang.diagnostics import Diagnostic, SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
 from sophios.lang.names import check_written_name
 from sophios.lang.spans import SourceSpan
-from sophios.run_status import RunResult, RunState, RunStatus, StepStatus, WorkflowRunError
+from sophios.runtime.status import RunResult, RunState, RunStatus, StepStatus, WorkflowRunError
 from sophios.wic_types import DEFAULT_BASEPATH, TargetName, Tools
 
 from ._compiled import CompiledNextflowWorkflow, CompiledWorkflow

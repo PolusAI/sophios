@@ -18,7 +18,7 @@ from hypothesis import example, given, strategies as st
 import pytest
 import yaml
 
-from sophios.backends import recorded_outputs
+from sophios.runtime.backends import recorded_outputs
 from sophios.input_output import write_artifacts_to_disk
 from sophios.nextflow.render import write_nextflow_artifacts
 
