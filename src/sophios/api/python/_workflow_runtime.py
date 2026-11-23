@@ -17,8 +17,9 @@ from typing import TYPE_CHECKING, Any, Final, NamedTuple, TypeVar
 import graphviz
 import yaml
 
-from sophios import cli, compiler, drawing, input_output, post_compile as pc, targets
-from sophios.input_output import SHIPPED_RENAMINGS
+from sophios import cli, compiler, drawing, targets
+from sophios.config import SHIPPED_RENAMINGS
+from sophios.cwl import io as cwl_io, post_compile as pc
 from sophios.ir.artifacts import CompilationResult
 from sophios.ir.complete import coerce_job_value
 from sophios.ir.frontdoor import SourceBundle
@@ -287,7 +288,7 @@ def write_workflow_wic(workflow: "Workflow", path: str | Path | None = None) -> 
         target = root if nested is workflow else root.parent / f"{nested.process_name}.wic"
         target.write_text(render(workflow_document(nested)), encoding="utf-8")
     for target, step in missing_tools.items():
-        target.write_text(input_output.dump_wic_yaml(step.yaml), encoding="utf-8")
+        target.write_text(cwl_io.dump_wic_yaml(step.yaml), encoding="utf-8")
     return root
 
 

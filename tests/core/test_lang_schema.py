@@ -105,7 +105,7 @@ def test_generate_schemas_writes_the_schema_and_compiles_nothing(monkeypatch: py
         raise AssertionError('--generate_schemas reached discovery or compilation')
 
     for module, name in [(sophios.compiler, 'compile_source'), (sophios.plugins, 'get_tools_cwl'),
-                         (sophios.plugins, 'get_yml_paths'), (sophios.main.io, 'get_config')]:
+                         (sophios.plugins, 'get_yml_paths'), (sophios.main.config, 'get_config')]:
         monkeypatch.setattr(module, name, forbidden)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr('sys.argv', ['sophios', '--generate_schemas', '--homedir', str(tmp_path)])

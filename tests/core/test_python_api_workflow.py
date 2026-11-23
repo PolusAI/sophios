@@ -21,8 +21,8 @@ import yaml
 
 import sophios.api.python._workflow_runtime as python_runtime
 import sophios.plugins
-import sophios.post_compile
-from sophios.runtime import preflight, local
+from sophios.cwl import post_compile
+from sophios.runtime import local, preflight
 from sophios.runtime.backends import RunRequest
 from sophios.api.python import nextflow
 from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
@@ -484,7 +484,7 @@ def test_run_stops_before_the_runner_or_says_how_the_run_ended(monkeypatch: pyte
         (problem,) = caught.value.diagnostics
         assert str(problem.code) == 'wic021' and f'but {locked} is not writable by you' in problem.message
 
-    monkeypatch.setattr(python_runtime.input_output, 'write_artifacts_to_disk', lambda *_a, **_k: None)
+    monkeypatch.setattr(python_runtime.cwl_io, 'write_artifacts_to_disk', lambda *_a, **_k: None)
     monkeypatch.setattr(local.RunHandle, '_start', lambda _handle: None)
     failed = RunStatus(RunState.FAILED, 'the runner exited with status 7', exit_code=7)
     monkeypatch.setattr(local.RunHandle, 'wait', lambda _handle, _timeout=None: failed)

@@ -10,7 +10,7 @@ import pytest
 import yaml
 
 import sophios.main
-from sophios import post_compile
+from sophios.cwl import post_compile
 from sophios.compiler import CompileSettings, compile_source
 from sophios.ir.artifacts import CompilationArtifact
 from sophios.ir.frontdoor import bundle_from_disk

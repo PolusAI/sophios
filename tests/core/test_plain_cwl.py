@@ -113,7 +113,7 @@ def test_anything_else_is_compiled_and_what_a_plain_workflow_cannot_take_stops_i
     names an input its job names that is missing."""
     def compiled(*_args: object, **_kwargs: object) -> None:
         raise _Compiled
-    monkeypatch.setattr(cli.io, 'get_config', compiled)
+    monkeypatch.setattr(cli.config, 'get_config', compiled)
     for name, flags in [('tagged.cwl', ['--allow_raw_cwl']), ('sidecar.cwl', ['--allow_raw_cwl']),
                         ('no_version.cwl', ['--allow_raw_cwl']), ('say.cwl', ['--allow_raw_cwl']),
                         ('packed_tool.cwl', ['--allow_raw_cwl']), ('plain.wic', ['--allow_raw_cwl']),

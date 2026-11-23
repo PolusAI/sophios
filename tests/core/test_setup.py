@@ -7,7 +7,7 @@ import pytest
 
 import sophios
 import sophios.cli
-import sophios.input_output as io
+from sophios import config as sophios_config
 import sophios.plugins
 import sophios.api
 import sophios.api.python.workflow
@@ -25,7 +25,7 @@ class CorpusRegistry:
 def corpus_config() -> Json:
     """The configuration Sophios itself would use: the one named or found, generated first when there is none."""
     args = sophios.cli.get_args()
-    return io.get_config(args.config_file, Path(args.homedir))
+    return sophios_config.get_config(args.config_file, Path(args.homedir))
 
 
 @lru_cache(maxsize=1)

@@ -1,7 +1,7 @@
 """A real-time analysis: cat prints greeting.txt as the workflow writes it."""
 from pathlib import Path
 
-from sophios import input_output, plugins
+from sophios import config, plugins
 from sophios.api.python.workflow import Step, Workflow
 
 
@@ -25,5 +25,5 @@ def workflow() -> Workflow:
 
 if __name__ == '__main__':
     # The analysis names its tool by stem, so the run is given the tools of the configuration.
-    tools = plugins.get_tools_cwl(input_output.get_config(None, Path.home()))
+    tools = plugins.get_tools_cwl(config.get_config(None, Path.home()))
     workflow().run(tool_registry=tools)

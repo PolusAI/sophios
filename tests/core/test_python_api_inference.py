@@ -13,7 +13,7 @@ from hypothesis import example, given, strategies as st
 import sophios.api.python._workflow_runtime as python_runtime
 from sophios import main as cli
 from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
-from sophios.input_output import SHIPPED_RENAMINGS
+from sophios.config import SHIPPED_RENAMINGS
 from sophios.api.python.workflow import (Inference, InvalidInferenceError, RunResult, RunState, SophiosError,
                                          SophiosErrorCode, Step, Workflow)
 from sophios.nextflow.model import NfProcessConnection

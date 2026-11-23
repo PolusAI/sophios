@@ -45,6 +45,9 @@ Codes in parentheses are the codes Sophios prints with each diagnostic.
 - Internals: a run is one `RunSettings` (`sophios.runtime.runners`) built alike by the command line and Python, which
   `RunRequest` and `runtime.setup.Settings` carry; `preflight.RunSettings` is gone. A `wic021` for `outdir` says
   `give outdir a directory you can write to` from both doors.
+- Configuration loading (`get_config`, `read_config_from_disk`, `generate_config`, `default_config_file`) moved from
+  `sophios.input_output` to `sophios.config`. Update `from sophios import input_output` to
+  `from sophios import config` and call `config.get_config(...)`.
 
 ### Nextflow
 

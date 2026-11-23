@@ -19,7 +19,7 @@ import pytest
 import yaml
 
 from sophios.runtime.backends import recorded_outputs
-from sophios.input_output import write_artifacts_to_disk
+from sophios.cwl.io import write_artifacts_to_disk
 from sophios.nextflow.render import write_nextflow_artifacts
 
 from ..budgets import budget

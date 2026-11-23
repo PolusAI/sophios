@@ -12,7 +12,7 @@ import yaml
 
 import sophios.compiler
 from sophios import targets
-from sophios.input_output import NoAliasDumper
+from sophios.cwl.io import NoAliasDumper
 from sophios.ir.artifacts import CompilationArtifact, CompilationResult
 from sophios.ir.frontdoor import SourceBundle
 from sophios.ir.resolve import RegistrySnapshot

@@ -300,8 +300,8 @@ name = "The public Python API reaches the compiler only through its runtime adap
 type = "forbidden"
 source_modules = ["sophios.api.python.workflow", "sophios.api.python.tool_builder"]
 forbidden_modules = ["sophios.compiler", "sophios.ir", "sophios.plugins", "sophios.runtime.local",
-                     "sophios.runtime.backends", "sophios.input_output", "sophios.main", "sophios.cli",
-                     "sophios.post_compile", "sophios.runtime.preflight"]
+                     "sophios.runtime.backends", "sophios.cwl", "sophios.config", "sophios.main", "sophios.cli",
+                     "sophios.runtime.preflight"]
 allow_indirect_imports = true
 
 [[tool.importlinter.contracts]]
@@ -314,7 +314,7 @@ forbidden_modules = ["sophios.main", "sophios.cli"]
 name = "The Nextflow target reads the resolved view, never emitted CWL"
 type = "forbidden"
 source_modules = ["sophios.nextflow"]
-forbidden_modules = ["sophios.ir.artifacts", "sophios.ir.emit", "sophios.compiler", "sophios.post_compile"]
+forbidden_modules = ["sophios.cwl", "sophios.ir.artifacts", "sophios.compiler"]
 
 [[tool.importlinter.contracts]]
 name = "The Nextflow target takes names and step inputs from the resolved view"
@@ -327,7 +327,7 @@ allow_indirect_imports = true
 [[tool.importlinter.contracts]]
 name = "The CWL target lowers the resolved view, not the graph"
 type = "forbidden"
-source_modules = ["sophios.ir.emit"]
+source_modules = ["sophios.cwl.emit"]
 forbidden_modules = ["sophios.ir.stepin", "sophios.ir.complete", "sophios.ir.link", "sophios.ir.infer",
                      "sophios.ir.lower"]
 # The view reads them on the target's behalf; only the lowering's own imports are checked.
@@ -337,4 +337,4 @@ allow_indirect_imports = true
 name = "The resolved view reads the graph, never its CWL"
 type = "forbidden"
 source_modules = ["sophios.ir.resolved"]
-forbidden_modules = ["sophios.ir.artifacts", "sophios.ir.emit", "sophios.compiler", "sophios.post_compile"]
+forbidden_modules = ["sophios.cwl", "sophios.ir.artifacts", "sophios.compiler"]

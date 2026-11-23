@@ -67,7 +67,7 @@ found on `search_paths_wic` like a subworkflow. The command line reads both
 from the configuration. `Workflow.run()` reads no configuration, so from
 Python the analysis's tool must be one of the workflow's own tools or be in
 the `tool_registry=` given to `run()`, as `watched.py` does with
-`plugins.get_tools_cwl(input_output.get_config(None, Path.home()))`; a
+`plugins.get_tools_cwl(config.get_config(None, Path.home()))`; a
 `.wic` analysis is given as `run(workflow_paths=...)`, shaped
 `{namespace: {stem: path}}` like `Workflow.from_wic(workflow_paths=...)`. An
 analysis the run cannot find is `wic044` at the declaration.

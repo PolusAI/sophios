@@ -13,7 +13,7 @@ promises the user pages make.
 | Compiler | the document and the tools it names | is each tool a step runs valid CWL, and does every step, port, reference and literal resolve and type-check? | `sophios.compiler.compile_source`: cwltool's validator on each tool (`wic057`), then Resolve, Lower, Link and Infer |
 | Tool builder | a `CommandLineTool` document | is it a valid CWL v1.2 tool? | `CommandLineTool.validate()` and `write_cwl(validate=True)`, which load it with cwltool; `--validate_plugins` runs the compiler's check on every tool on the search paths |
 | Editor schema | a `.wic` file in an editor | is its shape right? | `sophios --generate_schemas`, a JSON Schema generated from the AST |
-| Pre-flight | this machine | can it run the compiled CWL? | `sophios.preflight`, before every local run |
+| Pre-flight | this machine | can it run the compiled CWL? | `sophios.runtime.preflight`, before every local run |
 | Runner | the compiled CWL | does the runner accept it? | cwltool or Toil, when the document is loaded |
 
 The parser and the compiler report with `wic0NN` codes and positions; the

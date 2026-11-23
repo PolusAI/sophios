@@ -10,7 +10,7 @@ A step is spelled as it was written, less the `.wic` a call names its
 workflow by; a name the compiler derives joins the step and the port with
 `~`. Each emitted document's names are unique in it, and each emitted file is
 named `<root>~<address>`, unique in the directory the tree is written to: see
-`Names.of` and `ir.emit`.
+`Names.of` and `cwl.emit`.
 Rendering is one-way. Nothing here takes text apart, and nothing may: a
 consumer that needs to know what a name came from is given the identity.
 """

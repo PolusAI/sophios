@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-import sophios.input_output as io
+from sophios import config as sophios_config
 import sophios.plugins
 from sophios.nextflow.reader import read_nextflow
 from sophios.nextflow.model import NfWorkflowOutputConnection
@@ -33,7 +33,7 @@ def _compile(source: Path, pipeline: Path, monkeypatch: pytest.MonkeyPatch) -> N
         assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         return
     # A Python workflow names its tools relative to its repository, as run_workflows.yml compiles it.
-    tools = sophios.plugins.get_tools_cwl(io.read_config_from_disk(CONFIG))
+    tools = sophios.plugins.get_tools_cwl(sophios_config.read_config_from_disk(CONFIG))
     monkeypatch.chdir(source.parents[1])
     python_workflow(source, tools).compile(target="nextflow", tool_registry=tools).write(pipeline)
 

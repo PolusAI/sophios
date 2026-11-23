@@ -21,9 +21,10 @@ from ..lang.diagnostics import Diagnostics, Locator, SophiosError
 from ..lang.error_codes import SophiosErrorCode
 from ..lang.nodes import OpaqueCwl
 from ..lang.spans import SourceSpan
-from .emit import EDAM_NAMESPACE
 from .resolve import RegistrySnapshot
 from .types import DerivedName, StepId, StepNode, WorkflowGraph
+
+EDAM_NAMESPACE: Final = ('edam', 'https://edamontology.org/')
 
 #: The prefixes Emit binds itself, whatever a document or a process says of them.
 _BOUND_BY_EMIT: Final = frozenset({EDAM_NAMESPACE[0]})

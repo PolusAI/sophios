@@ -7,18 +7,18 @@ here, once, and nothing else reads it. Opaque CWL is copied, never inspected.
 """
 from copy import deepcopy
 
+from ..ir.artifacts import CompilationArtifact, Inlining
+from ..ir.declarations import PortDeclaration
+from ..ir.names import NAMESPACE_SEPARATOR
+from ..ir.namespaces import EDAM_NAMESPACE
+from ..ir.policy import RunPolicy, effective_when, tolerant_tool
+from ..ir.resolved import (
+    Bare, Entry, InputRef, OutputRef, OutputSource, Raw, ResolvedStep, ResolvedWorkflow, StepValue, Verbatim, spelling,
+)
 from ..lang import CWL_VERSION
 from ..lang.nodes import OpaqueCwl
 from ..lang.spans import SourceSpan
 from ..wic_types import Cwl, Tool
-from .artifacts import CompilationArtifact, Inlining
-from .declarations import PortDeclaration
-from .names import NAMESPACE_SEPARATOR
-from .policy import RunPolicy, effective_when, tolerant_tool
-from .resolved import (Bare, Entry, InputRef, OutputRef, OutputSource, Raw, ResolvedStep, ResolvedWorkflow, StepValue,
-                       Verbatim, spelling)
-
-EDAM_NAMESPACE = ('edam', 'https://edamontology.org/')
 
 
 def artifact_tree(view: ResolvedWorkflow) -> CompilationArtifact:
