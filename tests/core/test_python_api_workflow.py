@@ -2,20 +2,17 @@
 refused as stated, `check()` answers what `compile()` and `run()` would, and `run()` hands the runner what `compile()`
 returns; its properties judge types as the language does, name the user's line, and build one step through every
 door."""
-from contextlib import contextmanager
 import copy
 import pickle
 import inspect
-import json
 import os
 from pathlib import Path
 import sys
 import tempfile
-import traceback
 import warnings
 from types import SimpleNamespace
-from typing import Any, Callable, Final, Iterator, Literal, cast
-from unittest.mock import Mock, patch
+from typing import Any, Callable, Final, Literal, cast
+from unittest.mock import Mock
 
 from hypothesis import example, given, strategies as st
 import numpy
@@ -34,84 +31,13 @@ from sophios.api.python.workflow import (Cwltool, InvalidInputValueError, Invali
                                          StepInput, Toil, Workflow, WorkflowRunError)
 from sophios.lang.diagnostics import lines as printed_lines
 from sophios.runners import RunSettings
-from sophios.wic_types import Json, Tools
 
 from .budgets import budget
 from .cases import DATA
-from .test_setup import corpus_config
 from .helpers import ADAPTERS, adapter_step, echo_workflow, import_python_file, no_preflight, python_process
 from .wic_reading import read_wic
 
 PYTHON_API: Final = DATA / 'python_api'
-
-
-def _iter_python_workflow_paths(global_config: Json) -> list[tuple[str, Path]]:
-    """Every discovered Python workflow, minus the corpora with their own lanes: the cookbook's scripts are
-    test_cookbook.py's, each named for the `.wic` beside it, which writing it out here would overwrite."""
-    paths = sophios.plugins.get_workflow_paths(global_config, 'py')
-    return [
-        (path_str, path)
-        for _, paths_dict in paths.items()
-        for path_str, path in paths_dict.items()
-        if "mm-workflows" not in str(path) and "docs/tutorials/" not in str(path)
-        and "docs/cookbook/" not in path.as_posix()
-    ]
-
-
-@contextmanager
-def _step_registry_injected(tool_registry: Tools) -> Iterator[None]:
-    """Inject a default tool registry into imported Python workflow scripts,
-    so they see the patched ``Step``."""
-    from sophios.api.python import workflow  # pylint: disable=C0415:import-outside-toplevel
-
-    step_class = workflow.Step
-
-    def step_factory(*args: Any, **kwargs: Any) -> Any:
-        kwargs.setdefault("tool_registry", tool_registry)
-        return step_class(*args, **kwargs)
-
-    with patch.object(workflow, "Step", step_factory):
-        yield
-
-
-@pytest.mark.cwl_corpus
-@pytest.mark.fast
-def test_compile_python_workflows() -> None:
-    """Import and compile all auto-discovered Python workflow scripts."""
-    from sophios.api.python import workflow  # pylint: disable=C0415:import-outside-toplevel
-
-    global_config = corpus_config()
-    tools_cwl = sophios.plugins.get_tools_cwl(global_config)
-    paths_tuples = _iter_python_workflow_paths(global_config)
-    import_errors: list[str] = []
-    for path_stem, path in paths_tuples:
-        try:
-            with _step_registry_injected(tools_cwl):
-                module = import_python_file(path_stem, path)
-                retval: workflow.Workflow = module.workflow()
-
-            retval.compile()
-            retval.write_wic(path.parent)
-
-            config_ci = path.parent / "config_ci.json"
-            json_contents = {}
-            if config_ci.exists():
-                with open(config_ci, mode="r", encoding="utf-8") as r:
-                    json_contents = json.load(r)
-            fragments: list[str] = json_contents.get("fragments", [])
-            subworkflows: list[workflow.Workflow] = retval._flatten_subworkflows()[
-                1:]
-            fragments += [wf.process_name for wf in subworkflows]
-            json_contents["fragments"] = fragments
-            with open(config_ci, mode="w", encoding="utf-8") as f:
-                json.dump(json_contents, f)
-
-        except Exception as exc:  # pylint: disable=W0718:broad-exception-caught
-            import_errors.append(f"{path_stem}: {type(exc).__name__}: {exc}")
-            traceback.print_exception(type(exc), value=exc, tb=None)
-    if import_errors:
-        pytest.fail("Python workflow imports failed:\n" +
-                    "\n".join(import_errors))
 
 
 @pytest.mark.fast

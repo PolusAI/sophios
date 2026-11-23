@@ -23,7 +23,7 @@ import sophios.input_output
 import sophios.run_local
 import sophios.utils
 from sophios.ir import frontdoor
-from sophios import backends, post_compile, preflight, realtime, run_setup, targets
+from sophios import backends, plugins, post_compile, realtime, run_setup, runners, targets
 from sophios.cli import get_args
 from sophios.runners import RunSettings
 from sophios.utils_yaml import Key
@@ -38,6 +38,7 @@ from sophios.wic_types import Json
 
 # pylint: disable-next=unused-import  # `corpus_registry` is a pytest fixture
 from .test_setup import CorpusRegistry, corpus_config, corpus_registry, workflow_paths
+from .helpers import python_workflow
 from .cwl_validation import validate_cwl
 from .equivalence import Strength, equivalent, flatten_model
 from .hermetic import cwl_tree
@@ -93,6 +94,12 @@ yml_paths_tuples_on_push = [(s, p) for (s, p) in yml_paths_tuples
 
 yml_paths_partial_failure = [(s, p) for (s, p) in yml_paths_tuples if s in run_partial_failures]
 
+#: The Python workflows discovered beside the corpus, but for mm-workflows' scripts, which are tools, and the
+#: cookbook's, which test_cookbook.py runs.
+PYTHON_WORKFLOWS: Final = [pytest.param(path, id=path.name)
+                           for paths in plugins.get_workflow_paths(corpus_config(), 'py').values()
+                           for path in paths.values() if not {'mm-workflows', 'cookbook'} & set(path.parts)]
+
 
 def _artifacts(root: CompilationArtifact) -> list[CompilationArtifact]:
     """Return a stable depth-first view of an emitted artifact tree."""
@@ -117,6 +124,24 @@ def test_run_workflows_on_push(yml_path_str: str, yml_path: Path, cwl_runner: st
        those listed as partial failures run with --partial_failure_enable."""
     args = get_args(str(yml_path), ['--partial_failure_enable'] if yml_path_str in run_partial_failures else [])
     run_workflows(yml_path_str, yml_path, cwl_runner, args, corpus_registry)
+
+
+@pytest.mark.cwl_corpus
+@pytest.mark.parametrize('path', PYTHON_WORKFLOWS)
+def test_corpus_python_workflow_compiles(path: Path, corpus_registry: CorpusRegistry) -> None:
+    """Each discovered Python workflow compiles, on every leg; the run lane runs it below."""
+    python_workflow(path, corpus_registry.tools).compile()
+
+
+@pytest.mark.cwl_corpus
+@pytest.mark.skip_pypi_ci
+@pytest.mark.slow
+@pytest.mark.parametrize('path', PYTHON_WORKFLOWS)
+def test_run_workflows_on_push_from_python(path: Path, cwl_runner: str, corpus_registry: CorpusRegistry,
+                                           tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Each discovered Python workflow runs as its script runs it, by `Workflow.run`, in a directory of its own."""
+    monkeypatch.chdir(tmp_path)
+    python_workflow(path, corpus_registry.tools).run(runner=runners.named('cwl', cwl_runner)())
 
 
 #: The three forms the inline flags give, each of which must run to the same
