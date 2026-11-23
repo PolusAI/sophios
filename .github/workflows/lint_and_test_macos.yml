@@ -131,11 +131,10 @@ jobs:
 
       # Every corpus workflow compiled once and checked in every form the inline
       # flags give: no Sophios key or tool-only field in what is emitted, each
-      # subworkflow as it compiles alone (the isomorphism check MUST run in
-      # serial), and the flat and embedded forms meaning what the nested form
-      # does; on POSIX, cwltool validates every form. cwltool would find each
-      # defect only in run_workflows, behind a container pull.
+      # subworkflow as it compiles alone, and the flat and embedded forms meaning
+      # what the nested form does; on POSIX, cwltool validates every form. cwltool
+      # would find each defect only in run_workflows, behind a container pull.
       - name: PyTest CWL Corpus Forms
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
-        run: cd sophios/ && pytest tests/core/test_examples.py -k "test_corpus_ and not weekly_corpus" # --cov --cov-config=.coveragerc_serial
+        run: cd sophios/ && pytest tests/core/test_examples.py -k "test_corpus_ and not weekly_corpus" -n auto # --cov --cov-config=.coveragerc_serial
         timeout-minutes: 20 # backup timeout for windows
