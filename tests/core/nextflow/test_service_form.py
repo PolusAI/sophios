@@ -8,9 +8,9 @@ import pytest
 from sophios.api.python._workflow_runtime import service_pipeline
 from sophios.api.python.tool_builder import CommandLineTool, Inputs, Output, Outputs, cwl
 from sophios.api.python.workflow import Step, Workflow
-from sophios.input_output_nf import write_nextflow_artifacts
+from sophios.nextflow.render import write_nextflow_artifacts
 from sophios.lang.diagnostics import SophiosError
-from sophios.nf_reader import read_nextflow
+from sophios.nextflow.reader import read_nextflow
 
 from ..cases import DATA
 from ..helpers import autoseg

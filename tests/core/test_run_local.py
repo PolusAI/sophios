@@ -18,7 +18,7 @@ from typing import Any
 
 import pytest
 
-from sophios import preflight, run_local
+from sophios.runtime import local, preflight
 from sophios.api.python.workflow import (Cwltool, Nextflow, RunResult, RunState, StepStatus, Toil, Workflow,
                                          WorkflowRunError)
 from sophios.lang.diagnostics import Diagnostic, Severity, SophiosError
@@ -77,7 +77,7 @@ def test_a_run_starts_what_run_sh_holds_and_echoes_and_keeps_what_the_runner_pri
     the runner; both its streams go to this process's own, so a notebook and pytest show them, and to the run log, and
     the Python door prints what the command line prints."""
     fake = install(monkeypatch, tmp_path, stdout=['said on stdout'], stderr=['said on stderr'])
-    monkeypatch.setattr(run_local, 'datetime', _Frozen)
+    monkeypatch.setattr(local, 'datetime', _Frozen)
     secret = "p@ss$word! a&b 'single' \"double\" ;|<>()`x`\nline two"
     monkeypatch.delenv('SOPHIOS_TEST_TOKEN', raising=False)
     if door == 'command line':
@@ -195,15 +195,15 @@ def test_the_command_line_exits_as_its_run_ended(
 _SOPHIOS = """
 import os, signal, sys, threading, time
 from pathlib import Path
-from sophios import preflight, run_local
-from sophios.backends import RunRequest
-from sophios.runners import Cwltool, RunSettings
+from sophios.runtime import preflight, local
+from sophios.runtime.backends import RunRequest
+from sophios.runtime.runners import Cwltool, RunSettings
 program, basepath, mode, grace, nohup = sys.argv[1], Path(sys.argv[2]), sys.argv[3], float(sys.argv[4]), sys.argv[5]
 if nohup == 'nohup':
     signal.signal(signal.SIGHUP, signal.SIG_IGN)   # as `nohup` leaves it for the program it starts
 preflight.runner_program = lambda _name: program
-run_local.STOP_GRACE_SECONDS = grace
-handle = run_local.start(RunRequest('wf', basepath, RunSettings(Cwltool())))
+local.STOP_GRACE_SECONDS = grace
+handle = local.start(RunRequest('wf', basepath, RunSettings(Cwltool())))
 if mode == 'fork':
     if (child := os.fork()) == 0:
         time.sleep(30)
@@ -267,7 +267,7 @@ def test_the_runner_does_not_outlive_sophios(tmp_path: Path, mode: str, signame:
 _STARTS_AND_EXITS = '''
 import time
 from pathlib import Path
-from sophios import preflight
+from sophios.runtime import preflight
 preflight.ready = lambda *_a, **_k: None
 preflight.runner_program = lambda _name: {program!r}
 from sophios.api.python.workflow import Step, Toil, Workflow
@@ -351,7 +351,7 @@ def test_a_started_run_is_followed_by_its_handle_to_how_it_ended(
         'leaves-a-process-behind': {'leave_behind': 10}, 'no-watcher': {'sleep': 60}}
     fake = install(monkeypatch, tmp_path, **behaviour[ending])
     if ending == 'no-watcher':
-        monkeypatch.setattr(run_local.sys, 'executable', '')   # as in some embedded interpreters
+        monkeypatch.setattr(local.sys, 'executable', '')   # as in some embedded interpreters
     toil = ending in ('completes', 'exits-before-cancel')   # Toil prints its output object
     handle = echo_workflow().start(runner=Toil() if toil else Cwltool())
     if ending == 'completes':
@@ -405,7 +405,7 @@ def test_a_cancelled_run_stays_cancelled(monkeypatch: pytest.MonkeyPatch, tmp_pa
     cancellation and not the exit status the runner stopped with, and `collect` raises the run as cancelled, not as
     failed."""
     fake = install(monkeypatch, tmp_path, sleep=60, ignore_sigterm=how == 'ignoring-sigterm')
-    monkeypatch.setattr(run_local, 'STOP_GRACE_SECONDS', 0.5 if how == 'ignoring-sigterm' else 10)
+    monkeypatch.setattr(local, 'STOP_GRACE_SECONDS', 0.5 if how == 'ignoring-sigterm' else 10)
     handle = echo_workflow().start()
     fake.wait_until_started()
     if how == 'from-another-thread':
@@ -504,7 +504,7 @@ def test_the_runner_prints_no_rdflib_encoding_warning(monkeypatch: pytest.Monkey
     monkeypatch.setattr(cwltool.main, 'run', provenance_run)
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter('always')
-        assert run_local.cwltool_main() == 0
+        assert local.cwltool_main() == 0
     assert not [w for w in caught if 'NTSerializer' in str(w.message)]
 
 

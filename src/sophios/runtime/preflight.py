@@ -27,12 +27,12 @@ from urllib.request import url2pathname
 import cwl_utils.parser as cwl
 import requests
 
-from .ir.locations import input_paths
-from .lang.diagnostics import Diagnostic, Severity, SophiosError
-from .lang.error_codes import SophiosErrorCode
+from ..ir.locations import input_paths
+from ..lang.diagnostics import Diagnostic, Severity, SophiosError
+from ..lang.error_codes import SophiosErrorCode
 from .runners import RunSettings
-from .utils import strip_terminal_codes
-from .wic_types import Yaml
+from ..utils import strip_terminal_codes
+from ..wic_types import Yaml
 
 #: Engines `<engine> info` reaches: it needs the engine's daemon or machine, and no container or network.
 DOCKER_LIKE: Final = ('docker', 'podman')

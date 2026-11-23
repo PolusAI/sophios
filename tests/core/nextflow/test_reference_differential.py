@@ -11,7 +11,7 @@ import pytest
 
 from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
 from sophios.api.python.workflow import Step, Workflow
-from sophios.backends import recorded_outputs
+from sophios.runtime.backends import recorded_outputs
 
 from ..helpers import cwltool_outputs, observed, tree
 from .testkit import assert_succeeded, execute_nextflow

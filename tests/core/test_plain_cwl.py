@@ -15,8 +15,8 @@ import pytest
 import yaml
 
 import sophios.main as cli
-from sophios import preflight
-from sophios.backends import RunRequest
+from sophios.runtime import preflight
+from sophios.runtime.backends import RunRequest
 
 from .cases import DATA
 from .helpers import no_preflight
@@ -95,7 +95,7 @@ def test_a_plain_cwl_workflow_is_what_the_runner_is_given(sophios: Callable[...,
     def run(request: RunRequest) -> int:
         given.append((request.run.runner.cachedir, request.realtime_plans))
         return 0
-    monkeypatch.setattr(cli.run_local, 'run', run)
+    monkeypatch.setattr(cli.local, 'run', run)
     capsys.readouterr()
     sophios(name, '--allow_raw_cwl', '--run_local')
     assert given == [('', ())]

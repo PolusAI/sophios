@@ -12,13 +12,14 @@ from typing import Generic, TypeVar
 from pathlib import Path
 import tempfile
 
-from sophios import input_output, plugins, preflight, realtime
-from sophios.ir.artifacts import CompilationArtifact
-from sophios.ir.resolved import ResolvedWorkflow
-from sophios.lang.diagnostics import Diagnostic
-from sophios.runners import RunSettings
-from sophios.runtime_inputs import EmptyDirectory, directory_literal, runner_job_inputs
-from sophios.wic_types import Yaml
+from .. import input_output, plugins
+from . import preflight, realtime
+from ..ir.artifacts import CompilationArtifact
+from ..ir.resolved import ResolvedWorkflow
+from ..lang.diagnostics import Diagnostic
+from .runners import RunSettings
+from .inputs import EmptyDirectory, directory_literal, runner_job_inputs
+from ..wic_types import Yaml
 
 ModelT = TypeVar('ModelT')
 

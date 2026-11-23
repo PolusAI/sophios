@@ -13,7 +13,7 @@ from hypothesis import example, given, strategies as st
 from sophios import targets
 from sophios.compiler import CompileSettings, compile_source, resolved_view
 from sophios.ir.frontdoor import bundle_from_disk
-from sophios.runtime_inputs import runner_job_inputs
+from sophios.runtime.inputs import runner_job_inputs
 from sophios.wic_types import StepId, Tool
 
 from .budgets import budget

@@ -10,7 +10,7 @@ the run, and acts only on this machine, only in `prepare`:
 - launch: the runner's command line, environment and working directory, from the request alone;
 - outcome: after the runner exits, its outputs and the steps that failed, read from what it left.
 
-`run_local` starts the launch as a child process and reports the outcome. A target
+`runtime.local` starts the launch as a child process and reports the outcome. A target
 is the language a workflow is handed to its runner in: `cwl`, run by cwltool or Toil,
 or `nextflow`, run by Nextflow.
 """
@@ -25,17 +25,17 @@ from typing import Any, Final, Protocol
 
 from cwl_utils.parser import cwl_v1_2
 
-from . import preflight, realtime, run_setup
-from .ir.artifacts import CompilationArtifact
-from .lang.diagnostics import Diagnostic, SophiosError
-from .nextflow import render as io_nf
-from .nextflow.lower import nextflow_names
-from .nextflow.model import ExecutableNextflowWorkflow
-from .nextflow.reader import read_nextflow
+from . import preflight, realtime, setup
+from ..ir.artifacts import CompilationArtifact
+from ..lang.diagnostics import Diagnostic, SophiosError
+from ..nextflow import render as io_nf
+from ..nextflow.lower import nextflow_names
+from ..nextflow.model import ExecutableNextflowWorkflow
+from ..nextflow.reader import read_nextflow
 from .runners import RunSettings
-from .runtime_inputs import directory_literal, output_target_inputs
-from .utils import strip_terminal_codes
-from .wic_types import Json
+from .inputs import directory_literal, output_target_inputs
+from ..utils import strip_terminal_codes
+from ..wic_types import Json
 
 _ENV_VAR_NAME: Final = re.compile(r'[A-Za-z_][A-Za-z0-9_]*')
 
@@ -57,7 +57,7 @@ def _check_env_var_names(env_vars: Mapping[str, str]) -> None:
 class RunRequest:
     """One local run of a workflow, as every front door describes it.
 
-    A backend launches it as it is given; `run_local.launch` first makes its paths absolute, as this machine reads
+    A backend launches it as it is given; `runtime.local.launch` first makes its paths absolute, as this machine reads
     them, and names its output directory.
 
     Attributes:
@@ -127,8 +127,8 @@ class Backend(Protocol):
         """Whether the runner writes the run's summary, `output_<name>.json`, itself; else the caller writes there
         the output object `outcome` returns."""
 
-    def write(self, lowered: run_setup.Lowered[Any], analyses: tuple[realtime.Analysis, ...], basepath: Path, *,
-              inputs_file: str, root_dir: Path) -> run_setup.Prepared:
+    def write(self, lowered: setup.Lowered[Any], analyses: tuple[realtime.Analysis, ...], basepath: Path, *,
+              inputs_file: str, root_dir: Path) -> setup.Prepared:
         """Write what the runner reads of the model its target `lowered` under `basepath`, and nothing elsewhere:
         `inputs_file` holds values that win over the workflow's, and a relative path is read against `root_dir`.
         What the runner's machine must still do before the run starts is in what it returns."""
@@ -136,8 +136,8 @@ class Backend(Protocol):
     def needs(self, documents: Sequence[Path], jobs: Sequence[preflight.Job]) -> preflight.Needs:
         """What running `documents` with `jobs` asks of its machine: the paths the jobs name and the images."""
 
-    def prepare(self, lowered: run_setup.Lowered[Any], analyses: tuple[realtime.Analysis, ...], basepath: Path,
-                settings: run_setup.Settings) -> run_setup.Prepared:
+    def prepare(self, lowered: setup.Lowered[Any], analyses: tuple[realtime.Analysis, ...], basepath: Path,
+                settings: setup.Settings) -> setup.Prepared:
         """`write` under `basepath`, then make this machine ready to run it."""
 
     def launch(self, request: RunRequest) -> Launch:
@@ -200,30 +200,30 @@ def failed_steps(lines: Iterable[str]) -> dict[str, int | str | None]:
 
 
 class _Cwl:
-    """What every CWL runner shares: `run_setup` writes the files, the pre-flight checks the machine."""
+    """What every CWL runner shares: `setup` writes the files, the pre-flight checks the machine."""
 
     #: An empty output directory, as this runner takes one in its job.
     empty_directory = staticmethod(directory_literal)
 
-    def write(self, lowered: run_setup.Lowered[CompilationArtifact], analyses: tuple[realtime.Analysis, ...],
-              basepath: Path, *, inputs_file: str, root_dir: Path) -> run_setup.Prepared:
+    def write(self, lowered: setup.Lowered[CompilationArtifact], analyses: tuple[realtime.Analysis, ...],
+              basepath: Path, *, inputs_file: str, root_dir: Path) -> setup.Prepared:
         """The workflow and its job under `basepath`, and its analyses beside it; the runner makes every folder."""
-        return run_setup.write(lowered.model, analyses, basepath, inputs_file=inputs_file, root_dir=root_dir,
-                               output_targets=output_target_inputs(lowered.view),
-                               empty_directory=self.empty_directory)
+        return setup.write(lowered.model, analyses, basepath, inputs_file=inputs_file, root_dir=root_dir,
+                           output_targets=output_target_inputs(lowered.view),
+                           empty_directory=self.empty_directory)
 
     def needs(self, documents: Sequence[Path], jobs: Sequence[preflight.Job]) -> preflight.Needs:
         """Every DockerRequirement of the documents, as cwl-docker-extract reads them."""
         return preflight.needs(documents, jobs)
 
-    def prepare(self, lowered: run_setup.Lowered[CompilationArtifact], analyses: tuple[realtime.Analysis, ...],
-                basepath: Path, settings: run_setup.Settings) -> run_setup.Prepared:
+    def prepare(self, lowered: setup.Lowered[CompilationArtifact], analyses: tuple[realtime.Analysis, ...],
+                basepath: Path, settings: setup.Settings) -> setup.Prepared:
         """The workflow and its job under `basepath`, its analyses beside it, and its images pulled.
 
         The artifact written is the model, as the front door rewrote it.
         """
-        return run_setup.prepare(lowered.model, analyses, basepath, settings, output_target_inputs(lowered.view),
-                                 empty_directory=self.empty_directory)
+        return setup.prepare(lowered.model, analyses, basepath, settings, output_target_inputs(lowered.view),
+                             empty_directory=self.empty_directory)
 
 
 class CwltoolBackend(_Cwl):
@@ -416,8 +416,8 @@ class NextflowBackend:
         if problems:
             raise SophiosError(problems)
 
-    def write(self, lowered: run_setup.Lowered[ExecutableNextflowWorkflow], analyses: tuple[realtime.Analysis, ...],
-              basepath: Path, *, inputs_file: str, root_dir: Path) -> run_setup.Prepared:
+    def write(self, lowered: setup.Lowered[ExecutableNextflowWorkflow], analyses: tuple[realtime.Analysis, ...],
+              basepath: Path, *, inputs_file: str, root_dir: Path) -> setup.Prepared:
         """The four artifacts and `nextflow_names.json` in the workflow's `nextflow_directory`, and the analyses
         under `basepath`; the folders are each output-target Directory input, which the pipeline stages, so it must
         exist, where a CWL runner makes it.
@@ -438,11 +438,11 @@ class NextflowBackend:
             match view.values.get(name):
                 case {'class': 'Directory', 'path': str() as path}:
                     folders.append(path)
-        return run_setup.Prepared(view.name, realtime.write(analyses, basepath, view.name, root_dir), documents,
-                                  tuple(folders))
+        return setup.Prepared(view.name, realtime.write(analyses, basepath, view.name, root_dir), documents,
+                              tuple(folders))
 
-    def prepare(self, lowered: run_setup.Lowered[ExecutableNextflowWorkflow], analyses: tuple[realtime.Analysis, ...],
-                basepath: Path, settings: run_setup.Settings) -> run_setup.Prepared:
+    def prepare(self, lowered: setup.Lowered[ExecutableNextflowWorkflow], analyses: tuple[realtime.Analysis, ...],
+                basepath: Path, settings: setup.Settings) -> setup.Prepared:
         """`write`, the check, and each of its folders that names nothing yet made.
 
         A check (`settings.check`) writes into a temporary directory instead, removed when the check ends,
@@ -456,8 +456,8 @@ class NextflowBackend:
         with tempfile.TemporaryDirectory(prefix='sophios-check-') as scratch:
             return self._prepare(lowered, analyses, Path(scratch), settings)
 
-    def _prepare(self, lowered: run_setup.Lowered[ExecutableNextflowWorkflow], analyses: tuple[realtime.Analysis, ...],
-                 basepath: Path, settings: run_setup.Settings) -> run_setup.Prepared:
+    def _prepare(self, lowered: setup.Lowered[ExecutableNextflowWorkflow], analyses: tuple[realtime.Analysis, ...],
+                 basepath: Path, settings: setup.Settings) -> setup.Prepared:
         """`prepare`, writing under `basepath`."""
         written = self.write(lowered, analyses, basepath, inputs_file=settings.run.inputs_file,
                              root_dir=settings.root_dir)

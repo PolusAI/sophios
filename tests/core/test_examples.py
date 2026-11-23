@@ -16,12 +16,13 @@ from mergedeep import merge, Strategy
 import sophios.cli
 import sophios.compiler
 import sophios.input_output
-import sophios.run_local
+from sophios.runtime import local
 import sophios.utils
 from sophios.ir import frontdoor
-from sophios import backends, plugins, post_compile, realtime, run_setup, runners, targets
+from sophios import plugins, post_compile, targets
+from sophios.runtime import backends, realtime, setup, runners
 from sophios.cli import get_args
-from sophios.runners import RunSettings
+from sophios.runtime.runners import RunSettings
 from sophios.utils_yaml import Key
 from sophios.post_compile import apply_inline_options, inline_artifact_runs
 from sophios.lang import parse
@@ -249,12 +250,12 @@ def run_workflows(
     view = sophios.compiler.resolved_view(compilation)
     lowered = row.lower(targets.for_run(row, view, root))
     lowered = replace(lowered, model=_inlined(lowered.model, args))
-    prepared = backend.prepare(lowered, (), Path(basepath), run_setup.Settings(
+    prepared = backend.prepare(lowered, (), Path(basepath), setup.Settings(
         run, root, row.run_values(view), pull=docker_pull_only))
     if docker_pull_only:
         return
     # NOTE: Do not use --cachedir; we want to actually test everything.
-    retval = sophios.run_local.run(backends.RunRequest(prepared.name, Path(basepath), RunSettings(run.runner)))
+    retval = local.run(backends.RunRequest(prepared.name, Path(basepath), RunSettings(run.runner)))
     assert retval == 0, retval
 
 

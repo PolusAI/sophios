@@ -12,16 +12,17 @@ import pytest
 import yaml
 from hypothesis import example, given, strategies as st
 
-from sophios import backends, preflight, run_local, run_setup, targets
+from sophios import targets
+from sophios.runtime import backends, local, preflight, setup
 from sophios.compiler import resolved_view
 from sophios.ir.artifacts import CompilationResult
 from sophios.api.python._workflow_runtime import compile_workflow_result
 from sophios.api.python.workflow import Step, Workflow
-from sophios.backends import RunRequest
+from sophios.runtime.backends import RunRequest
 from sophios.nextflow.render import write_nextflow_artifacts
 from sophios.lang.diagnostics import Diagnostic, Severity, SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
-from sophios.runners import RUNNERS, Cwltool, Nextflow, Runner, RunSettings, Toil, build
+from sophios.runtime.runners import RUNNERS, Cwltool, Nextflow, Runner, RunSettings, Toil, build
 
 from .budgets import budget
 from .cases import DATA
@@ -86,13 +87,13 @@ def test_each_cwl_runner_reads_its_command_line_as_the_request_says(
     name, basepath, (runner, passthrough), fields = drawn
     asked = _DEFAULTS | fields
     arguments = tuple(argument for given, _, _ in passthrough for argument in given)
-    with mock.patch.object(run_local, 'datetime', _Frozen), \
+    with mock.patch.object(local, 'datetime', _Frozen), \
             mock.patch.dict(os.environ, {'SOPHIOS_TEST_KEPT': 'kept', 'SOPHIOS_TEST_ELSE': 'else'}):
         settings = {key: fields[key] for key in ('container_engine', 'provenance', 'cachedir') if key in fields}
         run = RunSettings(build('cwl', runner, arguments, **settings), fields.get('outdir', ''),
                           quiet=fields.get('quiet', True))
         request = RunRequest(name, Path(basepath), run, fields.get('documents'), fields.get('env', {}))
-        launch = run_local.launch(request, targets.backend(run.runner))
+        launch = local.launch(request, targets.backend(run.runner))
         assert launch.env == {**os.environ, **fields.get('env', {})}
     argv = list(launch.argv)
     import cwltool.argparser  # pylint: disable=import-outside-toplevel  # it and Toil import `pwd`
@@ -297,12 +298,12 @@ def _write_into(source: Any = Path('source.txt')) -> Any:
 
 
 def _prepared(result: CompilationResult, root: Path, base: Path, run: RunSettings = RunSettings(Nextflow()),
-              **settings: Any) -> tuple[run_setup.Lowered[Any], run_setup.Prepared]:
+              **settings: Any) -> tuple[setup.Lowered[Any], setup.Prepared]:
     """`result` lowered, and prepared for `run` under `base`, as a run does: each relative path read against `root`."""
     row, view = targets.target(run.runner.target), resolved_view(result)
     lowered = row.lower(targets.for_run(row, view, root))
     return lowered, targets.backend(run.runner).prepare(
-        lowered, (), base, run_setup.Settings(run, root, row.run_values(view), **settings))
+        lowered, (), base, setup.Settings(run, root, row.run_values(view), **settings))
 
 
 @pytest.mark.fast

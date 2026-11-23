@@ -25,7 +25,7 @@ from sophios import compute
 from sophios.compute import RunConfig
 from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
 from sophios.api.python.workflow import Step, Workflow
-from sophios.run_status import RunState, RunStatus
+from sophios.runtime.status import RunState, RunStatus
 from sophios.wic_types import TargetName
 
 from .helpers import import_python_file

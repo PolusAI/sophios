@@ -23,8 +23,8 @@ import yaml
 
 import sophios
 import sophios.plugins
-import sophios.preflight
 from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl as types
+from sophios.runtime import preflight
 from sophios.api.python.workflow import Step, Workflow
 from sophios.main import main
 from sophios.wic_types import Tools
@@ -107,7 +107,7 @@ def live_workflow(name: str, cwl_tool: str = 'touch', config: Any = None) -> Wor
 def no_preflight(monkeypatch: pytest.MonkeyPatch) -> list[list[Path]]:
     """Replace the container-engine pull of a run with a recorder of the documents it was asked to prepare."""
     prepared: list[list[Path]] = []
-    ready = sophios.preflight.ready
+    ready = preflight.ready
 
     def recorder(documents: Iterable[Path], *run_and_jobs: Any, pulling: bool = True) -> None:
         if pulling:
@@ -115,7 +115,7 @@ def no_preflight(monkeypatch: pytest.MonkeyPatch) -> list[list[Path]]:
         else:
             ready(list(documents), *run_and_jobs, pulling=False)
 
-    monkeypatch.setattr(sophios.preflight, 'ready', recorder)
+    monkeypatch.setattr(preflight, 'ready', recorder)
     return prepared
 
 

@@ -19,7 +19,7 @@ from sophios.lang.diagnostics import Diagnostic, SophiosError, lines
 from sophios.ir.artifacts import CompilationResult
 from sophios.ir.frontdoor import bundle_from_disk
 from sophios.post_compile import inline_artifact_runs
-from sophios.runtime_inputs import output_target_inputs, runner_job_inputs
+from sophios.runtime.inputs import output_target_inputs, runner_job_inputs
 from sophios.wic_types import Json
 
 from .cases import DATA, diagnostic, match

@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from sophios import compute
-from sophios import preflight
+from sophios.runtime import preflight
 from sophios.api.python.workflow import Workflow
 from sophios.lang import SophiosError
 
