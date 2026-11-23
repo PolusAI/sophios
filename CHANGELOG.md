@@ -56,6 +56,10 @@ Codes in parentheses are the codes Sophios prints with each diagnostic.
 - The `cyto` extra is gone, with `ipycytoscape.ipynb`, the notebook it served,
   which no longer ran. Drop `[cyto]` from your install lines; `Workflow.draw()`
   and `--graphviz` draw a workflow.
+- The REST server and ICT converter dependencies (`fastapi`, `uvicorn`,
+  `pydantic`) moved out of core into the `contrib` extra, and `docker`/`podman`
+  Python SDKs are no longer installed. Install `pip install 'sophios[contrib]'`
+  when using `sophios.contrib`.
 
 ### Command line
 

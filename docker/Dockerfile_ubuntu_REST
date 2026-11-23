@@ -29,7 +29,7 @@ ARG SOPHIOS_VERSION=""
 RUN if [ -n "$SOPHIOS_VERSION" ]; then \
         export SETUPTOOLS_SCM_PRETEND_VERSION_FOR_SOPHIOS="$SOPHIOS_VERSION"; \
     fi && \
-    pip3 install --no-cache-dir --break-system-packages /sophios
+    pip3 install --no-cache-dir --break-system-packages '/sophios[contrib]'
 
 # Then run the sophios REST API through port 3000
 EXPOSE 3000

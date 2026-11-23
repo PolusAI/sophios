@@ -3,7 +3,7 @@ channels:
   - defaults
 
 dependencies:
-  - "python>=3.11"
+  - "python>=3.11,<3.15"
 # NOTE: cwltool needs nodejs for InlineJavascriptRequirement.
 # nodejs=26 is the 26.x line at its newest patch, so a new or updated env gets
 # Node's security releases. The former ceiling, <26.8, kept out conda-forge's
