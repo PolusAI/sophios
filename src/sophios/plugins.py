@@ -7,7 +7,7 @@ import sys
 import tempfile
 from typing import Any, Iterable, Iterator, TypeAlias
 
-from . import utils_cwl
+from .cwl import tools
 from .lang.diagnostics import SophiosError
 from .lang.error_codes import SophiosErrorCode
 from .runtime import preflight
@@ -25,8 +25,8 @@ def validate_cwl(cwl_path_str: str) -> None:
         SophiosError: wic057, naming the file and what cwltool found wrong.
     """
     try:
-        utils_cwl.validate(cwl_path_str)
-    except utils_cwl.InvalidTool as error:
+        tools.validate(cwl_path_str)
+    except tools.InvalidTool as error:
         raise SophiosError.error(SophiosErrorCode.TOOL_REFUSED,
                                  f'{cwl_path_str} is a tool cwltool refuses:\n{error}') from error
 

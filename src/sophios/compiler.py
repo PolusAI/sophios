@@ -6,8 +6,9 @@ from itertools import chain
 from pathlib import Path
 
 
-from . import utils_cwl
-from .input_output import SHIPPED_RENAMINGS, dump_wic_yaml
+from .config import SHIPPED_RENAMINGS
+from .cwl import tools
+from .cwl.io import dump_wic_yaml
 
 from .ir.complete import complete
 from .ir.artifacts import CompilationResult
@@ -75,11 +76,11 @@ def compile_source(bundle: SourceBundle,
     names = Names.of(graph)
     diagnostics = Diagnostics([
         *front.diagnostics, *linked.diagnostics, *inferred.diagnostics,
-        *dict.fromkeys(authored_spelling_notes(authored)),
+        *dict.fromkeys(_authored_spelling_notes(authored)),
         *dict.fromkeys(_when_notes(graph, names)),
     ])
-    tools = dict(_tools(graph, _Descriptions(bundle.registry)))
-    return CompilationResult(graph, tools, selected_version, diagnostics, realtime, policy=settings.policy)
+    step_tools = dict(_tools(graph, _Descriptions(bundle.registry)))
+    return CompilationResult(graph, step_tools, selected_version, diagnostics, realtime, policy=settings.policy)
 
 
 def _tools_version(selected: str, settings: CompileSettings, bundle: SourceBundle, graph: WorkflowGraph) -> str:
@@ -110,9 +111,9 @@ def _tool_check() -> ToolCheck:
     def check(tool: ToolDefinition) -> str | None:
         if tool.key not in refusals:
             try:
-                utils_cwl.validate(tool.run_path, None if tool.from_file else tool.cwl)
+                tools.validate(tool.run_path, None if tool.from_file else tool.cwl)
                 refusals[tool.key] = None
-            except utils_cwl.InvalidTool as refused:
+            except tools.InvalidTool as refused:
                 refusals[tool.key] = str(refused)
         return refusals[tool.key]
 
@@ -151,7 +152,7 @@ def _tools(graph: WorkflowGraph, descriptions: '_Descriptions') -> Iterator[tupl
             yield from _tools(called, descriptions)
 
 
-def authored_spelling_notes(graph: WorkflowGraph) -> list[Diagnostic]:
+def _authored_spelling_notes(graph: WorkflowGraph) -> list[Diagnostic]:
     """A `wic069` note for each `outputSource` that names a step by an id more than one step
     has: it means the first.
 
@@ -161,7 +162,7 @@ def authored_spelling_notes(graph: WorkflowGraph) -> list[Diagnostic]:
     notes: list[Diagnostic] = []
     spans = [step.span for step in graph.steps if step.span is not None]
     if not spans:
-        return [note for child in graph.children for note in authored_spelling_notes(child)]
+        return [note for child in graph.children for note in _authored_spelling_notes(child)]
     sources = {port.name: port for port in graph.workflow_outputs}
     ids = [step.id.name for step in graph.steps]
     for name, source in graph.output_mapping:
@@ -178,7 +179,7 @@ def authored_spelling_notes(graph: WorkflowGraph) -> list[Diagnostic]:
             f"Write '({position}, {source.step.name})/{source.port}' to say so.",
             port.span or graph.span, Locator(port=str(name))))
     for child in graph.children:
-        notes.extend(authored_spelling_notes(child))
+        notes.extend(_authored_spelling_notes(child))
     return notes
 
 
@@ -263,13 +264,13 @@ class _Descriptions:
         Raises:
             SophiosError: `wic013` at the step, with cwltool's message, when cwltool cannot pack the tool.
         """
-        if not utils_cwl.has_relative_reference(tool.cwl):
+        if not tools.has_relative_reference(tool.cwl):
             return deepcopy(tool.cwl)
         if tool.key not in self._packed:
             try:
-                self._packed[tool.key] = utils_cwl.packed(dump_wic_yaml(tool.cwl),
-                                                          Path(tool.run_path).absolute().as_uri())
-            except utils_cwl.PackError as error:
+                self._packed[tool.key] = tools.packed(dump_wic_yaml(tool.cwl),
+                                                      Path(tool.run_path).absolute().as_uri())
+            except tools.PackError as error:
                 raise SophiosError.error(
                     SophiosErrorCode.SUBWORKFLOW_INVALID,
                     f'step {step.id.name!r} runs {tool.run_path}, which refers to files relative to itself, '

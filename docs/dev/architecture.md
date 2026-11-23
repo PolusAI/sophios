@@ -48,7 +48,7 @@ real-time declarations.
    and reports `wic031` where a prefix is bound two ways by the sources that
    count.
 7. **Emit** projects the resolved view of the final graph to CWL v1.2 documents and job inputs. The
-   CWL target runs it after the compile (`ir.emit.artifact_tree`); a compile
+   CWL target runs it after the compile (`cwl.emit.artifact_tree`); a compile
    emits for no target. It does not reopen source, consult registries, or revisit a decision.
 
 A completion step, run once before Link, gives each workflow the boundary its
@@ -135,7 +135,7 @@ can be plausible, which is why every choice between equals is reported.
 
 ## Post-compile rewrites
 
-`sophios.post_compile` rewrites the emitted artifact tree after compilation,
+`sophios.cwl.post_compile` rewrites the emitted artifact tree after compilation,
 never the source:
 
 - `flatten_subworkflows` (`--cwl_inline_subworkflows`) changes the shape: it
@@ -152,14 +152,14 @@ semantics.
 
 Partial failure is no rewrite. `--partial_failure_enable` and its success
 codes are compile input, a `RunPolicy` (`sophios.ir.policy`), and
-`ir.emit.artifact_tree`, run by the CWL target, writes for it: each step's `when` through
+`cwl.emit.artifact_tree`, run by the CWL target, writes for it: each step's `when` through
 `effective_when` and each tool through `tolerant_tool`. A real-time
 analysis, compiled under the same options, is written for it too.
 
 Each process an artifact carries is a description, never data. When
 the compile reads a step's tool, a tool whose text refers to a file
 relative to itself (`$include`, `$import`, a relative `location`) is packed by
-cwltool where it was read (`utils_cwl.packed`), once per tool per compile; a
+cwltool where it was read (`cwl.tools.packed`), once per tool per compile; a
 tool cwltool cannot read is `wic057` at the step, before it is packed. Inference and Link have already read
 the tool as written. Lower writes a relative `location` in a `.wic` `default:`
 absolute against the `.wic`'s directory, and the Python adapter does the same
@@ -175,25 +175,25 @@ for a `StepInput` default against the working directory.
 - `sophios.api.python._workflow_runtime` is the Python API's adapter: it
   builds the `Document` and the registry from `Step` and `Workflow` objects,
   calls `compile_source`, and runs the one document `compile()` returns
-  through the same `run_setup` and `run_local` as the command line. The import-linter contract keeps
+  through the same `runtime.setup` and `runtime.local` as the command line. The import-linter contract keeps
   `workflow.py` and `tool_builder.py` from reaching the compiler any other
   way.
-- `sophios.run_setup.prepare` is the one path from an artifact to a run, for
+- `sophios.runtime.setup.prepare` is the one path from an artifact to a run, for
   both adapters and the CI harness, through the backend's `prepare`: it binds
   and writes the job, writes the workflow and its analyses, and calls the
   pre-flight. The command line gives it the tree, or
   one document under `--cwl_inline_runtag`; Python gives it one document.
-- `sophios.preflight` answers what a local run needs from this machine, with
+- `sophios.runtime.preflight` answers what a local run needs from this machine, with
   one diagnostic per problem, and pulls images; it is called by both
   adapters and never by a compute submission.
-- `sophios.runners` is the one value of a local run: `Cwltool`, `Toil` and
+- `sophios.runtime.runners` is the one value of a local run: `Cwltool`, `Toil` and
   `Nextflow` hold the flags their program is given and the settings Sophios
   reads for it, and a `RunSettings` is a runner with what is given to the job
   (`outdir`, `inputs_file`, `quiet`, `generate_run_script`). The command line
   (`cli.run_settings_from_args`) and the Python API (`Workflow.run(runner=...)`)
   build the same value, and the deprecated dictionary form of `run()` is
   translated onto it in one function. The parser reads its defaults and choices from it.
-- `sophios.backends` describes a run once, as a `RunRequest` that carries the
+- `sophios.runtime.backends` describes a run once, as a `RunRequest` that carries the
   `RunSettings`, which the command line, the Python API and the CI harness
   each build. The backend of its runner (`targets.backend`) describes the
   run and starts nothing; only `prepare` acts, on this machine: `write` (the
@@ -206,7 +206,7 @@ for a `StepInput` default against the working directory.
   and the failed steps, read from what the runner printed and left, writing
   nothing), so a site can run the same launch on another machine, as the
   runner's `name` in a folder of its own (`design_docs/sites-design.md`).
-- `sophios.run_local` is the one path that runs a launch: `launch` places it
+- `sophios.runtime.local` is the one path that runs a launch: `launch` places it
   on this machine (absolute paths, the default output directory, this
   process's environment under the run's), and it runs always as a child
   process in its own session, whose two streams it echoes line by line and
@@ -220,11 +220,11 @@ for a `StepInput` default against the working directory.
   status however it ended; `collect` waits, and returns its result or raises
   `WorkflowRunError`, and `Workflow.run()` is `start().collect()`. Ctrl-C
   during `wait` is `cancel`: SIGTERM to the runner, then a kill after a grace
-  period. `sophios.run_status` holds the states, status and result it
+  period. `sophios.runtime.status` holds the states, status and result it
   reports, those of the compute service's contract, and the error `collect`
   raises.
   `Workflow.run_async()` prepares in a worker thread, then awaits `wait` from
-  another, and cancels the handle when its task is cancelled. `sophios.realtime` compiles each declaration once and runs a
+  another, and cancels the handle when its task is cancelled. `sophios.runtime.realtime` compiles each declaration once and runs a
   `Watcher` per plan beside the runner.
 - `sophios.compute` sends a workflow to the compute service, the cluster's
   slurm driver. It compiles through the runtime adapter's `service_document`,

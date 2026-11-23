@@ -12,7 +12,8 @@ from typing import Generic, TypeVar
 from pathlib import Path
 import tempfile
 
-from .. import input_output, plugins
+from .. import plugins
+from ..cwl import io as cwl_io
 from . import preflight, realtime
 from ..ir.artifacts import CompilationArtifact
 from ..ir.resolved import ResolvedWorkflow
@@ -76,11 +77,11 @@ def write(artifact: CompilationArtifact, analyses: tuple[realtime.Analysis, ...]
 
     `artifact` is written as it is: a tree from the command line, one document under
     `--cwl_inline_runtag` and from Python. Its job is the values bound in the workflow, as `targets.for_run` made
-    them for the runner, under the inputs file's. Each of `output_targets` (`runtime_inputs.output_target_inputs`)
+    them for the runner, under the inputs file's. Each of `output_targets` (`runtime.inputs.output_target_inputs`)
     is a name for the run to create, written in the job as `empty_directory` gives the runner an empty directory.
     """
-    input_output.write_artifacts_to_disk(artifact, basepath, inputs_file, output_targets=output_targets,
-                                         empty_directory=empty_directory)
+    cwl_io.write_artifacts_to_disk(artifact, basepath, inputs_file, output_targets=output_targets,
+                                   empty_directory=empty_directory)
     plans = realtime.write(analyses, basepath, artifact.name, root_dir)
     return Prepared(artifact.name, plans, (basepath / f'{artifact.name}.cwl', *realtime.documents(analyses, basepath)))
 
@@ -109,7 +110,7 @@ def inputs_job(inputs_file: str, named: str, output_targets: Collection[str] = (
     directory their relative paths are read from; None without one. `named` is how the user named the file."""
     if not inputs_file:
         return None
-    return preflight.Job(runner_job_inputs(input_output.read_inputs_file(inputs_file), output_targets),
+    return preflight.Job(runner_job_inputs(cwl_io.read_inputs_file(inputs_file), output_targets),
                          Path(inputs_file).parent.absolute(), named)
 
 

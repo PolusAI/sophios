@@ -10,7 +10,7 @@ import yaml
 from hypothesis import HealthCheck, example, given, settings
 from hypothesis import strategies as st
 
-import sophios.post_compile
+from sophios.cwl import post_compile
 from sophios.lang import Grammar, parse
 from sophios.lang.cwl import CWL_VERSION
 from sophios.wic_types import Yaml
@@ -87,7 +87,7 @@ def test_residue_validates_as_cwl_v1_2(freight: dict[str, Any], authored: bool) 
     workflow: Yaml = {'steps': [{'id': 'touch', 'in': {'filename': {'wic_inline_input': 'empty.txt'}}, **freight}]}
     if authored:
         workflow['outputs'] = {'mine': {'type': 'File', 'outputSource': 'touch/file'}}
-    inlined = sophios.post_compile.inline_artifact_runs(cwl_tree(compile_info(workflow, 'leak'))).cwl
+    inlined = post_compile.inline_artifact_runs(cwl_tree(compile_info(workflow, 'leak'))).cwl
     assert not authored or inlined['outputs']['mine']['outputSource'] == 'touch/file'
     with tempfile.TemporaryDirectory() as workdir:
         target = Path(workdir) / 'residue.cwl'

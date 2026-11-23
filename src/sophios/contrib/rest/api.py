@@ -9,9 +9,8 @@ from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 import yaml
 
-from sophios import compiler
-from sophios import input_output
-from sophios.post_compile import inline_artifact_runs
+from sophios import compiler, config as sophios_config
+from sophios.cwl.post_compile import inline_artifact_runs
 from sophios.runtime.inputs import output_target_inputs, runner_job_inputs
 from sophios.wic_types import Json, Tools
 from sophios.contrib import converter
@@ -67,10 +66,11 @@ async def compile_wf(request: Request) -> Json:
     # Build a list of CLTs
     # The default list
     tools_cwl: Tools = {}
-    global_config = input_output.get_config(None, Path.home())
+    global_config = sophios_config.get_config(None, Path.home())
     tools_cwl = plugins.get_tools_cwl(global_config)
     settings = compiler.CompileSettings(replace(
-        compiler.CompileSettings().inference, renaming_conventions=tuple(input_output.renamings_of(global_config))))
+        compiler.CompileSettings().inference,
+        renaming_conventions=tuple(sophios_config.renamings_of(global_config))))
 
     # ========= COMPILE WORKFLOW ================
     bundle = frontdoor.bundle_from_source(

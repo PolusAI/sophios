@@ -26,8 +26,8 @@ from typing import Any, Final
 import yaml
 
 from .. import compiler
-from .. import input_output as io
-from ..ir import emit, frontdoor
+from ..cwl import emit, io
+from ..ir import frontdoor
 from ..ir.artifacts import CompilationArtifact
 from ..ir.realtime import Declaration
 from ..lang.diagnostics import Diagnostic, Severity, SophiosError

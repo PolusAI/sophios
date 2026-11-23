@@ -14,10 +14,10 @@ from cwltool.process import Process, custom_schemas, use_custom_schema
 from schema_salad.exceptions import SchemaSaladException
 from schema_salad.fetcher import DefaultFetcher
 
-from .input_output import dump_wic_yaml
-from .lang.cwl import tool_process
-from .utils import strip_terminal_codes
-from .wic_types import Cwl, Yaml
+from ..lang.cwl import tool_process
+from ..utils import strip_terminal_codes
+from ..wic_types import Cwl, Yaml
+from .io import dump_wic_yaml
 
 
 #: The keys schema-salad resolves against the document that writes them.
@@ -32,7 +32,7 @@ _EXTENSION_NAMESPACE: Final = 'http://commonwl.org/cwltool'
 # as `outDir` does in a Polus plugin and `file` in the shipped `append.cwl`: CWL scopes the two together, so both
 # get one id. cwltool runs such a tool as it runs any other, and Emit writes each tool as authored, so no compiled
 # document adds a duplicate of its own. The warning is no one's to act on, and no process that imports this module
-# says it: each one that loads a document here, and the runner's own (`run_local.cwltool_main`), whose module
+# says it: each one that loads a document here, and the runner's own (`runtime.local.cwltool_main`), whose module
 # imports the compiler.
 logging.getLogger('salad').addFilter(lambda record: not record.getMessage().endswith('previously defined'))
 

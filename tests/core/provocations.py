@@ -28,7 +28,7 @@ def _provoke_workflow_run_failed() -> None:
 
     failed = RunStatus(RunState.FAILED, 'the runner exited with status 1', exit_code=1)
     with mock.patch.object(runtime.preflight, 'ready'), \
-            mock.patch.object(runtime.input_output, 'write_artifacts_to_disk'), \
+            mock.patch.object(runtime.cwl_io, 'write_artifacts_to_disk'), \
             mock.patch.object(runtime.local.RunHandle, '_start'), \
             mock.patch.object(runtime.local.RunHandle, 'wait', return_value=failed):
         echo_workflow('provoke').run()

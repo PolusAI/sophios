@@ -5,7 +5,7 @@ boundary that Link and Infer compose against, without loading a process,
 discovering a file, or replaying source. A boundary name it derives is a
 `DerivedName`, not text: `ir.names` spells it, at Emit. It states no document
 -- requirements, `$namespaces`, `$schemas`, a step's `run:` path and field
-order are spelled in `ir.emit`.
+order are spelled in `cwl.emit`.
 """
 import datetime
 import difflib

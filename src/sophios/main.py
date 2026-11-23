@@ -12,13 +12,12 @@ import graphviz
 import yaml
 
 from sophios.lang import wic_schema
-from sophios.lang.diagnostics import SophiosError, report
+from sophios.lang.diagnostics import Diagnostics, SophiosError, report
 from sophios.lang.error_codes import SophiosErrorCode
 from sophios.ir.artifacts import CompilationResult
 from sophios.ir.refusals import NotLowered
-from . import input_output as io
-from . import post_compile as pc
-from . import cli, compiler, drawing, plugins, targets
+from . import cli, compiler, config, drawing, plugins, targets
+from .cwl import post_compile as pc
 from .runtime import backends, local, preflight, realtime, setup
 from .runtime.runners import RunSettings
 from .ir import frontdoor
@@ -296,11 +295,11 @@ def _main(args: argparse.Namespace, unknown_args: list[str]) -> None:
         sys.exit(0)
 
     if args.generate_config:
-        default_config_file = io.default_config_file(Path(args.homedir))
+        default_config_file = config.default_config_file(Path(args.homedir))
         if default_config_file.exists():
             print(f'Config already exists. To overwrite delete {default_config_file.parent} directory. Exiting')
         else:
-            io.generate_config(Path(args.homedir))
+            config.generate_config(Path(args.homedir))
             print('Finished generating config. Exiting.')
         sys.exit(0)
     if args.generate_schemas:
@@ -322,7 +321,7 @@ def _main(args: argparse.Namespace, unknown_args: list[str]) -> None:
             return
         print(f'--allow_raw_cwl: --target {args.target} does not take a plain CWL workflow as it is, so {args.yaml} '
               'is compiled as a Sophios document', file=sys.stderr)
-    global_config: Json = io.get_config(args.config_file, Path(args.homedir))
+    global_config: Json = config.get_config(args.config_file, Path(args.homedir))
 
     tools_cwl = plugins.get_tools_cwl(global_config, args.validate_plugins, args.basepath)
     # pass around config object instead of reading from the disk!
@@ -335,7 +334,7 @@ def _main(args: argparse.Namespace, unknown_args: list[str]) -> None:
     settings, graph_settings = cli.settings_from_args(args)
     settings = replace(settings, inference=replace(
         settings.inference, format_rules=tuple(global_config.get('inference_rules', {}).items()),
-        renaming_conventions=tuple(io.renamings_of(global_config))))
+        renaming_conventions=tuple(config.renamings_of(global_config))))
     compilation, analyses = _compile_loaded_document(yaml_path, bundle, yml_paths, tools_cwl, settings)
     report((*compilation.diagnostics, *(note for analysis in analyses for note in analysis.diagnostics)),
            args.diagnostics)

@@ -6,8 +6,8 @@ import tempfile
 import warnings
 from typing import Any
 
-from sophios import utils_cwl
-from sophios.input_output import dump_wic_yaml
+from sophios.cwl import tools
+from sophios.cwl.io import dump_wic_yaml
 
 
 def _render(value: Any) -> Any:
@@ -99,7 +99,7 @@ def validate_cwl_document(
 def _validate_path(path: Path) -> ValidationResult:
     try:
         uri = path.absolute().as_uri()
-        process = utils_cwl.make_tool(uri)
+        process = tools.make_tool(uri)
     except Exception as exc:  # pylint: disable=W0718:broad-exception-caught
         raise ToolBuilderValidationError(f"Generated CommandLineTool failed validation: {path}") from exc
     return ValidationResult(path=path, uri=uri, process=process)

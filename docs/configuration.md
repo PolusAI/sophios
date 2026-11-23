@@ -133,11 +133,11 @@ configuration and pass it:
 ```python
 from pathlib import Path
 
-from sophios import input_output, plugins
+from sophios import config, plugins
 from sophios.api.python.workflow import Step, Workflow
 
-config = input_output.get_config(None, Path.home())    # ~/wic/global_config.json
-tools = plugins.get_tools_cwl(config)
+global_config = config.get_config(None, Path.home())    # ~/wic/global_config.json
+tools = plugins.get_tools_cwl(global_config)
 touch = Step(clt_path='touch.cwl', tool_registry=tools)   # found by stem
 ```
 
@@ -152,7 +152,7 @@ from sophios.api.python.workflow import Inference
 workflow.compile(tool_registry=tools, inference=Inference(insert_steps=True))
 ```
 
-`Workflow.from_wic(path, tool_registry=tools, workflow_paths=plugins.get_yml_paths(config))`
+`Workflow.from_wic(path, tool_registry=tools, workflow_paths=plugins.get_yml_paths(global_config))`
 reads a `.wic` file with the same tools and workflows the command line would
 find.
 

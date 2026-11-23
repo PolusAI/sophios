@@ -19,7 +19,7 @@ from hypothesis import example, given, strategies as st
 
 from sophios.runtime import realtime, local
 from sophios.runtime.backends import RunRequest
-from sophios.input_output import NoAliasDumper
+from sophios.cwl.io import NoAliasDumper
 from sophios.ir.realtime import Declaration
 from sophios.lang.diagnostics import SophiosError
 from sophios.lang.error_codes import SophiosErrorCode

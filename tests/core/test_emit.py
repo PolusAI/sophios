@@ -15,13 +15,14 @@ from cwl_utils.parser import cwl_v1_2
 from hypothesis import assume, example, given, strategies as st
 from schema_salad.utils import yaml_no_ts  # pylint: disable=no-name-in-module
 
-from sophios import compute, post_compile
+from sophios import compute
+from sophios.cwl import post_compile
 from sophios.compiler import resolved_view
-from sophios.input_output import dump_wic_yaml
+from sophios.cwl.io import dump_wic_yaml
 from sophios.ir.artifacts import CompilationArtifact
 from sophios.ir.complete import coerce_job_value, complete
 from sophios.ir.declarations import port_declaration
-from sophios.ir.emit import artifact_tree
+from sophios.cwl.emit import artifact_tree
 from sophios.ir.infer import infer
 from sophios.ir.link import link
 from sophios.ir.pipeline import front_end

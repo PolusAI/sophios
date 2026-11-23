@@ -15,16 +15,15 @@ from mergedeep import merge, Strategy
 
 import sophios.cli
 import sophios.compiler
-import sophios.input_output
-from sophios.runtime import local
+from sophios.cwl import io as cwl_io, post_compile
+from sophios.runtime import backends, local, realtime, runners, setup
 import sophios.utils
 from sophios.ir import frontdoor
-from sophios import plugins, post_compile, targets
-from sophios.runtime import backends, realtime, setup, runners
+from sophios import plugins, targets
 from sophios.cli import get_args
 from sophios.runtime.runners import RunSettings
 from sophios.utils_yaml import Key
-from sophios.post_compile import apply_inline_options, inline_artifact_runs
+from sophios.cwl.post_compile import apply_inline_options, inline_artifact_runs
 from sophios.lang import parse
 from sophios.lang.diagnostics import SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
@@ -461,11 +460,11 @@ def test_corpus_validates_in_cwltool_in_every_form(yml_path_str: str, yml_path: 
     nested = cwl_tree(_compile_corpus_workflow(yml_path_str, yml_path, corpus_registry))
     flat, _ = post_compile.flatten_subworkflows(nested)
     for form, artifact in (('flat', flat), ('flat_embedded', inline_artifact_runs(flat))):
-        sophios.input_output.write_artifacts_to_disk(artifact, tmp_path / form, output_targets=())
+        cwl_io.write_artifacts_to_disk(artifact, tmp_path / form, output_targets=())
         assert validate_cwl(str(tmp_path / form / f'{nested.name}.cwl')) == 0, form
     if yml_path_str not in large_workflows:
-        sophios.input_output.write_artifacts_to_disk(nested, tmp_path / 'nested', output_targets=())
-        sophios.input_output.write_artifacts_to_disk(inline_artifact_runs(nested), tmp_path / 'embedded',
-                                                     output_targets=())
+        cwl_io.write_artifacts_to_disk(nested, tmp_path / 'nested', output_targets=())
+        cwl_io.write_artifacts_to_disk(inline_artifact_runs(nested), tmp_path / 'embedded',
+                                       output_targets=())
         root = f'{nested.name}.cwl'
         assert _tool_defaults(tmp_path / 'embedded' / root) == _tool_defaults(tmp_path / 'nested' / root)

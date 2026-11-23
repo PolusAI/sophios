@@ -1,4 +1,4 @@
-"""The paths a written job names; the config `sophios.input_output` reads is test_config.py's."""
+"""The paths a written job names; the config `sophios.config` reads is test_config.py's."""
 import string
 from pathlib import Path, PurePath, PurePosixPath, PureWindowsPath
 from typing import Any, NamedTuple

@@ -12,9 +12,8 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Final, Protocol, TypeVar
 
-from . import input_output
 from .compiler import cwl_notes
-from .ir import emit
+from .cwl import emit, io as cwl_io
 from .ir.artifacts import CompilationArtifact
 from .ir.locations import absolute_paths
 from .ir.resolved import ResolvedWorkflow, bind
@@ -90,8 +89,8 @@ class _Cwl:
     def write(self, lowered: Lowered[CompilationArtifact], analyses: tuple[realtime.Analysis, ...], basepath: Path,
               *, inputs_file: str, root_dir: Path) -> None:
         """Each document under its own name, the root's job, and each analysis beside them."""
-        input_output.write_artifacts_to_disk(lowered.model, basepath, inputs_file,
-                                             output_targets=output_target_inputs(lowered.view))
+        cwl_io.write_artifacts_to_disk(lowered.model, basepath, inputs_file,
+                                       output_targets=output_target_inputs(lowered.view))
         realtime.write(analyses, basepath, lowered.model.name, root_dir)
 
 
