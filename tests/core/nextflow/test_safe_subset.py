@@ -7,7 +7,7 @@ from hypothesis import example, given, strategies as st
 import pytest
 
 from sophios.lang.subset import Boolean, canonical, check, parse, source_text, validate
-from sophios.nf_expr import render_groovy
+from sophios.nextflow.expr import render_groovy
 
 from ..budgets import budget
 from .test_subset_differential import _BOOLEAN, _NUMBER, TYPES

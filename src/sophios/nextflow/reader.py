@@ -3,7 +3,7 @@
 The reader admits exactly the text the renderer writes (design §4.2). From
 the three files Nextflow reads, ``workflow.nf``, ``nextflow_params.json``
 and ``nextflow.config``, it reads each fact the text states once, through
-the idiom table the renderer fills (:class:`sophios.input_output_nf.Idioms`),
+the idiom table the renderer fills (:class:`sophios.nextflow.render.Idioms`),
 builds the model, and renders it again: the files must be that rendering,
 so each form the text shows only through others is checked, never read.
 Anything else stops the read with a coded diagnostic at its line, and
@@ -23,7 +23,7 @@ from pathlib import Path
 import re
 from typing import Any, NoReturn
 
-from .input_output_nf import (
+from .render import (
     NEXTFLOW_CONFIG,
     NEXTFLOW_PARAMS,
     NEXTFLOW_SCRIPT,
@@ -39,13 +39,13 @@ from .input_output_nf import (
     render_nextflow,
     render_nextflow_config,
 )
-from .ir.complete import coerce_job_value
-from .ir.types import AuthoredName, PortDeclaration, PortType
-from .lang.diagnostics import SophiosError
-from .lang.error_codes import SophiosErrorCode
-from .lang.spans import SourceSpan
-from .nf_expr import GROOVY_IDENTIFIER, GROOVY_LITERAL, groovy_unescape, read_groovy
-from .nf_types import (
+from ..ir.complete import coerce_job_value
+from ..ir.types import AuthoredName, PortDeclaration, PortType
+from ..lang.diagnostics import SophiosError
+from ..lang.error_codes import SophiosErrorCode
+from ..lang.spans import SourceSpan
+from .expr import GROOVY_IDENTIFIER, GROOVY_LITERAL, groovy_unescape, read_groovy
+from .model import (
     ABSENT_PATH_TYPES,
     NF_ENTRY_STAGING_PREFIX,
     PARAM_TYPES,

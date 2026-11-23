@@ -9,7 +9,7 @@ takes back exactly what the renderer writes (design §4.2).
 import re
 from typing import Mapping
 
-from .lang.subset import CALLS, Boolean, Expr, Null, Number, Op, Ref, Text, canonical, source_text
+from ..lang.subset import CALLS, Boolean, Expr, Null, Number, Op, Ref, Text, canonical, source_text
 
 NF_FINITE_HELPER = "__sophios_finite_9f72e"
 NF_ROUND_HELPER = "__sophios_round_9f72e"

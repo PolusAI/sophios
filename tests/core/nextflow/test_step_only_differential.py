@@ -20,7 +20,7 @@ import yaml
 
 from sophios.backends import recorded_outputs
 from sophios.input_output import write_artifacts_to_disk
-from sophios.input_output_nf import write_nextflow_artifacts
+from sophios.nextflow.render import write_nextflow_artifacts
 
 from ..budgets import budget
 from ..helpers import REPO_ROOT

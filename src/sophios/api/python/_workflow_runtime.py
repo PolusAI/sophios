@@ -41,9 +41,9 @@ from sophios.lang.error_codes import SophiosErrorCode
 # Re-exported by `workflow`, which reaches the run settings only through this adapter.
 from sophios.runners import Cwltool, Nextflow, Runner, RunSettings, Toil  # pylint: disable=unused-import
 from sophios.runtime_inputs import output_target_inputs, resolve_file_formats, runner_job_inputs
-from sophios.input_output_nf import nextflow_params, render_nextflow
-from sophios.nf_types import ExecutableNextflowWorkflow
-from sophios.utils_nf import nextflow_names
+from sophios.nextflow.lower import nextflow_names
+from sophios.nextflow.model import ExecutableNextflowWorkflow
+from sophios.nextflow.render import nextflow_params, render_nextflow
 from sophios.wic_types import DEFAULT_BASEPATH, GraphSettings, Json, StepId, Tool, Tools, Yaml
 
 from ._inference import Inference

@@ -11,7 +11,7 @@ from typing import Any
 from hypothesis import assume, example, given, strategies as st
 import pytest
 
-from sophios.input_output_nf import write_nextflow_artifacts
+from sophios.nextflow.render import write_nextflow_artifacts
 
 from ..budgets import budget
 from .test_phase3_cells import CALCULATIONS, PREDICATES

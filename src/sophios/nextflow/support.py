@@ -9,7 +9,7 @@ REJECTED: a finding at the field, whose message is the row's note, and no artifa
 
 `FIELDS` is keyed by the `cwl_utils.parser.cwl_v1_2` class whose fields each part classifies, or by
 cwltool's extension class as a tool names it, such as `cwltool:CUDARequirement`.
-Capability analysis (`sophios.utils_nf`) consumes exactly the fields that are not rejected, and
+Capability analysis (`sophios.nextflow.lower`) consumes exactly the fields that are not rejected, and
 docs/nextflow.md renders this table (docs/conf.py). `tests/core/nextflow/test_support_table.py`
 holds `FIELDS` to the fields cwl_utils or cwltool declares and to Sophios's own `SUPPORT_MATRIX`.
 """
@@ -18,7 +18,7 @@ from enum import StrEnum
 from types import MappingProxyType
 from typing import Final, Mapping
 
-from .lang.error_codes import SophiosErrorCode
+from ..lang.error_codes import SophiosErrorCode
 
 
 class State(StrEnum):

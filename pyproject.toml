@@ -313,15 +313,13 @@ forbidden_modules = ["sophios.main", "sophios.cli"]
 [[tool.importlinter.contracts]]
 name = "The Nextflow target reads the resolved view, never emitted CWL"
 type = "forbidden"
-source_modules = ["sophios.utils_nf", "sophios.input_output_nf", "sophios.nf_reader", "sophios.nf_types",
-                  "sophios.nf_expr", "sophios.nf_support", "sophios.nf_symbols"]
+source_modules = ["sophios.nextflow"]
 forbidden_modules = ["sophios.ir.artifacts", "sophios.ir.emit", "sophios.compiler", "sophios.post_compile"]
 
 [[tool.importlinter.contracts]]
 name = "The Nextflow target takes names and step inputs from the resolved view"
 type = "forbidden"
-source_modules = ["sophios.utils_nf", "sophios.input_output_nf", "sophios.nf_reader", "sophios.nf_types",
-                  "sophios.nf_expr", "sophios.nf_support", "sophios.nf_symbols"]
+source_modules = ["sophios.nextflow"]
 forbidden_modules = ["sophios.ir.stepin", "sophios.ir.names"]
 # The view and ir.complete read them on the target's behalf; only the target's own imports are checked.
 allow_indirect_imports = true

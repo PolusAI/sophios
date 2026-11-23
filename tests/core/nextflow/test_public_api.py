@@ -14,8 +14,8 @@ from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Outp
 from sophios.api.python.workflow import CompiledNextflowWorkflow, CompiledWorkflow, Step, Workflow
 from sophios.lang import SophiosErrorCode
 from sophios.lang.diagnostics import lines
-from sophios.nf_reader import read_nextflow
-from sophios.nf_types import NfWorkflowOutputConnection
+from sophios.nextflow.reader import read_nextflow
+from sophios.nextflow.model import NfWorkflowOutputConnection
 
 from ..cases import DATA
 from ..helpers import adapter_step, run_cli

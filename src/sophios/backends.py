@@ -25,16 +25,16 @@ from typing import Any, Final, Protocol
 
 from cwl_utils.parser import cwl_v1_2
 
-from . import input_output_nf as io_nf
 from . import preflight, realtime, run_setup
 from .ir.artifacts import CompilationArtifact
 from .lang.diagnostics import Diagnostic, SophiosError
-from .nf_reader import read_nextflow
-from .nf_types import ExecutableNextflowWorkflow
+from .nextflow import render as io_nf
+from .nextflow.lower import nextflow_names
+from .nextflow.model import ExecutableNextflowWorkflow
+from .nextflow.reader import read_nextflow
 from .runners import RunSettings
 from .runtime_inputs import directory_literal, output_target_inputs
 from .utils import strip_terminal_codes
-from .utils_nf import nextflow_names
 from .wic_types import Json
 
 _ENV_VAR_NAME: Final = re.compile(r'[A-Za-z_][A-Za-z0-9_]*')
@@ -371,7 +371,7 @@ def nextflow_failed_steps(lines: Iterable[str]) -> dict[str, int | None]:
 
 
 def recorded_outputs(stdout: str) -> Iterator[tuple[str, Json]]:
-    """Each workflow output the pipeline printed, by its Nextflow name, as `input_output_nf` renders the record.
+    """Each workflow output the pipeline printed, by its Nextflow name, as `nextflow.render` renders the record.
 
     A record may follow other text on its line: the launcher's download notice has no newline.
     """

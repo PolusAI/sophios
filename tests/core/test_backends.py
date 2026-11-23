@@ -18,7 +18,7 @@ from sophios.ir.artifacts import CompilationResult
 from sophios.api.python._workflow_runtime import compile_workflow_result
 from sophios.api.python.workflow import Step, Workflow
 from sophios.backends import RunRequest
-from sophios.input_output_nf import write_nextflow_artifacts
+from sophios.nextflow.render import write_nextflow_artifacts
 from sophios.lang.diagnostics import Diagnostic, Severity, SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
 from sophios.runners import RUNNERS, Cwltool, Nextflow, Runner, RunSettings, Toil, build

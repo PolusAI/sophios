@@ -15,7 +15,7 @@ from sophios.ir.frontdoor import bundle_from_disk
 from sophios.ir.refusals import NotLowered
 from sophios.ir.resolved import bind
 from sophios.lang.diagnostics import Diagnostic
-from sophios.nf_types import (
+from sophios.nextflow.model import (
     ExecutableNextflowWorkflow,
     NfCommand,
     NfInputReference,
@@ -28,7 +28,7 @@ from sophios.nf_types import (
     NfWorkflowOutputConnection,
 )
 from sophios.plugins import get_tools_cwl
-from sophios.utils_nf import NEXTFLOW
+from sophios.nextflow.lower import NEXTFLOW
 from sophios.wic_types import StepId, Tool, Yaml
 
 from ..hermetic import bundle

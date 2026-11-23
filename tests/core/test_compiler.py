@@ -15,7 +15,7 @@ from sophios.ir.refusals import NotLowered
 from sophios.ir.resolved import bind
 from sophios.lang.diagnostics import SophiosError
 from sophios.runtime_inputs import output_target_inputs
-from sophios.utils_nf import NEXTFLOW
+from sophios.nextflow.lower import NEXTFLOW
 from sophios.wic_types import StepId, Tool, Tools, Yaml
 
 from .cases import DATA, diagnostic, match

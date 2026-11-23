@@ -15,8 +15,8 @@ from sophios.lang.diagnostics import SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
 from sophios.lang.spans import SourceSpan
 from sophios.lang.subset import Expr, Null, Op, Ref, references, source_text
-from sophios.nf_reader import read_nextflow
-from sophios.nf_types import (
+from sophios.nextflow.reader import read_nextflow
+from sophios.nextflow.model import (
     ExecutableNextflowWorkflow,
     NfArrayBinding,
     NfBasenameReference,

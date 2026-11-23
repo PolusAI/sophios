@@ -6,8 +6,8 @@ import pytest
 
 import sophios.input_output as io
 import sophios.plugins
-from sophios.nf_reader import read_nextflow
-from sophios.nf_types import NfWorkflowOutputConnection
+from sophios.nextflow.reader import read_nextflow
+from sophios.nextflow.model import NfWorkflowOutputConnection
 
 from ..helpers import REPO_ROOT, python_process, python_workflow
 from .testkit import execute_nextflow
