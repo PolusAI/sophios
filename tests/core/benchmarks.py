@@ -1,6 +1,8 @@
-"""Compile-cost cases, run weekly; no timing fails anything. Not hermetic, since the corpus trend is the point: a
-case that raises is reported, the others still run, and `main` returns 1."""
+"""Compile-cost cases and a scatter's run time, timed weekly; no timing fails anything. Not hermetic, since the
+corpus trend is the point: a case that raises is reported, the others still run, and `main` returns 1."""
+import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import dataclass
 from functools import partial
@@ -42,11 +44,21 @@ def _compile_corpus_file(path: Path) -> None:
 _CORPUS: Final = sorted(path for paths in workflow_paths().values() for path in paths.values())
 _DEEP_NESTING_YML: Final = nested_workflow(15)
 _WIDE_INFERENCE_YML: Final = {'steps': [{'id': 'mk_file'} for _ in range(100)]}
+_SCATTER: Final = Path(__file__).with_name('scattering_scaling.wic')
 
 
 def _parse_corpus() -> None:
     for path in _CORPUS:
         parse(path.read_text(encoding='utf-8'), filename=path.name)
+
+
+def _run_scatter(runner: str, size: int) -> None:
+    """Run scattering_scaling.wic over `size` elements under `runner`, as the command line runs it."""
+    with tempfile.TemporaryDirectory() as tmp:
+        (job := Path(tmp) / 'job.yml').write_text(f'array_int~maxval: {size}\n', encoding='utf-8')
+        subprocess.run([sys.executable, '-m', 'sophios.main', '--yaml', _SCATTER, '--run_local', '--quiet',
+                        '--cwl_runner', runner, '--inputs_file', job, '--basepath', tmp],
+                       cwd=tmp, check=True, capture_output=True)
 
 
 CASES: Final[tuple[Case, ...]] = tuple(
@@ -73,6 +85,12 @@ CASES: Final[tuple[Case, ...]] = tuple(
          "parser regression from a compiler regression; without it a slow "
          "week has two candidate causes and no way to choose.",
          run=_parse_corpus),
+) + tuple(
+    Case(f'scatter/{runner}/{size}',
+         "A scatter's run time should grow linearly with its size; Toil's once did not, on Slurm "
+         "(DataBiosphere/toil#4434). Two sizes per runner show what each element costs.",
+         run=partial(_run_scatter, runner, size))
+    for runner in ('cwltool', 'toil-cwl-runner') for size in (200, 2000)
 )
 
 
