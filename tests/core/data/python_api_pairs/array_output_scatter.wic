@@ -1,0 +1,4 @@
+steps: [{id: glob_pattern, in: {directory: !ii ., glob_pattern: !ii '*.txt', output_file_format: !ii 'edam:format_1964'},
+         out: [{output_files_path: !& found}]},
+        {id: sink, run: {cwlVersion: v1.2, class: CommandLineTool, baseCommand: 'true', inputs: {x: {type: File}},
+            outputs: {}}, scatter: [x], scatterMethod: dotproduct, in: {x: !* found}}]
