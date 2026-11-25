@@ -177,9 +177,12 @@ written:
 - a path in a `.wic` file is read from the directory of that file, a
   `default:` included;
 - a path in an inputs file is read from the directory of the inputs file;
-- a path assigned in Python, given as a `StepInput(default=...)`, or read
-  from a step's `step_inputs_file`, is read from the current directory, as
-  Python reads any path.
+- a path assigned in Python, or read from a step's `step_inputs_file`, is
+  read from the current directory, as Python reads any path, or, when the run
+  is given `config=RunConfig(folder).relative_to(path)`, from that `path`
+  ([Running](running.md));
+- a path given as a `StepInput(default=...)` is read from the current
+  directory while compiling, whatever the run's config.
 
 So `sophios --yaml sophios-tutorial/cat_file.wic --run_local` finds
 `sophios-tutorial/data.txt` wherever you run it from. A `default:` is

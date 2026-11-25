@@ -9,7 +9,9 @@ job, and each step as a Slurm job of its own.
 
 `sophios.compute` is a core feature of Sophios, but it is **not part of the
 Python API**: nothing under `sophios.api.python` exports or documents it, and
-its interface follows the service's contract rather than the API's. This page
+its interface follows the service's contract rather than the API's. The
+`RunConfig` it takes is the API's own, the one a local run takes
+([Choose where the results go](running.md#choose-where-the-results-go)). This page
 covers Sophios's side; how the service checks a request, runs it and is
 deployed is in the service's own README.
 
@@ -67,23 +69,25 @@ host:
 
 ```python
 from sophios.api.python.workflow import RunState
-from sophios.compute import RunConfig
+from sophios.compute import RunConfig, SlurmSettings
 
 config = (RunConfig('results')                # the outputs folder: every output lands in it
-          .basepath('/shared/lab')            # so the outputs folder is /shared/lab/results
-          .leader(time='2:00:00', memory='4G')
-          .steps(time='30:00'))
+          .relative_to('/shared/lab')         # so the outputs folder is /shared/lab/results
+          .slurm_settings(SlurmSettings(time='2:00:00', memory='4G', steps_time='30:00')))
 run = service.submit(workflow, config)
 if run.wait().state is RunState.COMPLETED:    # wait() prints each change, and why
     print(run.outputs())
 ```
 
 A `RunConfig` may be made with the outputs folder: the folder on the
-cluster every output lands in, new or empty, relative to `basepath` when
-the config sets one, else absolute. `basepath` and the outputs folder are
-a pair, the project's root and the outputs folder under it: a config that
-sets `basepath` without the folder is refused before anything is sent.
-Without a folder, and so without `basepath`, the outputs land in the run's
+cluster every output lands in, new or empty, relative to `relative_to` when
+the config sets one, else absolute. `relative_to` and the outputs folder are
+a pair, the project's root and the outputs folder under it, and the service
+has no working directory to read a relative folder from: a config that sets
+`relative_to` without the folder, or with an absolute folder, a relative
+folder without `relative_to`, or a `relative_to` that is not an absolute
+path, is refused before anything is sent, every problem at once.
+Without a folder, and so without `relative_to`, the outputs land in the run's
 own folder on the cluster, which the service deletes some days after the
 run ends: so they do with `RunConfig()`, and with no `RunConfig` at all,
 `service.submit(workflow)`, which takes every setting from the service
@@ -92,7 +96,7 @@ run ends: so they do with `RunConfig()`, and with no `RunConfig` at all,
 Every path goes as written; the service, not Sophios, reads it on the
 cluster, before anything is queued, refuses what it cannot read, and
 answers every problem at once. A path a tool reads is a path on the
-cluster, absolute or relative to `basepath`, or an http(s) URL; it must
+cluster, absolute or relative to `relative_to`, or an http(s) URL; it must
 exist and be readable, with a name cwltool takes. An output folder is
 written, not read: see below. No path on the cluster may start with `~`
 or hold a `$VARIABLE`: a shell expands those on the machine that wrote
@@ -107,21 +111,32 @@ and `Service.attach(id)` follows it from any session or machine.
 
 A `RunConfig` is everything of the request but the workflow and its
 inputs. How it is made says where the outputs go, and nothing changes that
-after. Each setter sets just what it is passed, leaves the rest as it was,
-and returns the config, so the calls chain. What no setter sets is left out
-of the request, so the service's own settings apply: only the service knows
-the cluster. The values are strings in Slurm's own forms, such as `'2:00:00'`
-and `'4G'`; Sophios checks them against the service's schema when it builds
-the request, each problem at the request's field, such as `leader.time`.
+after. Each setter sets what it is passed, in place of what an earlier call
+of it set, and returns the config, so the calls chain. What no setter sets
+is left out of the request, so the service's own settings apply: only the
+service knows the cluster. The values are strings in Slurm's own forms, such
+as `'2:00:00'` and `'4G'`; Sophios checks them against the service's schema
+when it builds the request, each problem naming what you wrote, such as
+`SlurmSettings(time=...)`. The service's own answers name the request's
+fields: `relative_to` is its `basepath`, the outputs folder its
+`workflowOutDir`, and the Slurm settings its `leader` and `steps`, as below.
 
 | `RunConfig` | What it sets |
 |---|---|
-| `RunConfig(folder)` | The outputs folder, the request's `workflowOutDir`: the folder on the cluster every output lands in, relative to `basepath` when one is set, and then required, else absolute; missing (the service creates it) or empty, and used by no run that has not ended |
-| `RunConfig()` | No outputs folder, and so no `basepath`: the outputs land in the run's own folder |
-| `.basepath(path)` | The directory on the cluster that relative paths are relative to: those the tools read, and the outputs folder, which it requires, and which is then never absolute; required when a tool reads a relative path. An output folder given a name is made in the run, never there |
-| `.leader(partition=, time=, memory=)` | The leader's Slurm job, which runs Toil or Nextflow as long as the run lasts |
-| `.steps(partition=, gpu_partition=, time=)` | Where step jobs go, those that ask for a GPU to `gpu_partition`, and how long each may run |
-| `.log_level(level)` | Toil's log level: `DEBUG`, `INFO` (the default), `WARNING` or `ERROR`; a Nextflow run does not use it |
+| `RunConfig(folder)` | The outputs folder, the request's `workflowOutDir`: the folder on the cluster every output lands in, relative to `relative_to` when one is set, and then required, else absolute; missing (the service creates it) or empty, and used by no run that has not ended |
+| `RunConfig()` | No outputs folder, and so no `relative_to`: the outputs land in the run's own folder |
+| `.relative_to(path)` | The request's `basepath`: the absolute directory on the cluster that relative paths are relative to: those the tools read, and the outputs folder, which it requires, and which is then never absolute; required when a tool reads a relative path. An output folder given a name is made in the run, never there |
+| `.slurm_settings(SlurmSettings(...))` | Where the run's Slurm jobs go and how long they may last, the request's `leader` and `steps`, each sent only when one of its fields is given |
+| `.log_level(level)` | The request's `logLevel`, Toil's log level: `DEBUG`, `INFO` (the default), `WARNING` or `ERROR`; a Nextflow run does not use it |
+
+| `SlurmSettings` | The request's | What it sets |
+|---|---|---|
+| `partition=` | `leader.partition` | The partition of the leader, the Slurm job that runs Toil or Nextflow as long as the run lasts |
+| `time=` | `leader.time` | The leader's time limit, the whole run's |
+| `memory=` | `leader.memory` | The leader's memory |
+| `steps_partition=` | `steps.partition` | Where each step's job goes |
+| `steps_time=` | `steps.time` | How long each step's job may run |
+| `gpu_partition=` | `steps.gpuPartition` | Where a step that asks for a GPU goes |
 
 `submit` and `build_request` take the workflow and a `RunConfig`, or none;
 besides, `target=` says what the service runs, `'cwl'` (the default) or
@@ -132,7 +147,7 @@ besides, `target=` says what the service runs, `'cwl'` (the default) or
 
 Everything a run returns lands in one place. Usually that is one folder,
 the **outputs folder**, under each output's own name: the folder
-`RunConfig(folder)` names, which `basepath` requires, or, without one, the
+`RunConfig(folder)` names, which `relative_to` requires, or, without one, the
 run's own folder on the cluster, `<run>/out` below. A run whose output
 folders are given absolute paths is written in place instead: everything
 it returns is in those folders, where they are, and nothing is copied.
@@ -160,7 +175,7 @@ returns, such as the folder a segmentation tool fills; the service finds
 them itself, whatever they are called and however deep in the workflow.
 
 - **Given just a name**, such as `step.inputs.output = 'masks'`, it is made
-  empty in the run, never anywhere `basepath` points, and copied into the
+  empty in the run, never anywhere `relative_to` points, and copied into the
   outputs folder under that name. The name is one folder name: `seg/p1`
   would land as `p1`, and is refused.
 - **Given an absolute path**, on CWL, it is written there by its tool, once, in
@@ -183,7 +198,7 @@ them itself, whatever they are called and however deep in the workflow.
   workflow returns every step's outputs unless it declares its own, so
   declare them: `workflow.outputs.masks = segment.outputs.output`. Such a
   run names no outputs folder, `RunConfig()` with no folder, and so no
-  `basepath`: its paths are absolute.
+  `relative_to`: its paths are absolute.
 
 A folder that is not empty is never written into: to update one, read it
 as an input and write a new one.
@@ -220,7 +235,7 @@ that failed, misses this step.
 
 ### The run's own folder
 
-Without a folder, and so without `basepath`, the outputs land in the run's
+Without a folder, and so without `relative_to`, the outputs land in the run's
 own folder on the cluster, `<runs>/<account>/<run id>/out`, where `<runs>`
 is where the service keeps its runs and `<account>` the account you reach
 the service as: a new folder for every run, with no name to invent, so
@@ -263,8 +278,11 @@ the `RunConfig`, the `Run` and every call on it, is as on CWL. The service
 needs contract 3.1.0 or later; one of 3.0.0 refuses the submission in one
 line, before anything is sent. What differs:
 
-- **The pipeline** is sent as one file, in the form a service runs
-  ([On a compute service](nextflow.md#on-a-compute-service)). A workflow
+- **The pipeline** is sent as one file, the pipeline the Nextflow target
+  writes for Singularity, as a local run with
+  `Nextflow(container_engine="singularity")` or a compile under
+  `--container_engine singularity` writes it, without what only a local run
+  reads ([On a compute service](nextflow.md#on-a-compute-service)). A workflow
   the Nextflow target cannot run raises `NotLowered`, a `ValueError`, as
   `compile(target='nextflow')` and a local run do, and so does an input
   given as a URL, which the target does not take.
@@ -275,8 +293,9 @@ line, before anything is sent. What differs:
   container has no home of yours. Nextflow pulls each image into the
   service's image cache once, apart from the copy CWL runs use: the first
   Nextflow run of an image pulls it again.
-- **Outputs** are published: each output the workflow declares lands in the
-  outputs folder, placed as on CWL, once every output has completed, and
+- **Outputs** are published, as a local run publishes them: each output the
+  workflow declares lands in the outputs folder, placed as on CWL, once every
+  output has completed, and
   `outputs()` returns them by their names, each `File` and `Directory`
   with its `class`, `location`, `path` and `basename`, the copy's name, also
   for a run you attach to; a CWL run's also carry what Toil adds, `size`,
@@ -364,9 +383,11 @@ codes belong to the compute client alone: a `ComputeError` is never a
   no Nextflow; or a cancel of a run another
   account submitted; or there is no such run, as when the service has
   deleted it. Each problem is a line, at the input or field it is about; do
-  what it says. A relative path sent without `basepath` says to give it, and
-  the outputs folder relative to it; `basepath` without the outputs folder
-  says to give the folder, or no `basepath`.
+  what it says. A relative path sent without `relative_to` is refused by the
+  service, in its own words: send `basepath`, which is `relative_to`, and
+  the outputs folder relative to it. An outputs folder and a `relative_to`
+  that do not go together are refused by Sophios, before sending, each
+  saying what to give instead.
 - `cmp002`, `ServiceUnavailable`: Sophios runs on Windows itself, the URL is
   not one the service is reached at, ssh could not be run, failed before it
   forwarded the socket or has ended since, the `Service` is closed, or the

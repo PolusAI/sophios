@@ -241,7 +241,7 @@ It compiles once, as `compile()` does with the same arguments, then makes
 the target's checks: on CWL, that each `when:` can give `true` or `false`
 (`wic056`); on Nextflow, the whole lowering, in memory, with the values bound
 on the workflow's inputs. Then it makes every check of this machine that
-`run()` makes before it starts, with `run()`'s arguments (`runner`, `outdir`,
+`run()` makes before it starts, with `run()`'s arguments (`runner`, `config`,
 `basepath`): the input paths, the directories Sophios writes, the programs the
 run calls and the container engine. It returns the notes `compile()` would keep,
 and every construct the target cannot run, each an error with its code, all at

@@ -36,21 +36,45 @@ Codes in parentheses are the codes Sophios prints with each diagnostic.
 - `Cwltool`, `Toil` and `Nextflow` are the runners `Workflow.run`, `start`, `run_async` and `check` take as
   `runner=`: their positional arguments reach the runner as they are, and `container_engine=`, `pull_dir=`,
   `ignore_install=`, `ignore_processes=`, `provenance=`, `remove_entrypoints=` and (cwltool's) `cachedir=` are
-  their settings. `outdir=`, `inputs_file=`, `quiet=` and `generate_run_script=` take what `run_args_dict` keys
-  of those names did. A runner the target does not run is refused: `Nextflow()` needs `target='nextflow'`, and
-  `outdir=` and `inputs_file=` are refused under it.
+  their settings, and `Cwltool(quiet=...)` is cwltool's `--quiet`. `inputs_file=` and `generate_run_script=` take
+  what `run_args_dict` keys of those names did, and `config=RunConfig(folder)` what its `outdir` did. A runner the
+  target does not run is refused: `Nextflow()` needs `target='nextflow'`, and `inputs_file=` is refused under it.
+- `Workflow.run`, `start`, `run_async` and `check` take `config=RunConfig(folder)`, keyword only, for the outputs
+  folder. A relative folder is read from the working directory, or from `RunConfig(folder).relative_to(path)`, which
+  also reads the relative File and Directory paths bound in Python. `RunConfig` and `SlurmSettings` are
+  `sophios.api.python.workflow`'s, the same objects `sophios.compute` exports; a local run uses no `SlurmSettings`,
+  and `.log_level(...)` is Toil's `--logLevel`, before the flags of your `Toil(...)`. A `config` that is not a
+  `RunConfig`, such as `config='results'`, is refused, saying how to make one.
 - `run_args_dict` is deprecated: it still works, and warns once per call; [Running](docs/running.md) maps each
   key. `ignore_docker_install` and `ignore_docker_processes` now take effect, where they were parsed and left
   over, and a key of the command line that no run reads is dropped with its value.
 - Internals: a run is one `RunSettings` (`sophios.runtime.runners`) built alike by the command line and Python, which
-  `RunRequest` and `runtime.setup.Settings` carry; `preflight.RunSettings` is gone. A `wic021` for `outdir` says
-  `give outdir a directory you can write to` from both doors.
+  `RunRequest` and `runtime.setup.Settings` carry; `preflight.RunSettings` is gone. A `wic021` for the outputs
+  folder says `give the outputs folder (--outdir, or RunConfig(folder) in Python) a directory you can write to` from
+  both doors.
 - Configuration loading (`get_config`, `read_config_from_disk`, `generate_config`, `default_config_file`) moved from
   `sophios.input_output` to `sophios.config`. Update `from sophios import input_output` to
   `from sophios import config` and call `config.get_config(...)`.
 
+### The compute client
+
+- `RunConfig`'s setters change. `.basepath(path)` is `.relative_to(path)`. `.leader(partition=, time=, memory=)`
+  and `.steps(partition=, gpu_partition=, time=)` are one
+  `.slurm_settings(SlurmSettings(partition=, time=, memory=, steps_partition=, steps_time=, gpu_partition=))`,
+  whose fields name the job each is for: `partition`, `time` and `memory` the job that lasts the whole run,
+  `steps_partition` and `steps_time` each step's. A second `slurm_settings` call replaces the first, where
+  `leader` and `steps` kept what an earlier call set. `.log_level(...)` is unchanged, and the request sent to the
+  service is the same.
+
 ### Nextflow
 
+- A local Nextflow run copies the workflow's outputs into the outputs folder (`config=RunConfig(folder)`, or
+  `--outdir`), else into `<basepath>/outdir_nextflow_<workflow>_<time>`, once the run has finished.
+  `RunResult.outdir` is that folder, no longer `<basepath>/nextflow_<workflow>/work`, and each output's `path` is
+  its copy there (a second file of one name lands at `<name>_2`), its `basename` the file's own name. The
+  `sophios-output` lines are printed once, when the run has finished, not as each output completes. Read the
+  outputs from `RunResult.outputs` or the folder, not from `work/`, which `-resume` still uses.
+- A pipeline with workflow outputs that 0.7.0 compiled no longer imports (wic047): compile it again.
 - `NfProcess(condition=...)` takes a `sophios.lang.subset` tree (`Number`, `Text`, `Boolean`, `Null`, `Ref` or `Op`) in
   place of `Expr(kind, value, args)`: build a hand-written condition from those, or read one with `parse`.
 

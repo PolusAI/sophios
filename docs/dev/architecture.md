@@ -188,11 +188,17 @@ for a `StepInput` default against the working directory.
   adapters and never by a compute submission.
 - `sophios.runtime.runners` is the one value of a local run: `Cwltool`, `Toil` and
   `Nextflow` hold the flags their program is given and the settings Sophios
-  reads for it, and a `RunSettings` is a runner with what is given to the job
-  (`outdir`, `inputs_file`, `quiet`, `generate_run_script`). The command line
-  (`cli.run_settings_from_args`) and the Python API (`Workflow.run(runner=...)`)
-  build the same value, and the deprecated dictionary form of `run()` is
-  translated onto it in one function. The parser reads its defaults and choices from it.
+  reads for it (`quiet` and `cachedir` are cwltool's alone; Nextflow's one
+  setting is its `container_engine`, which the pipeline is written for), and a
+  `RunSettings` is a runner with what is given to the job (`outdir`,
+  `inputs_file`, `generate_run_script`). The command line (`cli.run_settings_from_args`) and
+  the Python API (`Workflow.run(runner=..., config=...)`) build the same value,
+  and the deprecated dictionary form of `run()` is translated onto it in one
+  function. The parser reads its defaults and choices from it. It also holds
+  `RunConfig` and `SlurmSettings`, the one configuration a local run and the
+  compute service take, and `read_config`, which every door reads a config
+  with and where the rules of its outputs folder and `relative_to` live; the
+  Python API resolves a config's folder into `RunSettings.outdir` once.
 - `sophios.runtime.backends` describes a run once, as a `RunRequest` that carries the
   `RunSettings`, which the command line, the Python API and the CI harness
   each build. The backend of its runner (`targets.backend`) describes the
@@ -230,11 +236,13 @@ for a `StepInput` default against the working directory.
   slurm driver. It compiles through the runtime adapter's `service_document`,
   which is `compile()` without the local run's Directory literals for output
   folders, or, for a Nextflow submission, its `service_pipeline`, the
-  pipeline's service form (`render_nextflow(model, service=True)`), checks the
-  request against its copy of the service's `run-request.schema.json`, and
-  follows the run over HTTP on the service's Unix socket, reached through the
-  user's own `ssh`. It is not part of the Python API, and never goes through
-  the pre-flight.
+  pipeline written for Singularity without the record of its outputs
+  (`render_nextflow(model, engine='singularity', record=False)`), reads the
+  `RunConfig` with `read_config` and maps it onto the request (`SLURM_FIELDS`
+  for its `SlurmSettings`), checks the request against its copy of the
+  service's `run-request.schema.json`, and follows the run over HTTP on the
+  service's Unix socket, reached through the user's own `ssh`. The Python API
+  does not import it, and it never goes through the pre-flight.
 
 ## Compatibility contract
 
