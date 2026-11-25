@@ -41,8 +41,9 @@ Each command stops after a different stage:
 
 The command line needs exactly one of these. In Python, the runner and its
 settings are a value, `Cwltool(...)`, `Toil(...)` or `Nextflow(...)`, passed as
-`run(runner=...)`; what is given to the job is a keyword: `outdir=`,
-`inputs_file=`, `quiet=` and `generate_run_script=`.
+`run(runner=...)`; where the outputs go is a `RunConfig`, passed as
+`run(config=...)`, the same one the [compute service](compute.md) takes; the
+rest is a keyword: `inputs_file=` and `generate_run_script=`.
 [The same options from Python](cli-reference.md#the-same-options-from-python)
 maps each flag to its value.
 
@@ -79,17 +80,31 @@ directory inside it, named for the runner, the workflow and the time.
   `error_<workflow>.txt` and, when a real-time analysis turns caching on
   without `--cachedir`, `cachedir/` stay in the current directory.
 - To put only the output files somewhere else, pass `--outdir <dir>`, or
-  `outdir='<dir>'` in Python. The rest stays in the base path.
+  `config=RunConfig('<dir>')` in Python. The rest stays in the base path. The
+  folder may exist already, and hold files.
 
 ```bash
 sophios --yaml greeting.wic --run_local --basepath build --outdir results
 ```
 
 ```python
+from sophios.api.python.workflow import RunConfig
+
 from greeting import workflow
 
-workflow().run(basepath='build', outdir='results')
+workflow().run(basepath='build', config=RunConfig('results'))
 ```
+
+A relative outputs folder is read from the current directory, or from the
+config's `relative_to`, an absolute folder: `RunConfig('results').relative_to('/data/lab')`
+puts the outputs in `/data/lab/results`. `relative_to` is also where a relative
+File or Directory you bound in Python is read from; a `StepInput(default=...)`
+path is still read from the current directory, when the workflow is compiled.
+`relative_to` without a folder, a `relative_to` that is not absolute, and an
+absolute folder with a `relative_to` are each refused with a `ValueError`
+before anything is compiled. The config's `log_level` is given to Toil as
+`--logLevel`, before the flags of `Toil(...)`, so a level given there wins;
+its `SlurmSettings` are not used in a local run.
 
 Both directories are checked before anything is compiled into them. One
 Sophios cannot create or write to stops the run:
@@ -174,9 +189,9 @@ Sophios adds is listed here.
 
 The same workflow runs as a Nextflow pipeline: Sophios compiles it with
 `--target nextflow`, writes the pipeline to `nextflow_<workflow>/` in the
-base path, checks the input paths, that `nextflow` starts and, when a step
-uses a container, that Docker works, and runs it as one `nextflow run` from
-there:
+base path, checks the input paths, the outputs folder, that `nextflow` starts
+and, when a step uses a container, that its container engine works, and runs
+it as one `nextflow run` from there:
 
 ```bash
 sophios --yaml greeting.wic --target nextflow --run_local
@@ -187,19 +202,25 @@ workflow().run(target='nextflow')
 ```
 
 `--check`, `--generate_run_script`, `start(target='nextflow')` and
-`run_async(target='nextflow')` work as they do for CWL. The options that only
-a CWL run reads, such as `--cwl_runner`, `--container_engine`, `--outdir`,
-`--cachedir` and `--quiet`, are refused with `--target nextflow`, and so are
-`outdir=` and `inputs_file=` in Python. `run(runner=Nextflow())` without
+`run_async(target='nextflow')` work as they do for CWL, and so does the output
+folder, `--outdir` or `config=RunConfig(folder)`, which the pipeline publishes
+the outputs into, replacing what it holds under an output's name
+([Outputs](nextflow.md#outputs)). The container engine is `docker` or `singularity`:
+`--container_engine singularity`, or `Nextflow(container_engine='singularity')`.
+The options that only a CWL run reads, such as `--cwl_runner`, `--cachedir`,
+`--quiet` and `--inputs_file`, are refused with `--target nextflow`, and so is
+`inputs_file=` in Python. `run(runner=Nextflow())` without
 `target='nextflow'` is refused too: the target decides which runners exist. The
 options of `nextflow run` pass through as a runner's do, though not those of
 the `nextflow` launcher, which go before `run`: on the command line after
 `--passthrough_flags yes`, as in `--passthrough_flags yes -process.executor
 slurm -resume`, and in Python as the flags of `Nextflow`, as they are:
-`Nextflow('-process.executor', 'slurm', '-resume')`. The outputs stay in Nextflow's
-work directory, `nextflow_<workflow>/work/` in the base path, and
-`output_<workflow>.json` names them. [Nextflow](nextflow.md#running-on-the-nextflow-target)
-says what the run does and what it does not support.
+`Nextflow('-process.executor', 'slurm', '-resume')`. Once the run has
+finished, the pipeline copies the outputs into the outputs folder, as a CWL run
+places them, and `output_<workflow>.json` names the copies; the files also stay
+in Nextflow's work directory, `nextflow_<workflow>/work/` in the base path.
+[Nextflow](nextflow.md#running-on-the-nextflow-target) says what the run does
+and what it does not support.
 
 The run sets `NXF_SYNTAX_PARSER=v2`, the script parser the generated
 pipeline needs, whatever your shell sets.
@@ -226,7 +247,7 @@ turns it on, in `cachedir/`, unless you named a directory.
 The command line shows cwltool's log of every step, each command it ran and
 how each ended, and what each tool prints. Add `--quiet` to hide cwltool's
 own log; what each tool prints still shows as the run goes. Python is quiet
-by default; pass `quiet=False` to see the log. `--quiet`
+by default; pass `runner=Cwltool(quiet=False)` to see the log. `--quiet`
 changes only what the runner prints: the compiled CWL is the same with or
 without it.
 
@@ -304,7 +325,7 @@ Everything goes into the base path:
 | `run_<workflow>.log` | everything the runner printed, both streams, as the run went |
 | `provenance/<workflow>/` | the runner's record of what ran, with what, and what came out |
 | `realtime/`, `<workflow>.realtime.json` | compiled real-time analyses, when the workflow declares any |
-| `nextflow_<workflow>/` | under `--target nextflow`, in place of the CWL: the pipeline, `nextflow_workflow.json`, `workflow.nf`, `nextflow.config` and `nextflow_params.json`; `nextflow_names.json`, the names it maps back; and, from the run, `work/`, Nextflow's work directory, which holds the output files, and Nextflow's log `.nextflow.log` and cache `.nextflow/` |
+| `nextflow_<workflow>/` | under `--target nextflow`, in place of the CWL: the pipeline, `nextflow_workflow.json`, `workflow.nf`, `nextflow.config` and `nextflow_params.json`; `nextflow_names.json`, the names it maps back; and, from the run, `work/`, Nextflow's work directory, and Nextflow's log `.nextflow.log` and cache `.nextflow/` |
 
 `run.sh` and, after a failure Sophios did not expect, `error_<workflow>.txt`
 with the full traceback, go into the current directory.
@@ -343,7 +364,7 @@ print(result.log_file)                         # everything the runner printed
 |---|---|
 | `state` | `RunState.COMPLETED`: a run that ends any other way raises |
 | `outputs` | the workflow's outputs, as `output_<workflow>.json` holds them |
-| `outdir` | the directory the output files were moved to |
+| `outdir` | the outputs folder: the directory the output files were moved to, or, on Nextflow, copied into |
 | `log_file` | `run_<workflow>.log` in the base path |
 | `exit_code` | the runner's, `0` |
 
@@ -441,10 +462,14 @@ works, and warns once per call. Each key means what its typed spelling means:
 | `no_provenance` | the runner's `provenance=` (`'yes'` is `False`) |
 | `docker_remove_entrypoints` | the runner's `remove_entrypoints=` |
 | `ignore_docker_install`, `ignore_docker_processes` | the runner's `ignore_install=` and `ignore_processes=` |
-| `outdir`, `inputs_file`, `quiet`, `generate_run_script` | the keyword of that name (a switch is on for `yes`, `true`, `1` or `on`) |
+| `outdir` | the outputs folder of `config=RunConfig(...)`; given with one, the key wins |
+| `quiet` | cwltool's `quiet=` |
+| `inputs_file`, `generate_run_script` | the keyword of that name |
 | any other key | a flag of the runner: `--<key> <value>`, or `-<key> <value>` for Nextflow |
 
-A key the command line declares and no run reads is dropped, with its value.
+A switch, such as `quiet` or `generate_run_script`, is on for `yes`, `true`,
+`1` or `on`. A key the command line declares and no run reads is dropped, with
+its value.
 `run_args_dict` and `runner=` together are an error.
 
 ## When a run fails

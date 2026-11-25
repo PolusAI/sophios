@@ -36,7 +36,7 @@ Without one of them the command compiles and then asks for one. Under `--target 
 `Workflow.run()`, and `Workflow.start()` and `Workflow.run_async()` with the same arguments
 ([Follow a run from Python](running.md#follow-a-run-from-python)), take the running options as values: the runner
 is `runner=Cwltool(...)`, `Toil(...)` or `Nextflow(...)`, whose positional arguments reach the runner as they
-are, and the rest is `outdir=`, `inputs_file=`, `quiet=` and `generate_run_script=`.
+are, the outputs folder is `config=RunConfig(folder)`, and the rest is `inputs_file=` and `generate_run_script=`.
 
 | Flag | Python |
 |---|---|
@@ -47,12 +47,13 @@ are, and the rest is `outdir=`, `inputs_file=`, `quiet=` and `generate_run_scrip
 | `--docker_remove_entrypoints` | the runner's `remove_entrypoints=True` |
 | `--ignore_docker_install`, `--ignore_docker_processes` | the runner's `ignore_install=`, `ignore_processes=` |
 | `--passthrough_flags yes` and the flags | the runner's positional arguments |
-| `--outdir`, `--inputs_file`, `--generate_run_script` | `outdir=`, `inputs_file=`, `generate_run_script=` |
-| `--quiet` | `quiet=`; the command line is not quiet unless asked, Python is |
+| `--outdir` | `config=RunConfig(folder)`, a relative folder read from its `relative_to`, else from the current directory |
+| `--inputs_file`, `--generate_run_script` | `inputs_file=`, `generate_run_script=` |
+| `--quiet` | `Cwltool(quiet=)`; the command line is not quiet unless asked, Python is; Toil has none |
 
-`Nextflow` takes no settings but its flags, and `outdir=` and `inputs_file=` are refused with
-`target='nextflow'`; so is a runner the target does not have. `Cwltool(...)` and `Toil(...)` take
-`container_engine='docker'` unless told otherwise, as the command line does. `Workflow.compile()`
+`Nextflow` takes its flags and `container_engine=`, `docker` or `singularity`, and `inputs_file=` is refused with
+`target='nextflow'`; so is a runner the target does not have. Each runner takes `container_engine='docker'` unless
+told otherwise, as the command line does. `Workflow.compile()`
 takes `target=`, `lang_version=`, `tool_registry=`, `inference=` and `policy=`, and nothing else.
 The partial-failure flags map onto `RunPolicy(partial_failure=, success_codes=)`
 ([Partial failures](partial-failures.md#in-python)), and the inference flags onto `Inference(enabled=, strict=, naming_conventions=, insert_steps=)`, and the
