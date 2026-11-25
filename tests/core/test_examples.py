@@ -11,7 +11,6 @@ import argparse
 from typing import Any, Final
 
 import pytest
-from mergedeep import merge, Strategy
 
 import sophios.cli
 import sophios.compiler
@@ -24,11 +23,12 @@ from sophios.cli import get_args
 from sophios.runtime.runners import RunSettings
 from sophios.utils_yaml import Key
 from sophios.cwl.post_compile import apply_inline_options, inline_artifact_runs
-from sophios.lang import parse
-from sophios.lang.diagnostics import SophiosError
+from sophios.lang import ParseResult, parse
+from sophios.lang.diagnostics import Diagnostics, SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
 from sophios.ir.artifacts import CompilationArtifact, CompilationResult
 from sophios.ir.names import Names
+from sophios.ir.resolve import ResolvedDocument, resolve
 from sophios.ir.types import WorkflowGraph
 from sophios.wic_types import Json
 
@@ -47,8 +47,8 @@ config_ci: Json = {}
 for yml_dir in (directory for directories in corpus_config()['search_paths_wic'].values() for directory in directories):
     if (config_ci_json := Path(yml_dir) / 'config_ci.json').exists():
         lines = config_ci_json.read_text(encoding='utf-8').splitlines()
-        config_ci = merge(config_ci, json.loads('\n'.join(line for line in lines if not line.strip().startswith('//'))),
-                          strategy=Strategy.TYPESAFE_ADDITIVE)
+        for key, values in json.loads('\n'.join(line for line in lines if not line.strip().startswith('//'))).items():
+            config_ci.setdefault(key, []).extend(values)
 
 # Each stops with an error on purpose, which the page showing it explains, so no lane compiles or runs it.
 refused: list[str] = config_ci.get("refused", [])
@@ -258,11 +258,6 @@ def run_workflows(
     assert retval == 0, retval
 
 
-def _discover(yml_paths: dict[str, dict[str, Path]], stem: str) -> Path | None:
-    """The file a discovered workflow stem names, in whichever namespace holds it."""
-    return next((paths[stem] for paths in yml_paths.values() if stem in paths), None)
-
-
 def _is_includer_fragment(error: SophiosError) -> bool:
     """Whether a document failed only for edges an includer would supply: it has no standalone compilation, so
     comparing it against an embedded one compares nothing."""
@@ -270,11 +265,15 @@ def _is_includer_fragment(error: SophiosError) -> bool:
         item.code is SophiosErrorCode.UNDEFINED_EDGE for item in error.diagnostics)
 
 
-def _compile_corpus_workflow(yml_path_str: str, yml_path: Path, registry: CorpusRegistry) -> CompilationResult:
+def _compile_corpus_workflow(
+        yml_path_str: str, yml_path: Path,
+        registry: CorpusRegistry) -> tuple[frontdoor.SourceBundle, CompilationResult]:
     """One corpus workflow compiled as the command line compiles it, skipping a fragment that has no standalone
     compile."""
+    bundle = frontdoor.bundle_from_disk(Path(yml_path), yml_paths, registry.tools)
+    settings, _graph_settings = sophios.cli.settings_from_args(get_args(str(yml_path)))
     try:
-        return _compiled(yml_path, get_args(str(yml_path)), registry)
+        return bundle, sophios.compiler.compile_source(bundle, settings)
     except SophiosError as error:
         if _is_includer_fragment(error):
             pytest.skip(f'{yml_path_str} consumes edges from an includer')
@@ -319,30 +318,43 @@ def _check_residue(nested: CompilationArtifact) -> None:
     embedded(inline_artifact_runs(nested).cwl)
 
 
-def _workflows(graph: WorkflowGraph) -> list[WorkflowGraph]:
-    """`graph` and every workflow nested in it."""
-    return [graph, *(each for child in graph.children for each in _workflows(child))]
+def _resolved_children(document: ResolvedDocument, graph: WorkflowGraph,
+                       names: Names) -> dict[tuple[str, ...], ResolvedDocument]:
+    """Each nested subworkflow's resolved document (with caller `wic: steps:` overrides applied), keyed by namespace."""
+    found: dict[tuple[str, ...], ResolvedDocument] = {}
+    child_by_index = {child.namespace.parts[-1].index: child for child in graph.children}
+    for index, step in enumerate(document.steps, start=1):
+        if step.process.child is not None and index in child_by_index:
+            child = child_by_index[index]
+            found[tuple(names.step(part) for part in child.namespace.parts)] = step.process.child
+            found |= _resolved_children(step.process.child, child, names)
+    return found
 
 
-def _check_embedding_independence(graph: WorkflowGraph, nested: CompilationArtifact, registry: CorpusRegistry,
+def _check_embedding_independence(bundle: frontdoor.SourceBundle, graph: WorkflowGraph,
+                                  nested: CompilationArtifact,
                                   options: sophios.compiler.CompileSettings) -> None:
-    """Each subworkflow compiled alone, from its own file, as a root is the CWL it is embedded as (but for `run:`
-    paths, whose namespaces differ in length)."""
-    names = Names.of(graph)
-    graphs = {tuple(names.step(part) for part in each.namespace.parts): each for each in _workflows(graph)}
-    for embedded in [artifact for artifact in _artifacts(nested) if artifact.cwl['class'] == 'Workflow'][1:]:
-        inside = graphs[embedded.namespace]
-        sub_path = _discover(yml_paths, inside.name)
-        assert sub_path is not None, f'{inside.name} is embedded but has no file of its own'
+    """Each subworkflow compiled alone as a root, with the `wic: steps:` overrides its call passed it, is the CWL it
+    is embedded as (but for `run:` paths, whose namespaces differ in length)."""
+    embedded_workflows = [artifact for artifact in _artifacts(nested) if artifact.cwl['class'] == 'Workflow'][1:]
+    if not embedded_workflows:
+        return
+    assert bundle.parsed.document is not None
+    resolved = resolve(bundle.parsed.document, bundle.registry, name=bundle.name)
+    assert resolved.document is not None
+    children = _resolved_children(resolved.document, graph, Names.of(graph))
+    for embedded in embedded_workflows:
+        child = children[embedded.namespace]
+        standalone = replace(bundle, name=child.name, parsed=ParseResult(child.source, Diagnostics()),
+                             registry=replace(bundle.registry, root_directory=child.directory))
         try:
-            alone = sophios.compiler.compile_source(frontdoor.bundle_from_disk(sub_path, yml_paths, registry.tools),
-                                                    options)
+            alone = sophios.compiler.compile_source(standalone, options)
         except SophiosError as error:
             if _is_includer_fragment(error):  # `test_rand_fail`'s only child, `fail.wic`, is not standalone
                 continue
             raise
         assert (sophios.utils.recursively_delete_dict_key('run', embedded.cwl)
-                == sophios.utils.recursively_delete_dict_key('run', cwl_tree(alone).cwl)), inside.name
+                == sophios.utils.recursively_delete_dict_key('run', cwl_tree(alone).cwl)), child.name
 
 
 #: The fields a CWL document declares its prefixes and ontologies in.
@@ -413,10 +425,10 @@ def test_corpus_compiles_clean_in_every_form(yml_path_str: str, yml_path: Path,
     """Each corpus workflow compiles to documents CWL can read, its subworkflows as they compile alone, and each form
     the inline flags give means what the nested form means; each real-time analysis it declares compiles. cwltool
     finds each defect these find, but only in a run, behind a container pull: here each costs a compile."""
-    result = _compile_corpus_workflow(yml_path_str, yml_path, corpus_registry)
+    bundle, result = _compile_corpus_workflow(yml_path_str, yml_path, corpus_registry)
     options = sophios.cli.settings_from_args(get_args(str(yml_path)))[0]
     _check_residue(cwl_tree(result))
-    _check_embedding_independence(result.graph, cwl_tree(result), corpus_registry, options)
+    _check_embedding_independence(bundle, result.graph, cwl_tree(result), options)
     _check_embedding_keeps_meaning(cwl_tree(result))
     _check_flatten_keeps_meaning(yml_path_str, cwl_tree(result))
     if not _calls_a_workflow(yml_path):
@@ -457,7 +469,8 @@ def test_corpus_validates_in_cwltool_in_every_form(yml_path_str: str, yml_path: 
     directory-listing defaults it gives the same tool read from its own file: a tool written for CWL v1.0, embedded
     in a v1.2 document with no `cwlVersion` of its own, ran without network access, and every download of the weekly
     lane failed. The large workflows are only validated, as the weekly lane always did."""
-    nested = cwl_tree(_compile_corpus_workflow(yml_path_str, yml_path, corpus_registry))
+    _, result = _compile_corpus_workflow(yml_path_str, yml_path, corpus_registry)
+    nested = cwl_tree(result)
     flat, _ = post_compile.flatten_subworkflows(nested)
     for form, artifact in (('flat', flat), ('flat_embedded', inline_artifact_runs(flat))):
         cwl_io.write_artifacts_to_disk(artifact, tmp_path / form, output_targets=())

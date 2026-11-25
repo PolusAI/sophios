@@ -69,7 +69,6 @@ contrib = [
 ]
 test = [
     "sophios[contrib]",
-    "mergedeep",
     "networkx",
     "pre-commit",
     "pytest",
@@ -212,7 +211,6 @@ ignore_errors = false
 [[tool.mypy.overrides]]
 module = [
     "graphviz.*",
-    "mergedeep.*",
     "networkx.*",
     "matplotlib.*",
     "scipy.*",
