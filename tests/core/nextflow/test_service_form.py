@@ -24,8 +24,9 @@ _AUTOSEG = partial(autoseg, "input_directory", ["segmentation-a", "segmentation-
 
 @pytest.mark.fast
 def test_the_service_form_of_the_autoseg_shape_is_its_golden(tmp_path: Path) -> None:
-    """design §4.5: the service form is the pipeline with containers under Singularity and its outputs published,
-    its parameters every path as written; the import refuses it, at the first line a local pipeline does not have."""
+    """design §4.5: the service form is the pipeline written for Singularity, its outputs published and not
+    recorded, its parameters every path as written; beside the configuration Sophios writes for Singularity, the
+    import reads it back to its model."""
     pipeline = service_pipeline(_AUTOSEG())
     assert pipeline.script == SERVICE_AUTOSEG.read_text(encoding="utf-8")
     assert pipeline.params == {
@@ -34,11 +35,9 @@ def test_the_service_form_of_the_autoseg_shape_is_its_golden(tmp_path: Path) -> 
         "autoseg_output": [{"class": "Directory", "path": "segmentation-a"},
                            {"class": "Directory", "path": "segmentation-b"}],
     }
-    write_nextflow_artifacts(pipeline.nextflow_workflow, tmp_path)
+    write_nextflow_artifacts(pipeline.nextflow_workflow, tmp_path, "singularity")
     (tmp_path / "workflow.nf").write_text(pipeline.script, encoding="utf-8")
-    with pytest.raises(SophiosError) as refused:
-        read_nextflow(tmp_path)
-    assert [str(diagnostic.code) for diagnostic in refused.value.diagnostics] == ["wic047"]
+    assert read_nextflow(tmp_path)[0] == pipeline.nextflow_workflow
     # Only a process that asks for GPUs has them bound.
     script = service_pipeline(_AUTOSEG(gpu=False)).script
     assert "    container 'vjaganat90/ichnaea-segmentation-plugin:devn'\n" in script

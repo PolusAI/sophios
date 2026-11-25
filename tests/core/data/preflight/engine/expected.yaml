@@ -44,11 +44,18 @@ runs:
 - machine: {processes: 1001}
   argv: [--yaml, touch.wic, --generate_run_script, --ignore_docker_processes]
   pulled: true
-- why: a Nextflow run is not told of options only a CWL run takes
+- why: a Nextflow run takes another engine, as a CWL run does, and is not told of options only a CWL run takes
   machine: {engine: missing}
   argv: [--yaml, touch.wic, --target, nextflow, --check, --diagnostics, json]
   exit: 1
-  diagnostics: [{code: CONTAINER_ENGINE_UNAVAILABLE, severity: error, message: {re: 'install docker\.$'}}]
+  diagnostics: [{code: CONTAINER_ENGINE_UNAVAILABLE, severity: error, message: {re:
+    'install docker, or name an installed engine with --container_engine\.$'}}]
+- why: the engine a Nextflow run is given is the one checked
+  machine: {fails: [[singularity]], said: no runtime}
+  argv: [--yaml, touch.wic, --target, nextflow, --container_engine, singularity, --check, --diagnostics, json]
+  exit: 1
+  diagnostics: [{code: CONTAINER_ENGINE_UNAVAILABLE, severity: error, message: {contains: [
+    'singularity is installed, but', (no runtime)]}}]
 - machine: {processes: 1001}
   argv: [--yaml, touch.wic, --target, nextflow, --check, --diagnostics, json]
   exit: 1

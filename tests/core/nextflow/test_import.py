@@ -28,6 +28,7 @@ from sophios.nextflow.render import (
     NEXTFLOW_PARAMS,
     NEXTFLOW_SCRIPT,
     NF_HELPER_FUNCTIONS,
+    render_nextflow,
     write_nextflow_artifacts,
 )
 from sophios.lang.diagnostics import SophiosError
@@ -201,14 +202,19 @@ def _generated(draw: st.DrawFn) -> Workflow:
 
 
 @budget(100)
-@given(_generated())
-@example(calculator_workflow())
-@example(predicates_workflow())
-def test_the_import_of_a_generated_tool_compiles_to_its_model(workflow: Workflow) -> None:
-    """Pinned: the conditions the subset differential runs, which each operator of the subset writes."""
-    compiled = workflow.compile(target="nextflow")
+@given(_generated(), st.sampled_from(["docker", "singularity"]), st.booleans())
+@example(calculator_workflow(), "singularity", False)
+@example(predicates_workflow(), "docker", True)
+def test_the_import_of_a_generated_tool_compiles_to_its_model(workflow: Workflow, engine: str, record: bool) -> None:
+    """The reader reads back each form the writer writes: for Docker or Singularity, with the record of the outputs
+    or without, as a compute service is sent it. Pinned: the conditions the subset differential runs, which each
+    operator of the subset writes."""
+    model = workflow.compile(target="nextflow").nextflow_workflow
     with tempfile.TemporaryDirectory() as directory:
-        assert _imported(compiled.write(directory)) == compiled.nextflow_workflow
+        write_nextflow_artifacts(model, directory, engine)
+        (Path(directory) / NEXTFLOW_SCRIPT).write_text(render_nextflow(model, engine=engine, record=record),
+                                                       encoding="utf-8")
+        assert _imported(Path(directory)) == model
 
 
 _STRINGS = re.compile(r"'(?:[^'\\]|\\.)*'|\"(?:[^\"\\]|\\.)*\"")

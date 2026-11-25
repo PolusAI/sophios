@@ -128,9 +128,9 @@ class Backend(Protocol):
         the output object `outcome` returns."""
 
     def write(self, lowered: setup.Lowered[Any], analyses: tuple[realtime.Analysis, ...], basepath: Path, *,
-              inputs_file: str, root_dir: Path) -> setup.Prepared:
-        """Write what the runner reads of the model its target `lowered` under `basepath`, and nothing elsewhere:
-        `inputs_file` holds values that win over the workflow's, and a relative path is read against `root_dir`.
+              run: RunSettings, root_dir: Path) -> setup.Prepared:
+        """Write what `run`'s runner reads of the model its target `lowered` under `basepath`, and nothing elsewhere:
+        `run.inputs_file` holds values that win over the workflow's, and a relative path is read against `root_dir`.
         What the runner's machine must still do before the run starts is in what it returns."""
 
     def needs(self, documents: Sequence[Path], jobs: Sequence[preflight.Job]) -> preflight.Needs:
@@ -206,9 +206,9 @@ class _Cwl:
     empty_directory = staticmethod(directory_literal)
 
     def write(self, lowered: setup.Lowered[CompilationArtifact], analyses: tuple[realtime.Analysis, ...],
-              basepath: Path, *, inputs_file: str, root_dir: Path) -> setup.Prepared:
+              basepath: Path, *, run: RunSettings, root_dir: Path) -> setup.Prepared:
         """The workflow and its job under `basepath`, and its analyses beside it; the runner makes every folder."""
-        return setup.write(lowered.model, analyses, basepath, inputs_file=inputs_file, root_dir=root_dir,
+        return setup.write(lowered.model, analyses, basepath, inputs_file=run.inputs_file, root_dir=root_dir,
                            output_targets=output_target_inputs(lowered.view),
                            empty_directory=self.empty_directory)
 
@@ -238,7 +238,7 @@ class CwltoolBackend(_Cwl):
         # turns each download into a ~30 s timeout.
         # --disable-pull: the pre-flight pulled every image (cwl-docker-extract).
         runner, outdir = request.run.runner, request.run.outdir
-        argv = [runner.program, '--disable-pull', *(['--quiet'] if request.run.quiet else []),
+        argv = [runner.program, '--disable-pull', *(['--quiet'] if runner.quiet else []),
                 *_provenance_flags(basepath, request), *_container_flags(runner.container_engine),
                 '--write-summary', f'{basepath}/output_{request.workflow_name}.json',
                 '--skip-schemas', '--relax-path-checks', '--move-outputs', '--enable-ext', '--outdir', outdir]
@@ -333,7 +333,7 @@ def _last_json_object(text: str) -> Json | None:
 def nextflow_directory(basepath: Path, workflow_name: str) -> Path:
     """Where `NextflowBackend` writes and runs `workflow_name`'s pipeline: the four artifacts, `nextflow_names.json`
     with the Sophios name of each process and workflow output by its Nextflow name, the work directory `work`, and
-    Nextflow's own log and cache.
+    Nextflow's own log and cache; the outputs are published into the run's outputs folder.
 
     Named after the workflow, as a CWL run's `<name>.cwl` and `<name>_inputs.yml` are, so two workflows run
     together from one base path never read or overwrite each other's pipeline.
@@ -383,11 +383,13 @@ def recorded_outputs(stdout: str) -> Iterator[tuple[str, Json]]:
 
 
 def _cwl_objects(value: Any) -> Any:
-    """`value` with each path the pipeline recorded made a CWL File or Directory object; one that has its location,
-    as a CWL runner's has, is that object already, and stays as it is."""
+    """`value` with each path the pipeline recorded made a CWL File or Directory object, named by the `basename` a
+    local run's record gives, its own, or, from a compute service, by its copy's; one that has its location, as a CWL
+    runner's has, is that object already, and stays as it is."""
     match value:
         case {'class': 'File' | 'Directory' as kind, 'path': str() as path} if 'location' not in value:
-            return {'class': kind, 'location': Path(path).as_uri(), 'path': path, 'basename': Path(path).name}
+            return {'class': kind, 'location': Path(path).as_uri(), 'path': path,
+                    'basename': value.get('basename', Path(path).name)}
         case list():
             return [_cwl_objects(item) for item in value]
     return value
@@ -408,29 +410,32 @@ class NextflowBackend:
                                tuple(jobs))
 
     def check(self, needs: preflight.Needs, settings: RunSettings) -> None:
-        """The paths the jobs name, `nextflow`, starting with a Java it can run, and the container engine when a
-        process has a container."""
-        problems = preflight.path_problems(needs.jobs) + preflight.nextflow_problems(settings)
+        """The paths the jobs name, the outputs folder, `nextflow`, starting with a Java it can run, and the container
+        engine when a process has a container."""
+        problems = (preflight.path_problems(needs.jobs) + preflight.outdir_problems(settings)
+                    + preflight.nextflow_problems(settings))
         if needs.containers:
             problems += preflight.engine_problems(needs.images, settings)
         if problems:
             raise SophiosError(problems)
 
     def write(self, lowered: setup.Lowered[ExecutableNextflowWorkflow], analyses: tuple[realtime.Analysis, ...],
-              basepath: Path, *, inputs_file: str, root_dir: Path) -> setup.Prepared:
-        """The four artifacts and `nextflow_names.json` in the workflow's `nextflow_directory`, and the analyses
-        under `basepath`; the folders are each output-target Directory input, which the pipeline stages, so it must
-        exist, where a CWL runner makes it.
+              basepath: Path, *, run: RunSettings, root_dir: Path) -> setup.Prepared:
+        """The four artifacts, the pipeline written for `run`'s container engine, and `nextflow_names.json` in the
+        workflow's `nextflow_directory`, and the analyses under `basepath`; the folders are each output-target
+        Directory input, which the pipeline stages, so it must exist, where a CWL runner makes it.
 
         The workflow was lowered from a view whose relative File or Directory paths are read against `root_dir`
         and written absolute (`targets.for_run`): Nextflow runs from its `nextflow_directory`. An inputs file is a
         CWL runner's.
+
+        Raises:
+            ValueError: An engine other than Docker or Singularity.
         """
-        del inputs_file
         view, workflow = lowered.view, lowered.model
         directory = nextflow_directory(basepath, view.name)
         io_nf.remove_nextflow_artifacts(directory)
-        documents = io_nf.write_nextflow_artifacts(workflow, directory)
+        documents = io_nf.write_nextflow_artifacts(workflow, directory, run.runner.container_engine)
         (directory / _NEXTFLOW_NAMES).write_text(json.dumps(nextflow_names(view), indent=2) + '\n',
                                                  encoding='utf-8')
         folders = []
@@ -459,8 +464,7 @@ class NextflowBackend:
     def _prepare(self, lowered: setup.Lowered[ExecutableNextflowWorkflow], analyses: tuple[realtime.Analysis, ...],
                  basepath: Path, settings: setup.Settings) -> setup.Prepared:
         """`prepare`, writing under `basepath`."""
-        written = self.write(lowered, analyses, basepath, inputs_file=settings.run.inputs_file,
-                             root_dir=settings.root_dir)
+        written = self.write(lowered, analyses, basepath, run=settings.run, root_dir=settings.root_dir)
         targets = output_target_inputs(lowered.view)
         # A folder need not exist yet: it is made below.
         job = preflight.Job({name: value for name, value in settings.bound.items() if name not in targets},
@@ -473,23 +477,23 @@ class NextflowBackend:
         return written
 
     def launch(self, request: RunRequest) -> Launch:
-        """`nextflow` reading only the generated configuration, with the pipeline, its parameters, its work directory
-        and no ANSI log, then the passthrough arguments, from the workflow's `nextflow_directory`.
+        """`nextflow` reading only the generated configuration, with the pipeline, its parameters, its work directory,
+        the outputs folder it publishes into and no ANSI log, then the passthrough arguments, from the workflow's
+        `nextflow_directory`.
 
         From there, Nextflow's own log and cache are with the pipeline they belong to.
         """
         directory = nextflow_directory(request.basepath, request.workflow_name)
-        workdir = str(directory / 'work')
-        runner = request.run.runner
+        runner, outdir = request.run.runner, request.run.outdir
         argv = [runner.program, '-C', str(directory / io_nf.NEXTFLOW_CONFIG), 'run',
                 str(directory / io_nf.NEXTFLOW_SCRIPT), '-params-file', str(directory / io_nf.NEXTFLOW_PARAMS),
-                '-work-dir', workdir, '-ansi-log', 'false', *runner.flags]
-        return Launch(tuple(argv), {**request.env, 'NXF_SYNTAX_PARSER': 'v2'}, directory, workdir)
+                '-work-dir', str(directory / 'work'), '-output-dir', outdir, '-ansi-log', 'false', *runner.flags]
+        return Launch(tuple(argv), {**request.env, 'NXF_SYNTAX_PARSER': 'v2'}, directory, outdir)
 
     # pylint: disable-next=too-many-arguments,too-many-positional-arguments
     def outcome(self, request: RunRequest, exit_code: int, stdout: str, log: str, read: Read) -> Outcome:
-        """The outputs the pipeline recorded, by their Sophios names; the failed processes from Nextflow's log, by
-        their Sophios step names."""
+        """The outputs the pipeline recorded, as it published them, by their Sophios names; the failed processes from
+        Nextflow's log, by their Sophios step names."""
         names_file = read(str(nextflow_directory(Path(), request.workflow_name) / _NEXTFLOW_NAMES))
         assert names_file is not None, 'write writes it'
         names = json.loads(names_file)

@@ -37,7 +37,8 @@ class RunResult:
     state: RunState
     #: The workflow's output object, or None when the runner gave none.
     outputs: Json | None
-    #: The directory the runner moved the workflow's outputs to.
+    #: The run's outputs folder: the one a CWL runner moved the workflow's outputs to, or the one the Nextflow pipeline
+    #: copied them into.
     outdir: Path
     #: Both of the runner's streams, as they came: `<basepath>/run_<workflow>.log`.
     log_file: Path

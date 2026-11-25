@@ -14,6 +14,7 @@ from sophios import targets
 from sophios.compiler import CompileSettings, compile_source, resolved_view
 from sophios.ir.frontdoor import bundle_from_disk
 from sophios.runtime.inputs import runner_job_inputs
+from sophios.runtime.runners import Cwltool, RunSettings
 from sophios.wic_types import StepId, Tool
 
 from .budgets import budget
@@ -79,8 +80,8 @@ def _written(tmp_path: Path, source: str, inputs_file: str = '') -> Path:
     if inputs_file:
         write_tree(tmp_path, {'job.yml': inputs_file})
     cwl = targets.target('cwl')
-    cwl.write(cwl.lower(resolved_view(result)), (), tmp_path / 'out',
-              inputs_file=str(tmp_path / 'job.yml') if inputs_file else '', root_dir=tmp_path)
+    run = RunSettings(Cwltool(), inputs_file=str(tmp_path / 'job.yml') if inputs_file else '')
+    cwl.write(cwl.lower(resolved_view(result)), (), tmp_path / 'out', run=run, root_dir=tmp_path)
     return tmp_path / 'out'
 
 
@@ -90,14 +91,14 @@ def _job(out: Path, stem: str) -> Any:
 
 @pytest.mark.fast
 @pytest.mark.parametrize('given_directory', [
-    'result.outDir', '{class: Directory, location: result.outDir}', '{class: Directory, path: result.outDir}',
-    '{class: Directory, basename: result.outDir}'], ids=['name', 'location', 'path', 'basename'])
+    'masks.outDir', '{class: Directory, location: masks.outDir}', '{class: Directory, path: masks.outDir}',
+    '{class: Directory, basename: masks.outDir}'], ids=['name', 'location', 'path', 'basename'])
 def test_an_output_target_directory_in_a_job_is_a_directory_literal(tmp_path: Path, given_directory: str) -> None:
-    """Whichever way an inputs file gave it, the runner is asked to create an empty directory of that name; nothing
-    is made on disk."""
+    """Whichever way an inputs file gave it, the runner is asked to create an empty directory of that name, the
+    inputs file's over the one the workflow binds; nothing is made on disk."""
     out = _written(tmp_path, 'w.wic', f'write_dir~outDir: {given_directory}\n')
-    assert _job(out, 'w')['write_dir~outDir'] == {'class': 'Directory', 'basename': 'result.outDir', 'listing': []}
-    assert not (tmp_path / 'result.outDir').exists()
+    assert _job(out, 'w')['write_dir~outDir'] == {'class': 'Directory', 'basename': 'masks.outDir', 'listing': []}
+    assert not (tmp_path / 'masks.outDir').exists()
 
 
 @pytest.mark.fast
@@ -117,9 +118,9 @@ def test_an_output_target_directory_below_calls_is_a_directory_literal_at_its_ro
         tmp_path: Path, source: str, key: str) -> None:
     """The job key is the step's qualified input, however many calls deep, whether the tool writes its
     requirements as a mapping or as a list, and whether it reads the input as inputs.outDir or inputs["outDir"]."""
-    out = _written(tmp_path, source, f'{key}: {{class: Directory, location: result.outDir}}\n')
+    out = _written(tmp_path, source, f'{key}: {{class: Directory, location: masks.outDir}}\n')
     assert _job(out, source.removesuffix('.wic')) == {
-        key: {'class': 'Directory', 'basename': 'result.outDir', 'listing': []}}
+        key: {'class': 'Directory', 'basename': 'masks.outDir', 'listing': []}}
 
 
 @pytest.mark.needs_cwltool

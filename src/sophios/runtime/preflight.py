@@ -115,15 +115,19 @@ def check(found: Needs, run: RunSettings) -> None:
     Raises:
         SophiosError: One diagnostic per problem.
     """
-    problems = path_problems(found.jobs)
-    if run.outdir and (problem := unwritable(Path(run.outdir), "the run's outputs",
-                                             'give outdir a directory you can write to')) is not None:
-        problems.append(problem)
+    problems = path_problems(found.jobs) + outdir_problems(run)
     problems += _program_problems(found, run)
     if found.containers:
         problems += engine_problems(found.images, run)
     if problems:
         raise SophiosError(problems)
+
+
+def outdir_problems(run: RunSettings) -> list[Diagnostic]:
+    """The run's outputs folder, when it names one, cannot be made or written."""
+    remedy = 'give the outputs folder (--outdir, or RunConfig(folder) in Python) a directory you can write to'
+    problem = unwritable(Path(run.outdir), "the run's outputs", remedy) if run.outdir else None
+    return [] if problem is None else [problem]
 
 
 def pull(found: Needs, run: RunSettings) -> None:
@@ -388,8 +392,7 @@ def engine_problems(images: Sequence[str], run: RunSettings) -> list[Diagnostic]
     """
     runner = run.runner
     engine = runner.container_engine
-    # The options that name another engine or skip a check are a CWL run's; a Nextflow run's configuration
-    # enables Docker.
+    # The options that skip a check are a CWL run's.
     cwl_run = runner.target == 'cwl'
     probe = [engine, 'info'] if engine in DOCKER_LIKE else [engine, '--version']
     try:
@@ -399,7 +402,7 @@ def engine_problems(images: Sequence[str], run: RunSettings) -> list[Diagnostic]
             return []
         return [_engine_error(f'{engine} is not installed (it is not on PATH), and this workflow runs tools in '
                               f'containers ({_images(images)}): install {engine}'
-                              + (', or name an installed engine with --container_engine' if cwl_run else ''))]
+                              + ', or name an installed engine with --container_engine')]
     problems = []
     if proc.returncode != 0 and not runner.ignore_install:
         problems.append(_unusable_engine(engine, proc.returncode, proc.stderr.decode('utf-8', errors='replace')))

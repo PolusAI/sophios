@@ -1,6 +1,7 @@
 """The corpus workflows the Nextflow target runs, compiled and run under Nextflow with Docker. Only
 `.github/workflows/run_workflows.yml` collects these, on a push, with mm-workflows and image-workflows alongside."""
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -8,6 +9,7 @@ from sophios import config as sophios_config
 import sophios.plugins
 from sophios.nextflow.reader import read_nextflow
 from sophios.nextflow.model import NfWorkflowOutputConnection
+from sophios.runtime.backends import recorded_outputs
 
 from ..helpers import REPO_ROOT, python_process, python_workflow
 from .testkit import execute_nextflow
@@ -38,12 +40,20 @@ def _compile(source: Path, pipeline: Path, monkeypatch: pytest.MonkeyPatch) -> N
     python_workflow(source, tools).compile(target="nextflow", tool_registry=tools).write(pipeline)
 
 
+def _recorded(value: Any) -> list[dict[str, str]]:
+    """Each File or Directory a recorded output names, at any depth; a null names none."""
+    if isinstance(value, list):
+        return [item for element in value for item in _recorded(element)]
+    return [] if value is None else [value]
+
+
 @pytest.mark.nextflow
 @pytest.mark.docker
 @pytest.mark.nextflow_corpus
 @pytest.mark.parametrize("workflow", WORKFLOWS)
 def test_a_corpus_workflow_runs_under_nextflow(workflow: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The run succeeds, every file a workflow output emits exists, and every directory it emits holds something."""
+    """The run succeeds, every file a workflow output publishes exists, and every directory it publishes holds
+    something, as the pipeline records them."""
     pipeline = tmp_path / "pipeline"
     _compile(CHECKOUTS / workflow, pipeline, monkeypatch)
     executable, _ = read_nextflow(pipeline)
@@ -57,25 +67,17 @@ def test_a_corpus_workflow_runs_under_nextflow(workflow: str, tmp_path: Path, mo
     outputs = [
         connection for connection in executable.connections if isinstance(connection, NfWorkflowOutputConnection)
     ]
-    sinks = "".join(
-        # Every item, each a value or a list of them, one per line.
-        f"\n    {executable.name}.out.{output.to_port}.toList().subscribe {{ "
-        f"new File('emits/{output.to_port}').text = "
-        "it.collectMany { item -> (item instanceof List) ? item : [item] }.join('\\n') }"
-        for output in outputs
-    )
-    script = pipeline / "workflow.nf"
-    (pipeline / "emits").mkdir()
-    script.write_text(script.read_text(encoding="utf-8")[:-2] + sinks + "\n}\n", encoding="utf-8")
-
     result = execute_nextflow(pipeline, timeout=3600)
     assert result.returncode == 0, f"stdout:\n{result.stdout[-6000:]}\nstderr:\n{result.stderr[-6000:]}"
+    recorded = dict(recorded_outputs(result.stdout))
     processes = {process.name: process for process in executable.processes}
     for output in outputs:
         [port] = [port for port in processes[output.from_process].outputs if port.name == output.from_port]
-        values = (pipeline / "emits" / output.to_port).read_text(encoding="utf-8").splitlines()
-        if port.capture == "text" or (port.optional and not values):
-            continue  # a captured text, or an optional output's null
-        assert values and all(Path(value).exists() for value in values), f"{output.to_port}: {values}"
-        if port.path_kind == "Directory":
-            assert all(any(Path(value).iterdir()) for value in values), f"{output.to_port} is empty: {values}"
+        if port.capture == "text":
+            continue
+        values = _recorded(recorded[output.to_port])
+        if port.optional and not values:
+            continue  # an optional output's null
+        assert values and all(Path(value["path"]).exists() for value in values), f"{output.to_port}: {values}"
+        assert all(any(Path(value["path"]).iterdir()) for value in values if value["class"] == "Directory"), \
+            f"{output.to_port} holds an empty folder: {values}"

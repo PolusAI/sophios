@@ -1,0 +1,98 @@
+# Each pair of an outputs folder and a relative_to a RunConfig may be made with, and the lines every door that takes a
+# RunConfig refuses it with, by hand: [] for one every door takes. `remote_only` marks a pair only a door with no
+# working directory to read a relative folder from refuses (the compute service); a local run takes it.
+# Read by tests/core/test_run_config.py.
+- id: nothing
+  folder: null
+  relative_to: null
+  refused: []
+- id: absolute-folder
+  folder: /projects/lab/out
+  relative_to: null
+  refused: []
+- id: relative-folder-read-from-relative-to
+  folder: results
+  relative_to: /projects/lab
+  refused: []
+- id: relative-folder-alone
+  why: a local run reads it from the working directory
+  folder: results
+  relative_to: null
+  remote_only: true
+  refused:
+  - "the outputs folder 'results' is relative, and no relative_to is given to read it from, as there is no working
+    directory where the run runs: give relative_to(path), or an absolute folder"
+- id: relative-to-alone
+  folder: null
+  relative_to: /projects/lab
+  refused:
+  - "relative_to('/projects/lab') is given with no outputs folder to read from it: name one, as
+    RunConfig('results').relative_to('/projects/lab')"
+- id: absolute-folder-with-relative-to
+  folder: /projects/lab/out
+  relative_to: /projects/lab
+  refused:
+  - "the outputs folder '/projects/lab/out' is an absolute path, and relative_to('/projects/lab') is given: give the
+    folder relative to it, or give no relative_to"
+- id: relative-relative-to
+  folder: results
+  relative_to: projects/lab
+  refused:
+  - "relative_to('projects/lab') is not an absolute path: give the folder the relative paths are read from as one"
+- id: relative-relative-to-alone
+  folder: null
+  relative_to: lab
+  refused:
+  - "relative_to('lab') is given with no outputs folder to read from it: name one, as
+    RunConfig('results').relative_to('lab')"
+  - "relative_to('lab') is not an absolute path: give the folder the relative paths are read from as one"
+- id: absolute-folder-with-relative-relative-to
+  folder: /out
+  relative_to: lab
+  refused:
+  - "relative_to('lab') is not an absolute path: give the folder the relative paths are read from as one"
+  - "the outputs folder '/out' is an absolute path, and relative_to('lab') is given: give the folder relative to it,
+    or give no relative_to"
+- id: file-url-folder
+  why: the compute service takes an outputs folder written as a file:// URL; a local run reads it as a relative name
+  folder: file:///projects/lab/out
+  relative_to: null
+  refused: []
+- id: file-url-folder-with-relative-to
+  why: the compute service reads a file:// URL as absolute, so refuses it with basepath; a local run takes it
+  folder: file:///projects/lab/out
+  relative_to: /projects/lab
+  remote_only: true
+  refused:
+  - "the outputs folder 'file:///projects/lab/out' is an absolute path, and relative_to('/projects/lab') is given: give
+    the folder relative to it, or give no relative_to"
+- id: upper-case-file-url-folder
+  why: the compute service reads the scheme of a file:// URL in any case, as it reads a URL's scheme
+  folder: FILE:///projects/lab/out
+  relative_to: null
+  refused: []
+- id: upper-case-file-url-folder-with-relative-to
+  folder: FILE:///projects/lab/out
+  relative_to: /projects/lab
+  remote_only: true
+  refused:
+  - "the outputs folder 'FILE:///projects/lab/out' is an absolute path, and relative_to('/projects/lab') is given: give
+    the folder relative to it, or give no relative_to"
+- id: folder-for-a-shell
+  why: the compute service refuses a path written for a shell in its own words, whatever relative_to is
+  folder: ~/out
+  relative_to: null
+  refused: []
+- id: folder-with-a-variable
+  folder: $HOME/out
+  relative_to: null
+  refused: []
+- id: url-folder
+  why: "the compute service refuses a URL as an outputs folder in its own words, and to it C: is a URL's scheme"
+  folder: http://x/y
+  relative_to: null
+  refused: []
+- id: drive-letter-folder
+  folder: C:\out
+  relative_to: null
+  refused: []

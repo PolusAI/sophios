@@ -4,15 +4,17 @@ A core feature, but not part of the Python API: `sophios.api.python` neither exp
 `Workflow` built with that API, compiles it, to CWL, which the service runs with Toil, or, with `target='nextflow'`,
 to a Nextflow pipeline, which it runs with Nextflow, and sends it with its inputs as one request:
 
-    from sophios.compute import RunConfig, Service
+    from sophios.compute import RunConfig, Service, SlurmSettings
 
     service = Service('ssh://login.cluster.example.org')  # your own ssh, to the service's socket there
-    config = RunConfig('results/run7').basepath('/projects/lab').leader(time='2:00:00')
+    config = RunConfig('results/run7').relative_to('/projects/lab').slurm_settings(SlurmSettings(time='2:00:00'))
     run = service.submit(workflow, config)
     status = run.wait()
 
-A `RunConfig` is everything of the request but the workflow and its inputs: the folder it may be made with is where
-the outputs go, and each of its setters sets a field more; without one, the run takes the service's settings.
+A `RunConfig`, the one a local run takes too, is everything of the request but the workflow and its
+inputs: the folder it may be made with is where the outputs go, `relative_to` is the request's `basepath`, its
+`SlurmSettings` the request's `leader` and `steps` (`SLURM_FIELDS`), and `log_level` its `logLevel`; without one,
+the run takes the service's settings.
 
 A `Run` is followed as the local `RunHandle` of `Workflow.start()` is: `status`, `wait`, `outputs`, `logs` and
 `cancel`. `Service.attach` follows a run from any session or machine; the run goes on in Slurm whatever happens to
@@ -20,15 +22,15 @@ the session.
 
 Every path goes as written, and the service, not Sophios, reads it on the cluster and refuses what it cannot read
 there, `~` and `$VARIABLE`s included. A path a tool reads is a path on the cluster, absolute or relative to
-`basepath`, or an http(s) URL. Every output lands in one folder, the outputs folder, under its own name: the one
-`RunConfig(folder)` names, relative to `basepath` when one is set, which then requires it, else absolute; or, without
-one, and so without `basepath`, the run's own folder on the cluster. An output folder (a Directory input a tool
-writes into and returns) given as a name, such as `segmentation`, is made in the run, never read against `basepath`,
-and lands in the outputs folder under that name; one given as an absolute path is written there by its tool, in
-place, never copied, on CWL alone. A run's output folders are all names or all absolute paths, and a run that writes
-them in place returns them alone, and plain values, and names no outputs folder, so no `basepath`. The request's
-shape is `run-request.schema.json`, a copy of the service's own: Sophios checks every request against it before
-sending, and the service again on arrival.
+`relative_to`, or an http(s) URL. Every output lands in one folder, the outputs folder, under its own name: the one
+`RunConfig(folder)` names, relative to `relative_to` when one is set, which then requires it, else absolute; or,
+without one, and so without `relative_to`, the run's own folder on the cluster. An output folder (a Directory input a
+tool writes into and returns) given as a name, such as `segmentation`, is made in the run, never read against
+`relative_to`, and lands in the outputs folder under that name; one given as an absolute path is written there by its
+tool, in place, never copied, on CWL alone. A run's output folders are all names or all absolute paths, and a run
+that writes them in place returns them alone, and plain values, and names no outputs folder, so no `relative_to`. The
+request's shape is `run-request.schema.json`, a copy of the service's own: Sophios checks every request against it
+before sending, and the service again on arrival.
 """
 import json
 import os
@@ -45,7 +47,7 @@ import weakref
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from importlib import resources
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal
+from typing import TYPE_CHECKING, Any, ClassVar, Final
 from urllib.parse import quote, urlsplit
 
 import requests
@@ -57,6 +59,8 @@ from .api.python._inference import Inference
 from .api.python._workflow_runtime import ServicePipeline, service_document, service_pipeline
 from .nextflow.model import NfLiteral, NfWorkflowInputConnection
 from .runtime.backends import _cwl_objects
+from .runtime.runners import (  # pylint: disable=unused-import  # SlurmSettings is re-exported
+    RunConfig, SlurmSettings, read_config)
 from .runtime.status import RunState, RunStatus, StepStatus
 from .wic_types import Json, TargetName, Tools
 
@@ -119,56 +123,13 @@ class ServiceUnavailable(ComputeError):
     code = 'cmp002'
 
 
-class RunConfig:
-    """Everything of a request but `id`, `workflow` and `inputs`: made with where the outputs go, which nothing
-    changes after, and given the rest by setters that set and return it, so the calls chain.
-
-        RunConfig('results').basepath('/shared/lab').leader(time='2:00:00', memory='4G')
-
-    Each setter sets just what it is passed, and leaves the rest as it was; what no setter sets is left out of the
-    request, so the service's own settings apply. The values are strings in Slurm's own forms, which the schema
-    checks when the request is built. Without a folder, and so without `basepath`, which requires one, the outputs
-    land in the run's own folder on the cluster; so they do without any `RunConfig`, with every setting the service's.
-
-    Args:
-        workflow_out_dir: The outputs folder: the folder on the cluster every output lands in, under its own name,
-            relative to `basepath` when one is set, and then required, else absolute. It must be missing (the service
-            creates it) or empty, and used by no run that has not ended. None for the run's own folder, without
-            `basepath`. An output folder given an absolute path is written in place instead, and a run's output
-            folders are all names or all absolute paths; a run that writes them in place takes no folder here.
-    """
-
-    def __init__(self, workflow_out_dir: str | None = None) -> None:
-        self._fields: Json = {} if workflow_out_dir is None else {'workflowOutDir': workflow_out_dir}
-
-    def basepath(self, path: str) -> 'RunConfig':
-        """The directory on the cluster that the relative paths of what the tools read are relative to, and the
-        outputs folder, which is then required, and never absolute; an output folder given as a name is made in the
-        run instead."""
-        self._fields['basepath'] = path
-        return self
-
-    def leader(self, *, partition: str | None = None,
-               time: str | None = None,  # pylint: disable=redefined-outer-name  # the request's name
-               memory: str | None = None) -> 'RunConfig':
-        """The leader's Slurm job, Toil's or Nextflow's, lasting as long as the run: its partition, time, memory."""
-        return self._merge('leader', partition=partition, time=time, memory=memory)
-
-    def steps(self, *, partition: str | None = None, gpu_partition: str | None = None,
-              time: str | None = None) -> 'RunConfig':  # pylint: disable=redefined-outer-name  # the request's name
-        """Where the step jobs go, those that ask for a GPU to `gpu_partition`, and how long each may run."""
-        return self._merge('steps', partition=partition, gpu_partition=gpu_partition, time=time)
-
-    def log_level(self, level: Literal['DEBUG', 'INFO', 'WARNING', 'ERROR']) -> 'RunConfig':
-        """Toil's log level; a Nextflow run does not use it."""
-        self._fields['logLevel'] = level
-        return self
-
-    def _merge(self, field: str, **values: str | None) -> 'RunConfig':
-        """Set each of `values` that is given in the object `field`, under the request's name for it."""
-        given = {_key(name): value for name, value in values.items() if value is not None}
-        self._fields[field] = {**self._fields.get(field, {}), **given}
-        return self
+#: Where the request holds each field of `SlurmSettings`: the leader's job, or each step's.
+SLURM_FIELDS: Final = {'partition': ('leader', 'partition'), 'time': ('leader', 'time'),
+                       'memory': ('leader', 'memory'), 'steps_partition': ('steps', 'partition'),
+                       'steps_time': ('steps', 'time'), 'gpu_partition': ('steps', 'gpuPartition')}
+#: What the user wrote, by where the request holds it: `SLURM_FIELDS` read backwards, and the rest of a RunConfig.
+_WRITTEN: Final = {**{f'{job}.{key}': f'SlurmSettings({name}=...)' for name, (job, key) in SLURM_FIELDS.items()},
+                   'basepath': 'relative_to(...)', 'workflowOutDir': 'RunConfig(...)', 'logLevel': 'log_level(...)'}
 
 
 def new_run_id(name: str, now: datetime | None = None) -> str:
@@ -198,8 +159,9 @@ def build_request(workflow: 'Workflow', config: RunConfig | None = None, *,
             name Nextflow does not keep (`wic061`).
         ValueError: No target has that name, as `Workflow.compile` raises it.
         NotLowered: `'nextflow'`, and a workflow the Nextflow target cannot run, as `Workflow.compile` raises it.
-        RequestRefused: A real-time analysis, an output folder given an absolute path to Nextflow, or a value the
-            schema does not take; every one is a line.
+        RequestRefused: A real-time analysis, an output folder given an absolute path to Nextflow, an outputs folder
+            and a `relative_to` that do not go together (`runners.read_config`), or a value the schema does not
+            take; every one is a line.
     """
     if targets.target(target).name == 'nextflow':
         pipeline = service_pipeline(workflow, tool_registry=tool_registry, inference=inference)
@@ -218,16 +180,28 @@ def request_for(run_id: str, workflow: Json, inputs: Json, config: RunConfig | N
                 target: TargetName = 'cwl') -> Json:
     """The request to run the compiled `workflow` with `inputs` on `target` as the run `run_id`, as `config` says:
     what `build_request` builds once it has compiled the workflow. Only a Nextflow request names its engine, so a
-    CWL request is one a service of contract 3.0.0 takes too.
+    CWL request is one a service of contract 3.0.0 takes too. What `config` does not say is left out of the request,
+    `leader` and `steps` included, so the service's own settings apply.
 
     Raises:
         ValueError: No target has that name, as `Workflow.compile` raises it.
-        RequestRefused: As `build_request` raises it, but for a real-time analysis or an output folder.
+        RequestRefused: As `build_request` raises it, but for a real-time analysis or an output folder of the
+            workflow's.
     """
-    given = config._fields if config is not None else {}  # pylint: disable=protected-access
     engine = {'engine': 'nextflow'} if targets.target(target).name == 'nextflow' else {}
-    request: Json = {'id': run_id, **engine, 'workflow': workflow, 'inputs': inputs, **given}
-    problems = [_schema_problem(error) for error in _VALIDATOR.iter_errors(request)]
+    read = read_config(config, local=False)
+    jobs: Json = {}
+    for name, (job, key) in SLURM_FIELDS.items():
+        if (value := getattr(read.slurm, name)) is not None:
+            jobs.setdefault(job, {})[key] = value
+    given = {'workflowOutDir': read.out_dir, 'basepath': read.relative_to, 'logLevel': read.log_level}
+    request: Json = {'id': run_id, **engine, 'workflow': workflow, 'inputs': inputs,
+                     **{field: value for field, value in given.items() if value is not None}, **jobs}
+    # The folder's and relative_to's problems are read_config's lines, which the schema would say again: with them,
+    # the schema judges the rest, and every problem is one line of one refusal.
+    problems = [*read.problems, *(_schema_problem(error) for error in _VALIDATOR.iter_errors(
+        {field: value for field, value in request.items()
+         if not (read.problems and field in ('workflowOutDir', 'basepath'))}))]
     if problems:
         raise RequestRefused(*problems)
     return request
@@ -271,21 +245,14 @@ def _params(pipeline: ServicePipeline) -> Json:
     return params
 
 
-def _key(name: str) -> str:
-    """The request's name for the keyword `name` of a `RunConfig` setter: the same words, in camelCase."""
-    first, *rest = name.split('_')
-    return first + ''.join(word.capitalize() for word in rest)
-
-
 def _schema_problem(error: Any) -> str:
-    """One line for a value the schema refuses: where it is, and what the field is, in the schema's words."""
+    """One line for a value the schema refuses: where it is, as the user wrote it, and what the field is, in the
+    schema's words."""
     where = _named(''.join('/' + str(part).replace('~', '~0').replace('/', '~1') for part in error.absolute_path))
+    where = _WRITTEN.get(where, where)
     what = error.schema.get('description') if isinstance(error.schema, dict) else None
     if what and error.validator in ('type', 'enum', 'pattern'):
         return f'{where}: {error.instance!r} is not {what}'
-    if error.validator == 'dependentRequired':  # jsonschema's line names neither the field to send nor the way out
-        ((field, (need,)),) = error.validator_value.items()  # the schema's one pair: basepath needs workflowOutDir
-        return f'{need}: required with {field}: send {need}, or send no {field}'
     return f'{where}: {error.message}'
 
 

@@ -52,9 +52,11 @@ from ._workflow_runtime import (
     Cwltool,
     Nextflow,
     RunHandle,
+    RunConfig,
     RunOptions as _RunOptions,
     RunPolicy,
     Runner,
+    SlurmSettings,
     Toil,
     check_workflow as _check_workflow,
     compiled as _compiled,
@@ -94,11 +96,13 @@ __all__ = [
     "InvalidLinkError",
     "InvalidStepError",
     "Nextflow",
+    "RunConfig",
     "RunHandle",
     "RunPolicy",
     "RunResult",
     "RunState",
     "RunStatus",
+    "SlurmSettings",
     "SophiosError",
     "SophiosErrorCode",
     "Step",
@@ -448,8 +452,8 @@ class Step(_ProcessBase):
                 This is the preferred file-backed constructor spelling.
             step_inputs_file (StrPath | None): A YAML file that maps this step's input
                 names to values, each bound as it is written. For a local run, a
-                relative path in it is read from the working directory, as a path
-                bound in Python is.
+                relative path in it is read from the working directory, or from the
+                run's ``config`` ``relative_to``, as a path bound in Python is.
             step_name (str | None): Optional workflow step name override.
             tool_registry (Tools | None): Optional fallback registry for known tools.
                 CommandLineTool-like objects must expose ``name`` and
@@ -1035,15 +1039,14 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
         basepath: str = DEFAULT_BASEPATH,
         tool_registry: Tools | None = None,
         *,
+        config: RunConfig | None = None,
         workflow_paths: Mapping[str, Mapping[str, Path]] | None = None,
         target: TargetName = "cwl",
         lang_version: str | None = None,
         inference: Inference = Inference(),
         policy: RunPolicy = RunPolicy(),
         runner: Runner | None = None,
-        outdir: str = _RUN.outdir,
         inputs_file: str = _RUN.inputs_file,
-        quiet: bool = _RUN.quiet,
         generate_run_script: bool = _RUN.generate_run_script,
     ) -> tuple[Diagnostic, ...]:
         """Check that this workflow compiles and that this machine can run it: the Python form of ``--check``.
@@ -1051,7 +1054,7 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
         It makes the compile and the checks of this machine that :meth:`run` makes before it starts, with
         the arguments :meth:`run` takes: the target's own checks (on CWL, that each ``when`` can give ``true``
         or ``false``, ``wic056``, a note; on Nextflow, the whole lowering); that every File and Directory
-        bound on the workflow exists and can be read; that ``basepath`` and the ``outdir`` can be written; that
+        bound on the workflow exists and can be read; that ``basepath`` and the outputs folder can be written; that
         the programs the run calls are installed (the CWL runner, or Nextflow with a Java it can run);
         and, when a step uses a container, that the container engine works. What the runner would read
         goes to a temporary directory, removed when the check ends. It writes nothing else, pulls no image,
@@ -1061,15 +1064,14 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
             run_args_dict (dict[str, str] | None): As :meth:`run` takes it.
             basepath (str): As :meth:`run` takes it: the directory the run would write into.
             tool_registry (Tools | None): As :meth:`compile` takes it.
+            config (RunConfig | None): As :meth:`run` takes it.
             workflow_paths (Mapping[str, Mapping[str, Path]] | None): As :meth:`run` takes it.
             target (TargetName): The target to check for.
             lang_version (str | None): As :meth:`compile` takes it.
             inference (Inference): As :meth:`compile` takes it.
             policy (RunPolicy): As :meth:`compile` takes it.
             runner (Runner | None): As :meth:`run` takes it.
-            outdir (str): As :meth:`run` takes it.
             inputs_file (str): As :meth:`run` takes it.
-            quiet (bool): As :meth:`run` takes it.
             generate_run_script (bool): As :meth:`run` takes it: the programs checked are those ``run.sh`` calls.
 
         Returns:
@@ -1085,9 +1087,9 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
                 for each problem, all at once, as :meth:`run` raises them and ``--check`` exits 1 on them.
             ValueError: No target has that name, or as :meth:`run` raises it.
         """
-        run = _run_settings(target, runner, run_args_dict, outdir, inputs_file, quiet, generate_run_script)
-        return _check_workflow(self, _RunOptions(run, None, basepath, tool_registry, workflow_paths, inference,
-                                                 policy, lang_version))
+        return _check_workflow(self, _RunOptions(
+            *_run_settings(target, runner, run_args_dict, config, inputs_file, generate_run_script), None, basepath,
+            tool_registry, workflow_paths, inference, policy, lang_version))
 
     def draw(  # pylint: disable=too-many-arguments
         self,
@@ -1154,14 +1156,13 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
         basepath: str = DEFAULT_BASEPATH,
         tool_registry: Tools | None = None,
         *,
+        config: RunConfig | None = None,
         workflow_paths: Mapping[str, Mapping[str, Path]] | None = None,
         inference: Inference = Inference(),
         policy: RunPolicy = RunPolicy(),
         target: TargetName = "cwl",
         runner: Runner | None = None,
-        outdir: str = _RUN.outdir,
         inputs_file: str = _RUN.inputs_file,
-        quiet: bool = _RUN.quiet,
         generate_run_script: bool = _RUN.generate_run_script,
     ) -> RunResult | None:
         """Compile and execute this workflow locally, and wait for it: :meth:`start`, then ``collect()``.
@@ -1170,21 +1171,29 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
         shaped ``{namespace: {stem: path}}`` like ``sophios.plugins.get_yml_paths``.
 
         A relative File or Directory path bound in Python is read from the working
-        directory, as Python reads one.
+        directory, as Python reads one, or from ``config``'s ``relative_to``. A
+        ``StepInput(default=...)`` path is read from the working directory while compiling.
 
         The run writes the one document ``compile()`` returns to
         ``<basepath>/<name>.cwl``, with its job file beside it, and runs exactly
         that. With ``target="nextflow"`` it writes the pipeline to ``<basepath>/nextflow_<name>``,
         runs it with Nextflow and prints each note the compile and the lowering made on stderr, as the
-        command line does; the outputs are in
-        ``<basepath>/nextflow_<name>/work``, Nextflow's work directory.
+        command line does; once the run has finished the pipeline copies the outputs into the outputs folder,
+        and they stay in ``<basepath>/nextflow_<name>/work``, Nextflow's work directory, too.
 
         Args:
-            run_args_dict (dict[str, str] | None): Deprecated: pass `runner` and the keywords below. A
+            run_args_dict (dict[str, str] | None): Deprecated: pass `runner`, `config` and the keywords below;
+                its ``quiet`` is ``Cwltool(quiet=...)``, and its ``outdir`` wins over `config`'s outputs folder. A
                 DeprecationWarning says how each key maps; it is refused with `runner`.
             user_env_vars (dict[str, str] | None): Environment variables to expose to the run.
             basepath (str): Directory used for generated files and execution artifacts.
             tool_registry (Tools | None): Optional tool registry override.
+            config (RunConfig | None): Where the outputs go, the same :class:`RunConfig` the compute service
+                takes: its outputs folder, relative to its ``relative_to``, else to the working directory, or
+                absolute, which may exist and hold files; with none, ``<basepath>/outdir_<runner>_<name>_<time>``.
+                Its ``relative_to`` is also where a relative File or Directory bound in Python is read from, and its
+                ``log_level`` is Toil's ``--logLevel``, before the runner's own flags. Its Slurm settings are not
+                used here.
             workflow_paths (Mapping[str, Mapping[str, Path]] | None): The
                 ``.wic`` files a real-time analysis may be.
             inference (Inference): How an unbound input is connected; the run
@@ -1197,9 +1206,7 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
                 given as they are and its own settings: ``Toil('--batchSystem', 'slurm',
                 container_engine='podman')``, ``Nextflow('-process.executor', 'slurm', '-resume')``. None
                 is the target's first runner: ``Cwltool()``, or ``Nextflow()`` under ``target="nextflow"``.
-            outdir (str): The runner's output directory; '' for one under ``basepath``. CWL only.
             inputs_file (str): A job file whose values win over the workflow's, or ''. CWL only.
-            quiet (bool): Hide cwltool's own log; each tool's own messages still print. Only cwltool reads it.
             generate_run_script (bool): Write ``run.sh`` with the runner's command instead of running it.
 
         Returns:
@@ -1210,16 +1217,18 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
 
         Raises:
             SophiosError: The workflow does not compile, or this machine cannot run it.
-            ValueError: If a `user_env_vars` key is not an environment variable name, `runner` is not one
-                of the target's runners (``Nextflow()`` needs ``target="nextflow"``), `run_args_dict` is
-                given with it, or under ``target="nextflow"`` `outdir`, `inputs_file` or a `run_args_dict` key
-                only a CWL run reads is given.
+            ValueError: If a `user_env_vars` key is not an environment variable name, `config` gives
+                ``relative_to`` with no outputs folder, a ``relative_to`` that is not absolute, or one with an
+                absolute outputs folder, `runner` is not one of the target's runners (``Nextflow()`` needs
+                ``target="nextflow"``), `run_args_dict` is given with it, or under ``target="nextflow"``
+                `inputs_file` or a `run_args_dict` key only a CWL run reads is given, or `runner`'s container engine
+                is neither ``docker`` nor ``singularity``.
             WorkflowRunError: If the runner exits non-zero. Its `exit_code` is the runner's.
             KeyboardInterrupt: On Ctrl-C, after the runner was stopped.
         """
-        run = _run_settings(target, runner, run_args_dict, outdir, inputs_file, quiet, generate_run_script)
-        return _run_workflow(self, _RunOptions(run, user_env_vars, basepath, tool_registry, workflow_paths,
-                                               inference, policy))
+        return _run_workflow(self, _RunOptions(
+            *_run_settings(target, runner, run_args_dict, config, inputs_file, generate_run_script), user_env_vars,
+            basepath, tool_registry, workflow_paths, inference, policy))
 
     def start(  # pylint: disable=too-many-arguments
         self,
@@ -1228,14 +1237,13 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
         basepath: str = DEFAULT_BASEPATH,
         tool_registry: Tools | None = None,
         *,
+        config: RunConfig | None = None,
         workflow_paths: Mapping[str, Mapping[str, Path]] | None = None,
         inference: Inference = Inference(),
         policy: RunPolicy = RunPolicy(),
         target: TargetName = "cwl",
         runner: Runner | None = None,
-        outdir: str = _RUN.outdir,
         inputs_file: str = _RUN.inputs_file,
-        quiet: bool = _RUN.quiet,
     ) -> RunHandle:
         """Compile this workflow, prepare its run, start its runner, and return without waiting for it.
 
@@ -1254,15 +1262,14 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
             user_env_vars (dict[str, str] | None): Environment variables to expose to the run.
             basepath (str): Directory used for generated files and execution artifacts.
             tool_registry (Tools | None): Optional tool registry override.
+            config (RunConfig | None): As :meth:`run` takes it.
             workflow_paths (Mapping[str, Mapping[str, Path]] | None): The
                 ``.wic`` files a real-time analysis may be.
             inference (Inference): How an unbound input is connected.
             policy (RunPolicy): As :meth:`run` takes it.
             target (TargetName): As :meth:`run` takes it.
             runner (Runner | None): As :meth:`run` takes it.
-            outdir (str): As :meth:`run` takes it.
             inputs_file (str): As :meth:`run` takes it.
-            quiet (bool): As :meth:`run` takes it.
 
         Returns:
             RunHandle: The started run.
@@ -1271,9 +1278,9 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
             SophiosError: The workflow does not compile, or this machine cannot run it.
             ValueError: As :meth:`run` raises it, and for a ``generate_run_script`` key of `run_args_dict`.
         """
-        run = _run_settings(target, runner, run_args_dict, outdir, inputs_file, quiet, False)
-        return _start_workflow(self, _RunOptions(run, user_env_vars, basepath, tool_registry, workflow_paths,
-                                                 inference, policy))
+        return _start_workflow(self, _RunOptions(
+            *_run_settings(target, runner, run_args_dict, config, inputs_file, False), user_env_vars, basepath,
+            tool_registry, workflow_paths, inference, policy))
 
     async def run_async(  # pylint: disable=too-many-arguments
         self,
@@ -1282,14 +1289,13 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
         basepath: str = DEFAULT_BASEPATH,
         tool_registry: Tools | None = None,
         *,
+        config: RunConfig | None = None,
         workflow_paths: Mapping[str, Mapping[str, Path]] | None = None,
         inference: Inference = Inference(),
         policy: RunPolicy = RunPolicy(),
         target: TargetName = "cwl",
         runner: Runner | None = None,
-        outdir: str = _RUN.outdir,
         inputs_file: str = _RUN.inputs_file,
-        quiet: bool = _RUN.quiet,
         generate_run_script: bool = _RUN.generate_run_script,
     ) -> RunResult | None:
         """:meth:`run`, as a coroutine that never blocks the event loop.
@@ -1308,15 +1314,14 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
             user_env_vars (dict[str, str] | None): Environment variables to expose to the run.
             basepath (str): Directory used for generated files and execution artifacts.
             tool_registry (Tools | None): Optional tool registry override.
+            config (RunConfig | None): As :meth:`run` takes it.
             workflow_paths (Mapping[str, Mapping[str, Path]] | None): Unused here: they
                 name real-time analyses, which are refused.
             inference (Inference): How an unbound input is connected.
             policy (RunPolicy): As :meth:`run` takes it.
             target (TargetName): As :meth:`run` takes it.
             runner (Runner | None): As :meth:`run` takes it.
-            outdir (str): As :meth:`run` takes it.
             inputs_file (str): As :meth:`run` takes it.
-            quiet (bool): As :meth:`run` takes it.
             generate_run_script (bool): As :meth:`run` takes it.
 
         Returns:
@@ -1328,9 +1333,9 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
             WorkflowRunError: If the runner exits non-zero.
             asyncio.CancelledError: When the awaiting task is cancelled, after the runner was stopped.
         """
-        run = _run_settings(target, runner, run_args_dict, outdir, inputs_file, quiet, generate_run_script)
-        return await _run_workflow_async(self, _RunOptions(run, user_env_vars, basepath, tool_registry,
-                                                           workflow_paths, inference, policy))
+        return await _run_workflow_async(self, _RunOptions(
+            *_run_settings(target, runner, run_args_dict, config, inputs_file, generate_run_script), user_env_vars,
+            basepath, tool_registry, workflow_paths, inference, policy))
 
     def _as_workflow_step(self) -> nodes.Step:
         """Return this workflow as a step naming its own ``.wic`` document, with its anchored outputs."""

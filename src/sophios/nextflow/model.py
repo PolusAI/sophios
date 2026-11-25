@@ -25,7 +25,7 @@ NF_INPUT_HELPER = "__sophios_input_9f72e"
 NF_STEP_INPUT_HELPER = "__sophios_step_input_9f72e"
 NF_FLOAT_TEXT_HELPER = "__sophios_float_text_9f72e"
 NF_OUTPUT_HELPER = "__sophios_output_9f72e"
-# The service form's channel of every workflow output's value, in the entry workflow (design §4.5).
+# The channel of every workflow output's published value, in the entry workflow (design §4.5).
 NF_OUTPUTS_NAME = "__sophios_outputs_9f72e"
 NF_INTERNAL_IDENTIFIERS = frozenset({
     NF_SHELL_QUOTE_HELPER, NF_LOAD_CONTENTS_HELPER, NF_FINITE_HELPER, NF_ROUND_HELPER,
@@ -1258,7 +1258,7 @@ class ExecutableNextflowWorkflow(_Model):
 
     @property
     def containers_enabled(self) -> bool:
-        """Whether Docker is enabled: some process declares a container.
+        """Whether the container engine is enabled: some process declares a container.
 
         Returns:
             bool: True when any process declares a container. Nextflow runs a

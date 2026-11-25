@@ -30,7 +30,7 @@ examples/scripts/count_words.py:
     - {id: append}
     - {id: word_count, in: {exact: {text: {source: append/file}}}, run: {baseCommand: [wc, -w], stdout: counts.txt}}
 examples/scripts/ichnaea_compact.py:
-  why: with a basepath the compute service requires the outputs folder, relative to it; the output folder is a name
+  why: with relative_to, the request's basepath, the service requires the outputs folder; the output folder is a name
   call: main
   printed:
     basepath: /projects/collabs/mock_common

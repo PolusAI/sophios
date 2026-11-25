@@ -120,10 +120,10 @@ def test_the_command_line_builds_the_run_python_spells() -> None:
     assert run('--quiet', '--cwl_runner', 'toil-cwl-runner', '--container_engine', 'podman', '--no_provenance',
                '--outdir', 'out', '--inputs_file', 'job.yml', '--generate_run_script', '--passthrough_flags', 'yes',
                '--batchSystem', 'slurm', '--cachedir', 'cache') == RunSettings(
-        Toil('--batchSystem', 'slurm', container_engine='podman', provenance=False), 'out', 'job.yml', True, True)
+        Toil('--batchSystem', 'slurm', container_engine='podman', provenance=False), 'out', 'job.yml', True)
     assert run('--quiet', '--cachedir', 'cache', '--docker_remove_entrypoints', '--ignore_docker_install',
                '--ignore_docker_processes', '--passthrough_flags', 'yes', '--logLevel', 'INFO') == RunSettings(
         Cwltool('--logLevel', 'INFO', cachedir='cache', remove_entrypoints=True, ignore_install=True,
-                ignore_processes=True), quiet=True)
+                ignore_processes=True, quiet=True))
     assert run('--target', 'nextflow', '--run_local', '--passthrough_flags', 'yes', '-resume') == RunSettings(
-        Nextflow('-resume'), '', '', False, False)
+        Nextflow('-resume'), '', '', False)

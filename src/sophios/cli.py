@@ -7,6 +7,7 @@ from . import __version__
 from .compiler import CompileSettings
 from .ir.policy import RunPolicy
 from .lang.error_codes import SophiosErrorCode
+from .nextflow.render import NF_ENGINE_CONFIG
 from .runtime import runners
 from .runtime.runners import Cwltool, RunSettings, runners_of
 from .wic_types import DEFAULT_BASEPATH, TARGET_NAMES, GraphSettings
@@ -118,13 +119,22 @@ group_run.add_argument('--check', default=False, action="store_true",
                        help='Compile, then check that this machine can run the result (the container '
                             'engine when a step uses one, the input paths, the directories Sophios '
                             'writes, the programs it calls; under `--target nextflow`, the input paths, '
-                            'that `nextflow` starts and, when a process has a container, that Docker '
-                            'works) and stop; nothing is written, pulled or run, so `--graphviz` is '
-                            'refused. In Python, `Workflow.check()`.')
+                            'the outputs folder, that `nextflow` starts and, when a process has a container, '
+                            'that its container engine works) and stop; nothing is written, pulled or run, so '
+                            '`--graphviz` is refused. In Python, `Workflow.check()`.')
 group_run.add_argument('--run_local', default=False, action="store_true",
                        help='Compile, check, pull every container image, and run the workflow with the '
                             'CWL runner; under `--target nextflow`, compile, check, and run the pipeline '
                             'with Nextflow, which pulls its own images (see the Nextflow page).')
+neutral.add_argument('--outdir', type=str, required=False, default=_RUN.outdir,
+                     help="The outputs folder, made absolute: the CWL runner's output directory, or the folder "
+                          'Nextflow publishes the outputs into. Default: '
+                          '`<basepath>/outdir_<runner>_<workflow>_<timestamp>`.')
+neutral.add_argument('--container_engine', default=_CWL.container_engine,
+                     help='The command that runs containers: `docker`, `podman`, `singularity`, or another '
+                          '`docker`-compatible command; decides how images are pulled and what the runner is '
+                          'told. Under `--target nextflow`, `docker` or `singularity`, which the pipeline is '
+                          'written for.')
 neutral.add_argument('--passthrough_flags', type=str, default='no', choices=['yes', 'no'], required=False,
                      help='With `yes`, arguments Sophios does not recognise are sent to the runner '
                           'unchecked, the CWL runner or Nextflow; they also need `--run_local` or '
@@ -166,10 +176,6 @@ cwl.add_argument('--ignore_docker_install', default=_CWL.ignore_install, action=
 cwl.add_argument('--ignore_docker_processes', default=_CWL.ignore_processes, action="store_true",
                  help='Do not check the number of running Docker Desktop processes, which above 1000 can '
                       'make a run hang.')
-cwl.add_argument('--container_engine', default=_CWL.container_engine,
-                 help='The command that runs containers: `docker`, `podman`, `singularity`, or another '
-                      '`docker`-compatible command; decides how images are pulled and what the runner is '
-                      'told.')
 cwl.add_argument('--docker_remove_entrypoints', default=_CWL.remove_entrypoints, action="store_true",
                  help='A diagnostic, not for everyday runs: before a local run, rebuild each image the '
                       'workflow pulls without its `ENTRYPOINT`, to show which tools depend on one: a tool '
@@ -193,7 +199,7 @@ group_run._group_actions.append(  # pylint: disable=protected-access
                           'unless `--basepath`): `<workflow>.cwl`, `<workflow>_inputs.yml` and a '
                           '`<workflow>~<step>.cwl` for each step (see Compiling to CWL); nothing is '
                           'pulled or run.'))
-# Off unless given, where `RunSettings.quiet` is on: the command line shows cwltool's log, Python hides it.
+# Off unless given, where `Cwltool(quiet=)` is on: the command line shows cwltool's log, Python hides it.
 cwl.add_argument('--quiet', default=False, action="store_true",
                  help='With `--run_local` or `--generate_run_script`: pass `--quiet` to cwltool (never to'
                       " Toil), which hides its own log; each tool's messages still print as the run goes,"
@@ -207,9 +213,6 @@ cwl.add_argument('--cachedir', type=str, required=False, default=_CWL.cachedir,
                  help="With cwltool, cache each step's outputs in this directory, so a step whose tool "
                       'and inputs are unchanged is reused; a real-time analysis turns this on. Default: '
                       'no cache.')
-cwl.add_argument('--outdir', type=str, required=False, default=_RUN.outdir,
-                 help="The runner's output directory, made absolute. Default: "
-                      '`<basepath>/outdir_<runner>_<workflow>_<timestamp>`.')
 cwl.add_argument('--graphviz', default=False, action="store_true",
                  help="Write `<basepath>/<workflow>.wic.gv`, its PNG, and cwltool's SVG of the compiled "
                       'CWL; needs `dot` on `PATH`, else a `wic029` note and no drawing.')
@@ -241,6 +244,14 @@ def validate_target_args(args: argparse.Namespace) -> None:
         parser.error(f"--target {args.target} cannot be combined with {', '.join(foreign)}")
 
 
+def validate_container_engine(args: argparse.Namespace) -> None:
+    """Reject a container engine the Nextflow target writes no pipeline for: the user's mistake, before anything is
+    written."""
+    if args.target == 'nextflow' and args.container_engine not in NF_ENGINE_CONFIG:
+        parser.error(f"--target nextflow writes the pipeline for {' or '.join(NF_ENGINE_CONFIG)}, not for "
+                     f'--container_engine {args.container_engine}')
+
+
 def validate_success_code_range(args: argparse.Namespace) -> None:
     """Reject a success-code range whose lower bound is above its upper, which names no code."""
     low, high = args.partial_failure_success_codes_range
@@ -256,6 +267,7 @@ def get_args(yaml_path: str = '', suppliedargs: list[str] | None = None) -> argp
     """
     args = parser.parse_args(['--yaml', yaml_path] + (suppliedargs or []))
     validate_target_args(args)
+    validate_container_engine(args)
     validate_success_code_range(args)
     return args
 
@@ -294,5 +306,5 @@ def run_settings_from_args(args: argparse.Namespace, unknown_args: list[str]) ->
                            container_engine=args.container_engine, pull_dir=args.pull_dir,
                            ignore_install=args.ignore_docker_install, ignore_processes=args.ignore_docker_processes,
                            provenance=not args.no_provenance, remove_entrypoints=args.docker_remove_entrypoints,
-                           cachedir=args.cachedir)
-    return RunSettings(runner, args.outdir, args.inputs_file, args.quiet, args.generate_run_script)
+                           cachedir=args.cachedir, quiet=args.quiet)
+    return RunSettings(runner, args.outdir, args.inputs_file, args.generate_run_script)

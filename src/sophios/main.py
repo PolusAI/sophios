@@ -261,6 +261,7 @@ def main() -> None:
     """CLI entry point: run, and convert a reported failure to its diagnostics and exit code 1."""
     args, unknown_args = cli.parser.parse_known_args()
     cli.validate_target_args(args)
+    cli.validate_container_engine(args)
     cli.validate_success_code_range(args)
     try:
         _main(args, unknown_args)
@@ -375,7 +376,7 @@ def _main(args: argparse.Namespace, unknown_args: list[str]) -> None:
             return
         _run(args, run, prepared.name, realtime_plans=prepared.plans)
     elif target.write_option is None or getattr(args, target.write_option):
-        target.write(lowered, analyses, basepath, inputs_file=args.inputs_file, root_dir=root_dir)
+        target.write(lowered, analyses, basepath, run=run, root_dir=root_dir)
         draw_after_write()
     else:
         print('Please specify either --generate_cwl_workflow (compile), --check or --run_local (run)')

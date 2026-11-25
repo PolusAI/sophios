@@ -1,11 +1,14 @@
 """Read a pipeline Sophios wrote back into the model it was written from: the renderer's inverse.
 
-The reader admits exactly the text the renderer writes (design §4.2). From
-the three files Nextflow reads, ``workflow.nf``, ``nextflow_params.json``
-and ``nextflow.config``, it reads each fact the text states once, through
-the idiom table the renderer fills (:class:`sophios.nextflow.render.Idioms`),
-builds the model, and renders it again: the files must be that rendering,
-so each form the text shows only through others is checked, never read.
+The reader admits exactly the text the renderer writes (design §4.2), in
+each of its forms: for Docker or Singularity, which ``nextflow.config``
+names, and with or without the record of its outputs. From the three files
+Nextflow reads, ``workflow.nf``, ``nextflow_params.json`` and
+``nextflow.config``, it reads each fact the text states once, through the
+idiom table the renderer fills (:class:`sophios.nextflow.render.Idioms`),
+builds the model, and renders it again in that form: the files must be that
+rendering, so each form the text shows only through others is checked,
+never read.
 Anything else stops the read with a coded diagnostic at its line, and
 nothing is returned.
 
@@ -21,7 +24,7 @@ import json
 import math
 from pathlib import Path
 import re
-from typing import Any, NoReturn
+from typing import Any, Final, NoReturn
 
 from .render import (
     NEXTFLOW_CONFIG,
@@ -32,7 +35,10 @@ from .render import (
     NF_ENTRYPOINT_READ,
     NF_ENTRYPOINT_WORDS,
     NF_HELPER_FUNCTIONS,
+    NF_OUTPUT_MARKER,
+    NF_RUNSCRIPT_READ,
     NF_STEP_INPUT_CARRIER,
+    NF_TASK_HOME,
     NF_STUB_LINES,
     Idioms,
     nextflow_params,
@@ -82,6 +88,11 @@ _STREAMS = {"<": "stdin", ">": "stdout", "2>": "stderr"}
 _CLOSERS = {"(": ")", "[": "]", "{": "}", "'": "'", '"': '"'}
 #: A JSON string, whose brackets nest nothing, or a bracket.
 _JSON_BRACKET = re.compile(r'"(?:[^"\\]|\\.)*"|[][{}]')
+#: Each helper the renderer may write, by its first line, which the two forms of the publishing helper share.
+_HELPERS: Final = {first: [helper for helper in NF_HELPER_FUNCTIONS if helper.split("\n", 1)[0] == first]
+                   for first in {helper.split("\n", 1)[0] for helper in NF_HELPER_FUNCTIONS}}
+#: A local variable the entry workflow declares, where a `def` is not a helper.
+_VARIABLE = re.compile(rf"def[ \t]+{GROOVY_IDENTIFIER.pattern}[ \t]*=")
 
 
 @dataclass(frozen=True, slots=True)
@@ -165,7 +176,6 @@ def _code(line: str, comment: bool) -> tuple[str, bool]:
 def _lines(file: str, text: str) -> list[_Line]:
     """The lines of ``text`` without layout; a script or stub body and each helper are kept as written."""
     raw = text.split("\n")
-    helpers = {helper.split("\n", 1)[0]: helper for helper in NF_HELPER_FUNCTIONS}
     lines: list[_Line] = []
     index, comment, body, opened = 0, False, False, 0
     while index < len(raw):
@@ -180,9 +190,11 @@ def _lines(file: str, text: str) -> list[_Line]:
             line, body = _Line(file, line.number, line.text[start + 3:]), False
         if body:
             lines.append(line)
-        elif not comment and line.verbatim and line.text.startswith("def ", start):
-            helper = helpers.get(line.text[start:], "")
-            if "\n".join([line.text[start:], *raw[index + 1:index + helper.count("\n") + 1]]) != helper:
+        elif not comment and line.verbatim and line.text.startswith("def ", start) and not _VARIABLE.match(
+                line.text, start):
+            helper = next((written for written in _HELPERS.get(line.text[start:], []) if "\n".join(
+                [line.text[start:], *raw[index + 1:index + written.count("\n") + 1]]) == written), None)
+            if helper is None:
                 line.stop(_Code.IMPORT_EDITED_HELPER, "a def that is not a helper Sophios writes, byte for byte")
             lines.append(_Line(file, line.number, helper, verbatim=True))
             index += helper.count("\n")
@@ -224,7 +236,8 @@ def _depth(line: _Line) -> int:
 def _top(lines: list[_Line]) -> tuple[list[_Line], dict[str, list[_Line]], list[list[_Line]]]:
     """The top-level lines but the process blocks, the process blocks by name, and the workflow blocks.
 
-    The process blocks lie together between the helpers and the workflows, in any order.
+    The process blocks lie together between the helpers and the workflows, in any order; the output block, a top-level
+    line, after them.
     """
     others: list[_Line] = []
     processes: dict[str, list[_Line]] = {}
@@ -239,7 +252,7 @@ def _top(lines: list[_Line]) -> tuple[list[_Line], dict[str, list[_Line]], list[
             index += 1
             continue
         process = Idioms.PROCESS.match(line.text)
-        if process is None and Idioms.WORKFLOW.match(line.text) is None and line.text != "workflow {":
+        if process is None and Idioms.WORKFLOW.match(line.text) is None and line.text not in ("workflow {", "output {"):
             line.stop(_Code.IMPORT_FOREIGN_STATEMENT, "a top-level statement Sophios does not write")
         end, depth = index, _depth(line)
         while depth > 0 and end + 1 < len(lines):
@@ -249,7 +262,8 @@ def _top(lines: list[_Line]) -> tuple[list[_Line], dict[str, list[_Line]], list[
             line.stop(_Code.IMPORT_FOREIGN_STATEMENT, "a block that does not close")
         block = lines[index:end + 1]
         if process is None:
-            workflows.append(block)
+            if line.text != "output {":
+                workflows.append(block)
             others.extend(block)
         elif workflows:
             line.stop(_Code.IMPORT_MISMATCH, "a process Sophios writes before the workflows")
@@ -382,12 +396,15 @@ def _command(body: list[_Line], head: _Line) -> tuple[NfCommand, dict[str, NfEnt
     index = 0
     try:
         for index, text in enumerate(texts):
+            # What the engine writes around the command is read from the configuration, and checked by the rendering.
+            if text.startswith("if [ -e ") or text in (NF_TASK_HOME, NF_ENTRYPOINT_READ, NF_RUNSCRIPT_READ):
+                continue
             if found := Idioms.ENTRY.match(text):
                 name = None if Idioms.ENTRY_NAME.match(found["entry"]) else _literal(found["entry"])
                 entries[found["name"]] = NfEntry(name, found["operator"] == "cp -RL")
             elif found := Idioms.EXPORT.match(text):
                 env.append(NfEnvVar(found["name"], _template(found["value"])))
-            elif not (text.startswith("if [ -e ") or text == NF_ENTRYPOINT_READ):
+            else:
                 break
         rest = texts[index:]
         parenthesized = len(rest) == 3 and rest[0] == "(" and rest[2].startswith(")")
@@ -819,7 +836,9 @@ def read_nextflow(directory: str | Path) -> tuple[ExecutableNextflowWorkflow, di
 
     The reader is the renderer's inverse (design §4.2): from the three files
     Nextflow reads it returns the model they were written from, and that
-    model renders the same files, up to layout. It reads nothing else:
+    model renders the same files, up to layout, in the form they were
+    written in: for the engine ``nextflow.config`` names, and with the
+    record of the outputs when the entry workflow prints it. It reads nothing else:
     not ``nextflow_workflow.json``, no tool registry, no network, and no
     path a parameter names. Beside the model, it gives the line each
     process block and the named workflow block begins at, by name.
@@ -852,10 +871,15 @@ def read_nextflow(directory: str | Path) -> tuple[ExecutableNextflowWorkflow, di
     params_file = str(folder / NEXTFLOW_PARAMS)
     params_text = _read(folder / NEXTFLOW_PARAMS, _Code.IMPORT_PARAMS)
     params = _params(params_file, params_text, parameters)
+    config_file = str(folder / NEXTFLOW_CONFIG)
+    config = _lines(config_file, _read(folder / NEXTFLOW_CONFIG, _Code.IMPORT_CONFIG))
+    engine = "singularity" if config and config[0].text.startswith("singularity") else "docker"
     try:  # a condition its run: line reads that is too deep to build into the workflow or render, past that line
         model = _workflow(workflows[0], processes := {name: _process(block) for name, block in blocks.items()},
                           parameters, params)
-        rendered, written = render_nextflow(model), nextflow_params(model)
+        rendered = render_nextflow(model, engine=engine,
+                                   record=any(NF_OUTPUT_MARKER in line.text for line in workflows[1]))
+        written = nextflow_params(model)
     except RecursionError as exc:
         workflows[0][0].stop(_Code.IMPORT_FOREIGN_STATEMENT, f"a condition Sophios does not write ({exc})")
     rendered_others, rendered_blocks, _ = _top(_lines(script_file, rendered))
@@ -872,8 +896,6 @@ def read_nextflow(directory: str | Path) -> tuple[ExecutableNextflowWorkflow, di
     for name in sorted(given):
         if json.dumps(written[name], sort_keys=True) != json.dumps(given[name], sort_keys=True):
             _key(params_file, params_text, name).stop(_Code.IMPORT_PARAMS, f"not the value Sophios writes for {name!r}")
-    config_file = str(folder / NEXTFLOW_CONFIG)
-    config = _lines(config_file, _read(folder / NEXTFLOW_CONFIG, _Code.IMPORT_CONFIG))
-    _same(config, _lines(config_file, render_nextflow_config(model)), _Code.IMPORT_CONFIG,
+    _same(config, _lines(config_file, render_nextflow_config(model, engine)), _Code.IMPORT_CONFIG,
           _Line(config_file, 1, ""))
     return model, {name: block[0].span for name, block in blocks.items()} | {model.name: workflows[0][0].span}

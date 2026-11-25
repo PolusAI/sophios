@@ -8,6 +8,7 @@ import argparse
 import asyncio
 import copy
 import logging
+import os
 import warnings
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
@@ -43,7 +44,8 @@ from sophios.runtime.local import RunHandle
 from sophios.nextflow.lower import nextflow_names
 from sophios.nextflow.model import ExecutableNextflowWorkflow
 from sophios.nextflow.render import nextflow_params, render_nextflow
-from sophios.runtime.runners import Cwltool, Nextflow, Runner, RunSettings, Toil  # pylint: disable=unused-import
+from sophios.runtime.runners import (  # pylint: disable=unused-import  # workflow.py re-exports them
+    Cwltool, Nextflow, RunConfig, Runner, RunSettings, SlurmSettings, Toil, read_config)
 from sophios.runtime.status import RunResult
 from sophios.wic_types import DEFAULT_BASEPATH, GraphSettings, Json, StepId, Tool, Tools, Yaml
 
@@ -466,8 +468,8 @@ def service_pipeline(workflow: "Workflow", *, tool_registry: Tools | None = None
     if renamed:
         raise SophiosError(Diagnostic(Severity.ERROR, SophiosErrorCode.NEXTFLOW_OUTPUT_RENAMED, refusal(*names))
                            for names in renamed.items())
-    return ServicePipeline(executable, render_nextflow(executable, service=True), nextflow_params(executable),
-                           result.realtime)
+    return ServicePipeline(executable, render_nextflow(executable, engine="singularity", record=False),
+                           nextflow_params(executable), result.realtime)
 
 
 def compiled_workflow_from_result(
@@ -535,7 +537,7 @@ def check_workflow(workflow: "Workflow", options: "RunOptions") -> tuple[Diagnos
     result, analyses = _compiled_for_run(workflow, options, refuse_realtime=False, check=True)
     analysis_notes = tuple(note for analysis in analyses for note in analysis.diagnostics)
     try:
-        lowered, bound = _lowered_for_run(row, workflow, result)
+        lowered, bound = _lowered_for_run(row, workflow, result, options.relative_to)
     except NotLowered as refused:
         return (*result.diagnostics, *analysis_notes, *refused.diagnostics)
     _prepared(workflow, options, lowered=lowered, bound=bound, analyses=analyses, check=True)
@@ -563,7 +565,7 @@ def _from_run_args_dict(target: str, run_args_dict: Mapping[str, Any], given: Ru
         raise ValueError(f"target={target!r} runs no CWL runner, so it takes none of the run_args_dict keys "
                          f"only a CWL run reads: {', '.join(map(repr, refused))}")
     args = cli.get_args()
-    vars(args).update(target=target, outdir=given.outdir, inputs_file=given.inputs_file, quiet=given.quiet,
+    vars(args).update(target=target, outdir=given.outdir, inputs_file=given.inputs_file, quiet=given.runner.quiet,
                       generate_run_script=given.generate_run_script)
     flags: list[str] = []
     for key, value in run_args_dict.items():
@@ -579,31 +581,38 @@ def _from_run_args_dict(target: str, run_args_dict: Mapping[str, Any], given: Ru
 
 
 def run_settings(  # pylint: disable=too-many-arguments,too-many-positional-arguments
-    target: str, runner: Runner | None, run_args_dict: Mapping[str, Any] | None, outdir: str, inputs_file: str,
-    quiet: bool, generate_run_script: bool,
-) -> RunSettings:
-    """The run `Workflow.run` and its siblings are asked for, as the one value the run path takes.
+    target: str, runner: Runner | None, run_args_dict: Mapping[str, Any] | None, config: RunConfig | None,
+    inputs_file: str, generate_run_script: bool,
+) -> tuple[RunSettings, str]:
+    """The run `Workflow.run` and its siblings are asked for, as the one value the run path takes, its outputs folder
+    `config`'s (or `run_args_dict`'s) and its log level Toil's first flags; and `config`'s `relative_to`, '' for none.
 
     Raises:
-        ValueError: No target has that name; `runner` is none of its runners, or `run_args_dict` is given with it,
-            names a `cwl_runner` the target lacks, or has a key only a CWL run reads; or, for the target `nextflow`,
-            `outdir` or `inputs_file` is given.
+        ValueError: No target has that name; `config`'s outputs folder and `relative_to` do not go together
+            (`read_config`); `runner` is none of the target's runners, or `run_args_dict` is given with it, names a
+            `cwl_runner` the target lacks, or has a key only a CWL run reads; or, for the target `nextflow`,
+            `inputs_file` is given.
     """
     targets.target(target)  # the name is checked before anything is read from `run_args_dict`
     if runner is not None and run_args_dict is not None:
         raise ValueError("pass runner= or run_args_dict, not both: run_args_dict is deprecated and names its "
                          "runner as cwl_runner")
-    settings = RunSettings(targets.resolve(target, runner), outdir, inputs_file, quiet, generate_run_script)
+    read = read_config(config, local=True)
+    if read.problems:
+        raise ValueError("\n".join(read.problems))
+    outdir = os.path.join(read.relative_to or "", read.out_dir or "")  # '' for none: the runner's default
+    settings = RunSettings(targets.resolve(target, runner), outdir, inputs_file, generate_run_script)
     if run_args_dict is not None:
-        warnings.warn("run_args_dict is deprecated: pass runner=Cwltool(...), Toil(...) or Nextflow(...), and "
-                      "outdir=, inputs_file=, quiet= and generate_run_script= to run() instead",
-                      DeprecationWarning, stacklevel=3)
+        warnings.warn("run_args_dict is deprecated: pass runner=Cwltool(...), Toil(...) or Nextflow(...), "
+                      "config=RunConfig(outputs folder), inputs_file= and generate_run_script= to run() instead, "
+                      "and quiet as Cwltool(quiet=...)", DeprecationWarning, stacklevel=3)
         settings = _from_run_args_dict(target, run_args_dict, settings)
-    given = [name for name, value in (("outdir", settings.outdir), ("inputs_file", settings.inputs_file)) if value]
-    if settings.runner.target != "cwl" and given:
+    if read.log_level is not None and isinstance(toil := settings.runner, Toil):
+        settings = replace(settings, runner=toil.evolve(flags=("--logLevel", read.log_level, *toil.flags)))
+    if settings.runner.target != "cwl" and settings.inputs_file:
         raise ValueError(f"target={target!r} runs no CWL runner, so it takes none of the run() settings only a CWL "
-                         f"run reads: {', '.join(map(repr, given))}")
-    return settings
+                         "run reads: 'inputs_file'")
+    return settings, read.relative_to or ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -611,6 +620,7 @@ class RunOptions:  # pylint: disable=too-many-instance-attributes
     """What `Workflow.run()`, `start()` and `run_async()` are given, besides the workflow: see `Workflow.run`."""
 
     run: RunSettings
+    relative_to: str  # where a relative File or Directory bound in Python is read from; '' for the working directory
     user_env_vars: dict[str, str] | None = None
     basepath: str = DEFAULT_BASEPATH
     tool_registry: Tools | None = None
@@ -641,7 +651,7 @@ def _run_request(workflow: "Workflow", options: RunOptions, *, refuse_realtime: 
     row = targets.target(options.run.runner.target)
     logger.info("Running %s", workflow.process_name)
     result, analyses = _compiled_for_run(workflow, options, refuse_realtime=refuse_realtime, check=False)
-    lowered, bound = _lowered_for_run(row, workflow, result)
+    lowered, bound = _lowered_for_run(row, workflow, result, options.relative_to)
     report(lowered.notes)
     request = _prepared(workflow, options, lowered=lowered, bound=bound, analyses=analyses, check=False)
     analysis_notes = tuple(note for analysis in analyses for note in analysis.diagnostics)
@@ -675,12 +685,12 @@ def _compiled_for_run(workflow: "Workflow", options: RunOptions, *, refuse_realt
     return result, analyses
 
 
-def _lowered_for_run(row: targets.Target[Any], workflow: "Workflow",
-                     result: CompilationResult) -> tuple[setup.Lowered[Any], Yaml]:
-    """`result` lowered by `row` for a runner, which does not run where the workflow's relative paths are read, and
-    the values bound in the workflow as the author wrote their paths."""
+def _lowered_for_run(row: targets.Target[Any], workflow: "Workflow", result: CompilationResult,
+                     relative_to: str) -> tuple[setup.Lowered[Any], Yaml]:
+    """`result` lowered by `row` for a runner, which does not run where the workflow's relative paths are read (from
+    `relative_to`, or the working directory), and the values bound in the workflow as the author wrote their paths."""
     view = _view(workflow, result)
-    return row.lower(targets.for_run(row, view, Path.cwd())), row.run_values(view)
+    return row.lower(targets.for_run(row, view, Path.cwd() / relative_to)), row.run_values(view)
 
 
 # pylint: disable-next=too-many-arguments
@@ -698,7 +708,7 @@ def _prepared(workflow: "Workflow", options: RunOptions, *,
                          for analysis in analyses)
     prepared = targets.backend(run.runner).prepare(
         lowered, analyses, Path(options.basepath),
-        setup.Settings(run, Path.cwd(), bound, inputs_file_named="inputs_file", check=check))
+        setup.Settings(run, Path.cwd() / options.relative_to, bound, inputs_file_named="inputs_file", check=check))
     return backends.RunRequest(workflow.process_name, Path(options.basepath), run,
                                env=dict(options.user_env_vars or {}), realtime_plans=prepared.plans)
 

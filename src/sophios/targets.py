@@ -25,7 +25,7 @@ from .nextflow.tool import local_locations_as_paths
 from .runtime import realtime
 from .runtime.backends import Backend, CwltoolBackend, NextflowBackend, ToilBackend
 from .runtime.inputs import name_output_targets, output_target_inputs
-from .runtime.runners import RUNNERS, Cwltool, Nextflow, Runner, Toil, build, named
+from .runtime.runners import RUNNERS, Cwltool, Nextflow, Runner, RunSettings, Toil, build, named
 from .runtime.setup import Lowered
 
 ModelT = TypeVar('ModelT')
@@ -62,9 +62,9 @@ class Target(Protocol[ModelT]):
         """Remove what an earlier write of this target left under `basepath`, so a refused workflow leaves none."""
 
     def write(self, lowered: Lowered[ModelT], analyses: tuple[realtime.Analysis, ...], basepath: Path, *,
-              inputs_file: str, root_dir: Path) -> None:
-        """Write the model under `basepath`, with the real-time analyses it runs; `inputs_file` holds values that
-        win over the workflow's, and a relative path is read against `root_dir`."""
+              run: RunSettings, root_dir: Path) -> None:
+        """Write the model under `basepath` for `run`'s runner, with the real-time analyses it runs; `run.inputs_file`
+        holds values that win over the workflow's, and a relative path is read against `root_dir`."""
 
 
 class _Cwl:
@@ -87,9 +87,9 @@ class _Cwl:
         """Nothing: a write replaces every document it names."""
 
     def write(self, lowered: Lowered[CompilationArtifact], analyses: tuple[realtime.Analysis, ...], basepath: Path,
-              *, inputs_file: str, root_dir: Path) -> None:
+              *, run: RunSettings, root_dir: Path) -> None:
         """Each document under its own name, the root's job, and each analysis beside them."""
-        cwl_io.write_artifacts_to_disk(lowered.model, basepath, inputs_file,
+        cwl_io.write_artifacts_to_disk(lowered.model, basepath, run.inputs_file,
                                        output_targets=output_target_inputs(lowered.view))
         realtime.write(analyses, basepath, lowered.model.name, root_dir)
 
@@ -116,12 +116,12 @@ class _Nextflow:
         io_nf.remove_nextflow_artifacts(basepath)
 
     def write(self, lowered: Lowered[ExecutableNextflowWorkflow], analyses: tuple[realtime.Analysis, ...],
-              basepath: Path, *, inputs_file: str, root_dir: Path) -> None:
-        """The pipeline, its configuration, its parameters and its model."""
+              basepath: Path, *, run: RunSettings, root_dir: Path) -> None:
+        """The pipeline, for the runner's container engine, its configuration, its parameters and its model."""
         # A real-time analysis watches cwltool's job directories, which a Nextflow run has none of, and an inputs
         # file is a CWL runner's: neither is written, and no relative path of theirs is read.
-        del analyses, inputs_file, root_dir
-        io_nf.write_nextflow_artifacts(lowered.model, basepath)
+        del analyses, root_dir
+        io_nf.write_nextflow_artifacts(lowered.model, basepath, run.runner.container_engine)
 
 
 #: Every target, by name.
