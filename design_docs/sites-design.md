@@ -360,7 +360,8 @@ the site. Problems only a site has (it cannot be reached, a scheduler command is
     arguments, from one function in `sophios.sites`. The backend never learns of sites, so lifting the non-goal
     later deletes a sentence and changes no code. *Its channel is replaced by 25.*
 19. **2026-11-09: Nextflow's containerized processes stay Docker-only on a site**, the restriction of the pipeline
-    `compile()` writes; Apptainer would be a change to that pipeline.
+    `compile()` writes; Apptainer would be a change to that pipeline. *Its premise went with 29: the pipeline is
+    written for Singularity too.*
 20. **2026-11-09: the default runners:** a machine runs the target's default (cwltool for `cwl`, as locally); Slurm
     runs `toil-cwl-runner` for `cwl`. *Replaced by 22.*
 21. **2026-11-09: no resume until Sites has met real use.** (It was open question 1; the 2026-10-29 design's "Later:
@@ -390,6 +391,74 @@ the site. Problems only a site has (it cannot be reached, a scheduler command is
     compete with the ones the site sets. So `check` and `submit` take `target=` alone, nothing is refused for its
     runner, `wic063` is only a runner that `bin` lacks, that does not run there or that is too old, and 17's test
     walks the targets.
+28. **2026-11-24: one `RunConfig` for every place a run runs.** A local run (`Workflow.run(config=)`, `start`,
+    `run_async`, `check`), a site and the compute service take the same class, the same object, from
+    `sophios.runtime.runners`:
+    `RunConfig(folder).relative_to(path).slurm_settings(SlurmSettings(...)).log_level(level)`, three setters, each
+    replacing what an earlier call of it set, and no public reader. One class, because the three places answer the
+    same two questions, where the outputs go and how the jobs run, and a config written for one place is written for
+    the others.
+    - **`SlurmSettings`** is six optional strings in Slurm's own forms, given by keyword and checked where they are
+      used: `partition`, `time` and `memory` of the leader, the job that lasts the whole run; `steps_partition` and
+      `steps_time` of each step's own job (Toil, Nextflow); `gpu_partition`, where a step that asks for a GPU goes. A
+      field about a job the run does not have is not used, never refused: a local run and a `Machine` have no Slurm
+      job, and cwltool no step jobs. `log_level` is Toil's `--logLevel` wherever Toil runs; in a local run it comes
+      before the flags of `Toil(...)`, so a level given there wins. cwltool and Nextflow do not use it.
+    - **The pair rules** live in one function, `runners.read_config`, which every door reads a config with and which
+      returns what it says and its problems in the user's words; each door reports them its own way, a `ValueError`
+      locally and on a site, `RequestRefused` lines from the compute client. `relative_to` needs an output folder;
+      `relative_to` is an absolute path; an absolute folder takes no `relative_to`; a relative folder needs
+      `relative_to`, but in a local run, which reads it from the working directory, as before. Each rule is the
+      service's own: its schema refuses a `basepath` without `workflowOutDir` and one not starting with `/`, and its
+      path checks refuse the other two, reading a `file:` URL as absolute, as `read_config` does for every door but a
+      local one, so the client never refuses a request the service takes.
+    - **What is sent to the service does not change.** `relative_to` is the request's `basepath`, the folder its
+      `workflowOutDir`, `log_level` its `logLevel`, and the six settings its `leader` and `steps` through one six-row
+      table (`compute.SLURM_FIELDS`), each object sent only when one of its fields is given. The schema, the driver
+      and the requests' goldens are not edited. Sophios's own refusals from the schema name what the user wrote,
+      `SlurmSettings(time=...)`, through the same table read backwards; the service's keep its words.
+    - **Locally**, the output folder is the config's: relative, read from `relative_to`, else from the working
+      directory; absolute, as it is; none, `<basepath>/outdir_<runner>_<name>_<time>`. It may exist and hold files:
+      missing or empty is a site's and the service's rule. `relative_to` is also where a relative File or Directory
+      bound in Python is read from; a `StepInput(default=)` path is made absolute while compiling, where no config
+      exists, and stays on the working directory. The Python API resolves the config once into `RunSettings.outdir`,
+      the one folder the command line's `--outdir` also fills; the command line gains no flag. `outdir=` and `quiet=`
+      leave `Workflow.run` and its siblings, which no release had; `quiet` is cwltool's, `Cwltool(quiet=)`, as
+      `cachedir` is; the deprecated `run_args_dict` keeps both keys, its `outdir` winning over the config's folder.
+29. **2026-11-24: a Nextflow pipeline publishes its outputs wherever it runs, and is written for its runner's
+    engine.** One pipeline text serves a local run, a site and the compute service, so there is one text to read
+    back and to prove, and an output folder means the same on every target (`design_docs/sophios_nextflow_backend.md`
+    §4.5).
+    - **Publishing in every form.** Once every output has completed, the pipeline copies each into the output folder,
+      placed as a CWL run places them. A local run gives Nextflow `-output-dir` with its output folder, the config's
+      or `--outdir`, else `<basepath>/outdir_nextflow_<name>_<time>`, the default every runner has, and its result
+      names that folder; so an output folder is taken for the Nextflow target from Python and from the command line,
+      which accepts `--outdir` and `--container_engine` with `--target nextflow`, its one change. The files also
+      stay in the work folder. The pre-flight checks the folder can be written, as for CWL. A local folder may exist
+      and hold files: each copy replaces what the folder holds under its name, a folder and all in it, and leaves
+      the rest, so a run again into the folder, or with `-resume`, which copies every output again,
+      publishes as the first did; nothing more is refused. Each path a local run reports keeps its own name as its
+      `basename`, as cwltool reports a renamed copy's; its path names the copy.
+    - **The engine is the runner's:** `Nextflow(container_engine='docker')`, or `'singularity'`. The pipeline and its
+      `nextflow.config` are written for it: under Singularity the container directive, `--nv` for a GPU task, the
+      command after the image's runscript and each task's `HOME` its task directory, the form the compute service
+      runs; another engine is a `ValueError` where the pipeline is written, and on the command line a usage error,
+      each naming the two. So a local run can use
+      Singularity, and a site's engine reaches the pipeline through the runner value it builds.
+    - **The record** of the outputs, the `sophios-output` lines a local run and a site read, names the published
+      paths, each with its own name, and is printed once the run has finished, not one output at a time; the form
+      that prints it is the one that replaces what the output folder holds under a copy's name. The compute client
+      asks for the Singularity form without it, since the service reads Nextflow's own outputs object into a folder
+      that is empty: that text, the request and the service's golden file are unchanged.
+    - **Reading back.** The reader reads every form the renderer writes, the engine from `nextflow.config` and the
+      record from the entry workflow, so a run's check reads a Singularity pipeline as it reads a Docker one. A
+      pipeline with outputs written by an earlier release is compiled again; no second form is kept for it.
+    - **Measured** on the pinned Nextflow: a path the pipeline has copied into the output folder needs no
+      `workflow.output.mode`; without `-output-dir` Nextflow publishes into `results/` in the folder it starts from;
+      the folder holds copies, never links. Nextflow's own copy into a folder that holds an output's name replaces a
+      file, puts a folder inside the folder of its name, and on a third run fails after every task has run; with
+      the replacing form, three runs into one folder, the third with `-resume`, each publish a file and a folder at
+      the same paths, keep the folder's other files, and replace a link without touching what it names.
 
 ## 14. Open for the owner
 
