@@ -136,7 +136,7 @@ def test_a_pipeline_writes_its_parameters_and_directives_as_the_model_holds_them
         path: str, path_kind: str, memory_mb: int | float, cpus: float, containers: list[bool]) -> None:
     """A path parameter, a bare path or the object the compiler writes, is one channel of its kind staged without
     globbing; memory is written without an exponent and keeps its value; a fractional core count is unrepresentable;
-    Docker is enabled exactly when a process has a container."""
+    the engine, Docker or Singularity, is enabled exactly when a process has a container, and another is refused."""
     declared = "Directory" if path_kind == "directory" else "File"
     read = NfProcess("READ", (NfPort("source", "path", path_kind=path_kind),), (),
                      NfCommand((NfTemplate((NfLiteral("true"),)),)), resources=NfResources(memory_mb=memory_mb))
@@ -155,5 +155,9 @@ def test_a_pipeline_writes_its_parameters_and_directives_as_the_model_holds_them
     processes = tuple(NfProcess(f"P{index}", (), (), NfCommand((NfTemplate((NfLiteral("true"),)),)),
                                 container="ubuntu:24.04" if containerized else None)
                       for index, containerized in enumerate(containers))
-    config = render_nextflow_config(ExecutableNextflowWorkflow("wf", processes, (), {}))
-    assert f"docker.enabled = {str(any(containers)).lower()}" in config
+    workflow = ExecutableNextflowWorkflow("wf", processes, (), {})
+    assert [render_nextflow_config(workflow, engine) for engine in ("docker", "singularity")] == [
+        f"docker.enabled = {str(any(containers)).lower()}\n",
+        f"singularity {{ enabled = {str(any(containers)).lower()}; autoMounts = true }}\n"]
+    with pytest.raises(ValueError, match="container_engine='podman': .* 'docker' or 'singularity'"):
+        render_nextflow(workflow, engine="podman")

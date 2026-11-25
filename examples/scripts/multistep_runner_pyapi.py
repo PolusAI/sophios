@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from sophios.api.python.workflow import Cwltool, Step, Workflow
+from sophios.api.python.workflow import Cwltool, RunConfig, Step, Workflow
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -33,4 +33,4 @@ def workflow() -> Workflow:
 
 
 if __name__ == "__main__":
-    workflow().run(runner=RUNNER, outdir=OUTDIR, basepath=BASEPATH)
+    workflow().run(runner=RUNNER, config=RunConfig(OUTDIR), basepath=BASEPATH)

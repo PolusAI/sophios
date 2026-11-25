@@ -2,6 +2,7 @@
 starts a stand-in runner (`fake_runner`) through a public front door, so all between is the code users run."""
 import _thread
 import asyncio
+import contextlib
 import io
 import json
 import os
@@ -14,13 +15,13 @@ import time
 import warnings
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 import pytest
 
 from sophios.runtime import local, preflight
-from sophios.api.python.workflow import (Cwltool, Nextflow, RunResult, RunState, StepStatus, Toil, Workflow,
-                                         WorkflowRunError)
+from sophios.api.python.workflow import (Cwltool, Nextflow, RunConfig, RunResult, RunState, Runner, SlurmSettings,
+                                         StepStatus, Toil, Workflow, WorkflowRunError)
 from sophios.lang.diagnostics import Diagnostic, Severity, SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
 from sophios.wic_types import Yaml
@@ -63,7 +64,7 @@ def _script(directory: Path) -> list[str]:
 @pytest.mark.parametrize(('door', 'flags', 'given', 'withheld'), [
     ('command line', ['--passthrough_flags', 'yes', '--debug', '--validate'], ['--debug', '--validate'], ['--quiet']),
     ('command line', ['--quiet'], ['--quiet'], []),
-    ('python', {'runner': Cwltool('--logLevel', 'INFO', cachedir='cache'), 'quiet': False}, ['--cachedir'],
+    ('python', {'runner': Cwltool('--logLevel', 'INFO', cachedir='cache', quiet=False)}, ['--cachedir'],
      ['--quiet']),
 ], ids=['passthrough', 'quiet', 'python'])
 # pylint: disable-next=too-many-arguments,too-many-positional-arguments
@@ -425,18 +426,25 @@ def test_a_cancelled_run_stays_cancelled(monkeypatch: pytest.MonkeyPatch, tmp_pa
     assert 'Failure!' not in capsys.readouterr().err
 
 
+#: Slurm settings a local run has no job for, each in a form Slurm would refuse: never refused, never told the runner.
+_UNUSED: Final = SlurmSettings(partition='no partition', time='3 days', memory='8 GB', steps_partition='no steps',
+                               steps_time='one hour', gpu_partition='no gpus')
+
+
 @pytest.mark.fast
 @pytest.mark.usefixtures('offline')
 @pytest.mark.parametrize('door', ['run', 'start-collect', 'run_async'])
 def test_each_python_door_returns_a_completed_runs_result_and_raises_a_failed_ones(
         monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str], door: str) -> None:
-    """`run()` returns what `start().collect()` returns, and so does `run_async`, which leaves the event loop free
-    while the runner runs: a completed run's outputs, its output directory and its log. A failed run raises with the
-    runner's exit code, so it cannot be missed. Cancelling the `run_async` task stops the runner: it is sent SIGTERM
-    and has exited before the task's cancellation is seen."""
+    """`run()` returns what `start().collect()` returns, and so does `run_async`, which leaves the event loop free while
+    the runner runs: a completed run's outputs, its output directory and its log. A local run has no Slurm job: `check`
+    and each door take a config's Slurm settings, whatever their form, and tell the runner none of them. A failed run
+    raises with the runner's exit code, so it cannot be missed. Cancelling the `run_async` task stops the runner: it is
+    sent SIGTERM and has exited before the task's cancellation is seen."""
     outputs = {'out': 'x'}
     fake = install(monkeypatch, tmp_path, stdout=json.dumps(outputs).splitlines(), sleep=1.0)
-    asked: dict[str, Any] = {'runner': Toil(), 'outdir': str(tmp_path / 'outdir')}
+    asked: dict[str, Any] = {'runner': Toil(), 'config': RunConfig(str(tmp_path / 'outdir')).slurm_settings(_UNUSED)}
+    assert echo_workflow().check(**asked) == ()
     ticks = 0
 
     def through(workflow: Workflow) -> RunResult | None:
@@ -459,6 +467,9 @@ def test_each_python_door_returns_a_completed_runs_result_and_raises_a_failed_on
 
     result = through(echo_workflow())
     assert result is not None and (result.state, result.outputs, result.exit_code) == (RunState.COMPLETED, outputs, 0)
+    told = fake.record()
+    assert not [value for value in vars(_UNUSED).values() for said in (*told['argv'], *told['env'].values())
+                if value in said]
     assert result.log_file.is_file() and result.outdir == tmp_path / 'outdir'
     assert door != 'run_async' or ticks >= 10
     (tmp_path / 'failing').mkdir()
@@ -489,6 +500,62 @@ def test_each_python_door_returns_a_completed_runs_result_and_raises_a_failed_on
     assert "Interrupted; the runner's processes were terminated." in capsys.readouterr().err
 
 
+#: Where a local run's outputs go for each shape of what it is asked, as the folder the run starts in is given: by hand,
+#: relative to that folder. The default is named after the runner, the workflow and the time.
+_OUTPUT_FOLDERS: Final[dict[str, tuple[Callable[[Path], dict[str, Any]], str]]] = {
+    'no config': (lambda here: {}, 'autogenerated/outdir_{runner}_wf_2026_10_09_12.02.16'),
+    'no folder': (lambda here: {'config': RunConfig().log_level('ERROR')},
+                  'autogenerated/outdir_{runner}_wf_2026_10_09_12.02.16'),
+    'relative': (lambda here: {'config': RunConfig('out')}, 'out'),
+    'relative to': (lambda here: {'config': RunConfig('out').relative_to(str(here / 'lab'))}, 'lab/out'),
+    'absolute': (lambda here: {'config': RunConfig(str(here / 'abs'))}, 'abs'),
+    'existing': (lambda here: {'config': RunConfig('full')}, 'full'),
+    'run_args_dict': (lambda here: {'runner': None, 'config': RunConfig('lost'), 'run_args_dict': {'outdir': 'kept'}},
+                      'kept')}
+
+
+@pytest.mark.fast
+@pytest.mark.usefixtures('offline')
+@pytest.mark.parametrize('shape', list(_OUTPUT_FOLDERS))
+@pytest.mark.parametrize('runner', [Toil(), Nextflow()], ids=lambda runner: runner.name)
+def test_a_local_run_puts_its_outputs_in_its_configs_output_folder(monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+                                                                   shape: str, runner: Runner) -> None:
+    """The outputs folder is the config's, on every target: relative, read from its `relative_to`, else from the
+    working directory; absolute, as it is; none, the runner's default under the base path. A folder that exists and
+    holds files is taken, as it always was locally. The deprecated `run_args_dict`'s `outdir` wins over the config's.
+    The runner is told the folder, Toil as its `--outdir` and Nextflow as the folder it publishes into, and the result
+    names it."""
+    fake = install(monkeypatch, tmp_path, stdout=['{}'])
+    monkeypatch.setattr(local, 'datetime', _Frozen)
+    (tmp_path / 'full').mkdir()
+    (tmp_path / 'full' / 'kept.txt').write_text('kept', encoding='utf-8')
+    asked, outdir = _OUTPUT_FOLDERS[shape]
+    target, flag, name = ('nextflow', '-output-dir', 'nextflow') if isinstance(runner, Nextflow) else (
+        'cwl', '--outdir', 'toil')
+    given = {'runner': runner, 'target': target, **asked(tmp_path)}
+    if given['runner'] is None and target == 'cwl':
+        given['run_args_dict'] = {**given['run_args_dict'], 'cwl_runner': 'toil-cwl-runner'}
+    with pytest.warns(DeprecationWarning) if 'run_args_dict' in given else contextlib.nullcontext():
+        result = echo_workflow().run(**given)
+    assert result is not None and result.outdir == (tmp_path / outdir.format(runner=name)).resolve()
+    argv = fake.record()['argv']
+    assert argv[argv.index(flag) + 1] == str(result.outdir)
+
+
+@pytest.mark.fast
+@pytest.mark.usefixtures('offline')
+def test_a_configs_log_level_is_toils_before_the_runners_own_flags(tmp_path: Path) -> None:
+    """A config's `log_level` is Toil's `--logLevel`, given before the flags of `Toil(...)`, so a level given there
+    wins; cwltool and Nextflow are not told it."""
+    config = RunConfig().log_level('ERROR')
+    for runner, told in ((Toil('--logLevel', 'DEBUG'), ['--logLevel', 'ERROR', '--logLevel', 'DEBUG']),
+                         (Cwltool('--debug'), ['--debug']), (Nextflow('-resume'), ['-resume'])):
+        echo_workflow().run(runner=runner, target='nextflow' if isinstance(runner, Nextflow) else 'cwl', config=config,
+                            generate_run_script=True)
+        script = _script(tmp_path)
+        assert script[script.index(told[0]):][:len(told)] == told and script.count('ERROR') == told.count('ERROR')
+
+
 @pytest.mark.fast
 @pytest.mark.needs_cwltool
 def test_the_runner_prints_no_rdflib_encoding_warning(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -516,10 +583,13 @@ _ECHO_OUTPUTS = {'echo~stdout': {'class': 'File', 'location': 'file:///w/ab/stdo
 
 
 def _nextflow_argv(base: Path, *passthrough: str, name: str = 'wf') -> list[str]:
-    """The arguments Nextflow is started with for the workflow `name` in `base`, after its program."""
+    """The arguments Nextflow is started with for the workflow `name` in `base`, after its program, at the time the
+    stand-in clock gives (`_Frozen`), which names the default outputs folder."""
     run = base.resolve() / f'nextflow_{name}'
     return ['-C', f'{run}/nextflow.config', 'run', f'{run}/workflow.nf', '-params-file',
-            f'{run}/nextflow_params.json', '-work-dir', f'{run}/work', '-ansi-log', 'false', *passthrough]
+            f'{run}/nextflow_params.json', '-work-dir', f'{run}/work',
+            '-output-dir', f'{base.resolve()}/outdir_nextflow_{name}_2026_10_09_12.02.16', '-ansi-log', 'false',
+            *passthrough]
 
 
 @pytest.mark.fast
@@ -529,11 +599,14 @@ def _nextflow_argv(base: Path, *passthrough: str, name: str = 'wf') -> list[str]
 def test_each_door_runs_the_nextflow_target_and_reports_its_recorded_outputs(
         monkeypatch: pytest.MonkeyPatch, tmp_path: Path, sophios: Callable[..., int],
         capsys: pytest.CaptureFixture[str], door: str) -> None:
-    """Nextflow starts from the workflow's own directory on the pipeline Sophios wrote there, with the passthrough
-    arguments, and the outputs it recorded come back under their Sophios names, also in `output_<name>.json`; the
-    command line's run is what its run script holds. Each note the lowering made is a line on stderr, as the command
-    line prints it, and never a warning, and the result of the run carries the same notes."""
+    """Nextflow starts from the workflow's own directory on the pipeline Sophios wrote there, publishing into the
+    default outputs folder, which the result names, with the passthrough arguments, and the outputs it recorded come
+    back under their Sophios names, also in `output_<name>.json`; the command line's run is what its run script
+    holds. Each note the lowering made is a line on stderr, as the command
+    line prints it, and never a warning, and the result of the run carries the same notes. On the command line a
+    container engine the pipeline is not written for is a usage error naming the two, which writes nothing."""
     fake = install(monkeypatch, tmp_path, stdout=['[PROCESS ab/cdef12] wf:echo', _RECORDED])
+    monkeypatch.setattr(local, 'datetime', _Frozen)
     base = (tmp_path / 'autogenerated').resolve()
     if door == 'command line':
         flags = ('--target', 'nextflow', '--passthrough_flags', 'yes', '-resume')
@@ -542,6 +615,10 @@ def test_each_door_runs_the_nextflow_target_and_reports_its_recorded_outputs(
         argv = _nextflow_argv(base, '-resume', name='helloworld')
         assert _script(tmp_path) == ['nextflow', *argv] and fake.record()['argv'][1:] == argv
         assert json.loads((base / 'output_helloworld.json').read_text(encoding='utf-8')) == _ECHO_OUTPUTS
+        before, _ = sorted(tmp_path.rglob('*')), capsys.readouterr()  # an engine it cannot write for: a usage error
+        assert sophios('--target', 'nextflow', '--container_engine', 'podman', '--check') == 2
+        assert ('error: --target nextflow writes the pipeline for docker or singularity, not for --container_engine '
+                'podman') in capsys.readouterr().err and sorted(tmp_path.rglob('*')) == before
         return
     through: dict[str, Callable[[Workflow], RunResult | None]] = {
         'run': lambda workflow: workflow.run(target='nextflow'),
@@ -549,7 +626,7 @@ def test_each_door_runs_the_nextflow_target_and_reports_its_recorded_outputs(
         'run_async': lambda workflow: asyncio.run(workflow.run_async(target='nextflow'))}
     result = through[door](echo_workflow())
     assert result is not None and (result.state, result.outputs) == (RunState.COMPLETED, _ECHO_OUTPUTS)
-    assert result.outdir == base / 'nextflow_wf' / 'work'
+    assert result.outdir == base / 'outdir_nextflow_wf_2026_10_09_12.02.16'
     assert json.loads((base / 'output_wf.json').read_text(encoding='utf-8')) == _ECHO_OUTPUTS
     assert fake.record()['argv'][1:] == _nextflow_argv(base) and Path(fake.record()['cwd']) == base / 'nextflow_wf'
     capsys.readouterr()

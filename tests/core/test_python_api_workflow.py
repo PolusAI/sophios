@@ -5,6 +5,7 @@ door."""
 import copy
 import pickle
 import inspect
+import json
 import os
 from pathlib import Path
 import sys
@@ -27,8 +28,8 @@ from sophios.runtime.backends import RunRequest
 from sophios.api.python import nextflow
 from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
 from sophios.api.python.workflow import (Cwltool, InvalidCLTError, InvalidInputValueError, InvalidLinkError,
-                                         InvalidStepError, Nextflow, RunPolicy, RunResult, RunState, RunStatus,
-                                         SophiosError, Step, StepInput, Toil, Workflow, WorkflowRunError)
+                                         InvalidStepError, Nextflow, RunConfig, RunPolicy, RunResult, RunState,
+                                         RunStatus, SophiosError, Step, StepInput, Toil, Workflow, WorkflowRunError)
 from sophios.lang.diagnostics import lines as printed_lines
 from sophios.runtime.runners import RunSettings
 
@@ -337,11 +338,12 @@ def test_run_writes_what_compile_returns_and_hands_the_runner_its_own_flags(monk
                                                                             tmp_path: Path) -> None:
     """`run()` writes the one document `compile()` returns and its job, and nothing else: a workflow that declares its
     outputs runs with those alone, and a relative path, bound in Python, in a step inputs file (which binds values as
-    written) or as a `StepInput` default, names the file in the working directory, absolute. It prepares that document
-    in its basepath with docker, the images built without entrypoints when told, every embedded tool's, a hint's and a
-    real-time analysis's too; and hands the runner its own flags, never the Python API's: `quiet` is on unless told
-    otherwise and never a positional, and any spelling of yes for `generate_run_script` writes run.sh without
-    running."""
+    written) or as a `StepInput` default, names the file in the working directory, absolute; a config's `relative_to`
+    moves a File or Directory bound in Python or by a step inputs file, never a default, which is read while compiling,
+    on CWL as in the Nextflow pipeline's parameters. It prepares that document in its basepath with docker, the images
+    built without entrypoints when told, every embedded tool's, a hint's and a real-time analysis's too; and hands the
+    runner its own flags, never the Python API's: `quiet` is on unless told otherwise and never a positional, and any
+    spelling of yes for `generate_run_script` writes run.sh without running."""
     monkeypatch.chdir(tmp_path)
     Path('inputs').mkdir()
     Path('data.txt').write_text('hello\n', encoding='utf-8')
@@ -350,8 +352,11 @@ def test_run_writes_what_compile_returns_and_hands_the_runner_its_own_flags(monk
     by_value, by_default = (Step(clt_path=PYTHON_API / 'cat.cwl', step_name=name) for name in ('read', 'by_default'))
     by_value.inputs.f = 'data.txt'
     by_default.inputs.f = StepInput(default={'class': 'File', 'location': 'data.txt'})
+    listing = Step(CommandLineTool('ls', Inputs(d=Input(cwl.directory, position=1)),
+                                   Outputs(out=Output(cwl.file, glob='listed.txt'))).base_command('ls'))
+    listing.inputs.d = 'inputs'
     workflow = Workflow([by_file, by_value, by_default, adapter_step('touch', filename='empty.txt'),
-                         Step(clt_path=PYTHON_API / 'hinted.cwl')], 'exact')
+                         Step(clt_path=PYTHON_API / 'hinted.cwl'), listing], 'exact')
     workflow.outputs.printed = by_file.outputs.out
     prepared: list[tuple[list[Path], RunSettings]] = []
     monkeypatch.setattr(python_runtime.preflight, 'ready',
@@ -367,13 +372,32 @@ def test_run_writes_what_compile_returns_and_hands_the_runner_its_own_flags(monk
     assert [step['run'].get('requirements', step['run'].get('hints', {})).get('DockerRequirement')
             for step in written['steps']] == [None, None, None,
                                               {'dockerPull': 'docker.io/library/debian:bookworm-slim-noentrypoint'},
-                                              {'dockerPull': 'docker.io/alpine:3.20-noentrypoint'}]
+                                              {'dockerPull': 'docker.io/alpine:3.20-noentrypoint'}, None]
     here = {'class': 'File', 'location': (tmp_path / 'data.txt').as_uri()}
     assert written['steps'][2]['in']['f']['default'] == here
     assert yaml.safe_load((tmp_path / 'base' / 'exact_inputs.yml').read_text(encoding='utf-8')) == {
-        **compiled.cwl_job_inputs, 'cat~f': here, 'read~f': here}
+        **compiled.cwl_job_inputs, 'cat~f': here, 'read~f': here,
+        'ls~d': {'class': 'Directory', 'location': (tmp_path / 'inputs').as_uri()}}
     assert {(tuple(path.resolve() for path in documents), run.runner.container_engine, run.runner.ignore_install)
             for documents, run in prepared} == {(((tmp_path / 'base' / 'exact.cwl').resolve(),), 'docker', False)}
+    elsewhere = tmp_path / 'elsewhere'
+    workflow.run(basepath='moved', runner=Cwltool(remove_entrypoints=True), generate_run_script=True,
+                 config=RunConfig('out').relative_to(str(elsewhere)))
+    there = {'class': 'File', 'location': (elsewhere / 'data.txt').as_uri()}
+    assert yaml.safe_load((tmp_path / 'moved' / 'exact.cwl').read_text(encoding='utf-8'))['steps'][2]['in']['f'][
+        'default'] == here
+    assert yaml.safe_load((tmp_path / 'moved' / 'exact_inputs.yml').read_text(encoding='utf-8')) == {
+        **compiled.cwl_job_inputs, 'cat~f': there, 'read~f': there,
+        'ls~d': {'class': 'Directory', 'location': (elsewhere / 'inputs').as_uri()}}
+    elsewhere.mkdir()  # the Nextflow pipeline's parameters are read from there too
+    (elsewhere / 'data.txt').write_text('there\n', encoding='utf-8')
+    monkeypatch.setattr(preflight, 'nextflow_problems', lambda _settings: [])
+    read_there = Step(clt_path=PYTHON_API / 'cat.cwl', step_name='read')
+    read_there.inputs.f = 'data.txt'
+    Workflow([read_there], 'nf').run(basepath='moved', target='nextflow', generate_run_script=True,
+                                     config=RunConfig('out').relative_to(str(elsewhere)))
+    assert json.loads((tmp_path / 'moved' / 'nextflow_nf' / 'nextflow_params.json').read_text(encoding='utf-8')) == {
+        'read_f': {'class': 'File', 'path': str(elsewhere / 'data.txt')}}
     live_workflow('live').run(runner=Cwltool(remove_entrypoints=True), generate_run_script=True)
     (analysis,) = (tmp_path / 'autogenerated' / 'realtime').rglob('*.cwl')
     assert 'docker.io/library/debian:bookworm-slim-noentrypoint' in analysis.read_text(encoding='utf-8')
@@ -385,16 +409,21 @@ def test_run_writes_what_compile_returns_and_hands_the_runner_its_own_flags(monk
         return 0
     monkeypatch.setattr(python_runtime.local, 'run', run)
     workflow.run(basepath=str(tmp_path), runner=Cwltool('--logLevel', 'INFO'), generate_run_script=True,
-                 outdir=str(tmp_path / 'workflow_output'))
+                 config=RunConfig(str(tmp_path / 'workflow_output')))
     assert [(r.run.runner.flags, r.run.generate_run_script, r.run.outdir, r.workflow_name, r.basepath)
             for r in requests] == [(('--logLevel', 'INFO'), True, str(tmp_path / 'workflow_output'), 'exact', tmp_path)]
+
+
+#: What the warning of a `run_args_dict` points at instead: a runner, the config's outputs folder, cwltool's `quiet`.
+_DEPRECATED: Final = r'pass runner=Cwltool\(\.\.\.\), .*config=RunConfig\(.*Cwltool\(quiet=\.\.\.\)'
 
 
 @pytest.mark.fast
 def test_run_args_dict_means_its_typed_spelling_and_no_run_is_made_of_what_no_runner_reads(
         monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """A `run_args_dict` warns and builds the run its typed spelling builds, a key no run reads and its `target`
-    dropped. What no runner can be given is refused before anything is written."""
+    """A `run_args_dict` warns, pointing at that spelling, and builds the run its typed spelling builds, a key no run
+    reads and its `target` dropped: its `quiet` is cwltool's, and its `outdir` the outputs folder, over the config's.
+    What no runner can be given is refused before anything is written."""
     monkeypatch.chdir(tmp_path)
     checked: list[RunSettings] = []
     monkeypatch.setattr(python_runtime.preflight, 'ready', lambda _documents, run, *_a, **_k: checked.append(run))
@@ -404,49 +433,57 @@ def test_run_args_dict_means_its_typed_spelling_and_no_run_is_made_of_what_no_ru
     for refused in (lambda: workflow.start(run_args_dict={'generate_run_script': 'yes'}),
                     lambda: workflow.run(target='nextflow', run_args_dict={'cachedir': 'cache', 'resume': ''}),
                     lambda: workflow.run(target='wdl', run_args_dict={'logLevel': 'INFO'}),  # type: ignore[arg-type]
-                    lambda: workflow.run(target='nextflow', outdir='results'),
                     lambda: workflow.run(runner=Nextflow()),
                     lambda: workflow.run(runner=Toil),  # type: ignore[arg-type]
                     lambda: workflow.run(runner=Cwltool(), run_args_dict={'quiet': 'no'})):
         with pytest.raises(ValueError):
             refused()
     assert not list(tmp_path.iterdir())
-    workflow.run(generate_run_script=True, quiet=False, runner=Cwltool(
-        '--logLevel', 'INFO', provenance=False, remove_entrypoints=True, ignore_install=True, ignore_processes=True))
-    with pytest.warns(DeprecationWarning):
-        workflow.run(generate_run_script=True, run_args_dict={
+    with pytest.warns(DeprecationWarning, match=_DEPRECATED):  # without its quiet, cwltool is quiet, as by default
+        workflow.run(generate_run_script=True, run_args_dict={})
+    assert checked[-1] == RunSettings(Cwltool(), generate_run_script=True)
+    workflow.run(generate_run_script=True, config=RunConfig('out'), runner=Cwltool(
+        '--logLevel', 'INFO', provenance=False, remove_entrypoints=True, ignore_install=True, ignore_processes=True,
+        quiet=False))
+    with pytest.warns(DeprecationWarning, match=_DEPRECATED):  # its outdir wins over the config's
+        workflow.run(generate_run_script=True, config=RunConfig('lost'), run_args_dict={
             'quiet': 'no', 'no_provenance': '1', 'docker_remove_entrypoints': 'true', 'ignore_docker_install': 'yes',
-            'ignore_docker_processes': 'on', 'logLevel': 'INFO', 'parallel': 'yes', 'target': 'nextflow'})
+            'ignore_docker_processes': 'on', 'logLevel': 'INFO', 'parallel': 'yes', 'target': 'nextflow',
+            'outdir': 'out'})
     assert checked[-1] == checked[-2]
 
 
-def _missing_paths(monkeypatch: pytest.MonkeyPatch, workflow: Workflow) -> list[str]:
-    """The `wic016` lines `workflow.run()` raises, which it must raise before the runner starts."""
+def _missing_paths(monkeypatch: pytest.MonkeyPatch, workflow: Workflow, config: RunConfig | None = None) -> list[str]:
+    """The `wic016` lines `workflow.run(config=config)` raises, which it must raise before the runner starts."""
     monkeypatch.setattr(python_runtime.local, 'start', lambda _request: pytest.fail('ran'))
     with pytest.raises(SophiosError) as caught:
-        workflow.run()
+        workflow.run(config=config)
     return [str(diagnostic) for diagnostic in caught.value.diagnostics if str(diagnostic.code) == 'wic016']
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize("tool, bound, files, step_inputs_file, inputs_file, fragments", [
-    ("cat", {"f": "{cwd}/gone.txt"}, {}, None, None, ["names '{cwd}/gone.txt', which does not exist"]),
-    ("cat", {"f": "gone.txt"}, {}, None, None,
+@pytest.mark.parametrize("tool, bound, files, step_inputs_file, inputs_file, relative_to, fragments", [
+    ("cat", {"f": "{cwd}/gone.txt"}, {}, None, None, None, ["names '{cwd}/gone.txt', which does not exist"]),
+    ("cat", {"f": "gone.txt"}, {}, None, None, None,
      ["whose relative paths are read from {cwd}) names 'gone.txt'", "does not exist at {cwd}/gone.txt"]),
-    ("cat", {}, {"cat.yml": "f: {class: File, location: gone.txt}"}, "cat.yml", None, ["names 'gone.txt'"]),
+    ("cat", {"f": "data.txt"}, {"data.txt": "hello"}, None, None, "{cwd}/lab",
+     ["whose relative paths are read from {cwd}/lab) names 'data.txt'", "does not exist at {cwd}/lab/data.txt"]),
+    ("cat", {}, {"cat.yml": "f: {class: File, location: gone.txt}"}, "cat.yml", None, None, ["names 'gone.txt'"]),
     ("cat", {"f": "gone.txt"}, {"data.txt": "hello", "in.yml": "cat~f: {class: File, location: data.txt}"}, None,
-     "in.yml", []),
-    ("write_dir", {"outDir": Path("result.outDir")}, {}, None, None, []),
-    ("write_dir", {}, {"in.yml": "write_dir~outDir: {class: Directory, location: result.outDir}"}, None, "in.yml", []),
-], ids=["absolute", "relative", "in-a-step-inputs-file", "replaced-by-an-inputs-file", "output-directory",
-        "output-directory-in-an-inputs-file"])
+     "in.yml", None, []),
+    ("write_dir", {"outDir": Path("result.outDir")}, {}, None, None, None, []),
+    ("write_dir", {}, {"in.yml": "write_dir~outDir: {class: Directory, location: result.outDir}"}, None, "in.yml",
+     None, []),
+], ids=["absolute", "relative", "relative-to", "in-a-step-inputs-file", "replaced-by-an-inputs-file",
+        "output-directory", "output-directory-in-an-inputs-file"])
 # pylint: disable-next=too-many-arguments,too-many-positional-arguments
 def test_the_pre_flight_checks_exactly_the_paths_the_runner_reads(
         monkeypatch: pytest.MonkeyPatch, tmp_path: Path, tool: str, bound: dict[str, Any], files: dict[str, str],
-        step_inputs_file: str | None, inputs_file: str | None, fragments: list[str]) -> None:
+        step_inputs_file: str | None, inputs_file: str | None, relative_to: str | None, fragments: list[str]) -> None:
     """A path bound in Python or in a step inputs file is checked before the run starts, as an inputs file's is, from
-    the working directory the run reads it from. A value an inputs file replaces is not the one the runner gets, and
-    an output directory names one the step creates: neither is looked for."""
+    the folder the run reads it from: the working directory, or the config's `relative_to`. A value an inputs file
+    replaces is not the one the runner gets, and an output directory names one the step creates: neither is looked
+    for, and the job the runner reads holds the inputs file's value."""
     monkeypatch.chdir(tmp_path)
     for name, text in files.items():
         Path(name).write_text(text, encoding="utf-8")
@@ -454,7 +491,8 @@ def test_the_pre_flight_checks_exactly_the_paths_the_runner_reads(
                  **{port: value.format(cwd=Path.cwd()) if isinstance(value, str) else value
                     for port, value in bound.items()})
     if fragments:
-        line, = _missing_paths(monkeypatch, Workflow([step], "wf"))
+        line, = _missing_paths(monkeypatch, Workflow([step], "wf"), None if relative_to is None else RunConfig(
+            'out').relative_to(relative_to.format(cwd=Path.cwd())))
         assert line.startswith("error [wic016] input 'cat~f' (from the workflow, ")
         assert all(fragment.format(cwd=Path.cwd()) in line for fragment in fragments), line
         return
@@ -463,9 +501,11 @@ def test_the_pre_flight_checks_exactly_the_paths_the_runner_reads(
     Workflow([step], "wf").run(inputs_file=inputs_file or '')
     start.assert_called_once()
     assert not Path("result.outDir").exists(), "an output directory is the step's to make, not the run's"
-    if "outDir" in bound:
-        job = yaml.safe_load(Path("autogenerated/wf_inputs.yml").read_text(encoding="utf-8"))
+    job = yaml.safe_load(Path("autogenerated/wf_inputs.yml").read_text(encoding="utf-8"))
+    if tool == "write_dir":
         assert job["write_dir~outDir"] == {"class": "Directory", "basename": "result.outDir", "listing": []}
+    else:  # the job the runner reads holds the inputs file's value
+        assert job["cat~f"] == {"class": "File", "location": (tmp_path / "data.txt").as_uri()}
 
 
 @pytest.mark.fast

@@ -19,7 +19,7 @@ import pytest
 
 from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
 from sophios.api.python._workflow_runtime import ServicePipeline, service_pipeline
-from sophios.api.python.workflow import Step, StepInput, Workflow
+from sophios.api.python.workflow import Nextflow, RunConfig, Step, StepInput, Workflow
 from sophios.runtime.backends import recorded_outputs
 from sophios.nextflow.symbols import NEXTFLOW_SCRIPT_NAMES
 from sophios.runtime.status import RunState, RunStatus
@@ -122,18 +122,37 @@ def _run_service(pipeline: ServicePipeline, directory: Path) -> "subprocess.Comp
     )
 
 
+def _basenames(value: Any) -> Any:
+    """A recorded output's `basename`, each File's or Directory's, or None."""
+    if isinstance(value, list):
+        return [_basenames(item) for item in value]
+    return value["basename"] if isinstance(value, dict) else None
+
+
+def _placed(value: Any) -> Any:
+    """A recorded output as Nextflow's own outputs object gives it: each File or Directory its class and path."""
+    if isinstance(value, list):
+        return [_placed(item) for item in value]
+    return {"class": value["class"], "path": value["path"]} if isinstance(value, dict) else value
+
+
 @pytest.mark.nextflow
 @pytest.mark.serial
-def test_the_service_form_publishes_each_output_as_a_cwl_run_returns_it(tmp_path: Path) -> None:
-    """design §4.5: the outputs object Nextflow prints is the run's outputs in the CWL shape, each path in the
-    outputs folder, placed as a CWL run places it: a file, a text, a null, a scattered array of output folders the
-    tool filled, a scattered file in a subfolder, a file two outputs return, a folder with a file of that name in it,
-    which an output whose name sorts before the folder's returns too, and a file of the folder's name, whose output's
-    name sorts between those two. The outputs are copied in the order of their names, so the scattered file, whose
-    output sorts before the file of its name, is copied first, each copy at the top of the folder, the later two of
-    that name with _2 and _3; the file returned twice is copied once; the file in the returned folder is at its place
-    in the folder's copy, never copied on its own, so the file of the folder's name is copied before the folder, which
-    takes _2. A task's HOME is its task directory."""
+@pytest.mark.parametrize("form", ["service", "local"])
+def test_a_pipeline_publishes_each_output_as_a_cwl_run_returns_it(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, form: str) -> None:
+    """design §4.5: in the service form, the outputs object Nextflow prints, and in a local run under Singularity
+    into its config's outputs folder, the outputs the pipeline records, are the run's outputs in the CWL shape, each
+    path in the outputs folder, placed as a CWL run places it: a file, a text, a null, a scattered array of output
+    folders the tool filled, a scattered file in a subfolder, a file two outputs return, a folder with a file of that
+    name in it, which an output whose name sorts before the folder's returns too, and a file of the folder's name,
+    whose output's name sorts between those two. The outputs are copied in the order of their names, so the scattered
+    file, whose output sorts before the file of its name, is copied first, each copy at the top of the folder, the
+    later two of that name with _2 and _3; the file returned twice is copied once; the file in the returned folder is
+    at its place in the folder's copy, never copied on its own, so the file of the folder's name is copied before the
+    folder, which takes _2. Under Singularity a task's HOME is its task directory. A local run reports each path by its
+    own name, as cwltool does, and a local run again into that folder, then with `-resume`, publishes as the first
+    did: each copy replaces what the folder holds under its name, a folder and all in it."""
     inputs = Inputs(out_dir=Input(cwl.directory, flag="--outDir", position=1))
     fill = Step(CommandLineTool("fill", inputs, Outputs(
         filled=Output(cwl.directory, glob="$(inputs.out_dir.basename)"))).base_command(
@@ -168,11 +187,30 @@ def test_the_service_form_publishes_each_output_as_a_cwl_run_returns_it(tmp_path
     workflow.outputs.keep = mark.outputs.kept
     for name in ("seg-a", "seg-b"):  # A service makes each output folder empty, by its name, as the driver does.
         (tmp_path / name).mkdir()
+    monkeypatch.chdir(tmp_path)
+    for flags in [None] if form == "service" else [(), (), ("-resume",)]:
+        _publishes_each_output_as_a_cwl_run_returns_it(workflow, tmp_path, flags)
 
-    result = _run_service(service_pipeline(workflow), tmp_path)
-    assert_succeeded(result)
+
+def _publishes_each_output_as_a_cwl_run_returns_it(workflow: Workflow, tmp_path: Path,
+                                                   flags: tuple[str, ...] | None) -> None:
+    """`workflow`'s outputs in the service form (`flags` None), or a local run's with Nextflow's `flags`, as
+    `test_a_pipeline_publishes_each_output_as_a_cwl_run_returns_it` states them."""
     out = tmp_path / "out"
-    assert json.loads(result.stdout[result.stdout.index("{"):]) == {
+    if flags is None:
+        result = _run_service(service_pipeline(workflow), tmp_path)
+        assert_succeeded(result)
+        outputs = json.loads(result.stdout[result.stdout.index("{"):])
+    else:  # no step has a container, so this machine needs no Singularity
+        ran = workflow.run(target="nextflow", runner=Nextflow(*flags, container_engine="singularity"),
+                           config=RunConfig("out"))
+        assert ran is not None and ran.outdir == out.resolve() and ran.outputs is not None
+        outputs = {name: _placed(value) for name, value in ran.outputs.items()}
+        assert {name: _basenames(value) for name, value in ran.outputs.items()} == {
+            "folders": ["seg-a", "seg-b"], "note": "note.txt", "text": None, "absent": None,
+            "heard": ["note.txt", "note.txt"], "twice": "note.txt", "kept": "kept", "inner": "note.txt",
+            "keep": "kept"}
+    assert outputs == {
         "folders": [{"class": "Directory", "path": str(out / name)} for name in ("seg-a", "seg-b")],
         "note": {"class": "File", "path": str(out / "note.txt_3")},
         "text": "noted\n",
@@ -244,7 +282,7 @@ def _recorded(stdout: str) -> dict[str, Any]:
 def test_two_workflows_started_from_one_base_path_each_run_their_own_pipeline(tmp_path: Path) -> None:
     """Each run's pipeline, work directory and Nextflow log are in `nextflow_<workflow>/` under the base path, so
     a run started before the other has read its pipeline runs its own, and its outputs are CWL objects naming the
-    files it made."""
+    files it published into its own default outputs folder."""
     base = tmp_path / "base"
     other = supported_workflow()
     other.process_name = "other"
@@ -257,7 +295,8 @@ def test_two_workflows_started_from_one_base_path_each_run_their_own_pipeline(tm
         file = result.outputs["file"]
         assert (file["class"], file["basename"]) == ("File", "stdout.txt")
         assert Path(file["path"]).read_text(encoding="utf-8") == f"{text}\n"
-        assert Path(file["path"]).is_relative_to(base.resolve() / f"nextflow_{name}" / "work")
+        folder = Path(file["path"]).parent  # the run's default outputs folder, which it publishes into
+        assert folder.parent == base.resolve() and folder.name.startswith(f"outdir_nextflow_{name}_")
         assert json.loads((base / f"output_{name}.json").read_text(encoding="utf-8")) == result.outputs
         assert (base / f"nextflow_{name}" / ".nextflow.log").is_file()
 
@@ -282,14 +321,16 @@ def _kept(directory: Path, before: dict[str, Any]) -> bool:
 def test_an_example_workflow_runs_under_nextflow_as_stated(
         folder: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Each directory of tests/core/data/examples, run as Nextflow, gives exactly the outputs its `expected.yaml`
-    states by class, basename and contents, the outputs cwltool gives too (test_compiler.py's cwltool leg), and
-    leaves the files beside the workflow as they were."""
+    states by class, basename and contents, the outputs cwltool gives too (test_compiler.py's cwltool leg), each
+    named by its own name whatever name its copy took (design §4.5), and leaves the files beside the workflow as they
+    were."""
     directory = tmp_path / "example"
     workflow = _example(folder, directory, monkeypatch)
     before = files_beside(directory)
     ran = workflow.run(target="nextflow", basepath=str(directory / "out"))
     assert ran is not None and isinstance(ran.outputs, dict)
-    assert {name: observed(value) for name, value in ran.outputs.items()} == stated(folder)["outputs"]
+    outputs = stated(folder)["outputs"]
+    assert {name: observed(value) for name, value in ran.outputs.items()} == outputs
     assert _kept(directory, before), "Nextflow changed a file beside the workflow"
 
 

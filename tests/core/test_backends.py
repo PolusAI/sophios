@@ -89,9 +89,9 @@ def test_each_cwl_runner_reads_its_command_line_as_the_request_says(
     arguments = tuple(argument for given, _, _ in passthrough for argument in given)
     with mock.patch.object(local, 'datetime', _Frozen), \
             mock.patch.dict(os.environ, {'SOPHIOS_TEST_KEPT': 'kept', 'SOPHIOS_TEST_ELSE': 'else'}):
-        settings = {key: fields[key] for key in ('container_engine', 'provenance', 'cachedir') if key in fields}
-        run = RunSettings(build('cwl', runner, arguments, **settings), fields.get('outdir', ''),
-                          quiet=fields.get('quiet', True))
+        settings = {key: fields[key] for key in ('container_engine', 'provenance', 'cachedir', 'quiet')
+                    if key in fields}
+        run = RunSettings(build('cwl', runner, arguments, **settings), fields.get('outdir', ''))
         request = RunRequest(name, Path(basepath), run, fields.get('documents'), fields.get('env', {}))
         launch = local.launch(request, targets.backend(run.runner))
         assert launch.env == {**os.environ, **fields.get('env', {})}
@@ -326,16 +326,21 @@ def test_a_cwl_run_changes_only_the_job_and_only_as_its_runner_needs(tmp_path: P
 @pytest.mark.parametrize('runner', [Cwltool(), Toil()], ids=lambda runner: runner.name)
 def test_a_cwl_runner_writes_the_files_it_prepares(tmp_path: Path, runner: Runner) -> None:
     """`write`, which describes a run for whichever machine runs it, leaves the files `prepare` leaves on this one,
-    the job's output-target Directory in the runner's own form: CWL's literal for cwltool, not for Toil."""
+    the job's output-target Directory in the runner's own form: CWL's literal for cwltool, not for Toil, and the
+    run's inputs file's values over the workflow's."""
     root = tmp_path / 'root'
-    write_tree(root, {'source.txt': ''})
-    lowered, prepared = _prepared(_write_into(), root, tmp_path / 'prepared', RunSettings(runner), pull=False)
-    written = targets.backend(runner).write(lowered, (), tmp_path / 'written', inputs_file='', root_dir=root)
+    write_tree(root, {'source.txt': '', 'other.txt': '',
+                      'job.yml': 'write-into~source: {class: File, location: other.txt}'})
+    run = RunSettings(runner, inputs_file=str(root / 'job.yml'))
+    lowered, prepared = _prepared(_write_into(), root, tmp_path / 'prepared', run, pull=False)
+    written = targets.backend(runner).write(lowered, (), tmp_path / 'written', run=run, root_dir=root)
     assert [path.name for path in written.documents] == [path.name for path in prepared.documents]
     files = [{path.name: path.read_text(encoding='utf-8') for path in (tmp_path / side).iterdir()}
              for side in ('written', 'prepared')]
     assert files[0] == files[1]
-    assert ('listing' in yaml.safe_load(files[0]['wf_inputs.yml'])['write-into~outDir']) is (runner.name == 'cwltool')
+    job = yaml.safe_load(files[0]['wf_inputs.yml'])
+    assert ('listing' in job['write-into~outDir']) is (runner.name == 'cwltool')
+    assert job['write-into~source'] == {'class': 'File', 'location': (root / 'other.txt').as_uri()}
 
 
 #: What a Nextflow run asks of this machine.

@@ -1,7 +1,7 @@
 """Canonical end-to-end example: tool_builder -> Workflow -> the compute service.
 
 Every output lands in the outputs folder, `results_compact` under BASEPATH, under its own name, as `run.outputs()`
-names it; with `basepath`, the compute service requires that folder. The service creates it, or it must be empty, so
+names it; with `relative_to`, the compute service requires that folder. The service creates it, or it must be empty, so
 once a run has filled it, a rerun names a new folder, or empties this one.
 """
 
@@ -11,7 +11,7 @@ import sys
 from sophios.api.python.workflow import RunState, Step, Workflow
 
 from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
-from sophios.compute import RunConfig, Service, build_request
+from sophios.compute import RunConfig, Service, SlurmSettings, build_request
 
 #: The compute service: the host it runs on, over your own ssh, such as 'ssh://login.cluster.example.org'. None
 #: only builds and prints the request.
@@ -88,7 +88,8 @@ def main() -> int:
     # ========== BUILD WORKFLOW ======================
     autoseg_workflow = workflow(input_dicts, "autoseg_workflow")
     # The outputs folder, relative to BASEPATH: the output folder lands in it, as results_compact/segmentation_compact.
-    config = RunConfig('results_compact').basepath(BASEPATH).steps(partition='normal', gpu_partition='normal_gpu')
+    config = RunConfig('results_compact').relative_to(BASEPATH).slurm_settings(
+        SlurmSettings(steps_partition='normal', gpu_partition='normal_gpu'))
 
     if SERVICE_URL is None:
         request = build_request(autoseg_workflow, config)

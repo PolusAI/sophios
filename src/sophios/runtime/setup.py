@@ -32,7 +32,7 @@ class Settings:
     Attributes:
         run: The run: its runner, whose settings the pre-flight checks the machine for, and what is given to the job.
         root_dir: Where a relative path bound in the workflow is read: the `.wic`'s
-            directory from the command line, the working directory from Python.
+            directory from the command line; from Python, the working directory, or the config's `relative_to`.
         bound: The values bound in the workflow as the runner reads them, a relative path as the author wrote it
             (`Target.run_values`): what the pre-flight checks, and its messages name.
         inputs_file_named: How the user named `run.inputs_file`, for the pre-flight's messages.

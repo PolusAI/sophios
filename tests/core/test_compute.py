@@ -2,7 +2,6 @@
 """The compute service's request as Sophios builds it (`sophios.compute.build_request`) and a `Run`'s handling of its
 answers, fast and without a service; test_compute_service.py runs against the service itself."""
 import dataclasses
-import inspect
 import json
 import os
 import re
@@ -24,7 +23,7 @@ from jsonschema import Draft202012Validator
 
 from sophios import compute
 from sophios.api.python._workflow_runtime import service_pipeline
-from sophios.compute import RunConfig
+from sophios.compute import RunConfig, SlurmSettings
 from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
 from sophios.api.python.workflow import Step, StepInput, Workflow
 from sophios.lang.diagnostics import SophiosError
@@ -54,28 +53,60 @@ def _workflow(out: str = 'results/run7', model: str = 'models/sam3.pt', name: st
     return Workflow([step], name)
 
 
+def _sent(**fields: typing.Any) -> dict[str, typing.Any]:
+    """Each of `fields` that is given, as a request leaves out what is not."""
+    return {name: value for name, value in fields.items() if value is not None}
+
+
+#: A RunConfig, drawn as what it is made of: an outputs folder and a `relative_to` the service takes together, its
+#: Slurm settings, each given or not, and its log level; or None, no RunConfig.
+_Drawn = tuple[tuple[str | None, str | None], SlurmSettings, str | None] | None
+_PARTITIONS: typing.Final = st.none() | st.sampled_from(['normal', 'gpu', 'a.b_c-1'])
+_TIMES: typing.Final = st.none() | st.sampled_from(['30', '2:00:00', '1-00:00:00'])
+_CONFIGS: typing.Final = st.none() | st.tuples(
+    st.sampled_from([(None, None), ('/projects/lab/out', None), ('results', '/projects/lab')]),
+    st.builds(SlurmSettings, partition=_PARTITIONS, time=_TIMES, memory=st.none() | st.sampled_from(['8G', '512M']),
+              steps_partition=_PARTITIONS, steps_time=_TIMES, gpu_partition=_PARTITIONS),
+    st.none() | st.sampled_from(['DEBUG', 'INFO', 'WARNING', 'ERROR']))
+
+
 @pytest.mark.fast
 @budget(50)
 @given(*[st.lists(st.sampled_from('/.~$: ') | st.text(max_size=3), max_size=6).map(''.join)] * 2, st.booleans(),
-       st.booleans())
-@example('results/run7', 'https://example.org/sam3.pt', False, True)
-@example('/projects/lab/out', 'models/sam3.pt', False, False)
-@example('~/results', '$HOME/sam3.pt', False, False)
-@example('results/run7', 'models/sam3.pt', True, False)
+       _CONFIGS)
+@example('results/run7', 'https://example.org/sam3.pt', False, (('results', '/projects/lab'), SlurmSettings(), None))
+@example('/projects/lab/out', 'models/sam3.pt', False, None)
+@example('~/results', '$HOME/sam3.pt', False,
+         ((None, None), SlurmSettings(steps_partition='normal', gpu_partition='gpu'), None))
+@example('results/run7', 'models/sam3.pt', True,
+         (('/projects/lab/out', None), SlurmSettings(time='2:00:00', memory='8G'), 'DEBUG'))
 def test_the_request_carries_the_compiled_workflow_and_every_path_as_written(out: str, model: str, on_workflow: bool,
-                                                                             basepath: bool) -> None:
-    """One inline document, its inputs, and `basepath` only when given; nothing is joined or checked, `~` and
-    `$HOME` included: the service is the one authority on paths. A value bound on a workflow input is the job's value
-    of it (docs/inputs-and-values.md), so the service is sent it as written, as it is sent a step's."""
+                                                                             drawn: _Drawn) -> None:
+    """One inline document, its inputs, and what the RunConfig says, each under the request's own name; nothing is
+    joined or checked, `~` and `$HOME` included: the service is the one authority on paths. A value bound on a
+    workflow input is the job's value of it (docs/inputs-and-values.md), so the service is sent it as written, as it
+    is sent a step's. `relative_to` is `basepath`, and the Slurm settings are `leader` and `steps` as they were before
+    one RunConfig served every place, each left out when none of its fields is given."""
     workflow = _workflow(out, model)
     if on_workflow:
         step = workflow.steps[0]
         step.inputs.out, step.inputs.model = workflow.inputs.out, workflow.inputs.model
         workflow.inputs.out, workflow.inputs.model = out, model
-    config = RunConfig('results').basepath('/projects/lab') if basepath else None
+    config, said = None, dict[str, typing.Any]()
+    if drawn is not None:
+        (folder, relative_to), slurm, level = drawn
+        config = RunConfig(folder).slurm_settings(slurm)
+        if relative_to is not None:
+            config.relative_to(relative_to)
+        if level is not None:
+            config.log_level(typing.cast(typing.Any, level))
+        said = _sent(workflowOutDir=folder, basepath=relative_to, logLevel=level)
+        said |= {job: sent for job, sent in (
+            ('leader', _sent(partition=slurm.partition, time=slurm.time, memory=slurm.memory)),
+            ('steps', _sent(partition=slurm.steps_partition, time=slurm.steps_time,
+                            gpuPartition=slurm.gpu_partition))) if sent}
     request = compute.build_request(workflow, config)
-    assert set(request) == {'id', 'workflow', 'inputs', *(['basepath', 'workflowOutDir'] if basepath else [])}
-    assert request.get('basepath', '/projects/lab') == '/projects/lab'
+    assert {name: value for name, value in request.items() if name not in ('id', 'workflow', 'inputs')} == said
     assert request['workflow']['class'] == 'Workflow' and request['workflow']['cwlVersion'] == 'v1.2'
     assert all(isinstance(step['run'], dict) for step in request['workflow']['steps'])
     named = '' if on_workflow else 'write~'
@@ -104,7 +135,7 @@ def test_a_nextflow_request_is_the_service_form_with_every_path_as_written_and_e
     vendored schema takes. Each value is bound on the step, scattered over two output folders, or on the workflow."""
     scatter, on_workflow = bound == 'scattered', bound == 'workflow'
     workflow = autoseg(plate, [folder, 'segmentation-b'] if scatter else folder, models, on_workflow)
-    config = RunConfig('results').basepath('/projects/lab') if basepath else None
+    config = RunConfig('results').relative_to('/projects/lab') if basepath else None
     names = ('input', 'output', 'model') if on_workflow else ('autoseg_input', 'autoseg_output', 'autoseg_model')
     if folder.startswith('/'):
         with pytest.raises(compute.RequestRefused) as refused:
@@ -222,90 +253,60 @@ def test_a_run_id_is_the_workflow_name_the_time_and_four_hex_digits_within_the_s
     assert len({compute.new_run_id(name, now) for _ in range(8)}) > 1
 
 
-def _camel(name: str) -> str:
-    first, *rest = name.split('_')
-    return first + ''.join(word.capitalize() for word in rest)
-
-
-#: A valid value of every field RunConfig's setters set, as the request holds it.
-_VALID: typing.Final[dict[str, typing.Any]] = {
-    'basepath': '/projects/lab', 'leader': {'partition': 'normal', 'time': '1-00:00:00', 'memory': '8G'},
-    'steps': {'partition': 'normal', 'gpuPartition': 'gpu', 'time': '10'}, 'logLevel': 'DEBUG'}
-
-
-def _setters() -> dict[str, inspect.Signature]:
-    """RunConfig's setters, each named as the field of the request it sets: every public attribute of it, so that one
-    which is not a setter fails `_set_every_field`."""
-    return {name: inspect.signature(getattr(RunConfig, name)) for name in vars(RunConfig) if not name.startswith('_')}
-
-
-def _set_every_field(config: RunConfig) -> RunConfig:
-    """Call each setter of `config` with every argument it takes, each the value `_VALID` gives its field."""
-    for name, signature in _setters().items():
-        field = _camel(name)
-        parameters = list(signature.parameters.values())[1:]
-        positional = [_VALID[field] for parameter in parameters if parameter.kind is parameter.POSITIONAL_OR_KEYWORD]
-        keywords = {parameter.name: _VALID[field][_camel(parameter.name)] for parameter in parameters
-                    if parameter.kind is parameter.KEYWORD_ONLY}
-        assert getattr(config, name)(*positional, **keywords) is config, name
-    return config
-
-
 @pytest.mark.fast
 def test_a_request_is_refused_or_sent_as_the_vendored_schema_says() -> None:
     """The vendored schema is a JSON Schema 2020-12 document that takes its own example. Every field it refuses is a
-    line in its words, all at once, each where it is and what the field is; a workflow with a real-time analysis is
-    refused before sending, naming the analysis, rather than dropped. The constructor and every setter of RunConfig,
-    each given a valid value, reach exactly the schema's top-level properties but id, engine, workflow and inputs, which
-    the workflow and its target give, each under its own name; the keywords of `leader` and `steps` are the properties
-    of its Leader and Steps, camelCased; the folder is left out of the request without one, for the run's own folder, so
-    `basepath`, which requires it, is then refused before sending, saying what to do; and no setter touches where the
-    outputs go. Called again, a setter replaces what it is passed again and keeps the rest; what no setter sets is left
-    out of the request, for the service's own settings. The vendored schema and RunConfig cannot drift apart."""
+    line, all at once with the problems of the outputs folder and `relative_to`, naming what the user wrote and what
+    the field is in the schema's words, a folder or a `relative_to` that is not a string among them; a workflow with a
+    real-time analysis is refused before sending, naming the analysis, rather than dropped. The six rows that send
+    `SlurmSettings` reach every property of the schema's Leader and Steps, each from exactly one field, in the order
+    the class declares its fields; a RunConfig given every setting reaches exactly the schema's top-level properties
+    but id, engine, workflow and inputs, which the workflow and its target give; its log levels are the schema's.
+    Called again, a setter replaces what it set; what no setter sets is left out of the request, for the service's
+    own settings. The vendored schema and RunConfig cannot drift apart."""
     Draft202012Validator.check_schema(compute.SCHEMA)
     assert Draft202012Validator(compute.SCHEMA).is_valid(compute.SCHEMA['examples'][0])
     with pytest.raises(compute.RequestRefused) as refused:
-        compute.build_request(_workflow(), RunConfig('results').leader(time='3 days', memory='8GB')
-                              .log_level('LOUD')  # type: ignore[arg-type]
-                              .steps(partition='a b'))
+        compute.build_request(_workflow(), RunConfig('results').relative_to('projects/lab').slurm_settings(
+            SlurmSettings(time='3 days', memory='8GB', steps_partition='a b'))
+            .log_level('LOUD'))  # type: ignore[arg-type]  # a level the schema refuses
     assert sorted(refused.value.messages) == [
-        "leader.memory: '8GB' is not the leader's memory, as Slurm writes it: a whole number with K, M, G or T, "
-        'such as 8G',
-        "leader.time: '3 days' is not a Slurm time limit: M, M:S, H:M:S, D-H, D-H:M or D-H:M:S, such as 3-00:00:00",
-        "logLevel: 'LOUD' is not Toil's log level: DEBUG, INFO (the default), WARNING or ERROR; a Nextflow run does "
-        'not use it',
-        "steps.partition: 'a b' is not a Slurm partition of this cluster: letters, digits, '_', '.' or '-'"]
-    request = compute.build_request(_workflow(), RunConfig('results')
-                                    .leader(partition='normal', time='1-00:00:00', memory='8G')
-                                    .steps(partition='normal', gpu_partition='gpu', time='10').log_level('DEBUG'))
-    assert (request['leader']['time'], request['steps']['gpuPartition'], request['logLevel']) == (
-        '1-00:00:00', 'gpu', 'DEBUG')
+        "SlurmSettings(memory=...): '8GB' is not the leader's memory, as Slurm writes it: a whole number with K, M, "
+        'G or T, such as 8G',
+        "SlurmSettings(steps_partition=...): 'a b' is not a Slurm partition of this cluster: letters, digits, '_', "
+        "'.' or '-'",
+        "SlurmSettings(time=...): '3 days' is not a Slurm time limit: M, M:S, H:M:S, D-H, D-H:M or D-H:M:S, such as "
+        '3-00:00:00',
+        "log_level(...): 'LOUD' is not Toil's log level: DEBUG, INFO (the default), WARNING or ERROR; a Nextflow run "
+        'does not use it',
+        "relative_to('projects/lab') is not an absolute path: give the folder the relative paths are read from as "
+        'one']
+    workflow = {'class': 'Workflow', 'cwlVersion': 'v1.2'}
+    path: typing.Any = Path('/x')  # a path, not the string the request holds
+    for config, said in ((RunConfig(path), "RunConfig(...): PosixPath('/x') is not the outputs folder: "),
+                         (RunConfig('r').relative_to(path),
+                          "relative_to(...): PosixPath('/x') is not an absolute directory on the cluster")):
+        with pytest.raises(compute.RequestRefused) as refused:
+            compute.request_for('r1', workflow, {}, config)
+        ((line,),) = [refused.value.messages]
+        assert line.startswith(said), line
     with pytest.raises(compute.RequestRefused, match="real-time analysis 'touch', which the compute service never"):
         compute.build_request(live_workflow('live'))
     properties, defs = compute.SCHEMA['properties'], compute.SCHEMA['$defs']
-    workflow = {'class': 'Workflow', 'cwlVersion': 'v1.2'}
+    assert sorted(compute.SLURM_FIELDS.values()) == sorted(
+        (job, key) for job in ('leader', 'steps') for key in defs[job.capitalize()]['properties'])
+    assert list(compute.SLURM_FIELDS) == [field.name for field in dataclasses.fields(SlurmSettings)]
     core = {'id': 'r1', 'workflow': workflow, 'inputs': {}}
-    named = compute.request_for('r1', workflow, {}, _set_every_field(RunConfig(workflow_out_dir='results')))
-    assert set(named) == set(properties) - {'engine'}
-    assert named == core | {'workflowOutDir': 'results'} | _VALID
-    with pytest.raises(compute.RequestRefused) as refused:
-        compute.request_for('r1', workflow, {}, _set_every_field(RunConfig()))
-    assert refused.value.messages == (
-        'workflowOutDir: required with basepath: send workflowOutDir, or send no basepath',)
+    every = RunConfig('results').relative_to('/projects/lab').log_level('DEBUG').slurm_settings(
+        SlurmSettings(**{field.name: '10' for field in dataclasses.fields(SlurmSettings)}))
+    assert set(compute.request_for('r1', workflow, {}, every)) == set(properties) - {'engine'}
     assert compute.request_for('r1', workflow, {}, RunConfig()) == compute.request_for('r1', workflow, {}) == core
-    for name in ('leader', 'steps'):
-        keywords = {_camel(parameter.name) for parameter in _setters()[name].parameters.values()
-                    if parameter.kind is parameter.KEYWORD_ONLY}
-        assert keywords == set(defs[name.capitalize()]['properties']), name
     levels = typing.get_args(typing.get_type_hints(RunConfig.log_level)['level'])
     assert set(levels) == set(properties['logLevel']['enum'])
-    config = RunConfig('results').basepath('/shared/lab').leader(time='2:00:00', memory='4G')
-    config.steps(time='30:00').leader(memory='8G', partition='normal').basepath('/shared/lab2')
-    request = compute.request_for('r1', {'class': 'Workflow', 'cwlVersion': 'v1.2'}, {}, config)
-    assert request == {'id': 'r1', 'workflow': {'class': 'Workflow', 'cwlVersion': 'v1.2'}, 'inputs': {},
-                       'workflowOutDir': 'results',
-                       'basepath': '/shared/lab2', 'leader': {'time': '2:00:00', 'memory': '8G', 'partition': 'normal'},
-                       'steps': {'time': '30:00'}}
+    config = RunConfig('results').relative_to('/shared/lab').slurm_settings(SlurmSettings(time='2:00:00', memory='4G'))
+    config.slurm_settings(SlurmSettings(steps_time='30:00')).relative_to('/shared/lab2')
+    assert compute.request_for('r1', workflow, {}, config) == core | {
+        'workflowOutDir': 'results', 'basepath': '/shared/lab2', 'steps': {'time': '30:00'}}
 
 
 #: The header the service names itself in, on every answer.

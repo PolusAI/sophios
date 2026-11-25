@@ -23,6 +23,7 @@ from referencing.jsonschema import DRAFT202012
 
 from sophios import compute
 from sophios.compute import RunConfig
+from sophios.runtime import runners
 from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
 from sophios.api.python.workflow import Step, Workflow
 from sophios.runtime.status import RunState, RunStatus
@@ -228,7 +229,7 @@ def test_a_request_the_driver_refuses_names_each_input_and_says_to_send_basepath
     service = compute.Service(cluster.url)
     with pytest.raises(compute.RequestRefused) as refused:
         service.submit(_workflow(cluster, location='data/missing.txt'),
-                       RunConfig('results').basepath(str(cluster.shared)))
+                       RunConfig('results').relative_to(str(cluster.shared)))
     (problem,) = refused.value.messages
     assert problem.startswith('input show~file: data/missing.txt') and 'does not exist' in problem
     with pytest.raises(compute.RequestRefused) as refused:
@@ -238,6 +239,31 @@ def test_a_request_the_driver_refuses_names_each_input_and_says_to_send_basepath
         'workflowOutDir, the outputs folder relative to basepath',)
     with pytest.raises(compute.RequestRefused, match='there is no run nope'):
         service.attach('nope')
+
+
+def test_the_client_refuses_an_output_folder_and_relative_to_exactly_as_the_driver_reads_them(
+        cluster: Cluster) -> None:
+    """The rules of an output folder with or without `relative_to` that are the driver's and not the schema's
+    (`runners.read_config`): the client refuses an absolute folder with `relative_to`, a path from `/` or a `file:`
+    URL in either case, and a relative folder without one, exactly when the driver, sent the same pair unchecked,
+    refuses it for that reason; what the driver reads otherwise, a URL, a path for a shell or an empty name, it leaves
+    to the driver's own words. So the client never refuses what the service takes, nor advises what the service then
+    refuses. Each request also names a missing input, so the driver refuses every one and starts no run."""
+    client = compute._Client(cluster.url)  # pylint: disable=protected-access  # the request, sent unchecked
+    absolute = str(cluster.shared / 'pairs')
+    for folder in (absolute, f'file://{absolute}', f'FILE://{absolute}', 'pairs', 'pairs/deeper', './pairs', '~/pairs',
+                   '$HOME/pairs', 'http://x/y', 'C:\\pairs', ''):
+        for relative_to in (None, str(cluster.shared)):
+            config = RunConfig(folder) if relative_to is None else RunConfig(folder).relative_to(relative_to)
+            ours = runners.read_config(config, local=False).problems
+            request = compute.build_request(_workflow(cluster, location=str(cluster.shared / 'missing.txt')))
+            request |= {'workflowOutDir': folder} | ({} if relative_to is None else {'basepath': relative_to})
+            theirs = [error['message'] for error in client.call('POST', '/runs', body=request).json()['errors']]
+            assert [any('is an absolute path, and relative_to(' in line for line in ours),
+                    any('is relative, and no relative_to' in line for line in ours)] == [
+                any(line.startswith(f'{folder} is an absolute path, and with basepath') for line in theirs),
+                any(line.startswith(f'{folder} is relative: send basepath') for line in theirs)], (
+                folder, relative_to, ours, theirs)
 
 
 def test_a_path_written_for_a_shell_is_sent_as_written_and_the_driver_refuses_it(cluster: Cluster) -> None:
@@ -388,11 +414,11 @@ def _ended(cluster: Cluster, run: compute.Run) -> RunStatus:
 
 def test_workflow_out_dir_files_an_output_folder_given_as_a_name_under_that_name_and_takes_no_second_run(
         toil_cluster: Cluster, tmp_path: Path) -> None:
-    """With real Toil: an output folder sent as just a name is made in the run, never read against basepath, and
-    lands in <the RunConfig's folder, relative to basepath>/<name>; that folder is created when missing. Once it holds
-    the outputs, the same RunConfig is refused for a new run, which would replace them."""
+    """With real Toil: an output folder sent as just a name is made in the run, never read against relative_to, and
+    lands in <the RunConfig's folder, relative to relative_to>/<name>; that folder is created when missing. Once it
+    holds the outputs, the same RunConfig is refused for a new run, which would replace them."""
     results = toil_cluster.shared / 'results'
-    config = RunConfig('results').basepath(str(toil_cluster.shared))
+    config = RunConfig('results').relative_to(str(toil_cluster.shared))
     service = compute.Service(toil_cluster.url)
     run = service.submit(_writes(tmp_path, 'segmentation'), config)
     status = _ended(toil_cluster, run)
@@ -524,7 +550,7 @@ def _made(value: Any) -> Any:
 def test_a_containerized_gpu_tool_returns_on_nextflow_the_output_folders_it_returns_on_cwl(
         toil_cluster: Cluster, nextflow_cluster: Cluster) -> None:
     """The owner's segmentation shape, with real Nextflow and real Toil, run with one folder given a name, its paths
-    absolute, and scattered over two, its paths relative to `basepath`. On Nextflow it runs in its container, through
+    absolute, and scattered over two, its paths relative to `relative_to`. On Nextflow it runs in its container, through
     the stand-in for `singularity`, which finds no runscript, and each task job asks Slurm for the GPU; on CWL with no
     container and no GPU, which Toil refuses on a machine with neither. `outputs()` is the same, attached to or not:
     the same names, the same shapes, the same basenames, holding the same files, each in the run's outputs folder.
@@ -541,7 +567,7 @@ def test_a_containerized_gpu_tool_returns_on_nextflow_the_output_folders_it_retu
                                                    ('Directory', 'segmentation-b', held)]})):
         runs = {target: compute.Service(cluster.url).submit(
             _segments('lab' if scatter else str(cluster.shared / 'lab'), scatter, container=target == 'nextflow'),
-            RunConfig('segmented').basepath(str(cluster.shared)) if scatter else None, target=target)
+            RunConfig('segmented').relative_to(str(cluster.shared)) if scatter else None, target=target)
             for cluster, target in targets}
         for cluster, target in targets:
             run = runs[target]
@@ -591,7 +617,7 @@ def test_outputs_of_one_file_name_and_a_folder_staged_writable_agree_on_nextflow
         (cluster.shared / 'plate1').mkdir()
         (cluster.shared / 'plate1' / 'a.tif').write_text('a.tif', encoding='utf-8')
         (cluster.shared / 'plate1' / 'b.tif').write_text('b.tif', encoding='utf-8')
-    runs = {target: compute.Service(cluster.url).submit(workflow, RunConfig('copies').basepath(str(cluster.shared)),
+    runs = {target: compute.Service(cluster.url).submit(workflow, RunConfig('copies').relative_to(str(cluster.shared)),
                                                         target=target) for cluster, target in targets}
     for cluster, target in targets:
         run, folder = runs[target], cluster.shared / 'copies'

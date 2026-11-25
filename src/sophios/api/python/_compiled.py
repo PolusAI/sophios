@@ -94,12 +94,16 @@ class CompiledNextflowWorkflow:
     #: objects that were printed.
     diagnostics: tuple[Diagnostic, ...]
 
-    def write(self, path: str | Path | None = None) -> Path:
+    def write(self, path: str | Path | None = None, *, container_engine: str = "docker") -> Path:
         """Write everything Nextflow needs, `workflow.nf`, `nextflow.config` and `nextflow_params.json`, and the
-        record `nextflow_workflow.json`, into the directory `path`.
+        record `nextflow_workflow.json`, into the directory `path`, the pipeline written for `container_engine`,
+        `docker` or `singularity`, as the command line's `--container_engine` writes it.
 
         `path` defaults to the current directory. Returns the directory.
+
+        Raises:
+            ValueError: Another engine, before anything is written.
         """
         directory = Path(path if path is not None else ".")
-        write_nextflow_artifacts(self.nextflow_workflow, directory)
+        write_nextflow_artifacts(self.nextflow_workflow, directory, container_engine)
         return directory
