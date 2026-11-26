@@ -32,7 +32,8 @@ from sophios.ir.refusals import NotLowered
 from sophios.ir.resolved import ResolvedWorkflow, bind
 from sophios.ir.types import AuthoredName
 from sophios.lang import CwlRecord, Diagnostic, Diagnostics, Document, ParseResult, Severity, SophiosError, render
-from sophios.lang.cwl import Process, SCATTER_METHODS, canonical, ports_named, tool_process
+from sophios.lang.cwl import Process, canonical, ports_named, tool_process
+from sophios.lang.types import SCATTER_METHODS
 from sophios.lang.diagnostics import report
 from sophios.lang import Step as LangStep
 from sophios.lang.error_codes import SophiosErrorCode

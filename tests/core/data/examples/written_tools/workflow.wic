@@ -1,0 +1,13 @@
+# Tools written in .wic: a `script:` that writes a file, a command whose `stdout` is an output, and a script whose
+# `stderr` is one. A tool that says where its output is runs as it says on every target.
+steps:
+- id: shout
+  run: shout.wic
+  in: {message: !ii hello world}
+  out: [result: !& shouted]
+- id: copy
+  run: copy.wic
+  in: {source: !* shouted}
+- id: complain
+  run: complain.wic
+  in: {note: !ii diagnostic}

@@ -16,6 +16,7 @@ from sophios.ir.lower import output_step
 from sophios.ir.resolve import RegistrySnapshot, ResolvedDocument, ResolvedStep, resolve
 from sophios.lang import (CwlRecord, Diagnostic, Document, EdgeRef, InlineLiteral, InputValue, RawCwlRef,
                           Severity, SophiosError, SophiosErrorCode, SourceSpan, UnresolvedName, WicSidecar, to_json)
+from sophios.cwl.lowering import process_of
 from sophios.lang.diagnostics import report
 from sophios.wic_types import StepId, Tools
 
@@ -346,9 +347,9 @@ def _build_process(resolved: ResolvedStep, registry: RegistrySnapshot) -> "Step 
 
     if resolved.process.child is not None:
         return _build_workflow(resolved.process.child, registry)
-    assert isinstance(resolved.process.declaration, dict)  # a tool's CWL; Resolve checked it
+    assert resolved.process.node is not None  # a tool; Resolve checked it
     with authored_at(resolved.source.span):
-        step = Step.from_cwl_document(resolved.process.declaration, process_name=resolved.source.id,
+        step = Step.from_cwl_document(process_of(resolved.process.node), process_name=resolved.source.id,
                                       run_path=resolved.process.run_path)
     tool = registry.tool(resolved.process.key)
     if tool is not None:  # the tool's own document, which a compile is held to the version of

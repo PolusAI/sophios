@@ -24,14 +24,14 @@ records.wic:
     records.cwl:
       steps:
       - {id: sink, in: {file: f, extras: {exact: {source: [f], linkMerge: merge_nested}}}}
-      - {id: mk_file@2, in: {name: wf_name, go: {exact: {source: go}}}, when: $(inputs.go)}
+      - {id: mk_file@2, in: {name: wf_name, go: {exact: go}}, when: $(inputs.go)}
       - {id: mk_file@3}
-      - {id: relayed, in: {sink~file: {source: mk_file@3/file}}}
+      - {id: relayed, in: {sink~file: mk_file@3/file}}
       - {id: count, in: {file: {exact: {source: w, loadContents: true}}}}
       requirements: {keys: [InlineJavascriptRequirement, MultipleInputFeatureRequirement,
                             SubworkflowFeatureRequirement]}
     records~relayed.cwl:
-      steps: [{id: sink, in: {file: {source: sink~file}}}]   # the boundary input the edge is relayed through
+      steps: [{id: sink, in: {file: sink~file}}]   # the boundary input the edge is relayed through
 untyped.wic:
   written:
     untyped.cwl:
@@ -53,16 +53,16 @@ calls.wic:
     calls.cwl:
       steps:
       - {id: string_source}
-      - {id: wrapper, in: {mk_file~name: {source: string_source/value}}}
+      - {id: wrapper, in: {mk_file~name: string_source/value}}
       - {id: made}
-      - {id: count, in: {file: {source: made/result}}}
+      - {id: count, in: {file: made/result}}
       - {id: producer, scatter: [seed]}
-      - {id: consumer, in: {outer_name: {source: producer/make~value}}, scatter: [outer_name]}
+      - {id: consumer, in: {outer_name: producer/make~value}, scatter: [outer_name]}
       - {id: unbound, in: {name: string_source/value}}   # left unbound by the call, so inference's to give
       inputs: {keys: [made~mk_file~name, producer~seed]}
     # `shared` is threaded down through one boundary input per level, each reaching the same sink.
-    calls~wrapper.cwl: {steps: [{id: deep, in: {mk_file~name: {source: mk_file~name}}}], inputs: {keys: [mk_file~name]}}
-    calls~wrapper~deep.cwl: {steps: [{id: mk_file, in: {name: {source: mk_file~name}}}],
+    calls~wrapper.cwl: {steps: [{id: deep, in: {mk_file~name: mk_file~name}}], inputs: {keys: [mk_file~name]}}
+    calls~wrapper~deep.cwl: {steps: [{id: mk_file, in: {name: mk_file~name}}],
                              inputs: {keys: [mk_file~name]}}
     calls~consumer.cwl: {steps: [{id: take, in: {inner_name: outer_name}}]}
 choice.wic:

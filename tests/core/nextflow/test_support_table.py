@@ -12,8 +12,9 @@ import yaml
 from cwl_utils.parser import cwl_v1_2
 
 from sophios.lang import SUPPORT_MATRIX
+from sophios.lang.cwl_tool import READ
 from sophios.ir.refusals import NotLowered, Refusal
-from sophios.nextflow.support import FIELDS, REQUIREMENT_CLASSES, State
+from sophios.nextflow.support import FIELDS, REQUIREMENT_CLASSES, State, consumed
 from sophios.wic_types import Yaml
 
 from .testkit import lowered_case, step, tool
@@ -39,6 +40,17 @@ def test_the_table_classifies_every_field_cwl_declares_under_a_construct() -> No
     for classes in REQUIREMENT_CLASSES.values():
         for name, row in classes.items():
             assert _declared_fields(name) and (row.state is State.REJECTED or name in FIELDS), name
+
+
+@pytest.mark.fast
+def test_what_the_reader_holds_a_value_of_is_what_the_table_consumes() -> None:
+    """A field the CWL reader moves into a node is one the target consumes, and a field the target lowers is one the
+    reader moves: the version, which the target follows without reading, and a vendor class's own name, which no field
+    holds, are the two it does not."""
+    for owner, held in READ.items():
+        assert held <= consumed(FIELDS[owner]), owner
+        lowered = {name for name, row in FIELDS[owner].items() if row.state is State.LOWERED}
+        assert lowered - held <= {"cwlVersion", "class"} and (owner != "CommandLineTool" or "class" in held), owner
 
 
 def _strings() -> Yaml:

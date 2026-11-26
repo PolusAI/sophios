@@ -13,12 +13,11 @@ from ..ir.resolved import (
     output_unbound, spelling, tool_steps,
 )
 from ..ir.types import AuthoredName
-from ..lang.cwl import canonical, read_type, required
 from ..lang.diagnostics import Diagnostic, SophiosError
 from ..lang.error_codes import SophiosErrorCode
 from ..lang.subset import Expr
-from ..lang.types import PortDeclaration, spell
-from ..wic_types import Tool
+from ..lang.tools import ToolNode
+from ..lang.types import PortDeclaration, read_type, required, spell
 from .analyze import (
     _Step, _WhenError, _absent_optional_findings, _call_findings, _carried, _condition_value,
     _conditional_consumer_findings, _json_value, _lists, _param_type, _scatter_findings, _staged_name_findings,
@@ -32,8 +31,9 @@ from .model import (
     reference_problems, staged_write_problems, topological_order, with_scalar_types,
 )
 from .tool import (
-    ABSENT_VAL_SENTINEL, _Finding, _Tool, _Unsupported, _command, _container, _cuda_notes, _identifier, _iwdr_entries,
-    _normalized_identifiers, _ports, _resources, _tool_capability_findings, local_locations_as_paths,
+    ABSENT_VAL_SENTINEL, _Finding, _Tool, _Unsupported, _command, _container, _cuda_notes, _generated_files,
+    _identifier, _iwdr_entries, _normalized_identifiers, _ports, _resources, _tool_capability_findings,
+    local_locations_as_paths,
 )
 
 
@@ -47,7 +47,7 @@ def _process(step: _Step) -> tuple[NfProcess, Expr | None]:
     """A step's process, before the workflow types its inputs, and its condition, which needs them typed."""
     name = _identifier(step.node.name, variable=False)
     inputs = _ports(step.tool.inputs, outputs=False, entries=_iwdr_entries(step.tool))
-    outputs = _ports(step.tool.outputs, outputs=True)
+    outputs = _ports(step.tool.outputs, outputs=True, body=step.tool.body)
     command, container, resources = _command(step.tool), _container(step.tool), _resources(step.tool)
     condition = _condition_value(step) if step.node.condition is not None else None
     # A carried input is a val, staging nothing, and a list where what it delivers is one.
@@ -58,7 +58,8 @@ def _process(step: _Step) -> tuple[NfProcess, Expr | None]:
         raise _Unsupported(_REFERENCE_CODES.get(rule, SophiosErrorCode.NF_INVALID_CWL), problem)
     if problems := staged_write_problems(name, inputs, outputs, command):
         raise _Unsupported(SophiosErrorCode.NF_WRITE_THROUGH_STAGED, problems[0])
-    return NfProcess(name, inputs, outputs, command, container, resources, step_only_inputs=carried), condition
+    return NfProcess(name, inputs, outputs, command, container, resources, step_only_inputs=carried,
+                     files=_generated_files(step.tool)), condition
 
 
 def _typed(processes: list[NfProcess], connections: list[NfConnection], param_types: Mapping[str, str],
@@ -217,7 +218,7 @@ def _default_bindings(
                 continue
             elif declared.default is not None:
                 value = _json_value(declared.default)
-            elif required(canonical(declared.type_))[1]:
+            elif required(spell(declared.type))[1]:
                 # Capability analysis has already proven this unwired, no-default optional input is a safe absence.
                 # _apply_absent_sentinel converts None to the runtime-proven [] representation once, at the end of
                 # the conversion.
@@ -226,7 +227,7 @@ def _default_bindings(
                 continue
             port_name = _identifier(raw_name)
             made.append((f"{step.node.name}~{raw_name}", process.name, port_name, value,
-                         _param_type(canonical(declared.type_))))
+                         _param_type(spell(declared.type))))
     names = _normalized_identifiers([*workflow_inputs, *(name for name, *_ in made)], context="workflow parameter")
     return (
         [NfWorkflowInputConnection(names[name], process, port) for name, process, port, *_ in made],
@@ -271,7 +272,7 @@ class _Lowering:
         steps: list[_Step] = []
         refused: list[_Finding] = []
         for found in tool_steps(view):
-            if not isinstance(run := found.step.run, Tool):
+            if not isinstance(run := found.step.run, ToolNode):
                 continue
             try:
                 steps.append(_Step(found, _Tool.of(run, found.step.inherited), _carried(found)))
@@ -351,7 +352,7 @@ def _step_refusal(node: ResolvedStep, finding: _Finding, *, root: str) -> Refusa
         case "run":
             field_path = after.removeprefix(".")
             construct, text = Construct.TOOL, finding.text
-            tool_file = Path(node.run.run_path).name if isinstance(node.run, Tool) else node.name
+            tool_file = Path(node.run.run_path).name if isinstance(node.run, ToolNode) else node.name
             subject = f"{tool_file}: {field_path}" if field_path else tool_file
         case "requirements" | "hints":
             construct, subject, text = Construct.REQUIREMENT, name or None, _with_field(within, finding.text)
@@ -566,6 +567,6 @@ def nextflow_names(view: ResolvedWorkflow) -> dict[str, dict[str, str]]:
     """
     return {
         "processes": {_identifier(tool.step.name, variable=False): tool.step.name
-                      for tool in tool_steps(view) if isinstance(tool.step.run, Tool)},
+                      for tool in tool_steps(view) if isinstance(tool.step.run, ToolNode)},
         "outputs": {_identifier(port.name): port.name for port in view.outputs},
     }

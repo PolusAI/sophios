@@ -11,12 +11,18 @@ Nextflow target's Groovy rendering and reading are ``sophios.nextflow.expr``.
 from dataclasses import dataclass
 import math
 import re
-from typing import Mapping, TypeAlias
+from typing import Final, Mapping, TypeAlias
+
+from cwl_utils.errors import SubstitutionError
+from cwl_utils.expression import scanner
 
 NUMBER = "number"
 BOOLEAN = "boolean"
 STRING = "string"
 NULL = "null"
+
+#: Where a CWL expression starts: a parameter reference or a JavaScript expression, `$(`, or a function body, `${`.
+EXPRESSION: Final = re.compile(r'\$[({]')
 
 _SCALAR_TYPES = {"int": NUMBER, "float": NUMBER, "boolean": BOOLEAN, "string": STRING}
 _UNARY = frozenset({"!", "-", "+"})
@@ -456,3 +462,29 @@ def _body(node: Expr, outer: int) -> str:
             text = f"{_body(left, level - 1)} {op} {_body(right, level)}"
             return f"({text})" if level <= outer else text
     raise TypeError(f"not a node of the subset: {node!r}")
+
+
+def boolean_problem(written: object, type_: str | None) -> str | None:
+    """Why a `when` written `written`, of the subset's type `type_`, cannot give `true` or `false`, which CWL
+    requires of one, the `when` quoted first; `None` when it gives one, and when nothing here can tell: the subset
+    cannot parse or type it, or it is not a string, which cwltool's schema validation refuses itself."""
+    if isinstance(written, str) and one_expression(written) is None:
+        return f'{written!r} is not one $(...) or ${{...}} expression'
+    if type_ not in (None, BOOLEAN):
+        return f'{written!r} must compute a boolean, not a {type_}'
+    return None
+
+
+def one_expression(field: str) -> str | None:
+    """How `field` opens, `$(` or `${`, when it is one CWL expression from end to end; else None.
+
+    Read as cwltool reads an expression field: stripped of surrounding whitespace, then scanned by
+    `cwl_utils.expression.scanner`, as `interpolate` in cwl_utils/expression.py scans it. Anything else is a template,
+    text with or without expressions in it, which evaluates to text.
+    """
+    text = field.strip()
+    try:
+        span = scanner(text)
+    except SubstitutionError:
+        return None
+    return text[:2] if span == (0, len(text)) and text[:2] in ('$(', '${') else None

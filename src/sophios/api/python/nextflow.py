@@ -246,6 +246,9 @@ def _tool(model: ExecutableNextflowWorkflow, process: NfProcess,
             getattr(tool, stream)(_text(target, paths))
     for variable in command.env:
         tool.env_var(variable.name, _text(variable.value, paths))
+    if process.files:
+        tool.initial_workdir([{"class": "File", "basename": file.name, "contents": file.text}
+                              for file in process.files])
     for port in process.inputs:
         if port.entry is not None:
             tool.stage(inputs[port.name], writable=port.entry.copy, entryname=port.entry.name)

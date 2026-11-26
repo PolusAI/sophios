@@ -4,10 +4,8 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast
 
-from sophios.lang.cwl import read_type
-from sophios.lang.types import layered, spell
 from sophios.lang import CwlRecord, EdgeRef, InlineLiteral, InputValue, UnresolvedName
-from sophios.lang.cwl import PICKS_ONE
+from sophios.lang.types import PICKS_ONE, layered, read_type, spell
 from sophios.lang.spans import SourceSpan
 
 from ._utils import (contains_any_type,

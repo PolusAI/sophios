@@ -146,5 +146,4 @@ def _process_namespaces(graph: WorkflowGraph, step: StepNode,
         return child.namespaces
     definition = registry.tool(step.run)
     assert definition is not None, f'{step.run} is in the registry once resolved'
-    declared = definition.cwl.get('$namespaces')
-    return tuple((str(prefix), uri) for prefix, uri in declared.items()) if isinstance(declared, dict) else ()
+    return definition.node.namespaces

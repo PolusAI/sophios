@@ -8,7 +8,8 @@ from dataclasses import dataclass, field
 
 from ..lang.diagnostics import Diagnostics
 from ..lang.spans import SourceSpan
-from ..wic_types import Cwl, Tool
+from ..lang.tools import ToolNode
+from ..wic_types import Cwl
 from .policy import RunPolicy
 from .realtime import Declaration
 from .types import StepId, WorkflowGraph
@@ -42,7 +43,7 @@ class CompilationResult:
 
     graph: WorkflowGraph
     #: The tool each tool step runs, at any depth: the registry's, packed where it refers to files beside it.
-    tools: Mapping[StepId, Tool]
+    tools: Mapping[StepId, ToolNode]
     #: The version selected once for this compilation tree.
     lang_version: str
     #: The notes the compile made; a result never holds an error.

@@ -20,6 +20,7 @@ from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Outp
 from sophios.api.python.workflow import Step, Workflow
 from sophios.compiler import CompileSettings, compile_source
 from sophios.cwl.io import dump_wic_yaml
+from sophios.cwl.lowering import command_line_tool
 from sophios.ir.frontdoor import bundle_from_disk
 from sophios.lang import SophiosErrorCode, ToolDocument, parse
 from sophios.lang.cwl import canonical_type
@@ -147,11 +148,10 @@ def test_a_word_is_read_where_it_is_written(case: tuple[list[str], list[str] | N
 
 def _tool(document: dict[str, Any]) -> dict[str, Any]:
     """The CommandLineTool the tool `document` means when it is written as `.wic`, which the parser reads without a
-    diagnostic and lowers once, the CWL kept on the tool."""
+    diagnostic and the CWL target spells."""
     parsed = parse(dump_wic_yaml(document), 'tool.wic')
-    assert parsed.tool is not None and parsed.tool.cwl is not None and not parsed.diagnostics, [
-        str(found) for found in parsed.diagnostics]
-    return parsed.tool.cwl
+    assert parsed.tool is not None and not parsed.diagnostics, [str(found) for found in parsed.diagnostics]
+    return command_line_tool(parsed.tool)
 
 
 def _argv(tool: dict[str, Any], job: dict[str, Any]) -> list[str]:
@@ -179,7 +179,7 @@ def test_a_tool_means_the_cwl_its_row_states(case: dict[str, Any]) -> None:
     """A tool as `.wic` text is the CommandLineTool its row states, key for key and in the order of every list."""
     parsed = parse(case['wic'], 'tool.wic')
     assert parsed.tool is not None and not parsed.diagnostics, [str(found) for found in parsed.diagnostics]
-    assert parsed.tool.cwl == case['cwl']
+    assert command_line_tool(parsed.tool) == case['cwl']
 
 
 #: A value that is not there: its flag goes with it, and a dash word that is text stays.
@@ -313,9 +313,9 @@ def test_a_script_owns_its_command_line(inputs: dict[str, str], arguments: list[
                                      + ['arguments'] * bool(arguments)
                                      + ['requirements'] * isinstance(staged, dict))
     if not refused:
-        assert parsed.tool is not None and parsed.tool.cwl is not None
+        assert parsed.tool is not None
         job = {name: _SCRIPT_INPUTS[kind][1] for name, kind in sorted(inputs.items())}
-        assert _argv(parsed.tool.cwl, job) == [
+        assert _argv(command_line_tool(parsed.tool), job) == [
             'env', *(word.format(name) for name, kind in sorted(inputs.items())
                      for word in _SCRIPT_INPUTS[kind][2] or ()), 'bash', '.script.sh']
 

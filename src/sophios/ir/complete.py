@@ -83,9 +83,8 @@ def _lift_values(graph: WorkflowGraph) -> WorkflowGraph:
     workflow_inputs = list(graph.workflow_inputs)
     job_bindings = list(graph.job_bindings)
     input_mapping = list(graph.input_mapping)
-    shorthand_relays = list(graph.shorthand_relays)
 
-    def lift(step: StepNode, port: Port, value: OpaqueCwl, span: SourceSpan | None) -> DerivedName:
+    def lift(step: StepNode, port: Port, value: OpaqueCwl, span: SourceSpan | None) -> None:
         name = DerivedName(step.id, port.id.port)
         declaration = feeding_declaration(step, port)
         workflow_inputs.append(WorkflowPort(name, declaration))
@@ -93,14 +92,14 @@ def _lift_values(graph: WorkflowGraph) -> WorkflowGraph:
             port.id.port, declaration, value, scatter_rank=input_rank(step, port.id.port), span=span,
             locator=Locator(step.id.name, step.id.index, '/'.join(authored_path(port.id.port))))))
         input_mapping.append((name, (port.id,)))
-        return name
 
     for step in graph.steps:
         child = graph.child(step.id)
         bound = {binding.sink.port for binding in step.bindings}
         jobs = dict(child.job_bindings) if child is not None else {}
-        shorthand_relays += [lift(step, port, jobs[port.id.port], step.span) for port in step.inputs
-                             if port.id.port in jobs and port.id.port not in bound]
+        for port in step.inputs:
+            if port.id.port in jobs and port.id.port not in bound:
+                lift(step, port, jobs[port.id.port], step.span)
     for step in graph.steps:
         for binding in step.bindings:
             port = next(port for port in step.inputs if port.id == binding.sink)
@@ -111,7 +110,7 @@ def _lift_values(graph: WorkflowGraph) -> WorkflowGraph:
             if isinstance(value, InlineLiteral):
                 lift(step, port, value.value, value.span)
     return replace(graph, workflow_inputs=tuple(workflow_inputs), job_bindings=tuple(job_bindings),
-                   input_mapping=tuple(input_mapping), shorthand_relays=tuple(shorthand_relays))
+                   input_mapping=tuple(input_mapping))
 
 
 def _produced_type(graph: WorkflowGraph, port_id: PortId) -> Type:

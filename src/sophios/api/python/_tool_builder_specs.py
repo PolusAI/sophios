@@ -11,7 +11,8 @@ from typing import Any, ClassVar, Final, Self
 
 from cwl_utils.parser import cwl_v1_2 as _cwl_v12
 
-from sophios.lang.cwl import _hold_to_the_standard, canonical_type, required
+from sophios.lang.cwl import _hold_to_the_standard, canonical_type
+from sophios.lang.types import required
 from sophios.lang.types import Atom
 from sophios.lang.spans import SourceSpan
 

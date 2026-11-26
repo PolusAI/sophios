@@ -17,9 +17,8 @@ real-time declarations.
 
 1. **Parse** (`sophios.lang`) turns YAML into the versioned AST. Unknown CWL
    stays opaque. A document with `command:` or `script:` is read as a
-   `ToolDocument`, a place for each word and port, and lowered once, by
-   `lang/commandline.py`, to the `CommandLineTool` it means; the parser keeps
-   that CWL on the node. The front door (`sophios.ir.frontdoor`) parses each `.wic`
+   `ToolDocument`, a place for each word and port; `lang/wic_tool.py` reads what its lines mean and refuses
+   (`wic058`) the line a tool cannot mean. The front door (`sophios.ir.frontdoor`) parses each `.wic`
    file once, follows the steps to the files they reach, registers inline
    `run:` bodies and `run:` paths, and builds the bundle. A tool root becomes a
    workflow of one step that runs it. The Python API
@@ -36,6 +35,17 @@ real-time declarations.
    tool, and a registry key is fixed once, when discovery finds the file (a
    `.cwl` beside a `.wic` of one stem keeps the stem). The compiler reads the
    version the tools need after the front end, `wic060` if the pin is lower.
+   Resolve and every target but the CWL one hold a tool as a `ToolNode` (`sophios.lang.tools`): its ports, and a
+   body, what it runs and needs, read once by the reader of the language it is written in, where it reads the tool (a
+   tool the loader refuses holds the refusal, which a target that needs the body raises as `api004`). A command word,
+   an output's glob and what is made of its file are neutral kinds (`Word`, `Collect`). A requirement or hint a step
+   or a workflow writes is read where it is written and inherited by the tools beneath it. A CWL
+   process is read by `lang/cwl_tool.py`, through the standard's loader. A `.wic` tool is read by
+   `lang/wic_tool.py` from its lines (what each means is one `Plan`), laid over the CWL the document carries beside
+   them, which the CWL reader reads; no CWL is made of the lines. What the node holds no value of is named in an
+   `unread` for a target that cannot run it to refuse by name, and the document stays in the node, opaque, for the
+   CWL target to write back: a `.cwl` as it was read, a `.wic` tool spelled as a `CommandLineTool` from its `Plan`
+   (`cwl/lowering.py`). The Nextflow target lowers the node and reads no CWL.
 3. **Lower** builds an immutable `WorkflowGraph`: steps with complete port
    declarations, authored bindings, the workflow boundary, child graphs for
    subworkflows, and the real-time declarations. The compiler takes those out of
@@ -105,8 +115,11 @@ output maps to its concrete producing port rather than becoming a second
 producer.
 
 A port's type is a neutral `Type` (`sophios.lang.types`: an atom, an array, a
-union, or `Other` for what is carried as written and never judged), read from
-its spelling once, by the door; the CWL target spells it again. The
+union, a record, an enum, or `Other` for a name no door resolved), read from
+its spelling once, by the door; what a spelling says that no node holds (a key of a schema) is an `Unread` item on
+the port, and the CWL target spells the type again with it. A step's scatter method, merge and pick are enums, a
+`when` is the safe subset's tree and the inputs it reads; what the enums or the subset do not hold rides unread in the
+step's passthrough, which the CWL target writes back. The
 reference relation (`sophios.lang.types.relation`) rejects a reference
 only when it proves the endpoint types `DISJOINT`; `UNKNOWN`, which covers
 `Any`, named schemas and opaque records and enums, is deferred to the

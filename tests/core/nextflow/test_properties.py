@@ -116,7 +116,7 @@ def test_a_command_is_read_as_cwltool_reads_it(text: str, order: tuple[str, ...]
                        for segment in template.segments) == expected
     command = lower_command(_Tool.of(Tool("cmd.cwl", {
         "cwlVersion": "v1.2", "class": "CommandLineTool", "baseCommand": "cmd", "arguments": ["a", "b", "c"],
-        "inputs": {name: {"type": "string", "inputBinding": {}} for name in order}, "outputs": {}})))
+        "inputs": {name: {"type": "string", "inputBinding": {}} for name in order}, "outputs": {}}).node))
     templates = [token for token in command.tokens if isinstance(token, NfTemplate)]
     assert [[segment.value if isinstance(segment, NfLiteral) else getattr(segment, "name")
              for segment in token.segments] for token in templates] == [

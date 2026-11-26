@@ -1,0 +1,5 @@
+script: |
+  printf '%s\n' "$note" >&2
+inputs: {note: string}
+outputs: {errors: stderr}
+stderr: complaint.txt

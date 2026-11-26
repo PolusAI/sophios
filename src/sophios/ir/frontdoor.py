@@ -57,7 +57,7 @@ class _Reading:
         tool, and each port of the tool is an input of the workflow of its own name, so the job of the workflow is the
         job of the tool.
         """
-        if (tool := parsed.tool) is not None and tool.cwl is not None and not parsed.diagnostics.has_errors:
+        if (tool := parsed.tool) is not None and not parsed.diagnostics.has_errors:
             self.generated[StepId(name, 'global')] = _written_tool(self.root_directory / f'{name}.wic', tool)
             step = Step(name, tuple((port.name, UnresolvedName(port.name, port.span)) for port in tool.inputs),
                         interpreted=(('run', f'{name}.wic'),), span=tool.span)
@@ -172,9 +172,9 @@ def _register_document(key: tuple[str, str], path: Path, reading: _Reading) -> N
 
 
 def _written_tool(path: Path, tool: ToolDocument, refused: bool = False) -> Tool:
-    """The tool the `.wic` at ``path`` says, with the CWL its parse lowered; a tool the parse refused is left to be
-    read, and refused, when a step runs it."""
-    return Tool(str(path)) if refused or tool.cwl is None else Tool(str(path), tool.cwl, written=tool)
+    """The tool the `.wic` at ``path`` says; a tool the parse refused is left to be read, and refused, when a step runs
+    it."""
+    return Tool(str(path)) if refused else Tool(str(path), written=tool)
 
 
 def _register_run(step: Step, namespace: str, document_dir: Path, reading: _Reading) -> bool:
@@ -196,7 +196,7 @@ def _register_run(step: Step, namespace: str, document_dir: Path, reading: _Read
         name = inline_run_name(step.id, run, path_from_root(document_dir, reading.root_directory))
         # Written in the document, so its relative references are read beside it, as the step's own file would be.
         beside = document_dir / Path(step.id).stem
-        if step.tool is not None and step.tool.cwl is not None:  # a tool written in `.wic`, lowered by the parse
+        if step.tool is not None:  # a tool written in `.wic`
             reading.generated[StepId(name, namespace)] = _written_tool(Path(f'{beside}.wic'), step.tool)
         else:
             reading.generated[StepId(name, namespace)] = Tool(

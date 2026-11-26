@@ -6,49 +6,64 @@ EDAM namespace, a `when` written for the run policy, a step's `run:` file name a
 here, once, and nothing else reads it. Opaque CWL is copied, never inspected.
 """
 from copy import deepcopy
+from dataclasses import dataclass, field
 
 from ..ir.artifacts import CompilationArtifact, Inlining
 from ..ir.names import NAMESPACE_SEPARATOR
 from ..ir.namespaces import EDAM_NAMESPACE
-from ..ir.policy import RunPolicy, tolerant_tool
+from ..ir.policy import RunPolicy
 from ..ir.resolved import (
-    Bare, Entry, InputRef, OutputRef, OutputSource, Raw, ResolvedStep, ResolvedWorkflow, StepValue, Verbatim, spelling,
+    Entry, InputRef, OutputRef, OutputSource, Raw, ResolvedStep, ResolvedWorkflow, StepValue, Verbatim, spelling,
 )
 from ..lang import CWL_VERSION
 from ..lang.nodes import OpaqueCwl
 from ..lang.spans import SourceSpan
+from ..lang.tools import ToolNode
 from ..lang.types import PortDeclaration
-from ..wic_types import Cwl, Tool
-from .policy import effective_when
+from ..wic_types import Cwl
+from .lowering import process_of
+from .policy import effective_when, tolerant_tool
 from .spelling import written_type
+
+
+@dataclass(slots=True)
+class _Tree:
+    """The document tree of one root: its name, and each tool's process once it is spelled, by the tool, so a tool that
+    many steps run is spelled once."""
+
+    root: str
+    written: dict[int, Cwl] = field(default_factory=dict)
 
 
 def artifact_tree(view: ResolvedWorkflow) -> CompilationArtifact:
     """The CWL of `view`: one artifact per document, each tool step's process beside it, named by the root and the
     step that runs it (`<root>~<address>`)."""
-    return _artifact(view, view.name, view.name, (), None)
+    return _artifact(view, _Tree(view.name), view.name, (), None)
 
 
-def _artifact(workflow: ResolvedWorkflow, root: str, name: str, namespace: tuple[str, ...],
+def _artifact(workflow: ResolvedWorkflow, tree: _Tree, name: str, namespace: tuple[str, ...],
               span: SourceSpan | None) -> CompilationArtifact:
-    """`workflow` as the document `name`, in the document tree of `root`, and what runs in its steps."""
+    """`workflow` as the document `name`, in the document tree `tree`, and what runs in its steps."""
     # Each step's `when`, written for the run policy.
     whens = [effective_when(step.when_text, step.required_inputs, workflow.policy)
              for step in workflow.steps]
     return CompilationArtifact(
-        namespace, name, f'{name}.cwl', _document(workflow, whens, root),
+        namespace, name, f'{name}.cwl', _document(workflow, whens, tree.root),
         deepcopy(workflow.values),
-        tuple(_child(step, root, namespace, workflow.policy) for step in workflow.steps),
+        tuple(_child(step, tree, namespace, workflow.policy) for step in workflow.steps),
         Inlining(workflow.inlineable, span))
 
 
-def _child(step: ResolvedStep, root: str, namespace: tuple[str, ...], policy: RunPolicy) -> CompilationArtifact:
+def _child(step: ResolvedStep, tree: _Tree, namespace: tuple[str, ...], policy: RunPolicy) -> CompilationArtifact:
     """What `step` runs, as an artifact: a called workflow's document tree, or a tool's file."""
     match step.run:
         case ResolvedWorkflow() as called:
-            return _artifact(called, root, _file(root, step), (*namespace, step.local), step.span)
-        case Tool(run_path=run_path, cwl=cwl):
-            return CompilationArtifact((step.local,), _file(root, step), run_path, tolerant_tool(cwl, policy), {})
+            return _artifact(called, tree, _file(tree.root, step), (*namespace, step.local), step.span)
+        case ToolNode() as tool:
+            if id(tool) not in tree.written:
+                tree.written[id(tool)] = process_of(tool)
+            return CompilationArtifact((step.local,), _file(tree.root, step), tool.run_path,
+                                       tolerant_tool(deepcopy(tree.written[id(tool)]), policy), {})
 
 
 def _file(root: str, step: ResolvedStep) -> str:
@@ -108,10 +123,8 @@ def _step(step: ResolvedStep, when: OpaqueCwl, root: str) -> dict[str, OpaqueCwl
 
 
 def _binding(value: StepValue) -> str | dict[str, OpaqueCwl]:
-    """One `in:` entry, in the spelling its value asks for."""
+    """One `in:` entry: the source alone as the bare string, which means what `{source: ...}` does, or a mapping."""
     match value:
-        case Bare(ref=ref):
-            return spelling(ref)
         case Raw(text=text):
             return text
         case Entry(sources=sources, passthrough=passthrough, merge=merge, pick=pick, default=default,
@@ -129,7 +142,7 @@ def _binding(value: StepValue) -> str | dict[str, OpaqueCwl]:
             if has_default:
                 known['default'] = deepcopy(default)
             known.update({key: deepcopy(field) for key, field in passthrough})
-            return known
+            return known['source'] if list(known) == ['source'] and isinstance(known['source'], str) else known
 
 
 def _port(declaration: PortDeclaration, source: OutputSource = None) -> OpaqueCwl:
@@ -157,7 +170,7 @@ def _requirements(workflow: ResolvedWorkflow, whens: list[OpaqueCwl]) -> dict[st
     imply, by class."""
     entries = [entry for step in workflow.steps for entry in step.inputs]
     value_from = [str(text) for entry in entries for key, text in entry.passthrough if key == 'valueFrom']
-    requirements = {each.cls: deepcopy(each.body) for each in workflow.requirements if not each.hint}
+    requirements = {each.name: deepcopy(each.written) for each in workflow.needs if not each.hint}
     for requirement, needed in (
             ('SubworkflowFeatureRequirement', any(isinstance(step.run, ResolvedWorkflow) for step in workflow.steps)),
             ('ScatterFeatureRequirement',

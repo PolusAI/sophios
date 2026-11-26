@@ -32,7 +32,7 @@ flat:
   - {id: middle~inner~xform, run: workflow~middle~inner~xform.cwl}
   - {id: sealing~sealed, run: workflow~sealing~sealed.cwl}
   - {id: unbound~xform, in: {name: {exact: {valueFrom: fallback}}}}
-  - {id: sink, in: {file: {source: plain~xform/file},
+  - {id: sink, in: {file: plain~xform/file,
                     extras: {source: [plain~xform/file, plain~xform/file], linkMerge: merge_flattened}}}
 # What each step runs: T a CommandLineTool, W a Workflow, under each flag and both.
 runs:

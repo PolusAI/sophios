@@ -14,7 +14,8 @@ import graphviz
 
 from sophios.lang import CwlRecord, EdgeRef, InputValue, OpaqueCwl, UnresolvedName, nodes
 from sophios.lang.types import TypeRelation, relation
-from sophios.lang.cwl import Process, ScatterMethod, read_type
+from sophios.lang.cwl import Process, ScatterMethod
+from sophios.lang.types import read_type
 from sophios.lang.diagnostics import Diagnostic, SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
 from sophios.lang.names import check_written_name

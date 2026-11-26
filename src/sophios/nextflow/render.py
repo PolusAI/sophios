@@ -6,6 +6,7 @@ from decimal import Decimal
 import json
 from pathlib import Path
 import re
+import shlex
 from string import Formatter
 from typing import Any, Final
 
@@ -25,6 +26,7 @@ from .model import (
     NF_LOAD_CONTENTS_LIMIT,
     NF_ENTRY_STAGING_PREFIX,
     NF_ENTRYPOINT_FILE,
+    NF_FILE_NAME,
     NF_SCATTER_INDEX_NAME,
     NF_SHELL_QUOTE_HELPER,
     NfArrayBinding,
@@ -198,7 +200,8 @@ _LITERAL = GROOVY_LITERAL.pattern
 _HOLES: Final = {
     "name": _IDENTIFIER, "process": _IDENTIFIER, "emit": _IDENTIFIER, "output": _IDENTIFIER,
     "qualifier": "val|path", "count": "[1-9][0-9]*", "memory": "[0-9]+(?:[.][0-9]+)?",
-    "literal": _LITERAL, "prefix": _LITERAL, "type": _LITERAL, "label": _LITERAL, "link_merge": _LITERAL,
+    "file": NF_FILE_NAME.pattern, "literal": _LITERAL, "prefix": _LITERAL, "type": _LITERAL, "label": _LITERAL,
+    "link_merge": _LITERAL,
     "pick_value": f"null|{_LITERAL}", "glob": f'{_LITERAL}|"(?:[^"\\\\]|\\\\.)*"', "operator": "ln -s|cp -RL",
 }
 
@@ -271,6 +274,8 @@ class Idioms:  # pylint: disable=too-few-public-methods
     TEXT_CAPTURE: Final = Idiom(f"val({NF_LOAD_CONTENTS_HELPER}(task.workDir.resolve({{literal}})))")
     ENTRY: Final = Idiom(f"{{operator}} -- ${{{{{_QUOTE}({{name}}.toString())}}}} ${{{{{_QUOTE}({{entry}})}}}}")
     EXPORT: Final = Idiom("export {name}={value}")
+    #: A file of literal text the task writes: the text is one shell word, escaped for the script's string.
+    FILE: Final = Idiom("printf '%s' > {file} {text}")
     TEMPLATE: Final = Idiom(f"${{{{{_QUOTE}({{expression}})}}}}")
     FLAG: Final = Idiom(f"${{{{{{name}} ? {_QUOTE}({{prefix}}) : ''}}}}")
     ARRAY: Final = Idiom("${{{name}.isEmpty() ? '' : {joined}}}")
@@ -618,6 +623,9 @@ def _render_process(
                 Idioms.ENTRY.fill(
                     operator="cp -RL" if port.entry.copy else "ln -s", name=port.name, entry=entries[port.name]),
             ])
+    # The task writes each file of literal text the tool stages, as the text is: no line feed is added to it.
+    lines.extend(Idioms.FILE.fill(file=file.name, text=_groovy_gstring_fragment(shlex.quote(file.text)))
+                 for file in process.files)
     if service:
         lines.append(NF_TASK_HOME)
     lines.extend(

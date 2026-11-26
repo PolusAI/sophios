@@ -21,7 +21,8 @@ from sophios.compiler import resolved_view
 from sophios.cwl.io import dump_wic_yaml
 from sophios.ir.artifacts import CompilationArtifact
 from sophios.ir.complete import coerce_job_value, complete
-from sophios.lang.cwl import port_declaration, read_type
+from sophios.lang.cwl import port_declaration
+from sophios.lang.types import read_type
 from sophios.cwl.emit import artifact_tree
 from sophios.ir.infer import infer
 from sophios.ir.link import link
@@ -159,16 +160,16 @@ def test_a_hand_built_view_emits_without_a_compiler_adapter() -> None:
     the root and the step, and nothing of the compiler's own: no format says `edam:`, so no EDAM namespace either.
     """
     message, file = PortDeclaration(read_type('string')), PortDeclaration(read_type('File'))
-    step = ResolvedStep('write', 'write', Tool('write.cwl', {'class': 'CommandLineTool'}),
+    step = ResolvedStep('write', 'write', Tool('write.cwl', {'class': 'CommandLineTool'}).node,
                         (StepInput('message', None, Entry((InputRef('message'),), ()), Atom.STRING, None),),
                         ('file',), None, None, (), ('message',), None)
     view = ResolvedWorkflow(
         'handmade', (WorkflowInput('message', message, 'hello', True),),
         (WorkflowOutput('file', file, OutputRef('write', 'file'), None),), (step,),
-        (), (), RunPolicy(), True, None)
+        (), (), (), (), RunPolicy(), True, None)
     artifact = artifact_tree(view)
     assert artifact.cwl == {
-        'steps': [{'id': 'write', 'in': {'message': {'source': 'message'}},
+        'steps': [{'id': 'write', 'in': {'message': 'message'},
                    'run': 'handmade~write.cwl', 'out': ['file']}],
         'cwlVersion': CWL_VERSION,
         'class': 'Workflow',
@@ -184,9 +185,9 @@ def test_a_hand_built_view_emits_without_a_compiler_adapter() -> None:
 def test_a_scatter_method_with_nothing_to_scatter_is_written_only_when_it_says_something(
         method: str | None, written: Yaml) -> None:
     """The method of a step with no `scatter` is a key as written, and `null` writes no key."""
-    step = ResolvedStep('write', 'write', Tool('write.cwl', {'class': 'CommandLineTool'}), (), (), None, None,
+    step = ResolvedStep('write', 'write', Tool('write.cwl', {'class': 'CommandLineTool'}).node, (), (), None, None,
                         (('scatterMethod', method), ('label', 'hi')), (), None)
-    view = ResolvedWorkflow('handmade', (), (), (step,), (), (), RunPolicy(), True, None)
+    view = ResolvedWorkflow('handmade', (), (), (step,), (), (), (), (), RunPolicy(), True, None)
     assert artifact_tree(view).cwl['steps'][0] == {
         'id': 'write', 'in': {}, 'run': 'handmade~write.cwl', 'out': [], **written, 'label': 'hi'}
 

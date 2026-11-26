@@ -18,9 +18,10 @@ import sophios.plugins
 from sophios.runtime import preflight
 from sophios.compiler import CompileSettings, compile_source
 from sophios.ir.frontdoor import bundle_from_disk
-from sophios.lang.cwl import read_type
+from sophios.lang.types import read_type
 from sophios.lang.types import optional, spell
-from sophios.ir.policy import RunPolicy, tolerant_tool
+from sophios.cwl.policy import tolerant_tool
+from sophios.ir.policy import RunPolicy
 from sophios.lang.cwl import CWL_VERSION
 from sophios.lang.diagnostics import SophiosError
 from sophios.lang.error_codes import SophiosErrorCode

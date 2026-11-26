@@ -7,7 +7,6 @@ recorded as a ``wic068`` note and ignored.
 """
 from collections import Counter
 from collections.abc import Callable, Sequence
-from copy import deepcopy
 from dataclasses import dataclass, replace
 from functools import cached_property
 from hashlib import sha256
@@ -35,10 +34,11 @@ from ..lang import (
     WicSidecar,
 )
 from ..lang.diagnostics import Diagnostic, Diagnostics, Locator, SophiosError
-from ..lang.cwl import port_declaration
+from ..lang.cwl import named_entries, port_declaration
 from ..lang.nodes import GraphvizEntry, InputValue, OpaqueCwl, Step
+from ..lang.tools import ToolNode
 from ..lang.types import PortDeclaration
-from ..wic_types import Cwl, Tool, Tools
+from ..wic_types import Tool, Tools
 from .check import CheckedDocument, check as check_document
 from .types import RegistryKey
 
@@ -61,9 +61,9 @@ class ToolDefinition:
         return self.source.from_file
 
     @cached_property
-    def cwl(self) -> Cwl:
-        """The tool's process, copied when first asked: the snapshot's own, read only for a tool a step runs."""
-        return deepcopy(self.source.cwl)
+    def node(self) -> ToolNode:
+        """The tool as a node, read when first asked: the snapshot's own, read only for a tool a step runs."""
+        return self.source.node
 
 
 #: Why a tool is not a valid CWL process, or None when it is: what `resolve` asks of each tool a step runs, before it
@@ -146,7 +146,8 @@ class ResolvedProcess:
     run_path: str
     inputs: tuple[ResolvedPort, ...]
     outputs: tuple[ResolvedPort, ...]
-    declaration: OpaqueCwl
+    #: The tool it runs; None for a called workflow, which `child` holds.
+    node: ToolNode | None = None
     child: 'ResolvedDocument | None' = None
 
 
@@ -261,7 +262,7 @@ def _resolve_process(step: Step, index: int, sidecar: WicSidecar | None, registr
                           step.span)
         return None
     try:
-        cwl = tool.cwl
+        tool.source.read()  # a tool file is read when a step runs it
     except SophiosError as error:  # a tool file is read here, when a step runs it
         for diagnostic in error.diagnostics:  # one in the tool's own file stays where it says
             # A file that is no tool, named by a step, is a workflow the step runs wrongly.
@@ -275,17 +276,18 @@ def _resolve_process(step: Step, index: int, sidecar: WicSidecar | None, registr
                           f'step {step.id!r} runs {tool.run_path}, which cwltool refuses:\n{refusal}',
                           step.span, Locator(step=step.id, index=index))
         return None
-    # A packed document was read as its `main` where the tool was loaded, so `class` is the process's own.
-    if cwl.get('class') == 'Workflow':
+    node = tool.node
+    # A packed document was read as its `main` where the tool was loaded, so it is the process's own class.
+    if node.workflow:
         diagnostics.error(SophiosErrorCode.SUBWORKFLOW_INVALID,
                           _cwl_workflow_step(step, tool, own_name, directory), step.span)
         return None
     return ResolvedProcess(
         tool.key,
         tool.run_path,
-        process_ports(cwl.get('inputs', {}), output=False),
-        process_ports(cwl.get('outputs', {}), output=True),
-        deepcopy(cwl),
+        tuple(ResolvedPort(port.name, port.declaration) for port in node.inputs),
+        tuple(ResolvedPort(port.name, port.declaration) for port in node.outputs),
+        node,
     )
 
 
@@ -317,7 +319,7 @@ def _resolve_workflow(step: Step, sidecar: WicSidecar | None, workflow: Workflow
     interface = _workflow_interface(source, key, diagnostics)
     if interface is None:
         return None
-    return ResolvedProcess(key, f'{key.name}.cwl', *interface, {'class': 'Workflow'}, child)
+    return ResolvedProcess(key, f'{key.name}.cwl', *interface, child=child)
 
 
 def _cwl_workflow_step(step: Step, tool: ToolDefinition, own_name: str | None, directory: Path | None) -> str:
@@ -422,19 +424,7 @@ def _select_implementation(document: Document,
 def process_ports(raw: object, *, output: bool) -> tuple[ResolvedPort, ...]:
     """The ports a process declares under its `inputs:` or its `outputs:`, in CWL's map or list form."""
     return tuple(ResolvedPort(name, port_declaration(declaration, output=output))
-                 for name, declaration in _named_entries(raw))
-
-
-def _named_entries(raw: object) -> tuple[tuple[str, OpaqueCwl], ...]:
-    """CWL's map form (`{name: decl}`) or its `id`-keyed list form."""
-    match raw:
-        case dict():
-            return tuple(raw.items())
-        case list():
-            return tuple((str(item['id']).rsplit('#', 1)[-1], {k: v for k, v in item.items() if k != 'id'})
-                         for item in raw)
-        case _:
-            return ()
+                 for name, declaration in named_entries(raw))
 
 
 def _workflow_interface(document: Document, key: RegistryKey, diagnostics: Diagnostics) \

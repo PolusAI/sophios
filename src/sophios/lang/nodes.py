@@ -11,6 +11,7 @@ from datetime import date, datetime
 from enum import StrEnum
 from typing import Any, TypeAlias
 
+from .needs import Inherited, split
 from .spans import SourceSpan
 from .types import Merge, Pick
 
@@ -264,6 +265,15 @@ class Step:
     #: An inline `run:` body that says `command:` or `script:`, read as the tool it is. Internal, not a second
     #: surface: the body stays in `interpreted`, from which it is spelled.
     tool: 'ToolDocument | None' = surface(Shape.INTERNAL, default=None)
+    #: What it asks of the tools beneath it (the requirements, then the hints, it wrote) and the names of its other
+    #: keys that nothing reads, derived from `passthrough`.
+    needs: tuple[Inherited, ...] = surface(Shape.INTERNAL, init=False, compare=False, repr=False, default=())
+    unread: tuple[str, ...] = surface(Shape.INTERNAL, init=False, compare=False, repr=False, default=())
+
+    def __post_init__(self) -> None:
+        needs, unread = split(self.passthrough)
+        object.__setattr__(self, 'needs', needs)
+        object.__setattr__(self, 'unread', unread)
 
 
 @dataclass(frozen=True, slots=True)
@@ -335,6 +345,20 @@ class Document:
     #: Where each entry of `inputs:` and `outputs:` written as a mapping was written: (`inputs` or `outputs`,
     #: its name, its span).
     port_spans: tuple[tuple[str, str, SourceSpan], ...] = surface(Shape.INTERNAL, default=())
+    #: What it asks of the tools beneath it (the requirements, then the hints, it wrote), the names of the other keys
+    #: it carries that nothing reads, and every key it carries beyond its boundary, derived from `passthrough`.
+    needs: tuple[Inherited, ...] = surface(Shape.INTERNAL, init=False, compare=False, repr=False, default=())
+    unread: tuple[str, ...] = surface(Shape.INTERNAL, init=False, compare=False, repr=False, default=())
+    carried: tuple[tuple[str, 'OpaqueCwl'], ...] = surface(
+        Shape.INTERNAL, init=False, compare=False, repr=False, default=())
+
+    def __post_init__(self) -> None:
+        carried = tuple((key, value) for key, value in self.passthrough
+                        if key not in ('inputs', 'outputs', '$namespaces', 'cwlVersion', 'class'))
+        needs, unread = split(carried)
+        object.__setattr__(self, 'needs', needs)
+        object.__setattr__(self, 'unread', unread)
+        object.__setattr__(self, 'carried', carried)
 
 
 @dataclass(frozen=True, slots=True)
@@ -374,8 +398,8 @@ class ToolDocument:  # pylint: disable=too-many-instance-attributes
     as one that says `steps:` is a workflow.
 
     Each of its own keys is read into what it says, and Python builds the same node from its objects; `passthrough`
-    holds every other key, CWL that is copied into the CommandLineTool the tool means
-    (`sophios.lang.commandline.command_line_tool`).
+    holds every other key, CWL that stays beside the lines the tool is read from (`sophios.lang.wic_tool`) and
+    written with (`sophios.cwl.lowering`).
     """
 
     #: The words of `command:`, each text or one input; None when the tool says no command.
@@ -391,9 +415,6 @@ class ToolDocument:  # pylint: disable=too-many-instance-attributes
     span: SourceSpan | None = surface(Shape.INTERNAL, default=None)
     #: Where each key is written: (the key, its span).
     keys: tuple[tuple[str, SourceSpan], ...] = surface(Shape.INTERNAL, default=())
-    #: The CommandLineTool this tool means, as the parser's lowering made it: kept, so nothing lowers the tool again.
-    #: None where the parser did not lower it, because its `inputs:` could not be read.
-    cwl: dict[str, Any] | None = surface(Shape.INTERNAL, default=None)
 
     def at(self, key: str) -> SourceSpan | None:
         """Where `key` is written; else where the tool is."""

@@ -8,7 +8,7 @@ result carrying whatever was parsed plus whatever went wrong.
 import math
 import re
 from collections.abc import Callable
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from itertools import chain
 from types import MappingProxyType
 from typing import Any, Final, Iterator, Mapping, NoReturn, TypedDict, cast, final, get_args
@@ -38,10 +38,12 @@ from .nodes import (
     WicSidecar,
     Word,
 )
-from .commandline import command_line_tool
-from .cwl import CWL_VERSIONS, EXPRESSION, SCATTER_METHODS, SIZE
+from . import wic_tool
+from .cwl import CWL_VERSIONS, SIZE
 from .spans import SourceSpan
+from .subset import EXPRESSION
 from .support import STEP_INPUT_RECORD_KEYS
+from .types import SCATTER_METHODS
 
 #: A `graphviz: style:` value: one or more styles, comma separated.
 _GRAPHVIZ_STYLE: Final = ('((,\\s*)*(dashed|dotted|solid|invis|bold|tapered|filled|striped|wedged'
@@ -519,7 +521,9 @@ class _Reader:
                 passthrough.append((key, value))
         tool = ToolDocument(**said, passthrough=tuple(passthrough), span=self.span(root),
                             keys=tuple((key, self.span(at)) for key, (at, _) in nodes.items()))
-        return tool if declared is None else replace(tool, cwl=command_line_tool(tool, self.diags))
+        if declared is not None:
+            wic_tool.read(tool, self.diags)
+        return tool
 
     def _ports(self, key: str, node: yaml.nodes.Node, declared: Mapping[str, Port] | None = None) -> tuple[Port, ...]:
         """The `inputs:` or `outputs:` of a tool as its ports, each where it is named: a mapping of names, or CWL's

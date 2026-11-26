@@ -9,7 +9,7 @@ from hypothesis.strategies import SearchStrategy
 from sophios.lang import (CwlRecord, Document, EdgeDef, EdgeRef, Grammar, InlineLiteral, InputValue,
                           OpaqueCwl, OutputBinding, RawCwlRef, Step, StepKey, UnresolvedName, WicSidecar,
                           parse, render, to_json)
-from sophios.lang.cwl import SCATTER_METHODS
+from sophios.lang.types import SCATTER_METHODS
 from sophios.lang.spans import SourceSpan
 from sophios.wic_types import Yaml
 

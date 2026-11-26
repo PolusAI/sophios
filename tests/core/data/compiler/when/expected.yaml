@@ -35,7 +35,7 @@ workflow.wic:
     workflow.cwl:
       steps:
       - {id: a_number, when: $(inputs.n + 1)}
-      - {id: a_string, in: {s: {source: s}}}
+      - {id: a_string, in: {s: s}}
       - {id: a_null}
       - {id: an_element, scatter: [n]}
       - {id: text, when: 'true'}

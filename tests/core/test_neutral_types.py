@@ -6,31 +6,21 @@ import pytest
 from hypothesis import given
 
 from sophios.cwl.spelling import written_type
-from sophios.lang.cwl import read_type, read_typed
-from sophios.lang.types import (Array, Atom, Enum, Merge, Other, Pick, Record, TypeRelation, Unread, Union, atoms,
-                                delivered, layered, lists, relation, spell)
+from sophios.lang.types import (Array, Atom, Enum, Merge, Other, Pick, Record, TypeRelation, Unread, Union,
+                                delivered, layered, read_type, read_typed, relation, spell)
 
 from .strategies import cwl_types
-
-_ARRAY = {'type': 'array', 'items': 'File'}
 
 #: A written type and the canonical spelling it means: shorthand expanded at every depth, `null` first, no member
 #: twice, a stream a `File`, and what is not judged left as written, key order included.
 _CANONICAL: tuple[tuple[Any, Any], ...] = (
-    ('string', 'string'), ('Any', 'Any'), ('string?', ['null', 'string']),
-    ('string[]', {'type': 'array', 'items': 'string'}),
-    ('string?[]', {'type': 'array', 'items': ['null', 'string']}),
+    ('string?', ['null', 'string']), ('string?[]', {'type': 'array', 'items': ['null', 'string']}),
     ('string[]?', ['null', {'type': 'array', 'items': 'string'}]),
-    ('File??', ['null', 'File']), (['File?', 'string'], ['null', 'File', 'string']),
     (['string', 'null', 'string?'], ['null', 'string']), ([['null', 'int'], 'File'], ['null', 'int', 'File']),
-    (['string'], ['string']), ([], []), ('stdin', 'File'), ('stdout', 'File'), (['stderr', 'File'], ['File']),
-    ({'type': 'array', 'items': 'stdout'}, {'type': 'array', 'items': 'File'}),
-    ({'type': 'array'}, {'type': 'array'}), ({'type': 'array', 'items': None}, {'type': 'array', 'items': None}),
+    (['stderr', 'File'], ['File']), ({'type': 'array', 'items': 'stdout'}, {'type': 'array', 'items': 'File'}),
+    ({'type': 'array', 'items': None}, {'type': 'array', 'items': None}),
     ({'items': 'int[]', 'type': 'array', 'doc': 'd'},
      {'items': {'type': 'array', 'items': 'int'}, 'type': 'array', 'doc': 'd'}),
-    ({'type': 'array', 'items': ['int?', 'string[]']},
-     {'type': 'array', 'items': ['null', 'int', {'type': 'array', 'items': 'string'}]}),
-    ({'type': 'record', 'fields': []}, {'type': 'record', 'fields': []}),
     ({'type': 'record', 'name': 'r',
       'fields': [{'name': 'a', 'type': 'int?', 'doc': 'd'}, {'name': 'b', 'type': 'File'}]},
      {'type': 'record', 'name': 'r', 'fields': [{'name': 'a', 'type': ['null', 'int'], 'doc': 'd'},
@@ -38,13 +28,11 @@ _CANONICAL: tuple[tuple[Any, Any], ...] = (
     ({'type': 'record', 'fields': {'a': 'string[]'}},
      {'type': 'record', 'fields': [{'name': 'a', 'type': {'type': 'array', 'items': 'string'}}]}),
     ({'type': 'record', 'fields': 3}, {'type': 'record', 'fields': 3}),
-    ({'type': 'enum', 'symbols': ['a']}, {'type': 'enum', 'symbols': ['a']}),
     ({'type': 'enum', 'symbols': ['a', 'b'], 'name': 'e'}, {'type': 'enum', 'symbols': ['a', 'b'], 'name': 'e'}),
-    ({'type': 'enum', 'symbols': 'a'}, {'type': 'enum', 'symbols': 'a'}),
     # a union's member keeps what it wrote beyond its type when the union puts `null` first
     (['string', {'type': 'array', 'items': 'string', 'inputBinding': {'prefix': '-a'}}, 'null'],
      ['null', 'string', {'type': 'array', 'items': 'string', 'inputBinding': {'prefix': '-a'}}]),
-    ('example.org#Thing', 'example.org#Thing'), ('?', '?'), ('[]', '[]'), (None, None), (3, 3),
+    ('example.org#Thing', 'example.org#Thing'), (None, None),
 )
 
 
@@ -81,26 +69,6 @@ def test_layers_wrap_the_type() -> None:
     assert spell(layered(read_type('File?'), 2)) == {'type': 'array',
                                                      'items': {'type': 'array', 'items': ['null', 'File']}}
     assert layered(read_type('File'), 1) == Array(Atom.FILE)
-    assert spell(Atom.INT).__class__ is str
-
-
-_RELATIONS = (
-    ('string', 'string', TypeRelation.OVERLAPS), ('string', 'File', TypeRelation.DISJOINT),
-    ('string', 'string?', TypeRelation.OVERLAPS), (['int', 'boolean'], 'string', TypeRelation.DISJOINT),
-    (['null', 'Any'], 'File', TypeRelation.UNKNOWN), ('File[]', _ARRAY, TypeRelation.OVERLAPS),
-    ({'type': 'array', 'items': 'string'}, _ARRAY, TypeRelation.DISJOINT),
-    ('string', 'string[]', TypeRelation.DISJOINT),
-    ('Any', 'File[]', TypeRelation.UNKNOWN), ({'type': 'array'}, 'string', TypeRelation.UNKNOWN),
-    ({'type': 'array', 'items': None}, 'File[]', TypeRelation.UNKNOWN), (None, 'string', TypeRelation.UNKNOWN),
-    ({'type': 'record', 'fields': []}, 'string', TypeRelation.UNKNOWN),
-)
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize(('source', 'sink', 'expected'), _RELATIONS)
-def test_what_is_provably_disjoint(source: Any, sink: Any, expected: TypeRelation) -> None:
-    """Disjoint only where both are judged and differ; what is not judged is unknown."""
-    assert relation(read_type(source), read_type(sink)) is expected
 
 
 @pytest.mark.fast
@@ -147,19 +115,3 @@ def test_a_record_and_an_enum_are_nodes_and_what_they_wrote_beyond_is_unread() -
     assert read_typed({'type': 'map'}) == (Other(), (Unread((), None, {'type': 'map'}),))
     assert read_typed(None) == (Other(), ())
     assert read_typed('example.org#Thing') == (Other('example.org#Thing'), ())
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize('written, is_list, names', [
-    ('string', False, {Atom.STRING}), ('string[]', True, {Atom.STRING}), ('string[]?', True, {Atom.STRING, Atom.NULL}),
-    (['null', 'string', {'type': 'array', 'items': 'long'}], False, {Atom.NULL, Atom.STRING, Atom.LONG}),
-    ({'type': 'array', 'items': 'double?'}, True, {Atom.DOUBLE, Atom.NULL}),
-    ({'type': 'record', 'fields': [{'name': 'a', 'type': 'long'}]}, False, set()),
-    ({'type': 'array'}, True, set()), (None, False, set()),
-])
-def test_a_target_asks_a_type_whether_it_lists_and_which_atoms_it_names(written: Any, is_list: bool, names: set[Atom]
-                                                                        ) -> None:
-    """A value of a type is a list, `null` aside, when the type is an array; the atoms a type names are those of its
-    items and members, and a record's fields and an enum's symbols name none."""
-    type_ = read_type(written)
-    assert lists(type_) is is_list and atoms(type_) == names

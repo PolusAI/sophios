@@ -3,8 +3,7 @@
 steps:
 - id: touch
   in:
-    filename:
-      source: touch~filename
+    filename: touch~filename
   run:
     class: CommandLineTool
     requirements:
@@ -31,8 +30,7 @@ steps:
   - file
 - id: echo
   in:
-    message:
-      source: echo~message
+    message: echo~message
   run:
     class: CommandLineTool
     baseCommand: echo

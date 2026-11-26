@@ -1,0 +1,5 @@
+# A tool written in .wic: its own lines are lowered, and a computed value its CWL keys write is refused as in any tool.
+steps:
+- id: computed
+  run: computed_argument.wic
+  in: {message: !ii hello}

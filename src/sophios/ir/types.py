@@ -8,6 +8,7 @@ from enum import StrEnum
 from typing import NewType, TypeAlias
 
 from ..lang.diagnostics import Diagnostics
+from ..lang.needs import Inherited
 from ..lang.nodes import GraphvizEntry, InputValue, OpaqueCwl
 from ..lang.spans import SourceSpan
 from ..lang.subset import Expr
@@ -134,15 +135,9 @@ class StepOutputRef:
 
 @dataclass(frozen=True, slots=True)
 class Source:
-    """A step input bound to a workflow input or to a step's output.
-
-    `shorthand` is CWL's spelling choice and nothing more, the same
-    distinction `PortDeclaration.shorthand` records: `in: {x: src}` and
-    `in: {x: {source: src}}` mean one thing and are written two ways.
-    """
+    """A step input bound to a workflow input or to a step's output."""
 
     ref: PortName | StepOutputRef
-    shorthand: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -194,8 +189,8 @@ class Edge:
     source: PortId
     sink: PortId
     span: SourceSpan | None = None
-    #: Whether Infer added it. An inferred edge was never authored, so it is emitted in shorthand; any other
-    #: stands for something the document itself said, and is not.
+    #: Whether Infer added it: an inferred edge was never authored, where any other stands for something the document
+    #: itself said.
     inferred: bool = False
 
 
@@ -276,6 +271,10 @@ class StepNode:  # pylint: disable=too-many-instance-attributes
     synthesized: bool = False
     #: Its own `wic: steps:` entry's `graphviz:`, which only a drawing reads.
     graphviz: GraphvizEntry = GraphvizEntry()
+    #: What it asks of its tool: its own requirements, then its hints, as written.
+    needs: tuple[Inherited, ...] = ()
+    #: The names of the other keys it wrote that nothing reads, an orphan `scatterMethod` first.
+    unread: tuple[str, ...] = ()
 
 
 #: The three mappings the compiler threads through its recursion, as pairs
@@ -312,15 +311,16 @@ class WorkflowGraph:  # pylint: disable=too-many-instance-attributes
     children: tuple['WorkflowGraph', ...] = ()
     #: Every edge Link or Infer placed here (not a binding's own resolution).
     linked_edges: tuple[Edge, ...] = ()
-    #: `input_mapping` names emitted in shorthand: a step's own lifted input,
-    #: recorded where Complete or Infer creates it (a name cannot tell).
-    shorthand_relays: tuple[PortName, ...] = ()
     #: False when the workflow is marked `wic: inlineable: false`, in its own file or
     #: at the call site (read from the child's sidecar once call-site keys are folded
     #: in): a caller asking to flatten its calls keeps this one nested.
     inlineable: bool = True
     #: The `wic: graphviz:` of its document, the calling step's entry merged in; only a drawing reads it.
     graphviz: GraphvizEntry = GraphvizEntry()
+    #: What it asks of the tools beneath it: its own requirements, then its hints, as written.
+    needs: tuple[Inherited, ...] = ()
+    #: The names of the other keys it carries that nothing reads.
+    unread: tuple[str, ...] = ()
 
     @property
     def edges(self) -> tuple[Edge, ...]:

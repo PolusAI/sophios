@@ -11,7 +11,8 @@ from typing import Any, Final
 
 import yaml
 
-from sophios.lang.cwl import canonical_type, required
+from sophios.lang.cwl import canonical_type
+from sophios.lang.types import required
 from sophios.lang.types import Atom
 from sophios.lang.spans import SourceSpan
 

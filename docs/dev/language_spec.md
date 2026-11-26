@@ -72,8 +72,8 @@ step's tool is passthrough wholesale: Sophios does not classify
 
 A tool written in `.wic` is the one place Sophios owns a command line: its
 `command:`, `script:`, `docker:`, `needs:`, port lines and output lines are
-Sophios-owned syntax that `sophios.lang.commandline.command_line_tool`
-lowers once to a `CommandLineTool`, and every other key of the document is CWL,
+Sophios-owned syntax that `sophios.lang.wic_tool` reads, and the CWL target
+(`sophios.cwl.lowering`) spells as a `CommandLineTool`; every other key of the document is CWL,
 copied. A line adds CWL and never changes CWL that is there: a place a line
 writes that the author wrote too is `wic058`, found by one walk over a table
 of owned places, and `script:` owns the whole command line. The result means

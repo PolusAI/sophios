@@ -97,8 +97,7 @@ def lower(document: ResolvedDocument, here: Namespace = Namespace()) -> PhaseRes
     namespaces_raw = passthrough.get('$namespaces')
     namespaces = tuple((str(key), value) for key, value in namespaces_raw.items()) \
         if isinstance(namespaces_raw, dict) else ()
-    opaque = tuple((key, value) for key, value in document.source.passthrough
-                   if key not in ('inputs', 'outputs', '$namespaces', 'cwlVersion', 'class'))
+    opaque = document.source.carried
     if diagnostics.has_errors:
         # A graph is built only from a document the phase accepted.
         return PhaseResult(None, diagnostics)
@@ -119,6 +118,8 @@ def lower(document: ResolvedDocument, here: Namespace = Namespace()) -> PhaseRes
         children=tuple(children),
         inlineable=inlineable,
         graphviz=graphviz_entry(sidecar),
+        needs=document.source.needs,
+        unread=document.source.unread,
     )
     return PhaseResult(graph, diagnostics)
 
@@ -181,12 +182,14 @@ def _resolved_step_node(identity: StepId, resolved: ResolvedStep, defined: dict[
     guard = Guard(*read_when(written['when'])) if written.get('when') is not None else None
     # What no node holds is unread, first of the step's other keys: a `scatterMethod` with nothing to scatter, which
     # is no scatter, or one the standard does not have; a `when` the subset does not read.
-    unread = (*((('scatterMethod', written['scatterMethod']),) if 'scatterMethod' in written and (scatter is None or method is None)
-                else ()),
-              *((('when', written['when']),) if guard is not None and guard.expr is None else ()))
-    passthrough = (*unread, *source.passthrough)
+    held = [('scatterMethod', written['scatterMethod'])] if 'scatterMethod' in written and (
+        scatter is None or method is None) else []
+    if guard is not None and guard.expr is None:
+        held.append(('when', written['when']))
+    passthrough = (*held, *source.passthrough)
     return StepNode(identity, resolved.process.key, inputs, outputs, bindings, passthrough, source.span, scatter,
-                    guard, _inference_rules(resolved.sidecar), graphviz=graphviz_entry(resolved.sidecar))
+                    guard, _inference_rules(resolved.sidecar), graphviz=graphviz_entry(resolved.sidecar),
+                    needs=source.needs, unread=(*(key for key, _ in held), *source.unread))
 
 
 def _scatter_ports(source: Step, identity: StepId, inputs: tuple[Port, ...],

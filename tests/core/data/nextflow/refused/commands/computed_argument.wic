@@ -1,0 +1,6 @@
+command: echo {message}
+inputs: {message: string}
+outputs: {result: stdout}
+stdout: out.txt
+arguments:
+- {valueFrom: $(inputs.message.length), position: 5}

@@ -7,12 +7,12 @@ from collections.abc import Callable, Collection, Mapping
 from pathlib import PurePath, PurePosixPath, PureWindowsPath
 from typing import Any, TypeAlias
 
-from cwl_utils.parser.cwl_v1_2 import Dirent, InitialWorkDirRequirement
-
 from ..edam import resolve_file_format
 from ..ir.resolved import InputRef, ResolvedWorkflow, Through, tool_steps
-from ..lang.cwl import Process, inputs_read, ports_named, required, requirement
-from ..wic_types import Json, Tool
+from ..lang.cwl import inputs_read
+from ..lang.tools import Dirent, NeedKind, Staging, ToolBody, ToolNode
+from ..lang.types import required, spell
+from ..wic_types import Json
 
 
 #: An empty directory of a given name, as a runner takes one in a job.
@@ -54,7 +54,7 @@ def output_target_inputs(view: ResolvedWorkflow) -> set[str]:
     names: set[str] = set()
     for found in tool_steps(view):
         run = found.step.run
-        if not isinstance(run, Tool):
+        if not isinstance(run, ToolNode):
             continue
         targets = _output_target_inputs(run)
         for port, sources in zip(found.step.inputs, found.sources, strict=True):
@@ -88,23 +88,26 @@ def _normalize_file_formats(value: Any) -> None:
                 _normalize_file_formats(item)
 
 
-def _output_target_inputs(run: Tool) -> set[str]:
-    process, _ = run.loaded
-    inputs = ports_named(process.inputs)
-    writable_inputs = _writable_initial_workdir_inputs(process)
+def _output_target_inputs(run: ToolNode) -> set[str]:
+    body = run.body()
+    inputs = {each.name: each for each in body.inputs}
+    writable_inputs = _writable_initial_workdir_inputs(body)
     target_inputs: set[str] = set()
-    for output in process.outputs:
-        if _is_directory(output.type_) and (binding := getattr(output, "outputBinding", None)) is not None:
-            for input_name in inputs_read(binding.glob):
-                if input_name in writable_inputs and input_name in inputs and _is_directory(inputs[input_name].type_):
+    for output in body.outputs:
+        if _is_directory(spell(output.type)) and output.capture is not None:
+            for input_name in (output.capture.glob.names if output.capture.glob is not None
+                               else inputs_read(output.capture.unread_glob)):
+                if input_name in writable_inputs and input_name in inputs \
+                        and _is_directory(spell(inputs[input_name].type)):
                     target_inputs.add(input_name)
     return target_inputs
 
 
-def _writable_initial_workdir_inputs(process: Process) -> set[str]:
-    listing = getattr(requirement(process, InitialWorkDirRequirement), "listing", None)
-    return {name for entry in listing if isinstance(entry, Dirent) and entry.writable is True
-            for name in inputs_read(entry.entry)} if isinstance(listing, list) else set()
+def _writable_initial_workdir_inputs(body: ToolBody) -> set[str]:
+    staging = body.need(NeedKind.STAGING)
+    listing = staging.body.entries if staging is not None and isinstance(staging.body, Staging) else None
+    return {name for entry in listing or () if isinstance(entry, Dirent) and entry.writable is True
+            for name in inputs_read(entry.entry)}
 
 
 def _is_directory(cwl_type: Any) -> bool:

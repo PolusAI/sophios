@@ -18,14 +18,14 @@ steps:
   out: [file]
 - id: child
   in:
-    file: {source: emit_text/file}
+    file: emit_text/file
     count~scale: child~count~scale
   run:
     steps:
     - id: count
       in:
         file: file
-        scale: {source: count~scale}
+        scale: count~scale
       run:
         class: CommandLineTool
         id: count
@@ -51,7 +51,7 @@ steps:
   out: [counts, count~counts]
 - id: write_dir
   in:
-    outDir: {source: write_dir~outDir}
+    outDir: write_dir~outDir
   run:
     class: CommandLineTool
     requirements:
@@ -73,8 +73,8 @@ steps:
   out: [outDir]
 - id: cat
   in:
-    f: {source: cat~f}
-    go: {source: message}
+    f: cat~f
+    go: message
   run:
     class: CommandLineTool
     baseCommand: cat

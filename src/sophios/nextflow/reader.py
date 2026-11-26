@@ -21,6 +21,7 @@ import json
 import math
 from pathlib import Path
 import re
+import shlex
 from typing import Any, NoReturn
 
 from .render import (
@@ -41,7 +42,7 @@ from .render import (
 )
 from ..ir.complete import coerce_job_value
 from ..ir.types import AuthoredName
-from ..lang.cwl import read_type
+from ..lang.types import read_type
 from ..lang.diagnostics import SophiosError
 from ..lang.error_codes import SophiosErrorCode
 from ..lang.types import PortDeclaration
@@ -59,6 +60,7 @@ from .model import (
     NfConnection,
     NfEntry,
     NfEnvVar,
+    NfFile,
     NfFlag,
     NfInputReference,
     NfLiteral,
@@ -376,10 +378,11 @@ def _streams(pieces: list[tuple[bool, str]]) -> dict[str, NfTemplate]:
     return streams
 
 
-def _command(body: list[_Line], head: _Line) -> tuple[NfCommand, dict[str, NfEntry]]:
-    """The command a script body runs, and the entries it makes first."""
+def _command(body: list[_Line], head: _Line) -> tuple[NfCommand, dict[str, NfEntry], tuple[NfFile, ...]]:
+    """The command a script body runs, and the entries and files it makes first."""
     texts = [line.text for line in body]
     entries: dict[str, NfEntry] = {}
+    files: list[NfFile] = []
     env: list[NfEnvVar] = []
     index = 0
     try:
@@ -387,6 +390,9 @@ def _command(body: list[_Line], head: _Line) -> tuple[NfCommand, dict[str, NfEnt
             if found := Idioms.ENTRY.match(text):
                 name = None if Idioms.ENTRY_NAME.match(found["entry"]) else _literal(found["entry"])
                 entries[found["name"]] = NfEntry(name, found["operator"] == "cp -RL")
+            elif found := Idioms.FILE.match(text):
+                (word,) = shlex.split(groovy_unescape(found["text"]))
+                files.append(NfFile(found["file"], word))
             elif found := Idioms.EXPORT.match(text):
                 env.append(NfEnvVar(found["name"], _template(found["value"])))
             elif not (text.startswith("if [ -e ") or text == NF_ENTRYPOINT_READ):
@@ -405,7 +411,8 @@ def _command(body: list[_Line], head: _Line) -> tuple[NfCommand, dict[str, NfEnt
         tokens = _tokens(pieces[:split]) or [NfShellLiteral("")]
         index += parenthesized  # the ")" line, which holds the redirects
         streams = _streams(_pieces(texts[index][1:]) if parenthesized else pieces[split:])
-        return NfCommand(tokens, streams.get("stdin"), streams.get("stdout"), streams.get("stderr"), env), entries
+        command = NfCommand(tokens, streams.get("stdin"), streams.get("stdout"), streams.get("stderr"), env)
+        return command, entries, tuple(files)
     except ValueError as exc:
         (body[index] if body else head).stop(_Code.IMPORT_FOREIGN_SCRIPT, str(exc))
 
@@ -437,6 +444,7 @@ class _Process:  # pylint: disable=too-many-instance-attributes
     command: NfCommand
     container: str | None
     resources: NfResources
+    files: tuple[NfFile, ...]
 
 
 def _section(lines: list[_Line], index: int) -> int:
@@ -536,10 +544,10 @@ def _process(block: list[_Line]) -> _Process:  # pylint: disable=too-many-branch
     if carrier is not None and last != [(name, "val", False) for name in carried]:
         carrier.stop(_Code.IMPORT_MISMATCH, "a WorkflowStepInput carrier that does not name the process's last val "
                      "inputs, in order")
-    command, entries = _command(script, head)
+    command, entries, files = _command(script, head)
     return _Process(
         head, tuple((name, qualifier, entries.get(name) if entry else None) for name, qualifier, entry in inputs),
-        carried, tuple(scattered), tuple(outputs), command, container, resources,
+        carried, tuple(scattered), tuple(outputs), command, container, resources, files,
     )
 
 
@@ -681,7 +689,7 @@ def _process_model(
         inputs = [_port(port, qualifier, entry, incoming[port], channels) for port, qualifier, entry in process.inputs]
         declared = len(inputs) - len(process.carried)
         model = NfProcess(name, inputs[:declared], process.outputs, process.command, process.container,
-                          process.resources, step_only_inputs=inputs[declared:])
+                          process.resources, step_only_inputs=inputs[declared:], files=process.files)
     except (ValueError, TypeError, KeyError) as exc:
         process.head.stop(_Code.IMPORT_MISMATCH, f"a process Sophios does not write ({exc})")
     if branch is None:

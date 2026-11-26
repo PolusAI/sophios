@@ -9,7 +9,8 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 from sophios.api.python.workflow import _python_api_types_match
-from sophios.lang.cwl import ATOMIC_TYPES, read_type
+from sophios.lang.cwl import ATOMIC_TYPES
+from sophios.lang.types import read_type
 from sophios.lang.types import TypeRelation, relation
 from sophios.lang.diagnostics import SophiosError
 from sophios.lang.error_codes import SophiosErrorCode

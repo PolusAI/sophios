@@ -9,7 +9,7 @@ from ..lang.types import PortDeclaration, Type, layered, permits_format, types_m
 from .complete import call_interfaces, promote_outputs
 from .declarations import feeding_declaration, input_rank, output_rank, required
 from .names import Names
-from .resolve import RegistrySnapshot, ToolDefinition, process_ports
+from .resolve import RegistrySnapshot, ToolDefinition
 from .stepin import direct_sink
 from .types import (
     AuthoredName,
@@ -81,7 +81,6 @@ def _infer_local(graph: WorkflowGraph, policy: InferencePolicy, catalog: Inserti
     linked_edges = list(graph.linked_edges)
     workflow_inputs = list(graph.workflow_inputs)
     input_mapping = list(graph.input_mapping)
-    shorthand_relays = list(graph.shorthand_relays)
     bound = _bound(graph)
     steps = list(graph.steps)
     choices: list[tuple[StepNode, Port, PortId, int]] = []
@@ -96,7 +95,6 @@ def _infer_local(graph: WorkflowGraph, policy: InferencePolicy, catalog: Inserti
         name = DerivedName(step.id, port.id.port)
         workflow_inputs.append(WorkflowPort(name, feeding_declaration(step, port)))
         input_mapping.append((name, (port.id,)))
-        shorthand_relays.append(name)
 
     position = 0
     while position < len(steps):
@@ -125,8 +123,7 @@ def _infer_local(graph: WorkflowGraph, policy: InferencePolicy, catalog: Inserti
             _note_choice(diagnostics, policy, step, port, source, others, repeated)
     return promote_outputs(replace(graph, linked_edges=tuple(linked_edges),
                                    workflow_inputs=tuple(workflow_inputs),
-                                   input_mapping=tuple(input_mapping),
-                                   shorthand_relays=tuple(shorthand_relays)))
+                                   input_mapping=tuple(input_mapping)))
 
 
 def _refuse_duplicates(graph: WorkflowGraph, edges: list[Edge],
@@ -375,7 +372,8 @@ def _reads(steps: Sequence[StepNode], position: int, converter: StepNode,
 def _converter(steps: Sequence[StepNode], tool: ToolDefinition, policy: InferencePolicy) -> StepNode:
     """The converter `tool` as the step that would stand after `steps`, its ports read as Resolve reads a tool's."""
     identity = StepId(steps[0].id.namespace, max((step.id.index for step in steps), default=0) + 1, tool.key.name)
-    declared = process_ports(tool.cwl.get('inputs'), output=False), process_ports(tool.cwl.get('outputs'), output=True)
+    node = tool.node
+    declared = node.inputs, node.outputs
     inputs, outputs = (tuple(Port(PortId(identity, direction, AuthoredName(port.name)), port.declaration.type,
                                   port.declaration) for port in ports)
                        for direction, ports in zip((Direction.INPUT, Direction.OUTPUT), declared))

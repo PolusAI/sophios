@@ -26,10 +26,11 @@ from .ir.types import RegistryKey, StepId, StepNode, WorkflowGraph
 from .lang import versions
 from .lang.diagnostics import Diagnostic, Diagnostics, Locator, Severity, SophiosError
 from .lang.nodes import CwlRecord, ToolDocument, UnresolvedName
-from .lang.cwl import boolean_problem
+from .lang.tools import ToolNode
 from .lang.parser import step_key
+from .lang.subset import boolean_problem
 from .lang.error_codes import SophiosErrorCode
-from .wic_types import Cwl, Tool
+from .wic_types import Tool
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,7 +112,7 @@ def _tool_check() -> ToolCheck:
     def check(tool: ToolDefinition) -> str | None:
         if tool.key not in refusals:
             try:
-                tools.validate(tool.run_path, None if tool.from_file else tool.cwl)
+                tools.validate(tool.run_path, None if tool.from_file else deepcopy(tool.source.cwl))
                 refusals[tool.key] = None
             except tools.InvalidTool as refused:
                 refusals[tool.key] = str(refused)
@@ -154,13 +155,13 @@ def non_boolean_whens(workflow: ResolvedWorkflow) -> tuple[tuple[ResolvedStep, s
     return tuple(found)
 
 
-def _tools(graph: WorkflowGraph, descriptions: '_Descriptions') -> Iterator[tuple[StepId, Tool]]:
+def _tools(graph: WorkflowGraph, descriptions: '_Descriptions') -> Iterator[tuple[StepId, ToolNode]]:
     """Every tool step at any depth, with the tool it runs."""
     for step in graph.steps:
         called = graph.child(step.id)
         if called is None:
             tool = descriptions.tool(step)
-            yield step.id, Tool(tool.run_path, descriptions.of(step, tool))
+            yield step.id, descriptions.of(step, tool)
         else:
             yield from _tools(called, descriptions)
 
@@ -258,7 +259,7 @@ class _Descriptions:
 
     def __init__(self, registry: RegistrySnapshot) -> None:
         self._registry = registry
-        self._packed: dict[RegistryKey, Cwl] = {}
+        self._packed: dict[RegistryKey, ToolNode] = {}
 
     def tool(self, step: StepNode) -> ToolDefinition:
         """The registry's definition of the tool `step` runs."""
@@ -271,22 +272,23 @@ class _Descriptions:
                 f'process {key.namespace}/{key.name} disappeared after resolution')
         return definition
 
-    def of(self, step: StepNode, tool: ToolDefinition) -> Cwl:
+    def of(self, step: StepNode, tool: ToolDefinition) -> ToolNode:
         """The description written for `step`, which runs `tool`.
 
         Raises:
             SophiosError: `wic013` at the step, with cwltool's message, when cwltool cannot pack the tool.
         """
-        if not tools.has_relative_reference(tool.cwl):
-            return deepcopy(tool.cwl)
+        cwl = tool.source.cwl
+        if not tools.has_relative_reference(cwl):
+            return tool.node
         if tool.key not in self._packed:
             try:
-                self._packed[tool.key] = tools.packed(dump_wic_yaml(tool.cwl),
-                                                      Path(tool.run_path).absolute().as_uri())
+                packed = tools.packed(dump_wic_yaml(cwl), Path(tool.run_path).absolute().as_uri())
+                self._packed[tool.key] = Tool(tool.run_path, packed).node
             except tools.PackError as error:
                 raise SophiosError.error(
                     SophiosErrorCode.SUBWORKFLOW_INVALID,
                     f'step {step.id.name!r} runs {tool.run_path}, which refers to files relative to itself, '
                     f'and cwltool cannot read them:\n{error}',
                     span=step.span, locator=Locator(step=step.id.name, index=step.id.index)) from error
-        return deepcopy(self._packed[tool.key])
+        return self._packed[tool.key]

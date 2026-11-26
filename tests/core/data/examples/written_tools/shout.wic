@@ -1,0 +1,4 @@
+script: |
+  printf '%s\n' "$message" | tr a-z A-Z > shouted.txt
+inputs: {message: string}
+outputs: {result: shouted.txt}
