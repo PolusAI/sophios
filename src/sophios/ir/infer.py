@@ -223,7 +223,7 @@ def _unbound_scatter(graph: WorkflowGraph, diagnostics: Diagnostics,
     names = names or Names.of(graph)
     bound = _bound(graph)
     for step in graph.steps:
-        for name in step.scatter_ports:
+        for name in step.scatter.ports if step.scatter is not None else ():
             if PortId(step.id, Direction.INPUT, name) not in bound:
                 spelled = names.port(name)
                 diagnostics.error(

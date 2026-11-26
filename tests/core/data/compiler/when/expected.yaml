@@ -41,7 +41,7 @@ workflow.wic:
       - {id: text, when: 'true'}
       - {id: a_template}
       - {id: child, when: $(inputs.n)}
-      - {id: a_boolean, when: '  $(inputs.n > 0)  '}
+      - {id: a_boolean, when: $(inputs.n > 0)}
       - {id: outside_the_subset}
       - {id: a_body}
       - {id: not_a_string, when: true}

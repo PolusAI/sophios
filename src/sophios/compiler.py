@@ -21,12 +21,12 @@ from .ir.realtime import extract
 from .ir.resolve import RegistrySnapshot, ToolCheck, ToolDefinition, version_pins
 from .ir.names import NAMESPACE_SEPARATOR, Names
 from .ir.policy import RunPolicy
-from .ir.resolved import ResolvedWorkflow, non_boolean_whens, resolve
+from .ir.resolved import ResolvedStep, ResolvedWorkflow, resolve
 from .ir.types import RegistryKey, StepId, StepNode, WorkflowGraph
 from .lang import versions
 from .lang.diagnostics import Diagnostic, Diagnostics, Locator, Severity, SophiosError
 from .lang.nodes import CwlRecord, ToolDocument, UnresolvedName
-from .lang.cwl import inputs_read
+from .lang.cwl import boolean_problem
 from .lang.parser import step_key
 from .lang.error_codes import SophiosErrorCode
 from .wic_types import Cwl, Tool
@@ -141,6 +141,19 @@ def cwl_notes(view: ResolvedWorkflow) -> tuple[Diagnostic, ...]:
         for step, problem in non_boolean_whens(view))
 
 
+def non_boolean_whens(workflow: ResolvedWorkflow) -> tuple[tuple[ResolvedStep, str], ...]:
+    """Each step of `workflow` at any depth, a call among them, in graph order, whose `when` cannot give `true` or
+    `false`, with why (`boolean_problem`): the one check of a `when` every target shares."""
+    found: list[tuple[ResolvedStep, str]] = []
+    for step in workflow.steps:
+        if step.condition is not None and (
+                problem := boolean_problem(step.when_text, step.condition.type)) is not None:
+            found.append((step, problem))
+        if isinstance(step.run, ResolvedWorkflow):
+            found.extend(non_boolean_whens(step.run))
+    return tuple(found)
+
+
 def _tools(graph: WorkflowGraph, descriptions: '_Descriptions') -> Iterator[tuple[StepId, Tool]]:
     """Every tool step at any depth, with the tool it runs."""
     for step in graph.steps:
@@ -196,7 +209,7 @@ def _when_notes(graph: WorkflowGraph, names: Names) -> list[Diagnostic]:
         return [note for child in graph.children for note in _when_notes(child, names)]
     for step in graph.steps:
         declared = [names.port(port.id.port) for port in step.inputs]
-        for read in inputs_read(dict(step.interpreted).get('when')):
+        for read in step.guard.reads if step.guard is not None else ():
             if read not in declared:
                 made = [name for name in declared if name.startswith(f'{read}{NAMESPACE_SEPARATOR}')]
                 hint = f" Write {' or '.join(f'inputs[{name!r}]' for name in made)} to read one it declares." \

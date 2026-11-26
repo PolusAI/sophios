@@ -3,7 +3,6 @@ from collections.abc import Iterator
 from dataclasses import replace
 
 from ..lang import CwlRecord, SophiosErrorCode
-from ..lang.cwl import link_of
 from ..lang.diagnostics import Diagnostics, Locator
 from ..lang.types import Other, Type, TypeRelation, delivered, layered, relation, spell
 from .declarations import boundary_declaration, input_rank, output_rank
@@ -108,9 +107,9 @@ def _merging(graph: WorkflowGraph) -> dict[PortId, CwlRecord | None]:
     which its sources are judged by: the input is held with its record. A
     `valueFrom` computes the input, so nothing is judged: it is held with None.
     """
-    return {binding.sink: None if 'valueFrom' in dict(binding.value.fields) else binding.value
+    return {binding.sink: None if binding.value.computed else binding.value
             for step in graph.all_steps for binding in step.bindings
-            if isinstance(binding.value, CwlRecord) and not binding.value.delivers_its_source}
+            if isinstance(binding.value, CwlRecord) and binding.value.changes}
 
 
 def _check_workflow_inputs(graph: WorkflowGraph, merging: dict[PortId, CwlRecord | None],
@@ -147,8 +146,7 @@ def _reject_if_disjoint(graph: WorkflowGraph, edge: Edge, diagnostics: Diagnosti
     scope = _graph_at(graph, _owner_namespace(edge))
     produced = _effective_type(scope, edge.source, producing=True)
     if record is not None:
-        merge, pick = link_of(dict(record.fields))
-        produced = delivered(produced, sources=len(record.sources), merge=merge, pick=pick)
+        produced = delivered(produced, sources=len(record.sources), merge=record.merge, pick=record.pick)
     consumed = _effective_type(scope, edge.sink, producing=False)
     if relation(produced, consumed) is not TypeRelation.DISJOINT:
         return False

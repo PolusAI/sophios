@@ -3,7 +3,7 @@ from collections.abc import Callable
 from dataclasses import replace
 
 from ..lang.cwl import port_declaration
-from ..lang.types import BoundaryDeclaration, PortDeclaration, layered, optional, spell
+from ..lang.types import BoundaryDeclaration, PortDeclaration, ScatterMethod, layered, optional, spell
 from .types import DerivedName, Direction, Port, PortName, StepNode, WorkflowGraph
 
 
@@ -17,16 +17,15 @@ def required(declaration: PortDeclaration | None) -> bool:
 def input_rank(step: StepNode, port: PortName) -> int:
     """The array layers a value feeding `port` of `step` carries: one per time
     `scatter:` names the port."""
-    return step.scatter_ports.count(port)
+    return step.scatter.ports.count(port) if step.scatter is not None else 0
 
 
 def output_rank(step: StepNode) -> int:
     """The array layers `step`'s scatter adds to each of its outputs: none
     without scatter, one per scattered port for `nested_crossproduct`, else one."""
-    if not step.scatter_ports:
+    if step.scatter is None or not step.scatter.ports:
         return 0
-    nested = dict(step.interpreted).get('scatterMethod') == 'nested_crossproduct'
-    return len(step.scatter_ports) if nested else 1
+    return len(step.scatter.ports) if step.scatter.method is ScatterMethod.nested_crossproduct else 1
 
 
 def written_order(graph: WorkflowGraph) -> Callable[[PortName], tuple[int, int]]:

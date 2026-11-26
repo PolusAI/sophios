@@ -67,6 +67,6 @@ compiled:
     cat_pair_flat: {in: {f: {source: echo_item/out}}, scatter: [f], scatterMethod: flat_crossproduct}
     cat_pair_nested: {in: {f: {source: echo_item/out}}, scatter: [f], scatterMethod: nested_crossproduct}
     pair_nested: {scatter: [first, second], scatterMethod: nested_crossproduct}
-    pair_unless_b: {scatter: [first, second], scatterMethod: dotproduct, when: $(inputs.first !== 'b')}
+    pair_unless_b: {scatter: [first, second], scatterMethod: dotproduct, when: $(inputs.first !== "b")}
     pair_unless_skipped: {scatter: [first, seconds], scatterMethod: dotproduct,
       when: $(inputs.seconds !== inputs.skipped)}

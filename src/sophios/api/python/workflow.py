@@ -311,7 +311,7 @@ def _bind_record(process_self: Any, input_name: str, input_port: InputParameter,
     # A workflow input the record delivers as it is to a declared input carries that input's type,
     # as a plain binding's does. Otherwise the record gives it no type: one that nothing else types is `Any`.
     delivered = (_boundary_type(input_port.parameter_type)
-                 if built.delivers_its_source and input_port.declared else None)
+                 if not built.changes and input_port.declared else None)
     ports = tuple(entry.workflow._ensure_input(entry.name, parameter_type=delivered, implicit=entry.implicit)
                   if isinstance(entry, WorkflowInputReference) else entry for entry in entries)
     if record.value_from is None and input_port.declared:

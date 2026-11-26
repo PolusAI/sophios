@@ -423,3 +423,36 @@ def source_text(node: Expr) -> str:
             return f"{op}({', '.join(source_text(arg) for arg in args)})"
         case Op(op=op, args=args):
             return f"({source_text(args[0])} {op} {source_text(args[1])})"
+
+
+def written_text(node: Expr) -> str:
+    """The `$( … )` field a tree is written as: its operators spaced, a string in double quotes, and a parenthesis
+    only where the grammar's precedence needs one."""
+    return f"$({_body(node, -1)})"
+
+
+def _body(node: Expr, outer: int) -> str:
+    """The text of `node` inside an operator of precedence `outer`: a level of `_BINARY_LEVELS`, or -1 for none, so a
+    node of the same level is a right operand and takes a parenthesis (every level is left-associative)."""
+    match node:
+        case Number(text=text):
+            return text
+        case Text(value=value):
+            return f"'{value}'" if '"' in value else f'"{value}"'
+        case Boolean(value=value):
+            return "true" if value else "false"
+        case Null():
+            return "null"
+        case Ref(name=name):
+            return f"inputs.{name}"
+        case Op(op=op, args=(operand,)) if op.startswith("u"):
+            # A unary operand of a unary is parenthesized: `--x` is a decrement.
+            inner = _body(operand, len(_BINARY_LEVELS))
+            return f"{op[1]}({inner})" if isinstance(operand, Op) and operand.op.startswith("u") else f"{op[1]}{inner}"
+        case Op(op=op, args=args) if op in CALLS:
+            return f"{op}({', '.join(_body(arg, -1) for arg in args)})"
+        case Op(op=op, args=(left, right)):
+            level = next(index for index, ops in enumerate(_BINARY_LEVELS) if op in ops)
+            text = f"{_body(left, level - 1)} {op} {_body(right, level)}"
+            return f"({text})" if level <= outer else text
+    raise TypeError(f"not a node of the subset: {node!r}")

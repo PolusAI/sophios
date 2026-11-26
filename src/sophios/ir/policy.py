@@ -7,12 +7,8 @@ for the policy as it is emitted, and nothing rewrites the CWL afterwards.
 """
 import hashlib
 import json
-from collections.abc import Sequence
 from copy import deepcopy
 from dataclasses import dataclass
-
-from cwl_utils.errors import SubstitutionError
-from cwl_utils.expression import scanner
 
 from ..lang.cwl import read_type
 from ..lang.nodes import OpaqueCwl
@@ -44,44 +40,6 @@ class RunPolicy:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, 'success_codes', tuple(sorted({0, *self.success_codes})))
-
-
-def effective_when(authored: OpaqueCwl, needed: Sequence[str], policy: RunPolicy) -> OpaqueCwl:
-    """The `when` a step is written with: the null checks of every input it requires, then its own.
-
-    The checks come first, so the author's condition is evaluated only once every
-    required input has arrived, and at most once: it is written once, verbatim.
-    Without partial failure, or with no input to check, the step keeps the `when`
-    its author wrote, or none. A `when` that is neither one `$(...)` nor one
-    `${...}` is not a condition cwltool evaluates, and is written as it is.
-    """
-    if not policy.partial_failure or not needed:
-        return authored
-    checks = ' && '.join(f'inputs["{name}"] != null' for name in needed)
-    if authored is None:
-        return f'$({checks})'
-    text = authored.strip() if isinstance(authored, str) else ''  # as cwltool reads an expression
-    match one_expression(text):
-        case '$(':
-            return f'$({checks} && ({text[2:-1]}))'
-        case '${':
-            return f'${{if (!({checks})) {{ return false; }}{text[2:-1]}}}'
-    return authored
-
-
-def one_expression(field: str) -> str | None:
-    """How `field` opens, `$(` or `${`, when it is one CWL expression from end to end; else None.
-
-    Read as cwltool reads an expression field: stripped of surrounding whitespace, then scanned by
-    `cwl_utils.expression.scanner`, as `interpolate` in cwl_utils/expression.py scans it. Anything else is a template,
-    text with or without expressions in it, which evaluates to text.
-    """
-    text = field.strip()
-    try:
-        span = scanner(text)
-    except SubstitutionError:
-        return None
-    return text[:2] if span == (0, len(text)) and text[:2] in ('$(', '${') else None
 
 
 def tolerant_tool(document: Cwl, policy: RunPolicy) -> Cwl:

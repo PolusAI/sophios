@@ -63,7 +63,8 @@ def _spell_records(graph: WorkflowGraph, ins: dict[StepId, dict[PortName, Emitte
                 ins[step.id][binding.sink.port] = Record(
                     tuple(_record_source(graph, source, item, relayed)
                           for source, item in zip(binding.value.sources, binding.resolution, strict=True)),
-                    binding.value.fields)
+                    binding.value.passthrough, binding.value.merge, binding.value.pick, binding.value.computed,
+                    binding.value.computes, binding.value.default, binding.value.has_default)
 
 
 def _record_source(graph: WorkflowGraph, source: EdgeRef | UnresolvedName,

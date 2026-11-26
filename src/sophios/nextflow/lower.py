@@ -23,6 +23,7 @@ from .analyze import (
     _Step, _WhenError, _absent_optional_findings, _call_findings, _carried, _condition_value,
     _conditional_consumer_findings, _json_value, _lists, _param_type, _scatter_findings, _staged_name_findings,
     _step_input_findings, _text_capture_sink_findings, _wired, _workflow_capability_findings, _workflow_params,
+    written_link,
 )
 from .model import (
     ARRAY_REFERENCE, ExecutableNextflowWorkflow, NfConnection, NfPort, NfProcess, NfProcessConnection,
@@ -110,7 +111,7 @@ def _step_connections(
         # Capability analysis already admitted only an approved method for two or more; at one scattered input the
         # three methods coincide.
         method = step.node.scatter.method if step.node.scatter is not None else None
-        scatter_method = str(method or "dotproduct") if len(scattered) > 1 else "dotproduct"
+        scatter_method = method.value if method is not None and len(scattered) > 1 else "dotproduct"
         for port, found in step.bound():
             destination_port = _identifier(port.name)
             spelled = _wired(port, found)
@@ -130,8 +131,8 @@ def _step_connections(
                         (scatter_method if destination_port in scattered else "gather") if gathers else None,
                     ))
             # Capability analysis admitted only the step inputs the idioms lower.
-            link_merge = merge_of(port.link_merge, sources)
-            pick_value = port.pick_value
+            written_merge, pick_value = written_link(port)
+            link_merge = merge_of(written_merge, sources)
             if sources and port.has_default:
                 # The default takes the place of a null source: the first value that is not null.
                 sources.append(defaults[(process.name, destination_port)])

@@ -17,18 +17,19 @@ from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass, replace
 from typing import NamedTuple, TypeAlias
 
-from ..lang.cwl import link_of
 from ..lang.nodes import OpaqueCwl
 from ..lang.spans import SourceSpan
-from ..lang.subset import BOOLEAN, Expr, check, is_safe_subset_text, parse
-from ..lang.types import (Array, Atom, PortDeclaration, Type, delivered, layered, nullable, spell, without_null)
+from ..lang.subset import Expr, check, written_text
+from ..lang.types import (
+    Array, Atom, Merge, Pick, PortDeclaration, ScatterMethod, Type, delivered, layered, nullable, spell, without_null,
+)
 from .declarations import output_rank, required as needs_value, written_order
 from .names import Names
-from .policy import RunPolicy, one_expression
+from .policy import RunPolicy
 from .stepin import step_inputs
 from ..wic_types import Tool
 from .types import (
-    DerivedName, EmittedValue, Expression, PortName, Record, Source, StepId,
+    DerivedName, EmittedValue, Expression, Guard, PortName, Record, Source, StepId,
     StepNode, StepOutputRef, WorkflowGraph, WorkflowPort,
 )
 
@@ -133,11 +134,24 @@ class Raw:
 
 @dataclass(frozen=True, slots=True)
 class Entry:
-    """`in: {x: {source: ..., label: ...}}`: a WorkflowStepInput written as a mapping. `written` holds every field
-    but `source`, in the order the author wrote them."""
+    """`in: {x: {source: ..., label: ...}}`: a WorkflowStepInput written as a mapping. `merge`, `pick` and `default`
+    are what its fields mean; `passthrough` holds the fields no meaning holds, in the order the author wrote them."""
 
     sources: tuple[Ref, ...]
-    written: tuple[tuple[str, OpaqueCwl], ...]
+    passthrough: tuple[tuple[str, OpaqueCwl], ...]
+    merge: Merge | None = None
+    pick: Pick | None = None
+    computes: bool = False
+    default: OpaqueCwl = None
+    has_default: bool = False
+
+    @property
+    def unread(self) -> frozenset[str]:
+        """The fields of `passthrough` a target that reads none of them must refuse: a `valueFrom` written null
+        says nothing; a merge or a pick the standard does not have stays in `passthrough`, for the target that
+        refuses it by name."""
+        return frozenset(key for key, value in self.passthrough
+                         if (value is not None or key != 'valueFrom') and key not in ('linkMerge', 'pickValue'))
 
 
 #: What a step's `in:` entry says, in the form it was written.
@@ -169,13 +183,18 @@ class StepInput:
                 return ()
 
     @property
-    def written(self) -> tuple[tuple[str, OpaqueCwl], ...]:
-        """The fields of its mapping but `source`, in written order."""
+    def passthrough(self) -> tuple[tuple[str, OpaqueCwl], ...]:
+        """The fields of its mapping no meaning holds, in written order."""
         match self.value:
-            case Entry(written=written):
-                return written
+            case Entry(passthrough=passthrough):
+                return passthrough
             case Bare() | Raw():
                 return ()
+
+    @property
+    def unread(self) -> frozenset[str]:
+        """The fields of its mapping a target that reads none of them must refuse."""
+        return self.value.unread if isinstance(self.value, Entry) else frozenset()
 
     @property
     def expression(self) -> str | None:
@@ -186,48 +205,46 @@ class StepInput:
             case Bare() | Entry():
                 return None
 
-    def _field(self, key: str) -> OpaqueCwl:
-        return dict(self.written).get(key)
+    @property
+    def merge(self) -> Merge | None:
+        """How its sources join, when it says one the standard has."""
+        return self.value.merge if isinstance(self.value, Entry) else None
 
     @property
-    def link_merge(self) -> OpaqueCwl:
-        """As written; CWL's values are strings, and a target refuses any other."""
-        return self._field('linkMerge')
+    def pick(self) -> Pick | None:
+        """Which of the non-null values it takes, when it says one the standard has."""
+        return self.value.pick if isinstance(self.value, Entry) else None
 
     @property
-    def pick_value(self) -> OpaqueCwl:
-        """As written."""
-        return self._field('pickValue')
+    def computes(self) -> bool:
+        """Whether it says a `valueFrom` that is not null."""
+        return isinstance(self.value, Entry) and self.value.computes
 
     @property
     def default(self) -> OpaqueCwl:
-        """As written."""
-        return self._field('default')
+        """Its `default`, as written."""
+        return self.value.default if isinstance(self.value, Entry) else None
 
     @property
     def has_default(self) -> bool:
         """Whether it has a `default`, whatever the value."""
-        return 'default' in dict(self.written)
-
-    @property
-    def value_from(self) -> OpaqueCwl:
-        """As written."""
-        return self._field('valueFrom')
+        return isinstance(self.value, Entry) and self.value.has_default
 
 
 @dataclass(frozen=True, slots=True)
 class Scatter:
-    """A step's `scatter:`, spelled, in written order, and its `scatterMethod` as written."""
+    """A step's scatter: its inputs, spelled, in written order, and how it combines them. A method the enum does not
+    hold is None, and rides unread in the step's `passthrough`, for a target to refuse by name."""
 
     inputs: tuple[str, ...]
-    method: OpaqueCwl
+    method: ScatterMethod | None
 
 
 @dataclass(frozen=True, slots=True)
 class Condition:
-    """A step's authored `when`: as written, its safe-subset tree, and the tree's type over the step inputs."""
+    """A step's authored `when`: its safe-subset tree, where the subset reads the text, and the tree's type over the
+    step inputs. The text the subset does not read rides unread in the step's `passthrough`."""
 
-    written: OpaqueCwl
     expr: Expr | None
     type: str | None
     #: Why there is no tree, or why it does not type, in the subset's words.
@@ -248,8 +265,8 @@ class ResolvedStep:  # pylint: disable=too-many-instance-attributes
     outputs: tuple[str, ...]
     scatter: Scatter | None
     condition: Condition | None
-    #: Every other step key, verbatim and in written order: label, doc, requirements, hints, ... An orphan
-    #: `scatterMethod`, with no `scatter`, is first.
+    #: Every other step key, verbatim and in written order: label, doc, requirements, hints, ... A `scatterMethod`
+    #: the scatter does not hold and a `when` the subset does not read are first.
     passthrough: tuple[tuple[str, OpaqueCwl], ...]
     #: The inputs its process must be given a value for (no default, not optional; one it does not declare counts),
     #: spelled, in the order the process declares them.
@@ -259,6 +276,14 @@ class ResolvedStep:  # pylint: disable=too-many-instance-attributes
     #: the innermost requirement written on an enclosing workflow, a call or the step, else the innermost such hint;
     #: requirements first. A call's is empty: its workflow's steps inherit.
     inherited: tuple[Requirement, ...] = ()
+
+    @property
+    def when_text(self) -> OpaqueCwl:
+        """Its `when` as a message quotes it: the tree as the subset writes it, or the value the subset does not
+        read; None without one."""
+        if self.condition is None:
+            return None
+        return written_text(self.condition.expr) if self.condition.expr is not None else dict(self.passthrough)['when']
 
     @property
     def requirements(self) -> tuple[Requirement, ...]:
@@ -437,21 +462,18 @@ def _step(step: StepNode, child: WorkflowGraph | None, ins: tuple[tuple[PortName
     names = level.names
     called = {names.port(port.name): port.declaration for port in child.workflow_inputs} if child is not None else {}
     inputs = tuple(_step_input(name, value, step, called, level) for name, value in ins)
-    interpreted = dict(step.interpreted)
-    # A `scatterMethod` with nothing to scatter is not a scatter: a key as written.
-    passthrough = (('scatterMethod', interpreted['scatterMethod']), *step.passthrough) \
-        if interpreted.get('scatter') is None and 'scatterMethod' in interpreted else step.passthrough
     within = replace(level, outside=(*level.outside, *_requirements(step.passthrough)[0]))
     run: Tool | ResolvedWorkflow = (
         _workflow(child, within, {port.name: port.type for port in inputs}) if child is not None
         else level.tools[step.id])
     outputs = tuple(names.port(port.id.port) for port in step.outputs)
-    scatter = (Scatter(tuple(names.port(port) for port in step.scatter_ports), interpreted.get('scatterMethod'))
-               if interpreted.get('scatter') is not None else None)
-    condition = _condition(interpreted['when'], inputs, scatter) if interpreted.get('when') is not None else None
+    scatter = (Scatter(tuple(names.port(port) for port in step.scatter.ports), step.scatter.method)
+               if step.scatter is not None else None)
+    condition = _condition(step.guard, inputs, scatter) if step.guard is not None else None
     needed = tuple(names.port(port.id.port) for port in step.inputs if needs_value(port.declaration))
     return ResolvedStep(names.step(step.id), names.qualified(step.id), run, inputs, outputs, scatter, condition,
-                        passthrough, needed, step.span, _inherited(within.outside) if isinstance(run, Tool) else ())
+                        step.passthrough, needed, step.span,
+                        _inherited(within.outside) if isinstance(run, Tool) else ())
 
 
 # pylint: disable-next=too-many-locals
@@ -466,7 +488,7 @@ def _step_input(name: PortName, value: EmittedValue, step: StepNode, called: Map
     span = getattr(binding.value, 'span', None) if binding is not None else None
     refs: tuple[PortName | StepOutputRef, ...]
     form: StepValue
-    written: tuple[tuple[str, OpaqueCwl], ...] = ()
+    record: Record | None = None
     match value:
         case Source(ref=str() as ref, shorthand=True) if level.names.port(ref) not in level.inputs:
             # A name `--allow_raw_cwl` lets through unresolved: raw CWL, as `!cwl` writes it.
@@ -475,12 +497,14 @@ def _step_input(name: PortName, value: EmittedValue, step: StepNode, called: Map
             refs, form = (ref,), Bare(_ref(ref, level.names))
         case Source(ref=ref):
             refs, form = (ref,), Entry((_ref(ref, level.names),), ())
-        case Record(sources=sources, fields=written):
-            refs, form = sources, Entry(tuple(_ref(ref, level.names) for ref in sources), written)
+        case Record(sources=sources) as record:
+            refs, form = sources, Entry(tuple(_ref(ref, level.names) for ref in sources), record.passthrough,
+                                        record.merge, record.pick, record.computes, record.default,
+                                        record.has_default)
         case Expression(text=text):
             refs, form = (), Raw(text)
     return StepInput(spelled_name, declared, form,
-                     _delivered_type([_source_type(ref, level) for ref in refs], dict(written), declared), span)
+                     _delivered_type([_source_type(ref, level) for ref in refs], record, declared), span)
 
 
 def _ref(ref: PortName | StepOutputRef, names: Names) -> Ref:
@@ -505,7 +529,7 @@ def _source_type(ref: PortName | StepOutputRef, level: _Level) -> Type:
 def _may_skip(producer: StepNode, port: PortName, level: _Level) -> bool:
     """Whether `producer`'s output `port` may be `null`: the producer, or for a call the tool step that makes the
     output and every call on the way out to it, has a `when`."""
-    if dict(producer.interpreted).get('when') is not None:
+    if producer.guard is not None:
         return True
     child = level.graph.child(producer.id)
     inner = dict(child.output_mapping).get(port) if child is not None else None
@@ -513,21 +537,20 @@ def _may_skip(producer: StepNode, port: PortName, level: _Level) -> bool:
         return False
     parts = inner.step.namespace.parts
     on_the_way = (*parts[parts.index(producer.id) + 1:], inner.step)
-    return any(dict(level.everything[step].interpreted).get('when') is not None for step in on_the_way)
+    return any(level.everything[step].guard is not None for step in on_the_way)
 
 
-def _delivered_type(produced: list[Type], fields: Mapping[str, OpaqueCwl],
-                    declared: PortDeclaration | None) -> Type:
-    """What a step input holds after its sources, `linkMerge`, `pickValue` and `default`: `Any` after a
-    `valueFrom`; the declared type where no source says more; sources of different types merge as `Any`."""
-    if 'valueFrom' in fields:
+def _delivered_type(produced: list[Type], record: Record | None, declared: PortDeclaration | None) -> Type:
+    """What a step input holds after its sources, its merge, its pick and its `default`: `Any` after a `valueFrom`;
+    the declared type where no source says more; sources of different types merge as `Any`."""
+    if record is not None and record.computed:
         return Atom.ANY
     if not produced:
         return declared.type if declared is not None else Atom.ANY
     alike = all(item == produced[0] for item in produced)
-    merge, pick = link_of(fields)
+    merge, pick = (record.merge, record.pick) if record is not None else (None, None)
     merged = delivered(produced[0] if alike else Atom.ANY, sources=len(produced), merge=merge, pick=pick)
-    return without_null(merged)[0] if 'default' in fields else merged
+    return without_null(merged)[0] if record is not None and record.has_default else merged
 
 
 def _seen(port: StepInput, scatter: Scatter | None) -> Type:
@@ -538,45 +561,14 @@ def _seen(port: StepInput, scatter: Scatter | None) -> Type:
     return port.type
 
 
-def _condition(when: OpaqueCwl, inputs: tuple[StepInput, ...], scatter: Scatter | None) -> Condition:
-    if not isinstance(when, str):
-        return Condition(when, None, None, 'a when is a string')
-    if not is_safe_subset_text(when):
-        return Condition(when, None, None, 'the safe JavaScript subset requires the whole field to be one $( … ) '
-                         'reference')
+def _condition(guard: Guard, inputs: tuple[StepInput, ...], scatter: Scatter | None) -> Condition:
+    if guard.expr is None:
+        return Condition(None, None, guard.problem)
     try:
-        expr = parse(when)
+        typed = check(guard.expr, {port.name: spell(_seen(port, scatter)) for port in inputs})
     except ValueError as error:
-        return Condition(when, None, None, str(error))
-    try:
-        typed = check(expr, {port.name: spell(_seen(port, scatter)) for port in inputs})
-    except ValueError as error:
-        return Condition(when, expr, None, str(error))
-    return Condition(when, expr, typed, None)
-
-
-def boolean_problem(condition: Condition) -> str | None:
-    """Why `condition` cannot give `true` or `false`, which CWL requires of a `when`, the `when` quoted first;
-    `None` when it gives one, and when nothing here can tell: the subset cannot parse or type it, or it is not a
-    string, which cwltool's schema validation refuses itself."""
-    written = condition.written
-    if isinstance(written, str) and one_expression(written) is None:
-        return f'{written!r} is not one $(...) or ${{...}} expression'
-    if condition.type not in (None, BOOLEAN):
-        return f'{written!r} must compute a boolean, not a {condition.type}'
-    return None
-
-
-def non_boolean_whens(workflow: ResolvedWorkflow) -> tuple[tuple[ResolvedStep, str], ...]:
-    """Each step of `workflow` at any depth, a call among them, in graph order, whose `when` cannot give `true` or
-    `false`, with why (`boolean_problem`): the one check of a `when` every target shares."""
-    found: list[tuple[ResolvedStep, str]] = []
-    for step in workflow.steps:
-        if step.condition is not None and (problem := boolean_problem(step.condition)) is not None:
-            found.append((step, problem))
-        if isinstance(step.run, ResolvedWorkflow):
-            found.extend(non_boolean_whens(step.run))
-    return tuple(found)
+        return Condition(guard.expr, None, str(error))
+    return Condition(guard.expr, typed, None)
 
 
 @dataclass(frozen=True, slots=True)
@@ -683,5 +675,6 @@ class _Flattened:  # pylint: disable=too-few-public-methods
 
 def _plain(port: StepInput) -> bool:
     """Whether a call's binding passes its one source as it is: no merge, pick, default or computed value."""
-    return (len(port.sources) == 1 and port.expression is None and port.link_merge is None
-            and port.pick_value is None and not port.has_default and port.value_from is None)
+    return (len(port.sources) == 1 and port.expression is None and port.merge is None
+            and port.pick is None and not port.has_default and not port.computes
+            and all(value is None for key, value in port.passthrough if key in ('linkMerge', 'pickValue')))

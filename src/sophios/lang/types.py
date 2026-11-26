@@ -113,6 +113,14 @@ class PortDeclaration:  # pylint: disable=too-many-instance-attributes
 BoundaryDeclaration = NewType('BoundaryDeclaration', PortDeclaration)
 
 
+class ScatterMethod(str, enum.Enum):
+    """How a scatter over several inputs combines them: the names of `lang.cwl.SCATTER_METHODS`."""
+
+    dotproduct = "dotproduct"
+    flat_crossproduct = "flat_crossproduct"
+    nested_crossproduct = "nested_crossproduct"
+
+
 class Merge(str, enum.Enum):
     """How a step input joins several sources into one value."""
 
@@ -215,7 +223,7 @@ def layered(type_: Type, rank: int) -> Type:
     return type_
 
 
-def delivered(produced: Type, *, sources: int, merge: Merge | None, pick: Pick | None) -> Type:
+def delivered(produced: Type, *, sources: int, merge: 'Merge | OpaqueCwl', pick: 'Pick | OpaqueCwl') -> Type:
     """The type a step-input record delivers from sources of type `produced`: the list `merge` makes of them (a
     merged array stays flat; one source with no `merge` is not wrapped) or, for a `pick` that picks one value, one
     element of it. `Any` where a pick has no array to take an element of, so nothing is proved against it."""

@@ -5,12 +5,14 @@ well-formed Sophios document may contain, independent of which tools happen
 to be installed. Every node is frozen (an AST consumers can mutate is not a
 specification of anything) and slotted (allocated once per construct).
 """
-from dataclasses import dataclass, field, fields
+from collections.abc import Callable
+from dataclasses import dataclass, field, fields, replace
 from datetime import date, datetime
 from enum import StrEnum
 from typing import Any, TypeAlias
 
 from .spans import SourceSpan
+from .types import Merge, Pick
 
 
 class Shape(StrEnum):
@@ -161,10 +163,54 @@ class CwlRecord:
     span: SourceSpan | None = surface(Shape.INTERNAL, default=None)
 
     @property
-    def delivers_its_source(self) -> bool:
-        """Whether the step input receives its one source's value as it is:
-        no merge, no pick and no `valueFrom` stands between them."""
-        return len(self.sources) == 1 and not {'linkMerge', 'pickValue', 'valueFrom'} & dict(self.fields).keys()
+    def merge(self) -> Merge | None:
+        """How its sources join, from `linkMerge`; None when it says none, or says one the standard does not have,
+        which stays in `passthrough` for a target to refuse by name."""
+        return next((way for way in Merge if way == dict(self.fields).get('linkMerge')), None)
+
+    @property
+    def pick(self) -> Pick | None:
+        """Which of the non-null values it takes, from `pickValue`; None as `merge` is."""
+        return next((way for way in Pick if way == dict(self.fields).get('pickValue')), None)
+
+    @property
+    def passthrough(self) -> tuple[tuple[str, 'OpaqueCwl'], ...]:
+        """The fields no meaning above holds (`valueFrom`, `label`, `doc`, a merge or a pick the standard does not
+        have, ...), verbatim, in written order."""
+        held = {'default', *(key for key, way in (('linkMerge', self.merge), ('pickValue', self.pick))
+                             if way is not None)}
+        return tuple((key, value) for key, value in self.fields if key not in held)
+
+    @property
+    def computed(self) -> bool:
+        """Whether a `valueFrom` is written, whatever its value."""
+        return 'valueFrom' in dict(self.fields)
+
+    @property
+    def computes(self) -> bool:
+        """Whether a `valueFrom` is written that is not null."""
+        return dict(self.fields).get('valueFrom') is not None
+
+    @property
+    def default(self) -> 'OpaqueCwl':
+        """The `default` as written."""
+        return dict(self.fields).get('default')
+
+    @property
+    def has_default(self) -> bool:
+        """Whether a `default` is written, whatever its value."""
+        return 'default' in dict(self.fields)
+
+    @property
+    def changes(self) -> bool:
+        """Whether something stands between its sources and the step input: not one source, or a merge, a pick or
+        a `valueFrom`, as written."""
+        return len(self.sources) != 1 or bool({'linkMerge', 'pickValue', 'valueFrom'} & dict(self.fields).keys())
+
+    def map_default(self, resolve: Callable[['OpaqueCwl'], 'OpaqueCwl']) -> 'CwlRecord':
+        """This record with its `default`, if it has one, replaced by `resolve` of it."""
+        return replace(self, fields=tuple((key, resolve(value) if key == 'default' else value)
+                                          for key, value in self.fields))
 
 
 #: The complete set of forms a step input may take: a literal, an edge

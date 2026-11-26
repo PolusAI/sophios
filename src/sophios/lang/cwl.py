@@ -14,13 +14,17 @@ from pathlib import Path
 import re
 from typing import Any, Final, TypeAlias, TypeGuard, TypeVar
 
+from cwl_utils.errors import SubstitutionError
+from cwl_utils.expression import scanner
 from cwl_utils.parser import cwl_v1_2 as _standard
 import yaml
 
 from .diagnostics import SophiosError
 from .error_codes import SophiosErrorCode
 from .nodes import OpaqueCwl
-from .types import Array, Atom, Enum, Merge, Other, Pick, PortDeclaration, Place, Record, Type, Union, Unread
+from .subset import BOOLEAN, Expr, is_safe_subset_text, parse
+from .types import (Array, Atom, Enum, Merge, Other, Pick, PortDeclaration, Place, Record, ScatterMethod, Type, Union,
+                    Unread)
 
 
 class CwlVersion(StrEnum):
@@ -67,14 +71,6 @@ def _hold_to_the_standard(enum: type[enum.Enum], *standard: Sequence[str]) -> No
     symbols = {symbol for each in standard for symbol in each}
     if (values := {member.value for member in enum}) != symbols:
         raise TypeError(f"{enum.__name__} is not the CWL standard's: {sorted(values ^ symbols)}")
-
-
-class ScatterMethod(str, enum.Enum):
-    """The names of `SCATTER_METHODS`."""
-
-    dotproduct = "dotproduct"
-    flat_crossproduct = "flat_crossproduct"
-    nested_crossproduct = "nested_crossproduct"
 
 
 _hold_to_the_standard(Atom, _standard.CWLTypeLoader.symbols, _standard.AnyLoader.symbols)
@@ -301,12 +297,44 @@ def _read(raw: Any, path: Place, unread: list[Unread], open_: frozenset[int]) ->
     return Enum(tuple(raw['symbols']))
 
 
-def link_of(fields: Mapping[str, OpaqueCwl]) -> tuple[Merge | None, Pick | None]:
-    """The `linkMerge` and `pickValue` an `in:` record wrote, as what they change. A value that is none of the
-    standard's (reachable only through the Python API) is the way of the standard's that takes the same path."""
-    merge, pick = fields.get('linkMerge'), fields.get('pickValue')
-    return (None if merge is None else Merge.FLATTENED if merge == Merge.FLATTENED else Merge.NESTED,
-            None if pick is None else Pick(pick) if pick in PICK_VALUES else Pick.ALL)
+def read_when(written: OpaqueCwl) -> tuple[Expr | None, tuple[str, ...], str | None]:
+    """A step's `when` read: its tree where the safe subset reads the text, the inputs the text reads, and where there
+    is no tree, why, in the subset's words."""
+    reads = inputs_read(written)
+    if not isinstance(written, str):
+        return None, reads, 'a when is a string'
+    if not is_safe_subset_text(written):
+        return None, reads, 'the safe JavaScript subset requires the whole field to be one $( … ) reference'
+    try:
+        return parse(written), reads, None
+    except ValueError as error:
+        return None, reads, str(error)
+
+
+def boolean_problem(written: OpaqueCwl, type_: str | None) -> str | None:
+    """Why a `when` written `written`, of the subset's type `type_`, cannot give `true` or `false`, which CWL
+    requires of one, the `when` quoted first; `None` when it gives one, and when nothing here can tell: the subset
+    cannot parse or type it, or it is not a string, which cwltool's schema validation refuses itself."""
+    if isinstance(written, str) and one_expression(written) is None:
+        return f'{written!r} is not one $(...) or ${{...}} expression'
+    if type_ not in (None, BOOLEAN):
+        return f'{written!r} must compute a boolean, not a {type_}'
+    return None
+
+
+def one_expression(field: str) -> str | None:
+    """How `field` opens, `$(` or `${`, when it is one CWL expression from end to end; else None.
+
+    Read as cwltool reads an expression field: stripped of surrounding whitespace, then scanned by
+    `cwl_utils.expression.scanner`, as `interpolate` in cwl_utils/expression.py scans it. Anything else is a template,
+    text with or without expressions in it, which evaluates to text.
+    """
+    text = field.strip()
+    try:
+        span = scanner(text)
+    except SubstitutionError:
+        return None
+    return text[:2] if span == (0, len(text)) and text[:2] in ('$(', '${') else None
 
 
 #: What a workflow boundary port may state, by direction: the fields the CWL

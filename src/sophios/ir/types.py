@@ -10,7 +10,8 @@ from typing import NewType, TypeAlias
 from ..lang.diagnostics import Diagnostics
 from ..lang.nodes import GraphvizEntry, InputValue, OpaqueCwl
 from ..lang.spans import SourceSpan
-from ..lang.types import BoundaryDeclaration, PortDeclaration, Type
+from ..lang.subset import Expr
+from ..lang.types import BoundaryDeclaration, Merge, Pick, PortDeclaration, ScatterMethod, Type
 
 
 class Direction(StrEnum):
@@ -152,12 +153,19 @@ class Expression:
 
 
 @dataclass(frozen=True, slots=True)
-class Record:
-    """A step input spelled as CWL's WorkflowStepInput: its resolved sources, in
-    the authored order, and the other fields verbatim."""
+class Record:  # pylint: disable=too-many-instance-attributes
+    """A step input that says more than where its value comes from: its resolved sources, in the authored order,
+    what it means by them, and the fields no meaning holds, verbatim."""
 
     sources: tuple['PortName | StepOutputRef', ...]
-    fields: tuple[tuple[str, OpaqueCwl], ...]
+    passthrough: tuple[tuple[str, OpaqueCwl], ...]
+    merge: Merge | None = None
+    pick: Pick | None = None
+    #: Whether a `valueFrom` is written, and whether it is one that is not null.
+    computed: bool = False
+    computes: bool = False
+    default: OpaqueCwl = None
+    has_default: bool = False
 
 
 #: What a step's `in:` entry can be: a closed set of the shapes CWL has a
@@ -224,11 +232,30 @@ class Binding:
 
 
 @dataclass(frozen=True, slots=True)
+class Scatter:
+    """A step's scatter: the ports it runs once per element of, in the order written, and how it combines them. A
+    method the enum does not hold is None, and rides unread in `StepNode.passthrough`."""
+
+    ports: tuple[PortName, ...]
+    method: ScatterMethod | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class Guard:
+    """A step's condition: its tree when the safe subset reads the text, the inputs the text reads, and, where there
+    is no tree, why, in the subset's words. The text the subset does not read rides unread in
+    `StepNode.passthrough`."""
+
+    expr: Expr | None
+    reads: tuple[str, ...]
+    problem: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class StepNode:  # pylint: disable=too-many-instance-attributes
     """A step occurrence, with the ports it exposes and what its inputs bind
-    to. `interpreted` holds the CWL keys Sophios acts upon (including
-    `scatter`, `scatterMethod` and `when`, read verbatim by `emit`) and
-    `passthrough` the rest.
+    to. Its scatter and its condition are the two things the compiler reads of
+    what the author wrote beside it; `passthrough` holds the rest, opaque.
     """
 
     id: StepId
@@ -238,11 +265,13 @@ class StepNode:  # pylint: disable=too-many-instance-attributes
     inputs: tuple[Port, ...] = ()
     outputs: tuple[Port, ...] = ()
     bindings: tuple[Binding, ...] = ()
-    interpreted: tuple[tuple[str, OpaqueCwl], ...] = ()
+    #: What the author wrote beside the step that the compiler does not read, in written order. A `scatterMethod`
+    #: with no `scatter`, which is no scatter, or one the standard does not have, and a `when` the subset does not
+    #: read, are the first of them.
     passthrough: tuple[tuple[str, OpaqueCwl], ...] = ()
     span: SourceSpan | None = None
-    #: The ports `interpreted['scatter']` names, resolved where it is read.
-    scatter_ports: tuple[PortName, ...] = ()
+    scatter: Scatter | None = None
+    guard: Guard | None = None
     inference_rules: tuple[tuple[str, str], ...] = ()
     synthesized: bool = False
     #: Its own `wic: steps:` entry's `graphviz:`, which only a drawing reads.

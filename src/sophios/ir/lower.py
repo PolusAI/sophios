@@ -13,17 +13,16 @@ relative location in a `default:` is read against it.
 """
 import difflib
 from collections.abc import Mapping, Sequence
-from dataclasses import replace
 from pathlib import Path
 from typing import Final, cast
 
-from ..lang.cwl import port_declaration
+from ..lang.cwl import port_declaration, read_when
 from ..lang.diagnostics import Diagnostics, Locator
 from ..lang.error_codes import SophiosErrorCode
 from ..lang.nodes import CwlRecord, EdgeRef, InputValue, OpaqueCwl, Step, UnresolvedName, WicSidecar
 from ..lang.parser import step_key
 from ..lang.spans import SourceSpan
-from ..lang.types import Atom, BoundaryDeclaration
+from ..lang.types import Atom, BoundaryDeclaration, ScatterMethod
 from .locations import absolute_paths
 from .resolve import ResolvedDocument, ResolvedStep, graphviz_entry
 from .types import (
@@ -32,12 +31,14 @@ from .types import (
     DeferredObligation,
     Direction,
     Edge,
+    Guard,
     Namespace,
     PhaseResult,
     Port,
     PortId,
     PortName,
     Resolution,
+    Scatter,
     StepId,
     StepNode,
     WorkflowGraph,
@@ -172,11 +173,20 @@ def _resolved_step_node(identity: StepId, resolved: ResolvedStep, defined: dict[
                              _resolve(value, port, defined, diagnostics))
                      for name, value in source.inputs
                      if (port := by_input.get(AuthoredName(name))) is not None)
-    scatter_ports = _scatter_ports(source, identity, inputs, diagnostics,
-                                   calls_workflow=resolved.process.child is not None)
-    return StepNode(identity, resolved.process.key, inputs, outputs, bindings, source.interpreted,
-                    source.passthrough, source.span, scatter_ports,
-                    _inference_rules(resolved.sidecar), graphviz=graphviz_entry(resolved.sidecar))
+    written = dict(source.interpreted)
+    method = next((known for known in ScatterMethod if known == written.get('scatterMethod')), None)
+    scatter = (Scatter(_scatter_ports(source, identity, inputs, diagnostics,
+                                      calls_workflow=resolved.process.child is not None), method)
+               if written.get('scatter') is not None else None)
+    guard = Guard(*read_when(written['when'])) if written.get('when') is not None else None
+    # What no node holds is unread, first of the step's other keys: a `scatterMethod` with nothing to scatter, which
+    # is no scatter, or one the standard does not have; a `when` the subset does not read.
+    unread = (*((('scatterMethod', written['scatterMethod']),) if 'scatterMethod' in written and (scatter is None or method is None)
+                else ()),
+              *((('when', written['when']),) if guard is not None and guard.expr is None else ()))
+    passthrough = (*unread, *source.passthrough)
+    return StepNode(identity, resolved.process.key, inputs, outputs, bindings, passthrough, source.span, scatter,
+                    guard, _inference_rules(resolved.sidecar), graphviz=graphviz_entry(resolved.sidecar))
 
 
 def _scatter_ports(source: Step, identity: StepId, inputs: tuple[Port, ...],
@@ -232,8 +242,7 @@ def _with_defaults_resolved(value: InputValue, directory: Path | None) -> InputV
     """A step input, its `!cwl {default: ...}` resolved as `_resolved_default` resolves one."""
     if not isinstance(value, CwlRecord):
         return value
-    return replace(value, fields=tuple((key, _resolved_default(field, directory) if key == 'default' else field)
-                                       for key, field in value.fields))
+    return value.map_default(lambda default: _resolved_default(default, directory))
 
 
 def _workflow_ports(document: ResolvedDocument, side: str) -> tuple[WorkflowPort, ...]:

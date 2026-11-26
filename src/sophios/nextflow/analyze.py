@@ -10,12 +10,12 @@ from typing import Any
 from cwl_utils.parser import cwl_v1_2 as standard
 
 from ..ir.resolved import (
-    Crossing, InputRef, ResolvedStep, ResolvedWorkflow, StepInput, Through, ToolStep, boolean_problem, spelling,
+    Crossing, InputRef, ResolvedStep, ResolvedWorkflow, StepInput, Through, ToolStep, spelling,
 )
-from ..lang.cwl import LINK_MERGES, PICK_VALUES, SCATTER_METHODS, canonical, required
+from ..lang.cwl import LINK_MERGES, PICK_VALUES, SCATTER_METHODS, boolean_problem, canonical, required
 from ..lang.error_codes import SophiosErrorCode
 from ..lang.subset import Expr, is_safe_subset_text, references
-from ..lang.types import spell
+from ..lang.types import ScatterMethod, spell
 from .model import PARAM_TYPES, gives_list, merge_of, text_stays_out, wildcard_problem
 from .support import FIELDS, consumed
 from .tool import (
@@ -62,17 +62,16 @@ class _Step:
 
 def _idioms(port: StepInput) -> set[str]:
     """The fixed step-input idioms a step input writes."""
-    return {name for name, written in (("default", port.has_default), ("linkMerge", port.link_merge is not None),
-                                       ("pickValue", port.pick_value is not None)) if written}
+    link_merge, pick_value = written_link(port)
+    return {name for name, written in (("default", port.has_default), ("linkMerge", link_merge is not None),
+                                       ("pickValue", pick_value is not None)) if written}
 
 
-_NULLABLE_FIELDS = frozenset({"linkMerge", "pickValue", "valueFrom"})
-
-
-def _record_fields(port: StepInput) -> set[str]:
-    """Every WorkflowStepInput field a step input writes besides its sources: a `linkMerge`, `pickValue` or
-    `valueFrom` written as null says nothing."""
-    return {name for name, value in port.written if value is not None or name not in _NULLABLE_FIELDS}
+def written_link(port: StepInput) -> tuple[Any, Any]:
+    """The `linkMerge` and the `pickValue` a step input wrote: one the standard has, or else the value left unread."""
+    unread = dict(port.passthrough)
+    return (port.merge.value if port.merge is not None else unread.get("linkMerge"),
+            port.pick.value if port.pick is not None else unread.get("pickValue"))
 
 
 def _wired(port: StepInput, sources: tuple[Through | Crossing, ...]) -> list[str] | None:
@@ -86,15 +85,15 @@ def _wired(port: StepInput, sources: tuple[Through | Crossing, ...]) -> list[str
     if any(isinstance(found, Crossing) for found in sources):
         return None
     if port.sources:
-        if _record_fields(port) - consumed(FIELDS["WorkflowStepInput"]):
+        if port.unread - consumed(FIELDS["WorkflowStepInput"]):
             return None
         return [spelling(found.ref) for found in sources if isinstance(found, Through)]
-    return [] if port.has_default and _record_fields(port) <= {"default", "label"} else None
+    return [] if port.has_default and port.unread <= {"label"} else None
 
 
 def _gives_non_null(port: StepInput) -> bool:
     """Whether a step input's idioms give a value that is not null whatever its sources: a pickValue or a default."""
-    return port.pick_value is not None or port.has_default
+    return port.pick is not None or port.has_default
 
 
 def _call_findings(workflow: ResolvedWorkflow) -> list[_Finding]:
@@ -134,8 +133,7 @@ def _call_findings(workflow: ResolvedWorkflow) -> list[_Finding]:
             )
             if port.expression is None:
                 found.extend(_unconsumed_field_findings(
-                    _record_fields(port) - _idioms(port), "WorkflowStepInput",
-                    path=input_path))
+                    port.unread, "WorkflowStepInput", path=input_path))
         found.extend(_own_findings(child, path=".run"))
         for declared in child.inputs:
             port_path = f".run.inputs.{declared.name}"
@@ -210,7 +208,7 @@ def _workflow_capability_findings(workflow: ResolvedWorkflow, steps: tuple[_Step
         found.extend(_scatter_method_alone(step.node))
         for port in step.node.inputs:
             if port.expression is None:
-                found.extend(_unconsumed_field_findings(_record_fields(port),
+                found.extend(_unconsumed_field_findings(port.unread,
                                                         "WorkflowStepInput", path=f".in.{port.name}"))
         findings.extend(replace(each, step=step.node) for each in found)
     return findings
@@ -288,7 +286,8 @@ def _scatter_findings(workflow: ResolvedWorkflow, steps: tuple[_Step, ...]) -> l
             findings.append(_Finding(SophiosErrorCode.NF_INVALID_CWL, ".scatter",
                                      "scatter must name one input, as a string or a non-empty list", step.node))
             continue
-        method = step.node.scatter.method
+        method = (step.node.scatter.method.value if step.node.scatter.method is not None
+                  else dict(step.node.passthrough).get("scatterMethod"))
         if method is not None and method not in SCATTER_METHODS:
             findings.append(_Finding(SophiosErrorCode.NF_INVALID_CWL,
                             ".scatterMethod", f"unsupported CWL scatter method {method!r}", step.node))
@@ -338,7 +337,7 @@ def _scatter_edge_findings(steps: tuple[_Step, ...]) -> list[_Finding]:
                 if scatter is not None:
                     # Every scatter is indexed, so its outputs are gathered once, in invocation order (design §6,
                     # Topology, Gather).
-                    if scatter.method == "nested_crossproduct" and len(set(scatter.inputs)) > 1:
+                    if scatter.method is ScatterMethod.nested_crossproduct and len(set(scatter.inputs)) > 1:
                         findings.append(_Finding(SophiosErrorCode.NF_NESTED_RESULT, f".in.{port.name}",
                                                  f"{source!r} is a nested_crossproduct result, which reaches "
                                                  "workflow outputs only", step.node))
@@ -371,7 +370,7 @@ def _step_input_findings(workflow: ResolvedWorkflow, steps: tuple[_Step, ...]) -
 
     def problems(step: _Step, port: StepInput, sources: list[str]) -> Iterator[tuple[SophiosErrorCode, str, str]]:
         """Each problem of one step input: its code, the field of the input it is at, and the reason."""
-        link_merge, pick_value = port.link_merge, port.pick_value
+        link_merge, pick_value = written_link(port)
         if len(sources) < 2 and not _idioms(port):
             return
         if port.name in step.scattered:
@@ -683,11 +682,11 @@ def _condition_value(step: _Step) -> Expr:
     """
     condition = step.node.condition
     assert condition is not None
-    when = condition.written
+    when = step.node.when_text
     if not isinstance(when, str):
         raise _WhenError(SophiosErrorCode.NF_INVALID_CWL,
                          f"{when!r} must be a safe JavaScript subset $( … ) expression")
-    if (problem := boolean_problem(condition)) is not None:
+    if (problem := boolean_problem(when, condition.type)) is not None:
         raise _WhenError(SophiosErrorCode.WHEN_NOT_BOOLEAN, problem)
     if not is_safe_subset_text(when):
         raise _WhenError(SophiosErrorCode.NF_WHEN_SUBSET,

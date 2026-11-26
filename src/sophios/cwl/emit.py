@@ -10,7 +10,7 @@ from copy import deepcopy
 from ..ir.artifacts import CompilationArtifact, Inlining
 from ..ir.names import NAMESPACE_SEPARATOR
 from ..ir.namespaces import EDAM_NAMESPACE
-from ..ir.policy import RunPolicy, effective_when, tolerant_tool
+from ..ir.policy import RunPolicy, tolerant_tool
 from ..ir.resolved import (
     Bare, Entry, InputRef, OutputRef, OutputSource, Raw, ResolvedStep, ResolvedWorkflow, StepValue, Verbatim, spelling,
 )
@@ -19,6 +19,7 @@ from ..lang.nodes import OpaqueCwl
 from ..lang.spans import SourceSpan
 from ..lang.types import PortDeclaration
 from ..wic_types import Cwl, Tool
+from .policy import effective_when
 from .spelling import written_type
 
 
@@ -32,8 +33,8 @@ def _artifact(workflow: ResolvedWorkflow, root: str, name: str, namespace: tuple
               span: SourceSpan | None) -> CompilationArtifact:
     """`workflow` as the document `name`, in the document tree of `root`, and what runs in its steps."""
     # Each step's `when`, written for the run policy.
-    whens = [effective_when(step.condition.written if step.condition is not None else None, step.required_inputs,
-                            workflow.policy) for step in workflow.steps]
+    whens = [effective_when(step.when_text, step.required_inputs, workflow.policy)
+             for step in workflow.steps]
     return CompilationArtifact(
         namespace, name, f'{name}.cwl', _document(workflow, whens, root),
         deepcopy(workflow.values),
@@ -91,8 +92,11 @@ def _step(step: ResolvedStep, when: OpaqueCwl, root: str) -> dict[str, OpaqueCwl
         'out': list(step.outputs),
     }
     others = dict(step.passthrough)
-    # A `scatterMethod` with nothing to scatter is the first of the step's other keys, and is written before `when`.
-    method = step.scatter.method if step.scatter is not None else others.pop('scatterMethod', None)
+    # A `scatterMethod` the scatter does not hold is the first of the step's other keys, and is written before `when`,
+    # which the other keys hold too where the subset does not read it.
+    method = step.scatter.method.value if step.scatter is not None and step.scatter.method else \
+        others.pop('scatterMethod', None)
+    others.pop('when', None)
     if step.scatter is not None:
         known['scatter'] = list(step.scatter.inputs)
     if method is not None:
@@ -110,13 +114,21 @@ def _binding(value: StepValue) -> str | dict[str, OpaqueCwl]:
             return spelling(ref)
         case Raw(text=text):
             return text
-        case Entry(sources=sources, written=written):
+        case Entry(sources=sources, passthrough=passthrough, merge=merge, pick=pick, default=default,
+                   has_default=has_default):
             known: dict[str, OpaqueCwl] = {}
+            kept = {key for key, field in passthrough if field is not None}
             if sources:
                 texts: list[OpaqueCwl] = [spelling(source) for source in sources]
                 # One source stays a list beside `linkMerge`, which merges a list.
-                known['source'] = texts if len(texts) > 1 or 'linkMerge' in dict(written) else texts[0]
-            known.update({key: deepcopy(field) for key, field in written})
+                known['source'] = texts if len(texts) > 1 or merge is not None or 'linkMerge' in kept else texts[0]
+            if merge is not None:
+                known['linkMerge'] = merge.value
+            if pick is not None:
+                known['pickValue'] = pick.value
+            if has_default:
+                known['default'] = deepcopy(default)
+            known.update({key: deepcopy(field) for key, field in passthrough})
             return known
 
 
@@ -144,7 +156,7 @@ def _requirements(workflow: ResolvedWorkflow, whens: list[OpaqueCwl]) -> dict[st
     """The requirements the author wrote and the ones `workflow`'s calls, scatters, `when`s and step-input records
     imply, by class."""
     entries = [entry for step in workflow.steps for entry in step.inputs]
-    value_from = [str(text) for entry in entries for key, text in entry.written if key == 'valueFrom']
+    value_from = [str(text) for entry in entries for key, text in entry.passthrough if key == 'valueFrom']
     requirements = {each.cls: deepcopy(each.body) for each in workflow.requirements if not each.hint}
     for requirement, needed in (
             ('SubworkflowFeatureRequirement', any(isinstance(step.run, ResolvedWorkflow) for step in workflow.steps)),
@@ -153,7 +165,8 @@ def _requirements(workflow: ResolvedWorkflow, whens: list[OpaqueCwl]) -> dict[st
             ('InlineJavascriptRequirement',
              any(when is not None for when in whens) or any('$(' in text or '${' in text for text in value_from)),
             ('MultipleInputFeatureRequirement',
-             any(len(entry.sources) > 1 or 'linkMerge' in dict(entry.written) for entry in entries)),
+             any(len(entry.sources) > 1 or entry.merge is not None
+                 or dict(entry.passthrough).get('linkMerge') is not None for entry in entries)),
             ('StepInputExpressionRequirement', bool(value_from))):
         # An authored body is kept; an authored `Class:` with no body is `{}`, as CWL needs.
         if needed and requirements.get(requirement) is None:
