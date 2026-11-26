@@ -1,5 +1,5 @@
-"""What a step or a workflow asks of the tools beneath it: the requirements and hints it wrote, read out of the keys it
-passes through, and the names of the other keys that nothing reads."""
+"""What a step or a workflow asks of the tools beneath it: a requirement or a hint it wrote, held by class. The front
+door reads them (`lang.cwl_tool.split`); nothing here reads CWL."""
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 

@@ -270,7 +270,7 @@ class OutputBinding:
 
 
 @dataclass(frozen=True, slots=True)
-class Step:
+class Step:  # pylint: disable=too-many-instance-attributes
     """A single workflow step.
 
     `interpreted` holds the CWL keys Sophios acts upon (`scatter`,

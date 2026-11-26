@@ -74,7 +74,7 @@ Python Workflow or .wic
   -> JSON IR, workflow.nf, nextflow.config, nextflow_params.json
 ```
 
-Unsupported input exits through structured diagnostics before executable IR or artifacts exist. The view takes each tool step's document from the compile's tools; the compile emits nothing, and no pass reads a workflow's emitted CWL.
+Unsupported input exits through structured diagnostics before executable IR or artifacts exist. The view takes each tool step's neutral node (`ToolNode`) from the compile's tools, read at the front door, so the target imports no CWL (an import-linter contract); the compile emits nothing, and no pass reads a workflow's emitted CWL.
 
 ### 4.2 Import
 

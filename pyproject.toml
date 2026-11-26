@@ -280,6 +280,7 @@ notes="FIXME,XXX,TODO"
 # target is computed at runtime is not seen.
 [tool.importlinter]
 root_package = "sophios"
+include_external_packages = true
 
 [[tool.importlinter.contracts]]
 name = "Core never imports contrib"
@@ -336,3 +337,25 @@ name = "The resolved view reads the graph, never its CWL"
 type = "forbidden"
 source_modules = ["sophios.ir.resolved"]
 forbidden_modules = ["sophios.cwl", "sophios.ir.artifacts", "sophios.compiler"]
+
+[[tool.importlinter.contracts]]
+name = "The middle end holds no CWL: the front door reads it"
+type = "forbidden"
+source_modules = ["sophios.ir"]
+forbidden_modules = ["sophios.lang.cwl", "sophios.lang.cwl_tool", "sophios.lang.cwl_fields", "sophios.cwl",
+                     "cwl_utils", "cwltool"]
+# The door's neutral modules read CWL on the middle end's behalf. This checks the middle end's own imports of the
+# reader, of its table of CWL fields and of the CWL target and libraries; it cannot see what a module does with a
+# value it is handed, which the neutral nodes and `sophios.lang.types` keep to Sophios's own words.
+allow_indirect_imports = true
+
+[[tool.importlinter.contracts]]
+name = "The Nextflow target renders neutral nodes, never reads CWL"
+type = "forbidden"
+source_modules = ["sophios.nextflow"]
+forbidden_modules = ["sophios.lang.cwl", "sophios.lang.cwl_tool", "sophios.lang.cwl_fields", "sophios.cwl",
+                     "cwl_utils", "cwltool"]
+# The door's neutral modules read CWL on the target's behalf. This checks the target's own imports of the reader, of
+# its table of CWL fields and of the CWL target and libraries; it cannot see what a module does with a value it is
+# handed, which the neutral nodes and `sophios.lang.types` keep to Sophios's own words.
+allow_indirect_imports = true
