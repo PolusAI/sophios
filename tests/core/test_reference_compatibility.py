@@ -9,8 +9,8 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 from sophios.api.python.workflow import _python_api_types_match
-from sophios.lang.compatibility import TypeRelation, reference_relation
-from sophios.lang.cwl import ATOMIC_TYPES
+from sophios.lang.cwl import ATOMIC_TYPES, read_type
+from sophios.lang.types import TypeRelation, relation
 from sophios.lang.diagnostics import SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
 from sophios.wic_types import StepId, Tool, Tools, Yaml
@@ -93,13 +93,13 @@ def test_the_versioned_judge_matches_the_independent_model(
     which cwltool refuses and Sophios, which refuses only what is provably disjoint, lets through."""
     source, sink, expected = case
     before = copy.deepcopy((source, sink))
-    found = reference_relation(source, sink)
+    found = relation(read_type(source), read_type(sink))
     assert (source, sink) == before, 'observing a passthrough declaration mutated it'
     assert found.name == reference_expectation(source, sink).name == (expected or found).name
     if found is not TypeRelation.UNKNOWN and _loaded(source) and _loaded(sink):
         refused = check_types(copy.deepcopy(source), copy.deepcopy(sink), None, None, None) == 'exception'
         assert refused is (found is TypeRelation.DISJOINT) or refused and 'null' in repr((source, sink)), found
-    assert reference_relation(_RECURSIVE, _STR_ARR) is TypeRelation.UNKNOWN
+    assert relation(read_type(_RECURSIVE), read_type(_STR_ARR)) is TypeRelation.UNKNOWN
 
 
 #: A cyclic Python value, which the total raw judge must call unknown rather than recurse on forever.
@@ -107,9 +107,9 @@ _RECURSIVE: Final[dict[str, Any]] = {'type': 'array'}
 _RECURSIVE['items'] = _RECURSIVE
 
 
-#: What a Python API port or a value bound to one may declare: the declarations above but nothing, and `stdout`.
+#: What a Python API port or a value bound to one may declare: the declarations above but nothing.
 _API_TYPES: Final = cwl_types(
-    *_ATOMS, 'stdout', 'example.org#Thing', {'type': 'array'}, {'type': 'record', 'fields': []},
+    *_ATOMS, 'example.org#Thing', {'type': 'array'}, {'type': 'record', 'fields': []},
     {'type': 'enum', 'symbols': ['a']})
 
 

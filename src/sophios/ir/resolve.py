@@ -35,11 +35,12 @@ from ..lang import (
     WicSidecar,
 )
 from ..lang.diagnostics import Diagnostic, Diagnostics, Locator, SophiosError
+from ..lang.cwl import port_declaration
 from ..lang.nodes import GraphvizEntry, InputValue, OpaqueCwl, Step
+from ..lang.types import PortDeclaration
 from ..wic_types import Cwl, Tool, Tools
 from .check import CheckedDocument, check as check_document
-from .declarations import port_declaration
-from .types import PortDeclaration, RegistryKey
+from .types import RegistryKey
 
 
 @dataclass(frozen=True)

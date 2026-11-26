@@ -5,8 +5,9 @@ and inference's default choice of source for an unbound input."""
 from enum import Enum
 from typing import Any, Final
 
-from sophios.ir.declarations import input_rank, layered, output_rank
-from sophios.ir.types import DerivedName, Port, PortDeclaration, PortId, PortName, StepNode
+from sophios.ir.declarations import input_rank, output_rank
+from sophios.ir.types import DerivedName, Port, PortId, PortName, StepNode
+from sophios.lang.types import PortDeclaration, layered, spell
 from sophios.lang.cwl import ATOMIC_TYPES
 
 
@@ -82,7 +83,7 @@ def may_reference(source: Any, sink: Any) -> bool:
 def inference_choice(steps: tuple[StepNode, ...], position: int, sink: Port) -> PortId | None:
     """Independent, deliberately small model of default candidate selection: the most recent earlier step with an
     output whose type and format fit, the first such output declared, among those exposed through the same steps."""
-    sink_type = layered(sink.type, input_rank(steps[position], sink.id.port)).canonical
+    sink_type = spell(layered(sink.type, input_rank(steps[position], sink.id.port)))
     sink_formats = _formats(sink.declaration)
     for producer in reversed(steps[:position]):
         matches = [output for output in producer.outputs
@@ -138,4 +139,4 @@ def _permits_format(value: Any) -> bool:
 def _source_type(step: StepNode, port: Port) -> Any:
     """CWL v1.2: `nested_crossproduct` nests one array per scattered input; every other method yields one flat array.
     Rank is `output_rank`."""
-    return layered(port.type, output_rank(step)).canonical
+    return spell(layered(port.type, output_rank(step)))

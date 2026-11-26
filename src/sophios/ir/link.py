@@ -2,10 +2,11 @@
 from collections.abc import Iterator
 from dataclasses import replace
 
-from ..lang import CwlRecord, OpaqueCwl, SophiosErrorCode
-from ..lang.compatibility import TypeRelation, reference_relation
+from ..lang import CwlRecord, SophiosErrorCode
+from ..lang.cwl import link_of
 from ..lang.diagnostics import Diagnostics, Locator
-from .declarations import boundary_declaration, delivered, input_rank, layered, output_rank
+from ..lang.types import Other, Type, TypeRelation, delivered, layered, relation, spell
+from .declarations import boundary_declaration, input_rank, output_rank
 from .names import Names
 from .types import (
     Binding,
@@ -115,20 +116,19 @@ def _merging(graph: WorkflowGraph) -> dict[PortId, CwlRecord | None]:
 def _check_workflow_inputs(graph: WorkflowGraph, merging: dict[PortId, CwlRecord | None],
                            diagnostics: Diagnostics) -> None:
     """Apply the same conservative relation to typed workflow-input references."""
-    declarations = {port.name: port.declaration.type.canonical
+    declarations = {port.name: port.declaration.type
                     for port in graph.workflow_inputs}
     for name, sinks in graph.input_mapping:
-        source_type = declarations.get(name)
+        source_type = declarations.get(name, Other())
         for sink in sinks:
             if sink in merging:
                 continue
             sink_type = _effective_type(graph, sink, producing=False)
-            relation = reference_relation(source_type, sink_type)
-            if relation is TypeRelation.DISJOINT:
+            if relation(source_type, sink_type) is TypeRelation.DISJOINT:
                 diagnostics.error(
                     SophiosErrorCode.INCOMPATIBLE_INPUT_REFERENCE,
                     f"workflow input '{Names.of(graph).port(name)}' is provably disjoint: "
-                    f'{source_type!r} cannot feed {sink_type!r}.',
+                    f'{spell(source_type)!r} cannot feed {spell(sink_type)!r}.',
                     _port(graph, sink).span,
                     _locator(graph, sink),
                 )
@@ -147,15 +147,14 @@ def _reject_if_disjoint(graph: WorkflowGraph, edge: Edge, diagnostics: Diagnosti
     scope = _graph_at(graph, _owner_namespace(edge))
     produced = _effective_type(scope, edge.source, producing=True)
     if record is not None:
-        fields = dict(record.fields)
-        produced = delivered(produced, sources=len(record.sources), link_merge=fields.get('linkMerge'),
-                             pick_value=fields.get('pickValue'))
+        merge, pick = link_of(dict(record.fields))
+        produced = delivered(produced, sources=len(record.sources), merge=merge, pick=pick)
     consumed = _effective_type(scope, edge.sink, producing=False)
-    if reference_relation(produced, consumed) is not TypeRelation.DISJOINT:
+    if relation(produced, consumed) is not TypeRelation.DISJOINT:
         return False
     diagnostics.error(
         SophiosErrorCode.INCOMPATIBLE_INPUT_REFERENCE,
-        f'edge is provably disjoint: {produced!r} cannot feed {consumed!r}.',
+        f'edge is provably disjoint: {spell(produced)!r} cannot feed {spell(consumed)!r}.',
         edge.span, _locator(graph, edge.sink),
     )
     return True
@@ -209,8 +208,8 @@ def _call_edges(graph: WorkflowGraph) -> Iterator[tuple[PortId, Edge]]:
         yield from _call_edges(child)
 
 
-def _effective_type(graph: WorkflowGraph, port: PortId, *, producing: bool) -> OpaqueCwl:
-    return layered(_port(graph, port).type, _rank(graph, port, producing=producing)).canonical
+def _effective_type(graph: WorkflowGraph, port: PortId, *, producing: bool) -> Type:
+    return layered(_port(graph, port).type, _rank(graph, port, producing=producing))
 
 
 def _rank(graph: WorkflowGraph, port: PortId, *, producing: bool) -> int:

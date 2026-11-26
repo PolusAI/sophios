@@ -12,11 +12,12 @@ from ..ir.resolved import (
     Crossing, InputRef, ResolvedStep, ResolvedWorkflow, Through, WorkflowInput, WorkflowOutput, output_sources,
     output_unbound, spelling, tool_steps,
 )
-from ..ir.types import AuthoredName, PortDeclaration, PortType
-from ..lang.cwl import canonical, required
+from ..ir.types import AuthoredName
+from ..lang.cwl import canonical, read_type, required
 from ..lang.diagnostics import Diagnostic, SophiosError
 from ..lang.error_codes import SophiosErrorCode
 from ..lang.subset import Expr
+from ..lang.types import PortDeclaration, spell
 from ..wic_types import Tool
 from .analyze import (
     _Step, _WhenError, _absent_optional_findings, _call_findings, _carried, _condition_value,
@@ -49,7 +50,7 @@ def _process(step: _Step) -> tuple[NfProcess, Expr | None]:
     command, container, resources = _command(step.tool), _container(step.tool), _resources(step.tool)
     condition = _condition_value(step) if step.node.condition is not None else None
     # A carried input is a val, staging nothing, and a list where what it delivers is one.
-    carried = [NfPort(_identifier(port.name), "val", is_array=_lists(port.type))
+    carried = [NfPort(_identifier(port.name), "val", is_array=_lists(spell(port.type)))
                for port, _sources in step.bound() if port.declared is None]
     if broken := reference_problems(name, inputs, carried, outputs, command):
         rule, problem = broken[0]
@@ -205,7 +206,7 @@ def _default_bindings(
     for step, process in zip(steps, processes, strict=True):
         bound = {port.name: port for port, _sources in step.bound()}
         made.extend((f"{step.node.name}~{port.name}", process.name, _identifier(port.name),
-                     _json_value(port.default), _param_type(port.type))
+                     _json_value(port.default), _param_type(spell(port.type)))
                     for port in bound.values() if port.declared is None and port.has_default)
         for raw_name, declared in step.tool.inputs.items():
             port = bound.get(raw_name)
@@ -236,7 +237,8 @@ def _default_bindings(
 def _workflow_param_types(workflow: ResolvedWorkflow) -> dict[str, str]:
     """Each workflow input's declared type, by parameter name."""
     names = _normalized_identifiers([port.name for port in workflow.inputs], context="workflow input")
-    return {names[port.name]: _param_type(port.declaration.type.canonical) for port in workflow.inputs}
+    return {names[port.name]: _param_type(spell(port.declaration.type, port.declaration.unread))
+            for port in workflow.inputs}
 
 
 def _apply_absent_sentinel(params: Mapping[str, Any]) -> dict[str, Any]:
@@ -467,7 +469,7 @@ def _assembled(lowering: _Lowering, processes: list[NfProcess],
     # A default is as authored; each value is held as a value written on a step is (design §4.2, Losses): coerced
     # to its declared type, so an int given for a float is the float, and a local location a path.
     values = _apply_absent_sentinel({key: local_locations_as_paths(coerce_job_value(
-        AuthoredName(key), PortDeclaration(PortType(param_types[key])), value)) for key, value in params.items()})
+        AuthoredName(key), PortDeclaration(read_type(param_types[key])), value)) for key, value in params.items()})
     problems = {SophiosErrorCode.NF_SOURCE_NAMES_NO_STEP: endpoint_problems(processes, connections),
                 SophiosErrorCode.NF_ABSENT_OPTIONAL: absent_path_problems(values, param_types),
                 SophiosErrorCode.NF_OPTIONAL_OUTPUT: optional_output_problems(processes, connections)}

@@ -17,18 +17,18 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Final, cast
 
+from ..lang.cwl import port_declaration
 from ..lang.diagnostics import Diagnostics, Locator
 from ..lang.error_codes import SophiosErrorCode
 from ..lang.nodes import CwlRecord, EdgeRef, InputValue, OpaqueCwl, Step, UnresolvedName, WicSidecar
 from ..lang.parser import step_key
 from ..lang.spans import SourceSpan
-from .declarations import port_declaration
+from ..lang.types import Atom, BoundaryDeclaration
 from .locations import absolute_paths
 from .resolve import ResolvedDocument, ResolvedStep, graphviz_entry
 from .types import (
     AuthoredName,
     Binding,
-    BoundaryDeclaration,
     DeferredObligation,
     Direction,
     Edge,
@@ -37,7 +37,6 @@ from .types import (
     Port,
     PortId,
     PortName,
-    PortType,
     Resolution,
     StepId,
     StepNode,
@@ -163,7 +162,7 @@ def _resolved_step_node(identity: StepId, resolved: ResolvedStep, defined: dict[
     inputs = tuple(Port(PortId(identity, Direction.INPUT, name), declaration.type,
                         declaration, source.span)
                    for name, declaration in declared_inputs.items()) + tuple(
-        Port(PortId(identity, Direction.INPUT, AuthoredName(name)), PortType('Any'), None, source.span)
+        Port(PortId(identity, Direction.INPUT, AuthoredName(name)), Atom.ANY, None, source.span)
         for name in extra)
     outputs = tuple(Port(PortId(identity, Direction.OUTPUT, name), declaration.type,
                          declaration, source.span)

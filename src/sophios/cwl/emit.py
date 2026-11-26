@@ -8,7 +8,6 @@ here, once, and nothing else reads it. Opaque CWL is copied, never inspected.
 from copy import deepcopy
 
 from ..ir.artifacts import CompilationArtifact, Inlining
-from ..ir.declarations import PortDeclaration
 from ..ir.names import NAMESPACE_SEPARATOR
 from ..ir.namespaces import EDAM_NAMESPACE
 from ..ir.policy import RunPolicy, effective_when, tolerant_tool
@@ -18,7 +17,9 @@ from ..ir.resolved import (
 from ..lang import CWL_VERSION
 from ..lang.nodes import OpaqueCwl
 from ..lang.spans import SourceSpan
+from ..lang.types import PortDeclaration
 from ..wic_types import Cwl, Tool
+from .spelling import written_type
 
 
 def artifact_tree(view: ResolvedWorkflow) -> CompilationArtifact:
@@ -122,8 +123,8 @@ def _binding(value: StepValue) -> str | dict[str, OpaqueCwl]:
 def _port(declaration: PortDeclaration, source: OutputSource = None) -> OpaqueCwl:
     """A workflow input or output, without assigning meaning to opaque fields."""
     if declaration.shorthand:
-        return deepcopy(declaration.type.declared)
-    known: dict[str, OpaqueCwl] = {'type': deepcopy(declaration.type.declared)}
+        return written_type(declaration.type, declaration.unread)
+    known: dict[str, OpaqueCwl] = {'type': written_type(declaration.type, declaration.unread)}
     if declaration.has_format:
         known['format'] = deepcopy(declaration.format)
     if declaration.has_default:

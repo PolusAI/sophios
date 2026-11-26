@@ -14,9 +14,10 @@ from dataclasses import dataclass
 from cwl_utils.errors import SubstitutionError
 from cwl_utils.expression import scanner
 
+from ..lang.cwl import read_type
 from ..lang.nodes import OpaqueCwl
+from ..lang.types import optional
 from ..wic_types import Cwl
-from .types import PortType
 
 #: A tool's own shorthand for an output that captures one of its streams.
 _STREAMS = ('stdout', 'stderr')
@@ -131,7 +132,7 @@ def _tolerant_output(entry: OpaqueCwl, tool: Cwl) -> OpaqueCwl:
     if (stream := _captured(entry)) is not None:
         fields = entry if isinstance(entry, dict) else {}
         return {**fields, 'type': 'File?', 'outputBinding': {'glob': tool[stream]}}
-    if declared is None or declared in _STREAMS or PortType(declared).optional:
+    if declared is None or declared in _STREAMS or optional(read_type(declared)):
         return entry
     match declared:
         case str():

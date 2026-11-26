@@ -40,9 +40,11 @@ from .render import (
     render_nextflow_config,
 )
 from ..ir.complete import coerce_job_value
-from ..ir.types import AuthoredName, PortDeclaration, PortType
+from ..ir.types import AuthoredName
+from ..lang.cwl import read_type
 from ..lang.diagnostics import SophiosError
 from ..lang.error_codes import SophiosErrorCode
+from ..lang.types import PortDeclaration
 from ..lang.spans import SourceSpan
 from .expr import GROOVY_IDENTIFIER, GROOVY_LITERAL, groovy_unescape, read_groovy
 from .model import (
@@ -743,7 +745,7 @@ def _written(name: str, declared: str, value: Any) -> bool:
     Compared as JSON, where an int is not the float it equals."""
     absent = declared.endswith("?") and value == [] and declared not in ABSENT_PATH_TYPES
     try:
-        kept = coerce_job_value(AuthoredName(name), PortDeclaration(PortType(declared)), None if absent else value)
+        kept = coerce_job_value(AuthoredName(name), PortDeclaration(read_type(declared)), None if absent else value)
     except SophiosError:
         return False
     return json.dumps([] if kept is None else kept, sort_keys=True) == json.dumps(value, sort_keys=True)

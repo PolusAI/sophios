@@ -37,9 +37,9 @@ untyped.wic:
     untyped.cwl:
       outputs:
         plain: {type: File, outputSource: mk_file@1/file}
-        scattered: {type: {type: array, items: File}, outputSource: mk_file@2/file}
+        scattered: {type: 'File[]', outputSource: mk_file@2/file}
         called: {type: File, outputSource: kid@3/res}
-        called_scattered: {type: {type: array, items: File}, outputSource: kid@4/res}
+        called_scattered: {type: 'File[]', outputSource: kid@4/res}
     untyped~kid@3.cwl: {outputs: {res: {type: File}}}
     untyped~kid@4.cwl: {outputs: {res: {type: File}}}
 listed.wic:

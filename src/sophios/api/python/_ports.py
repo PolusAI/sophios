@@ -4,8 +4,8 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast
 
-from sophios.ir.declarations import layered
-from sophios.ir.types import PortType
+from sophios.lang.cwl import read_type
+from sophios.lang.types import layered, spell
 from sophios.lang import CwlRecord, EdgeRef, InlineLiteral, InputValue, UnresolvedName
 from sophios.lang.cwl import PICKS_ONE
 from sophios.lang.spans import SourceSpan
@@ -248,7 +248,7 @@ class OutputParameter(_ParameterBase):
         if declared is None:
             return None
         rank = self.parent_obj._output_rank()  # pylint: disable=protected-access
-        return layered(PortType(declared), rank).canonical
+        return spell(layered(read_type(declared), rank))
 
     def to_workflow_output(self) -> dict[str, Any]:
         """Serialize this workflow output parameter to CWL. The `outputSource` is addressed through the source's live

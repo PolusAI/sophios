@@ -3,15 +3,14 @@
 Each names something the compiler already manipulates, so the checker can
 verify what it means rather than only what it computes. Frozen and slotted.
 """
-from copy import deepcopy
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import NewType, TypeAlias
 
-from ..lang.cwl import expand_shorthand, required
 from ..lang.diagnostics import Diagnostics
 from ..lang.nodes import GraphvizEntry, InputValue, OpaqueCwl
 from ..lang.spans import SourceSpan
+from ..lang.types import BoundaryDeclaration, PortDeclaration, Type
 
 
 class Direction(StrEnum):
@@ -112,74 +111,6 @@ class PortId:
 
 
 @dataclass(frozen=True, slots=True)
-class PortType:
-    """What a port carries. `declared` keeps the CWL verbatim, for Emit;
-    `canonical` is the one parse of it every other reader uses: CWL's `T?` and
-    `T[]` shorthand expanded, through array items and every union member, so
-    `string?[]` is an array of nullable strings and not a nullable array, and
-    `[File?, string]` accepts null in either spelling of that member.
-    `stdin`, `stdout` and `stderr` canonicalise to `File`.
-    """
-
-    declared: OpaqueCwl
-    canonical: OpaqueCwl = field(init=False)
-
-    def __post_init__(self) -> None:
-        """Parse `declared` once, here, so no port type exists unparsed."""
-        object.__setattr__(self, 'canonical', _canonical(deepcopy(self.declared)))
-
-    @property
-    def optional(self) -> bool:
-        """Whether the port accepts `null` itself, not merely in its items."""
-        return required(self.canonical)[1]
-
-
-def _canonical(raw: OpaqueCwl) -> OpaqueCwl:
-    """Expand `T?` and `T[]` wherever they are written, including inside a member."""
-    if raw in ('stdin', 'stdout', 'stderr'):
-        # A tool's own shorthand for "the stream, as a File". Only a
-        # CommandLineTool port may say it; a workflow boundary promoted from
-        # one must say `File`, which is what cwltool makes of it.
-        return 'File'
-    if isinstance(raw, str) and (layer := expand_shorthand(raw)) is not raw:
-        return _canonical(layer)
-    if isinstance(raw, dict) and raw.get('type') == 'array' and 'items' in raw:
-        return {**raw, 'items': _canonical(raw['items'])}
-    if isinstance(raw, list):
-        # A member's own shorthand, expanded: `null` once, first; no duplicates.
-        members: list[OpaqueCwl] = []
-        for item in raw:
-            expanded = _canonical(item)
-            for member in expanded if isinstance(expanded, list) else [expanded]:
-                if member not in members:
-                    members.append(member)
-        return ['null'] * ('null' in members) + [item for item in members if item != 'null']
-    return raw
-
-
-@dataclass(frozen=True, slots=True)
-class PortDeclaration:  # pylint: disable=too-many-instance-attributes
-    """The complete declaration of one process or workflow port. The fields
-    beside `type` preserve emission facts without inviting Link or Infer to
-    interpret arbitrary CWL; `has_default` distinguishes an authored
-    `default: null` from no default at all.
-    """
-
-    type: PortType
-    format: OpaqueCwl = None
-    has_format: bool = False
-    default: OpaqueCwl = None
-    has_default: bool = False
-    passthrough: tuple[tuple[str, OpaqueCwl], ...] = ()
-    shorthand: bool = False
-
-
-#: A `PortDeclaration` reduced to what a workflow boundary may state. Only
-#: `declarations.boundary_declaration` produces one.
-BoundaryDeclaration = NewType('BoundaryDeclaration', PortDeclaration)
-
-
-@dataclass(frozen=True, slots=True)
 class WorkflowPort:
     """A port on the workflow boundary, including its CWL declaration."""
 
@@ -239,7 +170,7 @@ class Port:
     """One port of one step: its identity, its type, and where it was written."""
 
     id: PortId
-    type: PortType
+    type: Type
     declaration: PortDeclaration | None = None
     span: SourceSpan | None = None
 

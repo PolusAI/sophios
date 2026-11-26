@@ -21,7 +21,7 @@ from sophios.compiler import resolved_view
 from sophios.cwl.io import dump_wic_yaml
 from sophios.ir.artifacts import CompilationArtifact
 from sophios.ir.complete import coerce_job_value, complete
-from sophios.ir.declarations import port_declaration
+from sophios.lang.cwl import port_declaration, read_type
 from sophios.cwl.emit import artifact_tree
 from sophios.ir.infer import infer
 from sophios.ir.link import link
@@ -30,7 +30,8 @@ from sophios.ir.policy import RunPolicy
 from sophios.ir.resolve import RegistrySnapshot, resolve
 from sophios.ir.resolved import (Entry, InputRef, OutputRef, ResolvedStep, ResolvedWorkflow, StepInput, WorkflowInput,
                                  WorkflowOutput, resolve as resolve_view)
-from sophios.ir.types import AuthoredName, PortDeclaration, PortType, WorkflowGraph
+from sophios.ir.types import AuthoredName, WorkflowGraph
+from sophios.lang.types import Atom, PortDeclaration
 from sophios.lang.cwl import CWL_VERSION
 from sophios.lang.diagnostics import SophiosError
 from sophios.wic_types import StepId as LegacyStepId, Tool, Yaml
@@ -157,9 +158,9 @@ def test_a_hand_built_view_emits_without_a_compiler_adapter() -> None:
     Hand-built, so this states the document the compiler ships: the `run:` path, the file beside the root named by
     the root and the step, and nothing of the compiler's own: no format says `edam:`, so no EDAM namespace either.
     """
-    message, file = PortDeclaration(PortType('string')), PortDeclaration(PortType('File'))
+    message, file = PortDeclaration(read_type('string')), PortDeclaration(read_type('File'))
     step = ResolvedStep('write', 'write', Tool('write.cwl', {'class': 'CommandLineTool'}),
-                        (StepInput('message', None, Entry((InputRef('message'),), ()), 'string', None),),
+                        (StepInput('message', None, Entry((InputRef('message'),), ()), Atom.STRING, None),),
                         ('file',), None, None, (), ('message',), None)
     view = ResolvedWorkflow(
         'handmade', (WorkflowInput('message', message, 'hello', True),),

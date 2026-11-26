@@ -6,7 +6,7 @@ owned.wic:
       cwlVersion: v1.2
       $namespaces: {exact: {mine: 'https://mine/', edam: 'https://edamontology.org/'}}
       $schemas: [https://example.org/ontologies/mine.owl]
-      inputs: {mine: string, mk_file~name: {type: {type: array, items: string}}}
+      inputs: {mine: string, mk_file~name: {type: 'string[]'}}
       outputs: {mine: {type: 'File[]', outputSource: mk_file/file}, mk_file~file: {format: 'edam:format_2330'}}
       requirements: [{$import: shared.yml}]
       hints: [{$import: shared.yml}, {class: ResourceRequirement, coresMin: 1}]

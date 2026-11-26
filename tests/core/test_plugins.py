@@ -18,7 +18,8 @@ import sophios.plugins
 from sophios.runtime import preflight
 from sophios.compiler import CompileSettings, compile_source
 from sophios.ir.frontdoor import bundle_from_disk
-from sophios.ir.types import PortType
+from sophios.lang.cwl import read_type
+from sophios.lang.types import optional, spell
 from sophios.ir.policy import RunPolicy, tolerant_tool
 from sophios.lang.cwl import CWL_VERSION
 from sophios.lang.diagnostics import SophiosError
@@ -147,7 +148,7 @@ def _declared(outputs: Any) -> list[tuple[str, Yaml]]:
 
 def _admits(declared: Any) -> list[Any]:
     """What a port of type `declared` admits besides null, as the IR reads the type."""
-    canonical = PortType(declared).canonical
+    canonical = spell(read_type(declared))
     return [member for member in (canonical if isinstance(canonical, list) else [canonical]) if member != 'null']
 
 
@@ -186,7 +187,7 @@ def test_under_partial_failure_every_output_of_a_tool_accepts_null(tool: Yaml, c
         elif before['type'] in _STREAMS:
             assert after == {**before, 'type': 'File?', 'outputBinding': {'glob': written[before['type']]}}
         else:
-            assert PortType(after['type']).optional and _admits(after['type']) == _admits(before['type'])
+            assert optional(read_type(after['type'])) and _admits(after['type']) == _admits(before['type'])
             assert {**after, 'type': None} == {**before, 'type': None}
     captured = [before['type'] for _, before in declared
                 if before['type'] in _STREAMS and 'outputBinding' not in before]

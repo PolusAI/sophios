@@ -15,6 +15,7 @@ from ..ir.resolved import (
 from ..lang.cwl import LINK_MERGES, PICK_VALUES, SCATTER_METHODS, canonical, required
 from ..lang.error_codes import SophiosErrorCode
 from ..lang.subset import Expr, is_safe_subset_text, references
+from ..lang.types import spell
 from .model import PARAM_TYPES, gives_list, merge_of, text_stays_out, wildcard_problem
 from .support import FIELDS, consumed
 from .tool import (
@@ -178,7 +179,7 @@ def _workflow_capability_findings(workflow: ResolvedWorkflow, steps: tuple[_Step
     for given in workflow.inputs:
         input_path = f".inputs.{given.name}"
         findings.extend(_declared_findings(given.declaration, "WorkflowInputParameter", path=input_path))
-        cwl_type = given.declaration.type.canonical
+        cwl_type = spell(given.declaration.type, given.declaration.unread)
         has_default = given.declaration.has_default and not given.declaration.shorthand
         if has_default:
             findings.extend(_default_value_findings(cwl_type, given.declaration.default, path=input_path))
@@ -387,7 +388,7 @@ def _step_input_findings(workflow: ResolvedWorkflow, steps: tuple[_Step, ...]) -
             yield (SophiosErrorCode.NF_JOIN, ".pickValue",
                    "pickValue picks from a list; one source with no linkMerge is not one")
         # A step-only input has no declaration: its type is what it delivers.
-        declared_type = canonical(step.tool.inputs[port.name].type_) if port.declared is not None else port.type
+        declared_type = canonical(step.tool.inputs[port.name].type_) if port.declared is not None else spell(port.type)
         if port.has_default:
             if port.declared is None and _parameter_type(declared_type) not in PARAM_TYPES:
                 yield (SophiosErrorCode.NF_DEFAULT, ".default",
@@ -426,7 +427,8 @@ def _step_input_findings(workflow: ResolvedWorkflow, steps: tuple[_Step, ...]) -
 def _source_types(workflow: ResolvedWorkflow, steps: tuple[_Step, ...]) -> dict[str, Any]:
     """Every wireable source name, and the CWL type it carries: a workflow input's as declared, a tool output's as its
     tool declares it."""
-    types: dict[str, Any] = {port.name: port.declaration.type.canonical for port in workflow.inputs}
+    types: dict[str, Any] = {port.name: spell(port.declaration.type, port.declaration.unread)
+                             for port in workflow.inputs}
     for step in steps:
         for raw_port, port in step.tool.outputs.items():
             types[f"{step.node.name}/{raw_port}"] = canonical(port.type_)

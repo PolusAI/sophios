@@ -13,7 +13,6 @@ from typing import Any, TypeGuard, TypeVar
 from cwl_utils.parser import cwl_v1_2 as standard
 
 from ..ir.resolved import Ref, Requirement, ResolvedStep
-from ..ir.types import PortDeclaration
 from ..lang.cwl import (
     EXPRESSION, Process, Written, canonical, fields_set, inherited, ports_named, required,
     requirement as requirement_of,
@@ -21,6 +20,7 @@ from ..lang.cwl import (
 from ..lang.diagnostics import Diagnostic, Locator, Severity
 from ..lang.error_codes import SophiosErrorCode
 from ..lang.nodes import OpaqueCwl
+from ..lang.types import PortDeclaration, spell
 from ..wic_types import Tool
 from .model import (
     NF_INTERNAL_IDENTIFIERS, NfArrayBinding, NfBasenameReference, NfCommand, NfCommandToken, NfEntry, NfEnvVar, NfFlag,
@@ -1093,7 +1093,7 @@ def _port_findings(port: Any, cwl_class: str, *, path: str) -> list[_Finding]:
 def _declared_findings(declaration: PortDeclaration, cwl_class: str, *, path: str,
                        source: Ref | str | None = None) -> list[_Finding]:
     """`_parameter_findings` of a workflow's port as it states it."""
-    cwl_type = declaration.type.canonical
+    cwl_type = spell(declaration.type, declaration.unread)
     return _parameter_findings(
         cwl_class, path=path, fields=_port_fields(declaration, source), cwl_type=cwl_type,
         arrays=[member for member in _members(cwl_type) if _is_array_type(member)])

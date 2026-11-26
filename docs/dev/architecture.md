@@ -104,7 +104,10 @@ omitted call argument stays omitted and remains available to Infer. A wrapper
 output maps to its concrete producing port rather than becoming a second
 producer.
 
-The reference relation (`sophios.lang.compatibility`) rejects a reference
+A port's type is a neutral `Type` (`sophios.lang.types`: an atom, an array, a
+union, or `Other` for what is carried as written and never judged), read from
+its spelling once, by the door; the CWL target spells it again. The
+reference relation (`sophios.lang.types.relation`) rejects a reference
 only when it proves the endpoint types `DISJOINT`; `UNKNOWN`, which covers
 `Any`, named schemas and opaque records and enums, is deferred to the
 runner's validation of the emitted CWL. Scatter contributes its array rank

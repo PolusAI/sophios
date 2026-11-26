@@ -17,17 +17,18 @@ from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass, replace
 from typing import NamedTuple, TypeAlias
 
-from ..lang.cwl import required
+from ..lang.cwl import link_of
 from ..lang.nodes import OpaqueCwl
 from ..lang.spans import SourceSpan
 from ..lang.subset import BOOLEAN, Expr, check, is_safe_subset_text, parse
-from .declarations import delivered, layered, output_rank, required as needs_value, written_order
+from ..lang.types import (Array, Atom, PortDeclaration, Type, delivered, layered, nullable, spell, without_null)
+from .declarations import output_rank, required as needs_value, written_order
 from .names import Names
 from .policy import RunPolicy, one_expression
 from .stepin import step_inputs
 from ..wic_types import Tool
 from .types import (
-    DerivedName, EmittedValue, Expression, PortDeclaration, PortName, PortType, Record, Source, StepId,
+    DerivedName, EmittedValue, Expression, PortName, Record, Source, StepId,
     StepNode, StepOutputRef, WorkflowGraph, WorkflowPort,
 )
 
@@ -152,8 +153,8 @@ class StepInput:
     declared: PortDeclaration | None
     #: What the entry says, once: everything else but `type` is read from it.
     value: StepValue
-    #: The canonical CWL type of the value the step input delivers.
-    type: OpaqueCwl
+    #: The type of the value the step input delivers.
+    type: Type
     span: SourceSpan | None
 
     @property
@@ -346,7 +347,7 @@ def bind(view: ResolvedWorkflow, *, values: Mapping[str, OpaqueCwl] | None = Non
     return replace(view, inputs=inputs, outputs=kept)
 
 
-def _workflow(graph: WorkflowGraph, outer: '_Level', given: Mapping[str, OpaqueCwl] | None = None) -> ResolvedWorkflow:
+def _workflow(graph: WorkflowGraph, outer: '_Level', given: Mapping[str, Type] | None = None) -> ResolvedWorkflow:
     """A workflow's view, inside the level `outer` of the call that runs it, or of nothing for the root; `given` is
     the type each input the call binds holds, which is what its sources deliver."""
     names = outer.names
@@ -358,7 +359,7 @@ def _workflow(graph: WorkflowGraph, outer: '_Level', given: Mapping[str, OpaqueC
                                  span=port.span or graph.span)
                    for port in sorted(graph.workflow_inputs, key=lambda port: order(port.name)))
     level = replace(outer, graph=graph, inputs={
-        port.name: (given or {}).get(port.name, port.declaration.type.canonical) for port in inputs},
+        port.name: (given or {}).get(port.name, port.declaration.type) for port in inputs},
         outside=(*outer.outside, *requirements))
     ins = step_inputs(graph)
     steps = tuple(_step(step, graph.child(step.id), ins[step.id], level) for step in graph.steps)
@@ -414,7 +415,7 @@ class _Level:
     policy: RunPolicy
     everything: Mapping[StepId, StepNode]
     graph: WorkflowGraph
-    inputs: Mapping[str, OpaqueCwl]
+    inputs: Mapping[str, Type]
     outside: tuple[Requirement, ...] = ()
 
 
@@ -489,16 +490,16 @@ def _ref(ref: PortName | StepOutputRef, names: Names) -> Ref:
     return InputRef(names.port(ref))
 
 
-def _source_type(ref: PortName | StepOutputRef, level: _Level) -> OpaqueCwl:
+def _source_type(ref: PortName | StepOutputRef, level: _Level) -> Type:
     """A source's type at this level: a workflow input's as declared; a step output's inside one array
     layer per scatter it came through, nullable when its producer, or a call it came out of, has a `when`."""
     match ref:
         case StepOutputRef(step=producer_id, port=port):
             producer = level.everything[producer_id]
             declared = next(candidate for candidate in producer.outputs if candidate.id.port == port)
-            produced = layered(declared.type, output_rank(producer)).canonical
-            return PortType(['null', produced]).canonical if _may_skip(producer, port, level) else produced
-    return level.inputs.get(level.names.port(ref), 'Any')
+            produced = layered(declared.type, output_rank(producer))
+            return nullable(produced) if _may_skip(producer, port, level) else produced
+    return level.inputs.get(level.names.port(ref), Atom.ANY)
 
 
 def _may_skip(producer: StepNode, port: PortName, level: _Level) -> bool:
@@ -515,24 +516,24 @@ def _may_skip(producer: StepNode, port: PortName, level: _Level) -> bool:
     return any(dict(level.everything[step].interpreted).get('when') is not None for step in on_the_way)
 
 
-def _delivered_type(produced: list[OpaqueCwl], fields: Mapping[str, OpaqueCwl],
-                    declared: PortDeclaration | None) -> OpaqueCwl:
+def _delivered_type(produced: list[Type], fields: Mapping[str, OpaqueCwl],
+                    declared: PortDeclaration | None) -> Type:
     """What a step input holds after its sources, `linkMerge`, `pickValue` and `default`: `Any` after a
     `valueFrom`; the declared type where no source says more; sources of different types merge as `Any`."""
     if 'valueFrom' in fields:
-        return 'Any'
+        return Atom.ANY
     if not produced:
-        return declared.type.canonical if declared is not None else 'Any'
+        return declared.type if declared is not None else Atom.ANY
     alike = all(item == produced[0] for item in produced)
-    merged: OpaqueCwl = delivered(produced[0] if alike else 'Any', sources=len(produced),
-                                  link_merge=fields.get('linkMerge'), pick_value=fields.get('pickValue'))
-    return required(merged)[0] if 'default' in fields else merged
+    merge, pick = link_of(fields)
+    merged = delivered(produced[0] if alike else Atom.ANY, sources=len(produced), merge=merge, pick=pick)
+    return without_null(merged)[0] if 'default' in fields else merged
 
 
-def _seen(port: StepInput, scatter: Scatter | None) -> OpaqueCwl:
+def _seen(port: StepInput, scatter: Scatter | None) -> Type:
     """What a `when` reads of a step input: its value, or one element of it in each job of a scatter."""
     match port.type:
-        case {'type': 'array', 'items': items} if scatter is not None and port.name in scatter.inputs:
+        case Array(items=items) if items is not None and scatter is not None and port.name in scatter.inputs:
             return items
     return port.type
 
@@ -548,7 +549,7 @@ def _condition(when: OpaqueCwl, inputs: tuple[StepInput, ...], scatter: Scatter 
     except ValueError as error:
         return Condition(when, None, None, str(error))
     try:
-        typed = check(expr, {port.name: _seen(port, scatter) for port in inputs})
+        typed = check(expr, {port.name: spell(_seen(port, scatter)) for port in inputs})
     except ValueError as error:
         return Condition(when, expr, None, str(error))
     return Condition(when, expr, typed, None)

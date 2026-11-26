@@ -5,7 +5,10 @@ here, in the language definition, not to whichever module emits a document.
 Import `CWL_VERSION` rather than writing a version literal.
 """
 from collections.abc import Iterator, Mapping, Sequence
-from enum import Enum, StrEnum
+from copy import deepcopy
+from dataclasses import replace
+import enum
+from enum import StrEnum
 from itertools import chain
 from pathlib import Path
 import re
@@ -17,6 +20,7 @@ import yaml
 from .diagnostics import SophiosError
 from .error_codes import SophiosErrorCode
 from .nodes import OpaqueCwl
+from .types import Array, Atom, Enum, Merge, Other, Pick, PortDeclaration, Place, Record, Type, Union, Unread
 
 
 class CwlVersion(StrEnum):
@@ -58,29 +62,14 @@ PICK_VALUES: Final[frozenset[str]] = frozenset(_standard.PickValueMethodLoader.s
 PICKS_ONE: Final[frozenset[str]] = PICK_VALUES - {'all_non_null'}
 
 
-def _hold_to_the_standard(enum: type[Enum], *standard: Sequence[str]) -> None:
+def _hold_to_the_standard(enum: type[enum.Enum], *standard: Sequence[str]) -> None:
     """Fail at import when `enum` has a member more or a member less than the standard's own enumerations."""
     symbols = {symbol for each in standard for symbol in each}
     if (values := {member.value for member in enum}) != symbols:
         raise TypeError(f"{enum.__name__} is not the CWL standard's: {sorted(values ^ symbols)}")
 
 
-class CWLAtomicType(str, Enum):
-    """The names of `ATOMIC_TYPES`, and `Any`."""
-
-    NULL = "null"
-    BOOLEAN = "boolean"
-    INT = "int"
-    LONG = "long"
-    FLOAT = "float"
-    DOUBLE = "double"
-    STRING = "string"
-    FILE = "File"
-    DIRECTORY = "Directory"
-    ANY = "Any"
-
-
-class ScatterMethod(str, Enum):
+class ScatterMethod(str, enum.Enum):
     """The names of `SCATTER_METHODS`."""
 
     dotproduct = "dotproduct"
@@ -88,7 +77,7 @@ class ScatterMethod(str, Enum):
     nested_crossproduct = "nested_crossproduct"
 
 
-_hold_to_the_standard(CWLAtomicType, _standard.CWLTypeLoader.symbols, _standard.AnyLoader.symbols)
+_hold_to_the_standard(Atom, _standard.CWLTypeLoader.symbols, _standard.AnyLoader.symbols)
 _hold_to_the_standard(ScatterMethod, _standard.ScatterMethodLoader.symbols)
 
 
@@ -222,8 +211,172 @@ def canonical_type(declared: OpaqueCwl) -> OpaqueCwl:
     return declared
 
 
+_ATOMS: Final = {atom.value: atom for atom in Atom}
+_STREAMS: Final = ('stdin', 'stdout', 'stderr')
+
+
+def read_type(raw: 'OpaqueCwl') -> Type:
+    """The neutral type a written one means; `read_typed` says what it wrote beyond that. `T?` and `T[]` shorthand
+    is expanded wherever it is written, through array items and every union member, so `string?[]` is an array of
+    nullable strings and not a nullable array, and `[File?, string]` accepts null in either spelling of that member.
+    `stdin`, `stdout` and `stderr` mean `File`, the tool's own shorthand for "the stream, as a File"; only a
+    CommandLineTool port may say it, and a workflow boundary promoted from one must say `File`, which is what
+    cwltool makes of it. A type that holds itself is `Other` where it comes round again."""
+    return _read(raw, (), [], frozenset())
+
+
+def read_typed(raw: 'OpaqueCwl') -> tuple[Type, tuple[Unread, ...]]:
+    """`read_type`, and what the type wrote that no node of it holds: every key of a schema but the ones its node
+    holds, a record field's keys but its name and type, and the whole of a shape that is none of the types."""
+    found: list[Unread] = []
+    return _read(raw, (), found, frozenset()), tuple(found)
+
+
+def _fields(raw: dict[str, Any]) -> 'list[tuple[str, Any, dict[str, Any]]] | None':
+    """A record's fields as `(name, type, other keys)` in the order written, from the list form or the map form, or
+    None where it writes neither."""
+    match raw.get('fields'):
+        case list() as entries if all(isinstance(entry, dict) and isinstance(entry.get('name'), str)
+                                      and 'type' in entry for entry in entries):
+            return [(entry['name'], entry['type'], {key: value for key, value in entry.items()
+                                                    if key not in ('name', 'type')}) for entry in entries]
+        case dict() as entries:
+            return [(str(name), entry['type'], {key: value for key, value in entry.items() if key != 'type'})
+                    if isinstance(entry, dict) and 'type' in entry else (str(name), entry, {})
+                    for name, entry in entries.items()]
+    return None
+
+
+def _read(raw: Any, path: Place, unread: list[Unread], open_: frozenset[int]) -> Type:
+    """`raw` as a type, the keys no node holds appended to `unread` at `path`."""
+    if isinstance(raw, str):
+        if raw in _STREAMS:
+            return Atom.FILE
+        layer = expand_shorthand(raw)
+        if layer is not raw:
+            return _read(layer, path, unread, open_)
+        return _ATOMS.get(raw) or Other(raw)
+    if id(raw) in open_:
+        unread.append(Unread(path, None, deepcopy(raw)))
+        return Other()
+    inside = open_ | {id(raw)}
+    if isinstance(raw, list):
+        # A member's own shorthand, expanded: `null` once, first; no duplicates. What a member left unread moves to
+        # the place its type takes in the union that results, not the place it was written.
+        read: list[tuple[Type, list[Unread]]] = []
+        for item in raw:
+            held: list[Unread] = []
+            read.append((_read(item, (), held, inside), held))
+        members: list[Type] = []
+        for expanded, _ in read:
+            for member in expanded.members if isinstance(expanded, Union) else (expanded,):
+                if member not in members:
+                    members.append(member)
+        union = Union((*[Atom.NULL] * (Atom.NULL in members), *(member for member in members if member != Atom.NULL)))
+        for expanded, held in read:
+            for found in held:
+                inner, rest = ((expanded.members[int(found.path[0])], found.path[1:]) if isinstance(expanded, Union)
+                               else (expanded, found.path))
+                unread.append(replace(found, path=(*path, union.members.index(inner), *rest)))
+        return union
+    kind = raw.get('type') if isinstance(raw, dict) else None
+    fields = _fields(raw) if kind == 'record' else None
+    if kind not in ('array', 'record', 'enum') or kind == 'record' and fields is None \
+            or kind == 'enum' and not (isinstance(raw.get('symbols'), list)
+                                       and all(isinstance(symbol, str) for symbol in raw['symbols'])):
+        if raw is not None:
+            unread.append(Unread(path, None, deepcopy(raw)))
+        return Other()
+    keys = {'array': ('type', 'items'), 'record': ('type', 'fields'), 'enum': ('type', 'symbols')}[kind]
+    unread.extend(Unread(path, str(key), deepcopy(value))
+                  for key, value in sorted(raw.items(), key=lambda entry: str(entry[0])) if key not in keys)
+    match kind:
+        case 'array':
+            return Array(_read(raw['items'], (*path, 'items'), unread, inside) if 'items' in raw else None)
+        case 'record':
+            for name, _, other in fields or ():
+                unread.extend(Unread((*path, 'fields', name), key, deepcopy(value)) for key, value in other.items())
+            return Record(tuple((name, _read(field, (*path, 'fields', name, 'type'), unread, inside))
+                                for name, field, _ in fields or ()))
+    return Enum(tuple(raw['symbols']))
+
+
+def link_of(fields: Mapping[str, OpaqueCwl]) -> tuple[Merge | None, Pick | None]:
+    """The `linkMerge` and `pickValue` an `in:` record wrote, as what they change. A value that is none of the
+    standard's (reachable only through the Python API) is the way of the standard's that takes the same path."""
+    merge, pick = fields.get('linkMerge'), fields.get('pickValue')
+    return (None if merge is None else Merge.FLATTENED if merge == Merge.FLATTENED else Merge.NESTED,
+            None if pick is None else Pick(pick) if pick in PICK_VALUES else Pick.ALL)
+
+
+#: What a workflow boundary port may state, by direction: the fields the CWL
+#: v1.2 schema gives `WorkflowOutputParameter` and `WorkflowInputParameter`.
+#: An allowlist, not a denylist, because a tool's port record is a superset of a
+#: workflow's (`inputBinding` is a `CommandLineBinding` on a tool and an
+#: `InputBinding` on a workflow input, so a promoted `position` fails
+#: validation; `outputBinding` has no workflow counterpart). Only an input may
+#: ask for `loadContents` and `loadListing`.
+_OUTPUT_BOUNDARY_FIELDS: Final = frozenset({'type', 'format', 'label', 'doc', 'secondaryFiles', 'streamable'})
+_INPUT_BOUNDARY_FIELDS: Final = _OUTPUT_BOUNDARY_FIELDS | {'loadContents', 'loadListing'}
+
+
+def _evaluated(entry: OpaqueCwl) -> bool:
+    """Whether a `secondaryFiles` entry holds an expression, as its pattern or as its `required`."""
+    texts = entry.values() if isinstance(entry, dict) else (entry,)
+    return any(isinstance(text, str) and EXPRESSION.search(text) for text in texts)
+
+
+def _statable_secondary_files(value: OpaqueCwl) -> OpaqueCwl:
+    """The `secondaryFiles` entries a workflow boundary can state.
+
+    An expression is evaluated by the tool that wrote it, against that tool's
+    `inputs` and `expressionLib`. The boundary has neither, so it would
+    evaluate the expression differently or fail on it at run time; the tool
+    still declares the entry and keeps evaluating it.
+
+    A bare pattern or a single mapping is stated as a one-element list: it is
+    the same declaration, and cwltool's checker reads every entry as a mapping
+    at workflow level, so it fails on the bare form.
+    """
+    entries = value if isinstance(value, list) else [] if value is None else [value]
+    return [entry for entry in entries if not _evaluated(entry)]
+
+
+def port_declaration(raw: OpaqueCwl, *, output: bool = False) -> PortDeclaration:
+    """Preserve one CWL port declaration and expose its recognized fields, with those a workflow boundary may state
+    of it (`kept`) reduced here, where the direction is known."""
+    if not isinstance(raw, dict):
+        type_, unread = read_typed(raw)
+        return PortDeclaration(type_, unread=unread, shorthand=True)
+    reserved = {'type', 'format', 'default'}
+    if output:
+        reserved.add('outputSource')
+    passthrough = tuple((key, deepcopy(value)) for key, value in raw.items() if key not in reserved)
+    allowed = _OUTPUT_BOUNDARY_FIELDS if output else _INPUT_BOUNDARY_FIELDS
+    kept: list[tuple[str, OpaqueCwl]] = []
+    for name, value in passthrough:
+        if name not in allowed:
+            continue
+        if name == 'secondaryFiles':
+            value = _statable_secondary_files(value)
+            if not value:
+                continue
+        kept.append((name, deepcopy(value)))
+    type_, unread = read_typed(raw.get('type'))
+    return PortDeclaration(
+        type=type_,
+        unread=unread,
+        format=deepcopy(raw.get('format')),
+        has_format='format' in raw,
+        default=deepcopy(raw.get('default')),
+        has_default='default' in raw,
+        passthrough=passthrough,
+        kept=tuple(kept),
+    )
+
+
 def canonical(type_: LoadedType) -> OpaqueCwl:
-    """A loaded port type as `PortType.canonical` spells one, so a tool's types and a workflow's read alike: a union
+    """A loaded port type as `spell` writes one, so a tool's types and a workflow's read alike: a union
     is a list, an array `{type: array, items}`, and any other schema as the standard writes it."""
     match type_:
         case list():

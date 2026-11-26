@@ -11,7 +11,8 @@ from typing import Any, Final
 
 import yaml
 
-from sophios.lang.cwl import CWLAtomicType, canonical_type, required
+from sophios.lang.cwl import canonical_type, required
+from sophios.lang.types import Atom
 from sophios.lang.spans import SourceSpan
 
 _PACKAGE_ROOT: Final = Path(__file__).resolve().parents[2]
@@ -39,7 +40,7 @@ def normalize_parameter_type(parameter_type: Any) -> tuple[Any, bool]:
 def contains_any_type(type_obj: Any) -> bool:
     """Return whether a CWL type expression includes the permissive ``Any`` type."""
     match type_obj:
-        case CWLAtomicType.ANY:
+        case Atom.ANY:
             return True
         case list() | tuple() as type_options:
             return any(contains_any_type(type_option) for type_option in type_options)
@@ -55,7 +56,7 @@ def is_array_type(parameter_type: Any) -> bool:
         case {"type": "array"}:
             return True
         case list() as options:
-            return any(is_array_type(option) for option in options if option != CWLAtomicType.NULL.value)
+            return any(is_array_type(option) for option in options if option != Atom.NULL.value)
         case _:
             return False
 

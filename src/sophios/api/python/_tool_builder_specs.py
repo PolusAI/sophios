@@ -11,7 +11,8 @@ from typing import Any, ClassVar, Final, Self
 
 from cwl_utils.parser import cwl_v1_2 as _cwl_v12
 
-from sophios.lang.cwl import CWLAtomicType, _hold_to_the_standard, canonical_type, required
+from sophios.lang.cwl import _hold_to_the_standard, canonical_type, required
+from sophios.lang.types import Atom
 from sophios.lang.spans import SourceSpan
 
 from ._tool_builder_support import _merge_if_set, _render, _render_doc
@@ -38,15 +39,15 @@ class _CWLNamespace:
     __slots__ = ()
 
     # The standard's own names, as lang.cwl holds them; `.value`, since PyYAML cannot dump an enum member.
-    null = CWLAtomicType.NULL.value
-    boolean = CWLAtomicType.BOOLEAN.value
-    int = CWLAtomicType.INT.value
-    long = CWLAtomicType.LONG.value
-    float = CWLAtomicType.FLOAT.value
-    double = CWLAtomicType.DOUBLE.value
-    string = CWLAtomicType.STRING.value
-    file = CWLAtomicType.FILE.value
-    directory = CWLAtomicType.DIRECTORY.value
+    null = Atom.NULL.value
+    boolean = Atom.BOOLEAN.value
+    int = Atom.INT.value
+    long = Atom.LONG.value
+    float = Atom.FLOAT.value
+    double = Atom.DOUBLE.value
+    string = Atom.STRING.value
+    file = Atom.FILE.value
+    directory = Atom.DIRECTORY.value
 
     def optional(self, type_: Any) -> list[Any]:
         """Make a type optional: the union `["null", type_]`.
@@ -113,8 +114,8 @@ class _CWLNamespace:
 
 cwl = _CWLNamespace()
 # Every atomic type but `Any`, which a port names by its string: a name more or less fails at import.
-_hold_to_the_standard(CWLAtomicType, [value for name, value in vars(_CWLNamespace).items()
-                                      if not name.startswith('_') and isinstance(value, str)], ['Any'])
+_hold_to_the_standard(Atom, [value for name, value in vars(_CWLNamespace).items()
+                             if not name.startswith('_') and isinstance(value, str)], ['Any'])
 
 
 def _camel(name: str) -> str:

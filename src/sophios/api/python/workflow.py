@@ -13,8 +13,8 @@ from typing import Any, ClassVar, Final, Literal, overload
 import graphviz
 
 from sophios.lang import CwlRecord, EdgeRef, InputValue, OpaqueCwl, UnresolvedName, nodes
-from sophios.lang.compatibility import TypeRelation, reference_relation
-from sophios.lang.cwl import Process, ScatterMethod
+from sophios.lang.types import TypeRelation, relation
+from sophios.lang.cwl import Process, ScatterMethod, read_type
 from sophios.lang.diagnostics import Diagnostic, SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
 from sophios.lang.names import check_written_name
@@ -138,7 +138,8 @@ def _python_api_types_match(parameter_type: Any, candidate_type: Any) -> bool:
     the compiler, which knows the scatter.
     """
     def proven_disjoint(sink_type: Any) -> bool:
-        return reference_relation(candidate_type, sink_type) is TypeRelation.DISJOINT
+        return relation(read_type(candidate_type),
+                        read_type(sink_type)) is TypeRelation.DISJOINT
 
     return not (proven_disjoint(parameter_type)
                 and proven_disjoint({'type': 'array', 'items': parameter_type}))

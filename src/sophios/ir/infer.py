@@ -5,8 +5,9 @@ from dataclasses import dataclass, replace
 
 from ..lang import OpaqueCwl, SophiosErrorCode
 from ..lang.diagnostics import Diagnostics, Locator
+from ..lang.types import PortDeclaration, Type, layered, permits_format, types_match
 from .complete import call_interfaces, promote_outputs
-from .declarations import feeding_declaration, input_rank, layered, output_rank, required
+from .declarations import feeding_declaration, input_rank, output_rank, required
 from .names import Names
 from .resolve import RegistrySnapshot, ToolDefinition, process_ports
 from .stepin import direct_sink
@@ -17,7 +18,6 @@ from .types import (
     Edge,
     PhaseResult,
     Port,
-    PortDeclaration,
     PortId,
     PortName,
     StepId,
@@ -60,19 +60,6 @@ def infer(graph: WorkflowGraph, policy: InferencePolicy = InferencePolicy(),
     graph = _infer_tree(graph, policy, catalog, diagnostics)
     _unbound_scatter(graph, diagnostics)
     return PhaseResult(None if diagnostics.has_errors else graph, diagnostics)
-
-
-def types_match(in_type: OpaqueCwl, out_type: OpaqueCwl) -> bool:
-    """Legacy inferred-candidate relation, intentionally not a rejection judge."""
-    if in_type == out_type:
-        return True
-    if isinstance(in_type, list) and not isinstance(out_type, list):
-        return any(member == out_type for member in in_type)
-    if isinstance(out_type, list) and not isinstance(in_type, list):
-        return any(member == in_type for member in out_type)
-    if isinstance(in_type, list) and isinstance(out_type, list):
-        return any(member in in_type for member in out_type)
-    return False
 
 
 def _infer_tree(graph: WorkflowGraph, policy: InferencePolicy, catalog: InsertionCatalog,
@@ -259,14 +246,14 @@ def _candidate(steps: Sequence[StepNode], position: int, sink: Port, policy: Inf
     on past the winner only to collect the earlier producers' matches, so
     the choice can be reported; it never changes the choice.
     """
-    sink_type = layered(sink.type, input_rank(steps[position], sink.id.port)).canonical
+    sink_type = layered(sink.type, input_rank(steps[position], sink.id.port))
     sink_formats = _formats(sink.declaration)
     chosen: Port | None = None
     alternatives: list[PortId] = []
     for producer in reversed(steps[:position]):
         matches: list[Port] = []
         for output in reversed(producer.outputs):
-            output_type = layered(output.type, output_rank(producer)).canonical
+            output_type = layered(output.type, output_rank(producer))
             output_formats = _formats(output.declaration)
             if (types_match(sink_type, output_type)
                     and _formats_match(sink_formats, output_formats, output_type)):
@@ -406,19 +393,9 @@ def _formats(declaration: PortDeclaration | None) -> tuple[OpaqueCwl, ...]:
 
 
 def _formats_match(sink: tuple[OpaqueCwl, ...], source: tuple[OpaqueCwl, ...],
-                   source_type: OpaqueCwl) -> bool:
+                   source_type: Type) -> bool:
     if not sink:
         return True
     if not source:
-        return not _type_permits_format(source_type)
+        return not permits_format(source_type)
     return any(value in sink for value in source)
-
-
-def _type_permits_format(cwl_type: OpaqueCwl) -> bool:
-    if cwl_type == 'File':
-        return True
-    if isinstance(cwl_type, dict) and cwl_type.get('type') == 'array':
-        return _type_permits_format(cwl_type.get('items'))
-    if isinstance(cwl_type, list):
-        return any(_type_permits_format(member) for member in cwl_type)
-    return False
