@@ -10,7 +10,7 @@ import yaml
 from hypothesis import example, given, strategies as st
 
 from sophios.compiler import CompileSettings, compile_source
-from sophios.ir.frontdoor import bundle_from_disk
+from sophios.frontdoor import bundle_from_disk
 from sophios.ir.infer import InferencePolicy, InsertionCatalog, infer
 from sophios.ir.link import link
 from sophios.ir.names import Names

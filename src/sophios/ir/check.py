@@ -10,7 +10,7 @@ from typing import Final
 from ..lang.diagnostics import Diagnostics, Locator
 from ..lang.error_codes import SophiosErrorCode
 from ..lang.names import check_written_name
-from ..lang.nodes import CwlRecord, Document, EdgeRef, Step
+from ..lang.nodes import Document, EdgeRef, InputRecord, Step
 
 #: Held only here: what tells a `CheckedDocument` that `check` made it.
 _CHECKED: Final = object()
@@ -37,20 +37,15 @@ def check(document: Document, name: str, *, root: bool) -> tuple[CheckedDocument
     defined: set[str] = set()
     for index, step in enumerate(document.steps, start=1):
         _check_step(step, index, defined, diagnostics)
-    declared = dict(document.passthrough)
-    for side in ('inputs', 'outputs'):
-        ports = declared.get(side)
-        for port, declaration in ports.items() if isinstance(ports, dict) else ():
-            if (problem := check_written_name(str(port))) is not None:
-                diagnostics.error(SophiosErrorCode.INVALID_NAME, f'workflow {side[:-1]} {str(port)!r} {problem}',
+    for side, ports in (('inputs', document.boundary.inputs), ('outputs', document.boundary.outputs)):
+        for port in ports:
+            if (problem := check_written_name(port.name)) is not None:
+                diagnostics.error(SophiosErrorCode.INVALID_NAME, f'workflow {side[:-1]} {port.name!r} {problem}',
                                   document.span)
-            if side == 'outputs' and isinstance(declaration, dict):
-                rejected: list[str] = sorted(key for key in ('linkMerge', 'pickValue') if key in declaration)
-                rejected += ['a list outputSource'] * isinstance(declaration.get('outputSource'), list)
-                if rejected:
-                    diagnostics.error(SophiosErrorCode.STEP_INPUT_RECORD, f"workflow output {str(port)!r} uses "
-                                      f"{', '.join(rejected)}, which Sophios does not read; an output names one "
-                                      'step/port', document.span)
+            if port.unread:
+                diagnostics.error(SophiosErrorCode.STEP_INPUT_RECORD, f"workflow output {port.name!r} uses "
+                                  f"{', '.join(port.unread)}, which Sophios does not read; an output names one "
+                                  'step/port', document.span)
     if root and (problem := check_written_name(name)) is not None:
         diagnostics.error(SophiosErrorCode.INVALID_NAME, f'workflow name {name!r} {problem}', document.span)
     return (None if diagnostics.has_errors else CheckedDocument(document, _CHECKED)), diagnostics
@@ -68,7 +63,7 @@ def _check_step(step: Step, index: int, defined: set[str], diagnostics: Diagnost
         if not port:
             diagnostics.error(SophiosErrorCode.EMPTY_NAME, f"step '{step.id}' binds an input with no name",
                               step.span, at)
-        for reference in value.sources if isinstance(value, CwlRecord) else (value,):
+        for reference in value.sources if isinstance(value, InputRecord) else (value,):
             if isinstance(reference, EdgeRef) and not reference.name:
                 diagnostics.error(SophiosErrorCode.EMPTY_NAME, f"'!*' on '{step.id}.{port}' names no edge",
                                   reference.span, Locator(step=step.id, index=index, port=port))

@@ -15,21 +15,22 @@ from .ir.artifacts import CompilationResult
 from .ir.infer import InferencePolicy, InsertionCatalog, infer
 from .ir.link import link
 from .ir.namespaces import declare_namespaces
-from .ir.frontdoor import SourceBundle
+from .frontdoor import SourceBundle
 from .ir.pipeline import front_end
 from .ir.realtime import extract
 from .ir.resolve import RegistrySnapshot, ToolCheck, ToolDefinition, version_pins
 from .ir.names import NAMESPACE_SEPARATOR, Names
 from .ir.policy import RunPolicy
-from .ir.resolved import ResolvedWorkflow, non_boolean_whens, resolve
+from .ir.resolved import ResolvedStep, ResolvedWorkflow, resolve
 from .ir.types import RegistryKey, StepId, StepNode, WorkflowGraph
 from .lang import versions
 from .lang.diagnostics import Diagnostic, Diagnostics, Locator, Severity, SophiosError
-from .lang.nodes import CwlRecord, ToolDocument, UnresolvedName
-from .lang.cwl import inputs_read
+from .lang.nodes import InputRecord, ToolDocument, UnresolvedName
+from .lang.tools import ToolNode
 from .lang.parser import step_key
+from .lang.subset import boolean_problem
 from .lang.error_codes import SophiosErrorCode
-from .wic_types import Cwl, Tool
+from .wic_types import Tool
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,8 +101,15 @@ def _written(graph: WorkflowGraph, registry: RegistrySnapshot) -> Iterator[ToolD
         called = graph.child(step.id)
         if called is not None:
             yield from _written(called, registry)
-        elif (definition := registry.tool(step.run)) is not None and definition.source.document is not None:
-            yield definition.source.document
+        elif (definition := registry.tool(step.run)) is not None \
+                and (document := _tool(definition).document) is not None:
+            yield document
+
+
+def _tool(definition: ToolDefinition) -> Tool:
+    """The tool the front door registered under `definition`; its CWL is the compiler's to read."""
+    assert isinstance(definition.source, Tool)
+    return definition.source
 
 
 def _tool_check() -> ToolCheck:
@@ -111,7 +119,7 @@ def _tool_check() -> ToolCheck:
     def check(tool: ToolDefinition) -> str | None:
         if tool.key not in refusals:
             try:
-                tools.validate(tool.run_path, None if tool.from_file else tool.cwl)
+                tools.validate(tool.run_path, None if tool.from_file else deepcopy(_tool(tool).cwl))
                 refusals[tool.key] = None
             except tools.InvalidTool as refused:
                 refusals[tool.key] = str(refused)
@@ -141,13 +149,26 @@ def cwl_notes(view: ResolvedWorkflow) -> tuple[Diagnostic, ...]:
         for step, problem in non_boolean_whens(view))
 
 
-def _tools(graph: WorkflowGraph, descriptions: '_Descriptions') -> Iterator[tuple[StepId, Tool]]:
+def non_boolean_whens(workflow: ResolvedWorkflow) -> tuple[tuple[ResolvedStep, str], ...]:
+    """Each step of `workflow` at any depth, a call among them, in graph order, whose `when` cannot give `true` or
+    `false`, with why (`boolean_problem`): the one check of a `when` every target shares."""
+    found: list[tuple[ResolvedStep, str]] = []
+    for step in workflow.steps:
+        if step.condition is not None and (
+                problem := boolean_problem(step.quoted_when, step.condition.type)) is not None:
+            found.append((step, problem))
+        if isinstance(step.run, ResolvedWorkflow):
+            found.extend(non_boolean_whens(step.run))
+    return tuple(found)
+
+
+def _tools(graph: WorkflowGraph, descriptions: '_Descriptions') -> Iterator[tuple[StepId, ToolNode]]:
     """Every tool step at any depth, with the tool it runs."""
     for step in graph.steps:
         called = graph.child(step.id)
         if called is None:
             tool = descriptions.tool(step)
-            yield step.id, Tool(tool.run_path, descriptions.of(step, tool))
+            yield step.id, descriptions.of(step, tool)
         else:
             yield from _tools(called, descriptions)
 
@@ -196,7 +217,7 @@ def _when_notes(graph: WorkflowGraph, names: Names) -> list[Diagnostic]:
         return [note for child in graph.children for note in _when_notes(child, names)]
     for step in graph.steps:
         declared = [names.port(port.id.port) for port in step.inputs]
-        for read in inputs_read(dict(step.interpreted).get('when')):
+        for read in step.guard.reads if step.guard is not None else ():
             if read not in declared:
                 made = [name for name in declared if name.startswith(f'{read}{NAMESPACE_SEPARATOR}')]
                 hint = f" Write {' or '.join(f'inputs[{name!r}]' for name in made)} to read one it declares." \
@@ -221,7 +242,7 @@ def _check_unresolved_names(graph: WorkflowGraph, allow_raw_cwl: bool,
     for step in graph.steps:
         for binding in step.bindings:
             value = binding.value
-            for reference in value.sources if isinstance(value, CwlRecord) else (value,):
+            for reference in value.sources if isinstance(value, InputRecord) else (value,):
                 if not isinstance(reference, UnresolvedName) or reference.name in declared or allow_raw_cwl:
                     continue
                 name = reference.name
@@ -245,7 +266,7 @@ class _Descriptions:
 
     def __init__(self, registry: RegistrySnapshot) -> None:
         self._registry = registry
-        self._packed: dict[RegistryKey, Cwl] = {}
+        self._packed: dict[RegistryKey, ToolNode] = {}
 
     def tool(self, step: StepNode) -> ToolDefinition:
         """The registry's definition of the tool `step` runs."""
@@ -258,22 +279,23 @@ class _Descriptions:
                 f'process {key.namespace}/{key.name} disappeared after resolution')
         return definition
 
-    def of(self, step: StepNode, tool: ToolDefinition) -> Cwl:
+    def of(self, step: StepNode, tool: ToolDefinition) -> ToolNode:
         """The description written for `step`, which runs `tool`.
 
         Raises:
             SophiosError: `wic013` at the step, with cwltool's message, when cwltool cannot pack the tool.
         """
-        if not tools.has_relative_reference(tool.cwl):
-            return deepcopy(tool.cwl)
+        cwl = _tool(tool).cwl
+        if not tools.has_relative_reference(cwl):
+            return tool.node
         if tool.key not in self._packed:
             try:
-                self._packed[tool.key] = tools.packed(dump_wic_yaml(tool.cwl),
-                                                      Path(tool.run_path).absolute().as_uri())
+                packed = tools.packed(dump_wic_yaml(cwl), Path(tool.run_path).absolute().as_uri())
+                self._packed[tool.key] = Tool(tool.run_path, packed).node
             except tools.PackError as error:
                 raise SophiosError.error(
                     SophiosErrorCode.SUBWORKFLOW_INVALID,
                     f'step {step.id.name!r} runs {tool.run_path}, which refers to files relative to itself, '
                     f'and cwltool cannot read them:\n{error}',
                     span=step.span, locator=Locator(step=step.id.name, index=step.id.index)) from error
-        return deepcopy(self._packed[tool.key])
+        return self._packed[tool.key]

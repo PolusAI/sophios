@@ -8,15 +8,23 @@ the typing rules is rejected with a ValueError naming the construct. The
 Nextflow target's Groovy rendering and reading are ``sophios.nextflow.expr``.
 """
 
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
+from itertools import chain
 import math
 import re
-from typing import Mapping, TypeAlias
+from typing import Any, Final, TypeAlias
+
+from cwl_utils.errors import SubstitutionError
+from cwl_utils.expression import scanner
 
 NUMBER = "number"
 BOOLEAN = "boolean"
 STRING = "string"
 NULL = "null"
+
+#: Where a CWL expression starts: a parameter reference or a JavaScript expression, `$(`, or a function body, `${`.
+EXPRESSION: Final = re.compile(r'\$[({]')
 
 _SCALAR_TYPES = {"int": NUMBER, "float": NUMBER, "boolean": BOOLEAN, "string": STRING}
 _UNARY = frozenset({"!", "-", "+"})
@@ -423,3 +431,110 @@ def source_text(node: Expr) -> str:
             return f"{op}({', '.join(source_text(arg) for arg in args)})"
         case Op(op=op, args=args):
             return f"({source_text(args[0])} {op} {source_text(args[1])})"
+
+
+def written_text(node: Expr) -> str:
+    """The `$( … )` field a tree is written as: its operators spaced, a string in double quotes, and a parenthesis
+    only where the grammar's precedence needs one."""
+    return f"$({_body(node, -1)})"
+
+
+def _body(node: Expr, outer: int) -> str:
+    """The text of `node` inside an operator of precedence `outer`: a level of `_BINARY_LEVELS`, or -1 for none, so a
+    node of the same level is a right operand and takes a parenthesis (every level is left-associative)."""
+    match node:
+        case Number(text=text):
+            return text
+        case Text(value=value):
+            return f"'{value}'" if '"' in value else f'"{value}"'
+        case Boolean(value=value):
+            return "true" if value else "false"
+        case Null():
+            return "null"
+        case Ref(name=name):
+            return f"inputs.{name}"
+        case Op(op=op, args=(operand,)) if op.startswith("u"):
+            # A unary operand of a unary is parenthesized: `--x` is a decrement.
+            inner = _body(operand, len(_BINARY_LEVELS))
+            return f"{op[1]}({inner})" if isinstance(operand, Op) and operand.op.startswith("u") else f"{op[1]}{inner}"
+        case Op(op=op, args=args) if op in CALLS:
+            return f"{op}({', '.join(_body(arg, -1) for arg in args)})"
+        case Op(op=op, args=(left, right)):
+            level = next(index for index, ops in enumerate(_BINARY_LEVELS) if op in ops)
+            text = f"{_body(left, level - 1)} {op} {_body(right, level)}"
+            return f"({text})" if level <= outer else text
+    raise TypeError(f"not a node of the subset: {node!r}")
+
+
+def boolean_problem(written: object, type_: str | None) -> str | None:
+    """Why a `when` written `written`, of the subset's type `type_`, cannot give `true` or `false`, which CWL
+    requires of one, the `when` quoted first; `None` when it gives one, and when nothing here can tell: the subset
+    cannot parse or type it, or it is not a string, which cwltool's schema validation refuses itself."""
+    if isinstance(written, str) and one_expression(written) is None:
+        return f'{written!r} is not one $(...) or ${{...}} expression'
+    if type_ not in (None, BOOLEAN):
+        return f'{written!r} must compute a boolean, not a {type_}'
+    return None
+
+
+def one_expression(field: str) -> str | None:
+    """How `field` opens, `$(` or `${`, when it is one CWL expression from end to end; else None.
+
+    Read as cwltool reads an expression field: stripped of surrounding whitespace, then scanned by
+    `cwl_utils.expression.scanner`, as `interpolate` in cwl_utils/expression.py scans it. Anything else is a template,
+    text with or without expressions in it, which evaluates to text.
+    """
+    text = field.strip()
+    try:
+        span = scanner(text)
+    except SubstitutionError:
+        return None
+    return text[:2] if span == (0, len(text)) and text[:2] in ('$(', '${') else None
+
+
+def strings(value: Any) -> Iterator[str]:
+    """Every string in `value`: itself, or the strings at any depth of a list or of a mapping's values."""
+    match value:
+        case str():
+            yield value
+        case list():
+            yield from chain.from_iterable(map(strings, value))
+        case Mapping():
+            yield from strings(list(value.values()))
+
+
+#: An input a CWL expression reads, `inputs.name` or `inputs["name"]`: `inputs.name-1` is `inputs.name` minus 1.
+_INPUT_READ: Final = re.compile(r'\binputs(?:\.([A-Za-z_]\w*)|\[\s*["\']([^"\']+)["\']\s*\])')
+
+
+def inputs_read(value: Any) -> tuple[str, ...]:
+    """Every input the CWL expressions in `value` (a string, or the strings at any depth of a list or mapping) read,
+    in order of first mention."""
+    return tuple(dict.fromkeys(a or b for text in strings(value) for a, b in _INPUT_READ.findall(text)))
+
+
+@dataclass(frozen=True, slots=True)
+class Guard:
+    """A step's condition: its tree when the safe subset reads the text, the inputs the text reads, and, where there
+    is no tree, why, in the subset's words. `text` is what the author wrote, which only a diagnostic quotes: the text
+    the subset does not read rides unread in the step's `passthrough`, and the tree is what a target writes."""
+
+    expr: Expr | None
+    reads: tuple[str, ...]
+    problem: str | None = None
+    text: Any = None
+
+
+def read_guard(written: object) -> Guard:
+    """A step's `when` read: its tree where the safe subset reads the text, the inputs the text reads, and where there
+    is no tree, why, in the subset's words."""
+    reads = inputs_read(written)
+    if not isinstance(written, str):
+        return Guard(None, reads, 'a when is a string', written)
+    if not is_safe_subset_text(written):
+        return Guard(None, reads, 'the safe JavaScript subset requires the whole field to be one $( … ) reference',
+                     written)
+    try:
+        return Guard(parse(written), reads, None, written)
+    except ValueError as error:
+        return Guard(None, reads, str(error), written)

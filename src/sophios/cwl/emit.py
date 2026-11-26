@@ -7,18 +7,24 @@ here, once, and nothing else reads it. Opaque CWL is copied, never inspected.
 """
 from copy import deepcopy
 
-from ..ir.artifacts import CompilationArtifact, Inlining
-from ..ir.declarations import PortDeclaration
+from .artifacts import CompilationArtifact, Inlining
 from ..ir.names import NAMESPACE_SEPARATOR
 from ..ir.namespaces import EDAM_NAMESPACE
-from ..ir.policy import RunPolicy, effective_when, tolerant_tool
+from ..ir.policy import RunPolicy
 from ..ir.resolved import (
-    Bare, Entry, InputRef, OutputRef, OutputSource, Raw, ResolvedStep, ResolvedWorkflow, StepValue, Verbatim, spelling,
+    Entry, InputRef, OutputRef, OutputSource, Raw, ResolvedStep, ResolvedWorkflow, StepValue, Verbatim, spelling,
 )
 from ..lang import CWL_VERSION
-from ..lang.nodes import OpaqueCwl
+from ..lang.nodes import Value
 from ..lang.spans import SourceSpan
-from ..wic_types import Cwl, Tool
+from ..lang.subset import written_text
+from ..lang.tools import ToolNode
+from ..lang.types import PortDeclaration
+from ..lang.values import write_value
+from ..wic_types import Cwl
+from .lowering import process_of
+from .policy import effective_when, tolerant_tool
+from .spelling import written_type
 
 
 def artifact_tree(view: ResolvedWorkflow) -> CompilationArtifact:
@@ -31,13 +37,20 @@ def _artifact(workflow: ResolvedWorkflow, root: str, name: str, namespace: tuple
               span: SourceSpan | None) -> CompilationArtifact:
     """`workflow` as the document `name`, in the document tree of `root`, and what runs in its steps."""
     # Each step's `when`, written for the run policy.
-    whens = [effective_when(step.condition.written if step.condition is not None else None, step.required_inputs,
-                            workflow.policy) for step in workflow.steps]
+    whens = [effective_when(_when(step), step.required_inputs, workflow.policy) for step in workflow.steps]
     return CompilationArtifact(
         namespace, name, f'{name}.cwl', _document(workflow, whens, root),
-        deepcopy(workflow.values),
+        write_value(workflow.values),
         tuple(_child(step, root, namespace, workflow.policy) for step in workflow.steps),
         Inlining(workflow.inlineable, span))
+
+
+def _when(step: ResolvedStep) -> Value:
+    """A step's `when` as the document writes it: the tree as the subset writes it, or the text the subset does not
+    read, as written; None without one."""
+    if step.condition is None:
+        return None
+    return written_text(step.condition.expr) if step.condition.expr is not None else dict(step.passthrough)['when']
 
 
 def _child(step: ResolvedStep, root: str, namespace: tuple[str, ...], policy: RunPolicy) -> CompilationArtifact:
@@ -45,8 +58,9 @@ def _child(step: ResolvedStep, root: str, namespace: tuple[str, ...], policy: Ru
     match step.run:
         case ResolvedWorkflow() as called:
             return _artifact(called, root, _file(root, step), (*namespace, step.local), step.span)
-        case Tool(run_path=run_path, cwl=cwl):
-            return CompilationArtifact((step.local,), _file(root, step), run_path, tolerant_tool(cwl, policy), {})
+        case ToolNode() as tool:
+            return CompilationArtifact((step.local,), _file(root, step), tool.run_path,
+                                       tolerant_tool(process_of(tool), policy), {})
 
 
 def _file(root: str, step: ResolvedStep) -> str:
@@ -55,10 +69,10 @@ def _file(root: str, step: ResolvedStep) -> str:
     return f'{root}{NAMESPACE_SEPARATOR}{step.name}'
 
 
-def _document(workflow: ResolvedWorkflow, whens: list[OpaqueCwl], root: str) -> Cwl:
+def _document(workflow: ResolvedWorkflow, whens: list[Value], root: str) -> Cwl:
     """The CWL `workflow` is written as: known keys in one fixed order, then the author's other keys in the order
     they were written."""
-    document: dict[str, OpaqueCwl] = {
+    document: dict[str, Value] = {
         'steps': [_step(step, when, root) for step, when in zip(workflow.steps, whens, strict=True)],
         'cwlVersion': CWL_VERSION,
         'class': 'Workflow',
@@ -79,10 +93,10 @@ def _document(workflow: ResolvedWorkflow, whens: list[OpaqueCwl], root: str) -> 
     return document
 
 
-def _step(step: ResolvedStep, when: OpaqueCwl, root: str) -> dict[str, OpaqueCwl]:
+def _step(step: ResolvedStep, when: Value, root: str) -> dict[str, Value]:
     """One step in canonical order. A call's ports are its workflow's boundary, in that workflow's order, so `out:`
     is the step's outputs whatever it runs."""
-    known: dict[str, OpaqueCwl] = {
+    known: dict[str, Value] = {
         'id': step.local,
         'in': {entry.name: _binding(entry.value) for entry in step.inputs},
         # The file the step's process is written to, beside every other document of the tree.
@@ -90,8 +104,11 @@ def _step(step: ResolvedStep, when: OpaqueCwl, root: str) -> dict[str, OpaqueCwl
         'out': list(step.outputs),
     }
     others = dict(step.passthrough)
-    # A `scatterMethod` with nothing to scatter is the first of the step's other keys, and is written before `when`.
-    method = step.scatter.method if step.scatter is not None else others.pop('scatterMethod', None)
+    # A `scatterMethod` the scatter does not hold is the first of the step's other keys, and is written before `when`,
+    # which the other keys hold too where the subset does not read it.
+    method = step.scatter.method.value if step.scatter is not None and step.scatter.method is not None else \
+        others.pop('scatterMethod', None)
+    others.pop('when', None)
     if step.scatter is not None:
         known['scatter'] = list(step.scatter.inputs)
     if method is not None:
@@ -102,32 +119,37 @@ def _step(step: ResolvedStep, when: OpaqueCwl, root: str) -> dict[str, OpaqueCwl
     return known
 
 
-def _binding(value: StepValue) -> str | dict[str, OpaqueCwl]:
-    """One `in:` entry, in the spelling its value asks for."""
+def _binding(value: StepValue) -> str | dict[str, Value]:
+    """One `in:` entry: the source alone as the bare string, which means what `{source: ...}` does, or a mapping."""
     match value:
-        case Bare(ref=ref):
-            return spelling(ref)
         case Raw(text=text):
             return text
-        case Entry(sources=sources, written=written):
-            known: dict[str, OpaqueCwl] = {}
+        case Entry(sources=sources, passthrough=passthrough, merge=merge, pick=pick, default=default,
+                   has_default=has_default):
+            known: dict[str, Value] = {}
             if sources:
-                texts: list[OpaqueCwl] = [spelling(source) for source in sources]
+                texts: list[Value] = [spelling(source) for source in sources]
                 # One source stays a list beside `linkMerge`, which merges a list.
-                known['source'] = texts if len(texts) > 1 or 'linkMerge' in dict(written) else texts[0]
-            known.update({key: deepcopy(field) for key, field in written})
-            return known
+                known['source'] = texts if len(texts) > 1 or merge is not None else texts[0]
+            if merge is not None:
+                known['linkMerge'] = merge.value
+            if pick is not None:
+                known['pickValue'] = pick.value
+            if has_default:
+                known['default'] = write_value(default)
+            known.update({key: deepcopy(field) for key, field in passthrough})
+            return known['source'] if list(known) == ['source'] and isinstance(known['source'], str) else known
 
 
-def _port(declaration: PortDeclaration, source: OutputSource = None) -> OpaqueCwl:
+def _port(declaration: PortDeclaration, source: OutputSource = None) -> Value:
     """A workflow input or output, without assigning meaning to opaque fields."""
     if declaration.shorthand:
-        return deepcopy(declaration.type.declared)
-    known: dict[str, OpaqueCwl] = {'type': deepcopy(declaration.type.declared)}
+        return written_type(declaration.type, declaration.unread)
+    known: dict[str, Value] = {'type': written_type(declaration.type, declaration.unread)}
     if declaration.has_format:
         known['format'] = deepcopy(declaration.format)
     if declaration.has_default:
-        known['default'] = deepcopy(declaration.default)
+        known['default'] = write_value(declaration.default)
     match source:
         case None:
             pass
@@ -139,12 +161,12 @@ def _port(declaration: PortDeclaration, source: OutputSource = None) -> OpaqueCw
     return known
 
 
-def _requirements(workflow: ResolvedWorkflow, whens: list[OpaqueCwl]) -> dict[str, OpaqueCwl]:
+def _requirements(workflow: ResolvedWorkflow, whens: list[Value]) -> dict[str, Value]:
     """The requirements the author wrote and the ones `workflow`'s calls, scatters, `when`s and step-input records
     imply, by class."""
     entries = [entry for step in workflow.steps for entry in step.inputs]
-    value_from = [str(text) for entry in entries for key, text in entry.written if key == 'valueFrom']
-    requirements = {each.cls: deepcopy(each.body) for each in workflow.requirements if not each.hint}
+    value_from = [str(text) for entry in entries for key, text in entry.passthrough if key == 'valueFrom']
+    requirements = {each.name: deepcopy(each.written) for each in workflow.needs if not each.hint}
     for requirement, needed in (
             ('SubworkflowFeatureRequirement', any(isinstance(step.run, ResolvedWorkflow) for step in workflow.steps)),
             ('ScatterFeatureRequirement',
@@ -152,7 +174,7 @@ def _requirements(workflow: ResolvedWorkflow, whens: list[OpaqueCwl]) -> dict[st
             ('InlineJavascriptRequirement',
              any(when is not None for when in whens) or any('$(' in text or '${' in text for text in value_from)),
             ('MultipleInputFeatureRequirement',
-             any(len(entry.sources) > 1 or 'linkMerge' in dict(entry.written) for entry in entries)),
+             any(len(entry.sources) > 1 or entry.merge is not None for entry in entries)),
             ('StepInputExpressionRequirement', bool(value_from))):
         # An authored body is kept; an authored `Class:` with no body is `{}`, as CWL needs.
         if needed and requirements.get(requirement) is None:
@@ -170,14 +192,15 @@ def _uses_edam(workflow: ResolvedWorkflow) -> bool:
     declarations += [port.declaration for port in workflow.outputs]
     formats = [declaration.format for declaration in declarations if declaration.has_format]
     formats += [found for declaration in declarations if declaration.has_default
-                for found in _job_formats(declaration.default)]
-    formats += [found for step in workflow.steps for entry in step.inputs for found in _job_formats(entry.default)]
-    formats += [found for port in workflow.inputs if port.has_value for found in _job_formats(port.value)]
+                for found in _job_formats(write_value(declaration.default))]
+    formats += [found for step in workflow.steps for entry in step.inputs for found in _job_formats(
+        write_value(entry.default))]
+    formats += [found for port in workflow.inputs if port.has_value for found in _job_formats(write_value(port.value))]
     return any(isinstance(text, str) and text.startswith(f'{EDAM_NAMESPACE[0]}:')
                for value in formats for text in (value if isinstance(value, list) else [value]))
 
 
-def _job_formats(value: OpaqueCwl) -> list[OpaqueCwl]:
+def _job_formats(value: Value) -> list[Value]:
     """Every `format` a job value holds, at any depth: a File's, a File's in a list or a record."""
     match value:
         case dict():

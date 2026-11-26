@@ -15,7 +15,7 @@ from sophios.runtime.inputs import output_target_inputs, runner_job_inputs
 from sophios.wic_types import Json, Tools
 from sophios.contrib import converter
 from sophios import plugins, targets
-from sophios.ir import frontdoor
+from sophios import frontdoor
 
 
 app = FastAPI()

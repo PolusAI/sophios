@@ -8,6 +8,17 @@ from typing import Any
 
 from sophios.cwl import tools
 from sophios.cwl.io import dump_wic_yaml
+from sophios.cwl import lowering
+from sophios.lang.nodes import ToolDocument
+
+
+def command_line_tool(tool: ToolDocument) -> dict[str, Any]:
+    """The CommandLineTool the tool document means, as the CWL target writes it.
+
+    Raises:
+        SophiosError: `wic058`, for every line the tool cannot mean.
+    """
+    return lowering.command_line_tool(tool)
 
 
 def _render(value: Any) -> Any:

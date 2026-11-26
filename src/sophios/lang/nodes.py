@@ -5,12 +5,21 @@ well-formed Sophios document may contain, independent of which tools happen
 to be installed. Every node is frozen (an AST consumers can mutate is not a
 specification of anything) and slotted (allocated once per construct).
 """
-from dataclasses import dataclass, field, fields
+from collections.abc import Callable
+from dataclasses import dataclass, field, fields, replace
 from datetime import date, datetime
 from enum import StrEnum
 from typing import Any, TypeAlias
 
+from .cwl_fields import unread as refused_fields
+from .error_codes import SophiosErrorCode
+from .needs import Inherited
+from .ports import Boundary, read_boundary
 from .spans import SourceSpan
+from .subset import Guard, read_guard
+from .types import Merge, Pick, ScatterMethod, Unknown, named
+from .unread import UnreadField
+from .values import FileValue
 
 
 class Shape(StrEnum):
@@ -84,6 +93,15 @@ def surface_of(node_type: type, field_name: str) -> Surface:
     raise AttributeError(f'{node_type.__name__} has no field {field_name!r}')
 
 
+def _split(passthrough: 'tuple[tuple[str, Value], ...]', owner: str
+           ) -> tuple[tuple[Inherited, ...], tuple[UnreadField, ...]]:
+    """What a step or a workflow (`owner`) asks of its tools, and the refusal of each of its keys nothing reads (read
+    at the front door)."""
+    # pylint: disable-next=import-outside-toplevel,cyclic-import  # the reader imports these nodes
+    from .cwl_tool import split
+    return split(passthrough, owner)
+
+
 @dataclass(frozen=True, slots=True)
 class InlineLiteral:
     """`!ii value` — a literal, never an edge.
@@ -96,7 +114,7 @@ class InlineLiteral:
     reconstruction is lossy by nature.
     """
 
-    value: 'OpaqueCwl' = surface(Shape.IDENTITY)
+    value: 'Value' = surface(Shape.IDENTITY)
     span: SourceSpan | None = surface(Shape.INTERNAL, default=None)
     text: str | None = surface(Shape.INTERNAL, default=None)
 
@@ -123,7 +141,7 @@ class EdgeRef:
 
 
 @dataclass(frozen=True, slots=True)
-class RawCwlRef:
+class PassthroughRef:
     """`!cwl expression` — an opaque CWL reference, passed through unresolved.
 
     The compiler does not attempt to interpret the expression. This is the
@@ -147,7 +165,7 @@ class UnresolvedName:
 
 
 @dataclass(frozen=True, slots=True)
-class CwlRecord:
+class InputRecord:
     """`!cwl {source: ..., linkMerge: ...}` — CWL's WorkflowStepInput, at an `in:` position.
 
     `sources` are the Sophios references its `source` names, in order; each is
@@ -157,14 +175,67 @@ class CwlRecord:
     """
 
     sources: tuple[EdgeRef | UnresolvedName, ...] = surface(Shape.IDENTITY, default=())
-    fields: tuple[tuple[str, 'OpaqueCwl'], ...] = surface(Shape.IDENTITY, default=())
+    fields: tuple[tuple[str, 'Value'], ...] = surface(Shape.IDENTITY, default=())
     span: SourceSpan | None = surface(Shape.INTERNAL, default=None)
 
     @property
-    def delivers_its_source(self) -> bool:
-        """Whether the step input receives its one source's value as it is:
-        no merge, no pick and no `valueFrom` stands between them."""
-        return len(self.sources) == 1 and not {'linkMerge', 'pickValue', 'valueFrom'} & dict(self.fields).keys()
+    def merge(self) -> Merge | Unknown | None:
+        """How its sources join, from `linkMerge`: None when it says none, an `Unknown` of one the standard does not
+        have, for a target to refuse by name."""
+        return named(Merge, dict(self.fields).get('linkMerge'))
+
+    @property
+    def pick(self) -> Pick | Unknown | None:
+        """Which of the non-null values it takes, from `pickValue`; as `merge` is."""
+        return named(Pick, dict(self.fields).get('pickValue'))
+
+    @property
+    def passthrough(self) -> tuple[tuple[str, 'Value'], ...]:
+        """The fields no meaning above holds (`valueFrom`, `label`, `doc`, a null `linkMerge`, ...), verbatim, in
+        written order."""
+        held = {'default', *(key for key, way in (('linkMerge', self.merge), ('pickValue', self.pick))
+                             if way is not None)}
+        return tuple((key, value) for key, value in self.fields if key not in held)
+
+    @property
+    def unread(self) -> tuple[UnreadField, ...]:
+        """The fields of `passthrough` that a target reading none of them must refuse, each with its refusal: a
+        `valueFrom` written null says nothing, and a merge or a pick, of the standard or not, is a field of the
+        node."""
+        return refused_fields('WorkflowStepInput', (
+            key for key, value in self.passthrough
+            if (value is not None or key != 'valueFrom') and key not in ('linkMerge', 'pickValue')))
+
+    @property
+    def computed(self) -> bool:
+        """Whether a `valueFrom` is written, whatever its value."""
+        return 'valueFrom' in dict(self.fields)
+
+    @property
+    def computes(self) -> bool:
+        """Whether a `valueFrom` is written that is not null."""
+        return dict(self.fields).get('valueFrom') is not None
+
+    @property
+    def default(self) -> 'Value':
+        """The `default` as written."""
+        return dict(self.fields).get('default')
+
+    @property
+    def has_default(self) -> bool:
+        """Whether a `default` is written, whatever its value."""
+        return 'default' in dict(self.fields)
+
+    @property
+    def changes(self) -> bool:
+        """Whether something stands between its sources and the step input: not one source, or a merge, a pick or
+        a `valueFrom`, as written."""
+        return len(self.sources) != 1 or bool({'linkMerge', 'pickValue', 'valueFrom'} & dict(self.fields).keys())
+
+    def map_default(self, resolve: Callable[['Value'], 'Value']) -> 'InputRecord':
+        """This record with its `default`, if it has one, replaced by `resolve` of it."""
+        return replace(self, fields=tuple((key, resolve(value) if key == 'default' else value)
+                                          for key, value in self.fields))
 
 
 #: The complete set of forms a step input may take: a literal, an edge
@@ -172,16 +243,16 @@ class CwlRecord:
 #: record. `EdgeDef` is deliberately not a member — an edge is defined on an
 #: output, reachable only through `OutputBinding.edge_def`. Closed by
 #: construction, so exhaustive `match` statements over it stay exhaustive.
-InputValue: TypeAlias = InlineLiteral | EdgeRef | RawCwlRef | UnresolvedName | CwlRecord
+InputValue: TypeAlias = InlineLiteral | EdgeRef | PassthroughRef | UnresolvedName | InputRecord
 
-#: CWL that Sophios does not interpret and passes through unchanged: a closed
+#: What Sophios does not interpret and passes through unchanged (a CWL body, among it): a closed
 #: recursive union of what YAML's safe schema can produce, plus the Sophios
 #: constructs the passthrough walk preserves. `date`/`datetime` are members
 #: because YAML resolves timestamps; their JSON projection is ISO-8601 text
-#: (see `render.to_json`).
-OpaqueCwl: TypeAlias = (
+#: (see `render.to_json`). A File or Directory a door read is a `FileValue`.
+Value: TypeAlias = (
     None | bool | int | float | str | date | datetime
-    | list['OpaqueCwl'] | dict[str, 'OpaqueCwl'] | InputValue
+    | list['Value'] | dict[str, 'Value'] | InputValue | FileValue
 )
 
 
@@ -199,7 +270,7 @@ class OutputBinding:
 
 
 @dataclass(frozen=True, slots=True)
-class Step:
+class Step:  # pylint: disable=too-many-instance-attributes
     """A single workflow step.
 
     `interpreted` holds the CWL keys Sophios acts upon (`scatter`,
@@ -212,12 +283,48 @@ class Step:
     id: str = surface(Shape.IDENTITY, 'id')
     inputs: tuple[tuple[str, InputValue], ...] = surface(Shape.INPUT_BINDINGS, 'in', default=())
     outputs: tuple[OutputBinding, ...] = surface(Shape.OUTPUT_BINDINGS, 'out', default=())
-    interpreted: tuple[tuple[str, OpaqueCwl], ...] = surface(Shape.INTERPRETED, default=())
-    passthrough: tuple[tuple[str, OpaqueCwl], ...] = surface(Shape.PASSTHROUGH, default=())
+    interpreted: tuple[tuple[str, Value], ...] = surface(Shape.INTERPRETED, default=())
+    passthrough: tuple[tuple[str, Value], ...] = surface(Shape.PASSTHROUGH, default=())
     span: SourceSpan | None = surface(Shape.INTERNAL, default=None)
     #: An inline `run:` body that says `command:` or `script:`, read as the tool it is. Internal, not a second
     #: surface: the body stays in `interpreted`, from which it is spelled.
     tool: 'ToolDocument | None' = surface(Shape.INTERNAL, default=None)
+    #: What it asks of the tools beneath it (the requirements, then the hints, it wrote) and the refusal of each of
+    #: its other keys that nothing reads: a method with nothing to scatter, then those of `passthrough`.
+    needs: tuple[Inherited, ...] = surface(Shape.INTERNAL, init=False, compare=False, repr=False, default=())
+    unread: tuple[UnreadField, ...] = surface(Shape.INTERNAL, init=False, compare=False, repr=False, default=())
+    #: What `interpreted` says that the middle end holds: the inputs a `scatter:` lists, in the order written (None
+    #: without one), the method it combines them with, and the `when`.
+    scatter: tuple[Any, ...] | None = surface(Shape.INTERNAL, init=False, compare=False, repr=False, default=None)
+    method: ScatterMethod | Unknown | None = surface(Shape.INTERNAL, init=False, compare=False, repr=False,
+                                                     default=None)
+    guard: Guard | None = surface(Shape.INTERNAL, init=False, compare=False, repr=False, default=None)
+    #: What `interpreted` says that no node holds, in the order written, for the keys it passes through to follow: a
+    #: method with nothing to scatter, or none the enum has and no scatter to hold it, and a `when` the subset does not
+    #: read.
+    held: tuple[tuple[str, Value], ...] = surface(Shape.INTERNAL, init=False, compare=False, repr=False, default=())
+
+    def __post_init__(self) -> None:
+        needs, unread = _split(self.passthrough, 'WorkflowStep')
+        written = dict(self.interpreted)
+        scatter = written.get('scatter')
+        ports = None if scatter is None else (scatter,) if isinstance(scatter, str) else \
+            tuple(scatter) if isinstance(scatter, list) else ()
+        method = named(ScatterMethod, written.get('scatterMethod'))
+        guard = read_guard(written['when']) if written.get('when') is not None else None
+        held: list[tuple[str, Value]] = []
+        alone: list[UnreadField] = []
+        if 'scatterMethod' in written:
+            if ports is None or method is None:
+                held.append(('scatterMethod', written['scatterMethod']))
+            if ports is None:
+                alone.append(UnreadField('scatterMethod', 'WorkflowStep', SophiosErrorCode.NF_SCATTER_METHOD_ALONE,
+                                         'scatterMethod without scatter is not executable'))
+        if guard is not None and guard.expr is None:
+            held.append(('when', written['when']))
+        for key, value in (('needs', needs), ('unread', (*alone, *unread)), ('scatter', ports), ('method', method),
+                           ('guard', guard), ('held', tuple(held))):
+            object.__setattr__(self, key, value)
 
 
 @dataclass(frozen=True, slots=True)
@@ -259,7 +366,7 @@ class WicSidecar:
     """
 
     steps: tuple[tuple[StepKey, 'WicSidecar'], ...] = surface(Shape.SIDECAR_STEPS, 'steps', default=())
-    entries: tuple[tuple[str, OpaqueCwl], ...] = surface(Shape.SIDECAR_ENTRIES, default=())
+    entries: tuple[tuple[str, Value], ...] = surface(Shape.SIDECAR_ENTRIES, default=())
     #: Each `implementations:` body, parsed. Internal, not a second surface:
     #: the bodies stay in `entries` and are spelled from there, so rendering
     #: is unchanged.
@@ -270,7 +377,7 @@ class WicSidecar:
 
 
 @dataclass(frozen=True, slots=True)
-class Document:
+class Document:  # pylint: disable=too-many-instance-attributes
     """A parsed Sophios document.
 
     `passthrough` carries every top-level key Sophios does not interpret —
@@ -282,13 +389,37 @@ class Document:
 
     steps: tuple[Step, ...] = surface(Shape.STEPS, 'steps', default=())
     sidecar: WicSidecar | None = surface(Shape.SIDECAR, 'wic', default=None)
-    passthrough: tuple[tuple[str, OpaqueCwl], ...] = surface(Shape.PASSTHROUGH, default=())
+    passthrough: tuple[tuple[str, Value], ...] = surface(Shape.PASSTHROUGH, default=())
     span: SourceSpan | None = surface(Shape.INTERNAL, default=None)
     #: True when `steps:` was written as a mapping rather than a sequence.
     steps_as_mapping: bool = surface(Shape.INTERNAL, default=False)
     #: Where each entry of `inputs:` and `outputs:` written as a mapping was written: (`inputs` or `outputs`,
     #: its name, its span).
     port_spans: tuple[tuple[str, str, SourceSpan], ...] = surface(Shape.INTERNAL, default=())
+    #: What it asks of the tools beneath it (the requirements, then the hints, it wrote), the names of the other keys
+    #: it carries that nothing reads, and every key it carries beyond its boundary, derived from `passthrough`.
+    needs: tuple[Inherited, ...] = surface(Shape.INTERNAL, init=False, compare=False, repr=False, default=())
+    unread: tuple[UnreadField, ...] = surface(Shape.INTERNAL, init=False, compare=False, repr=False, default=())
+    carried: tuple[tuple[str, 'Value'], ...] = surface(
+        Shape.INTERNAL, init=False, compare=False, repr=False, default=())
+    #: The ports it declares, in the order written, and the sides it wrote as a list holding an `$import` or
+    #: `$include`, whose ports only the loader of that file can read; the namespaces it names. Derived from
+    #: `passthrough`.
+    boundary: Boundary = surface(Shape.INTERNAL, init=False, compare=False, repr=False, default=Boundary())
+    namespaces: tuple[tuple[str, str], ...] = surface(
+        Shape.INTERNAL, init=False, compare=False, repr=False, default=())
+
+    def __post_init__(self) -> None:
+        carried = tuple((key, value) for key, value in self.passthrough
+                        if key not in ('inputs', 'outputs', '$namespaces', 'cwlVersion', 'class'))
+        needs, unread = _split(carried, 'Workflow')
+        namespaces = dict(self.passthrough).get('$namespaces')
+        object.__setattr__(self, 'needs', needs)
+        object.__setattr__(self, 'unread', unread)
+        object.__setattr__(self, 'carried', carried)
+        object.__setattr__(self, 'boundary', read_boundary(self.passthrough, self.port_spans))
+        object.__setattr__(self, 'namespaces', tuple((str(key), value) for key, value in namespaces.items())
+                           if isinstance(namespaces, dict) else ())
 
 
 @dataclass(frozen=True, slots=True)
@@ -301,12 +432,12 @@ class Port:
     """
 
     name: str
-    fields: tuple[tuple[str, OpaqueCwl], ...] = ()
+    fields: tuple[tuple[str, Value], ...] = ()
     line: 'tuple[Word, ...] | None' = None
     span: SourceSpan | None = None
 
     @property
-    def type(self) -> OpaqueCwl:
+    def type(self) -> Value:
         """The type the port writes, if it writes one."""
         return dict(self.fields).get('type')
 
@@ -328,8 +459,8 @@ class ToolDocument:  # pylint: disable=too-many-instance-attributes
     as one that says `steps:` is a workflow.
 
     Each of its own keys is read into what it says, and Python builds the same node from its objects; `passthrough`
-    holds every other key, CWL that is copied into the CommandLineTool the tool means
-    (`sophios.lang.commandline.command_line_tool`).
+    holds every other key, CWL that stays beside the lines the tool is read from (`sophios.lang.wic_tool`) and
+    written with (`sophios.cwl.lowering`).
     """
 
     #: The words of `command:`, each text or one input; None when the tool says no command.
@@ -339,15 +470,12 @@ class ToolDocument:  # pylint: disable=too-many-instance-attributes
     outputs: tuple[Port, ...] = surface(Shape.TOOL_VALUE, 'outputs', default=())
     docker: str | None = surface(Shape.TOOL_VALUE, 'docker', default=None)
     #: `cores` and `ram`, as written: `ram` may be a size (`64G`).
-    needs: tuple[tuple[str, OpaqueCwl], ...] = surface(Shape.TOOL_VALUE, 'needs', default=())
+    needs: tuple[tuple[str, Value], ...] = surface(Shape.TOOL_VALUE, 'needs', default=())
     sidecar: WicSidecar | None = surface(Shape.SIDECAR, 'wic', default=None)
-    passthrough: tuple[tuple[str, OpaqueCwl], ...] = surface(Shape.PASSTHROUGH, default=())
+    passthrough: tuple[tuple[str, Value], ...] = surface(Shape.PASSTHROUGH, default=())
     span: SourceSpan | None = surface(Shape.INTERNAL, default=None)
     #: Where each key is written: (the key, its span).
     keys: tuple[tuple[str, SourceSpan], ...] = surface(Shape.INTERNAL, default=())
-    #: The CommandLineTool this tool means, as the parser's lowering made it: kept, so nothing lowers the tool again.
-    #: None where the parser did not lower it, because its `inputs:` could not be read.
-    cwl: dict[str, Any] | None = surface(Shape.INTERNAL, default=None)
 
     def at(self, key: str) -> SourceSpan | None:
         """Where `key` is written; else where the tool is."""

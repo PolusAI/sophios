@@ -51,7 +51,7 @@ Every source feature considered by the backend is classified as exactly one of:
 
 Imported text is a separate matter (§4.2): the reader admits exactly the text the renderer writes, and anything else stops the import with a coded diagnostic. That is a property of imported text, not a state a Sophios/CWL field can be in.
 
-The backend's support is one table in code, `src/sophios/nextflow/support.py`. It gives every Sophios/CWL field the backend considers one of the three states, keyed by its `cwl_utils` class as before; capability analysis takes the fields it consumes from it, and the user documentation is rendered from it. The table is the authority for which state a field is in; this document is the authority for what each state and each lowering means. Moving a field into **Lowered** or **Compile-time** is a revision of this design before it is a change to the table.
+The backend's support is one table in code, `src/sophios/lang/cwl_fields.py`, which the CWL reader at the front door holds. It gives every Sophios/CWL field the backend considers one of the three states, keyed by the CWL class and field name the reader read it from; the reader names each field no node holds a value of in an `unread` item that carries the refusal the table gives it, so the backend refuses item by item and looks no field up, and the user documentation is rendered from the table. The table is the authority for which state a field is in; this document is the authority for what each state and each lowering means. Moving a field into **Lowered** or **Compile-time** is a revision of this design before it is a change to the table.
 
 Capability analysis is closed-world. Each semantic source field is consumed by a lowering, used by the Sophios compile alone, or reported as rejected. Unknown requirements, bindings, expressions, directives, operators, and executable syntax are never ignored.
 
@@ -74,7 +74,7 @@ Python Workflow or .wic
   -> JSON IR, workflow.nf, nextflow.config, nextflow_params.json
 ```
 
-Unsupported input exits through structured diagnostics before executable IR or artifacts exist. The view takes each tool step's document from the compile's tools; the compile emits nothing, and no pass reads a workflow's emitted CWL.
+Unsupported input exits through structured diagnostics before executable IR or artifacts exist. The view takes each tool step's neutral node (`ToolNode`) from the compile's tools, read at the front door, so the target imports no CWL (an import-linter contract); the compile emits nothing, and no pass reads a workflow's emitted CWL.
 
 ### 4.2 Import
 
@@ -269,7 +269,7 @@ The closed set is widened only by the fixed whole-array idioms of §6, Topology:
 
 ### Outputs and globs
 
-Every output has a concrete capture mechanism. Support includes path globs and declared stdout/stderr file capture. Primitive outputs are not represented as bare variable names. A rendered glob remains a glob at run time: a name assembled from runtime data is still pattern-interpreted, so a staged name carrying a glob metacharacter does not match the file the process wrote. Rendering an assembled name literally is a distinct lowering, because it changes emitted bytes and the reader (§4.2) with them.
+Every output has a concrete capture mechanism. Support includes path globs and declared stdout/stderr file capture. An output that is a stream (`type: stdout` or `stderr`, which a tool written in `.wic` says as `outputs: {name: stdout}`) collects the file the tool's `stdout` or `stderr` names, or `stdout.txt` or `stderr.txt` where it names none, which the command is then redirected to. Primitive outputs are not represented as bare variable names. A rendered glob remains a glob at run time: a name assembled from runtime data is still pattern-interpreted, so a staged name carrying a glob metacharacter does not match the file the process wrote. Rendering an assembled name literally is a distinct lowering, because it changes emitted bytes and the reader (§4.2) with them.
 
 Supported glob expressions are parsed into typed literal and input-reference components. Raw CWL expression strings cannot enter the executable model.
 
@@ -286,6 +286,8 @@ Beyond the glob, `outputBinding` capture behavior falls into three statuses this
 The declaration is admitted only when the paired `glob` is one literal containing no wildcard character — no `*`, `?`, or `[` — and no input reference. `self[0]` means "the first of the matched list", so projecting it is provably identical only where the match set has exactly one member by construction, and a literal glob names at most one filesystem entry. A wildcard glob would instead make the two runtimes' glob match *ordering* load-bearing, and that ordering is unproven. An input-reference glob is rejected for the same reason one step removed: its runtime value could itself contain a wildcard, so wildcard-freedom is not decidable from the source text. The restriction lives in the executable model rather than only in capability analysis — a capture marker beside a non-literal or wildcard-bearing glob is an unrepresentable state, so no later change can reach it by a different code path.
 
 **Relaxation path for wildcard globs.** Admitting `$(self[0])` against a wildcard glob is a gated extension with known requirements, not a dead end. A future contributor must demonstrate that CWL's glob match ordering and Nextflow's are identical, covering at least the cases where they could plausibly diverge: filenames of differing length, mixed upper and lower case, numeric suffixes where lexical and numeric order disagree (`part2` against `part10`), and the locale sensitivity of the collation each runtime's underlying glob implementation uses. Absent that proof the two runtimes may silently select *different files* for the same workflow with no error raised anywhere, which is exactly the failure mode §1 forbids; the restriction therefore stands until the ordering is proven rather than assumed. The same proof would unlock the input-reference glob, whose only defect is that it cannot be shown wildcard-free at compile time.
+
+**A file of literal text (approved lowering).** An `InitialWorkDirRequirement` entry that is a `File` with a `basename` and literal `contents`, which is what a `script:` of a tool written in `.wic` stages, lowers to a file the task writes into its directory, as its text and with no line feed added, before the command runs. Its name is letters, digits, `.`, `_` and `-`; an entry whose content is computed is rejected as before.
 
 **File-text capture (approved lowering, one supported literal).** `loadContents: true` paired with an `outputEval` of exactly `$(self[0].contents)`, on an output declared `type: string`, under the same literal-glob restriction as the cardinality declaration, lowers to a closed file-text-capture marker: the port becomes a value port whose value is the named file's decoded text. Both halves are required and neither is admitted alone — `loadContents` without that `outputEval` is rejected, that `outputEval` without `loadContents: true` is rejected, and the pairing on any output type other than `string` is rejected.
 

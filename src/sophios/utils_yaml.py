@@ -19,7 +19,7 @@ class Tag:  # pylint: disable=too-few-public-methods  # a namespace, not a type
     ANCHOR: Final = '!&'
     ALIAS: Final = '!*'
     INLINE_INPUT: Final = '!ii'
-    RAW_CWL: Final = '!cwl'
+    PASSTHROUGH: Final = '!cwl'
 
     #: Every tag, for membership tests. Assigned below, from the pairing of
     #: tags and keys, so adding or renaming one cannot leave it behind.
@@ -35,7 +35,7 @@ class Key:  # pylint: disable=too-few-public-methods  # a namespace, not a type
     ANCHOR: Final = 'wic_anchor'
     ALIAS: Final = 'wic_alias'
     INLINE_INPUT: Final = 'wic_inline_input'
-    RAW_CWL: Final = 'wic_raw_cwl'
+    PASSTHROUGH: Final = 'wic_raw_cwl'
 
     #: Every desugared key, for membership tests. Derived, as above.
     ALL: ClassVar[frozenset[str]]
@@ -43,7 +43,7 @@ class Key:  # pylint: disable=too-few-public-methods  # a namespace, not a type
 
 #: Each tag with its desugared key: one construct, two spellings.
 KEY_OF_TAG: Final[Mapping[str, str]] = MappingProxyType({
-    Tag.ANCHOR: Key.ANCHOR, Tag.ALIAS: Key.ALIAS, Tag.INLINE_INPUT: Key.INLINE_INPUT, Tag.RAW_CWL: Key.RAW_CWL})
+    Tag.ANCHOR: Key.ANCHOR, Tag.ALIAS: Key.ALIAS, Tag.INLINE_INPUT: Key.INLINE_INPUT, Tag.PASSTHROUGH: Key.PASSTHROUGH})
 
 Tag.ALL = frozenset(KEY_OF_TAG)
 Key.ALL = frozenset(KEY_OF_TAG.values())

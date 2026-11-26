@@ -14,14 +14,15 @@ from typing import Any, Final, Protocol, TypeVar
 
 from .compiler import cwl_notes
 from .cwl import emit, io as cwl_io
-from .ir.artifacts import CompilationArtifact
+from .cwl.artifacts import CompilationArtifact
 from .ir.locations import absolute_paths
 from .ir.resolved import ResolvedWorkflow, bind
-from .lang.nodes import OpaqueCwl
+from .lang.nodes import Value
+from .lang.values import read_value, write_value
 from .nextflow import render as io_nf
 from .nextflow.lower import NEXTFLOW as _NEXTFLOW_LOWERING
 from .nextflow.model import ExecutableNextflowWorkflow
-from .nextflow.tool import local_locations_as_paths
+from .nextflow.tool import local_paths
 from .runtime import realtime
 from .runtime.backends import Backend, CwltoolBackend, NextflowBackend, ToilBackend
 from .runtime.inputs import name_output_targets, output_target_inputs
@@ -47,7 +48,7 @@ class Target(Protocol[ModelT]):
         """The command-line flag that asks it to write without running, `--<option>`; None when it writes whenever
         it does not run."""
 
-    def run_values(self, view: ResolvedWorkflow) -> dict[str, OpaqueCwl]:
+    def run_values(self, view: ResolvedWorkflow) -> dict[str, Value]:
         """`view`'s root values as the target's runner reads them, before a relative path in them is made absolute:
         the rewrite that must come first, because it reads the path as written."""
 
@@ -74,10 +75,12 @@ class _Cwl:
     write_option = 'generate_cwl_workflow'
     takes_plain_cwl = True
 
-    def run_values(self, view: ResolvedWorkflow) -> dict[str, OpaqueCwl]:
+    def run_values(self, view: ResolvedWorkflow) -> dict[str, Value]:
         """Each output-target Directory a name for the run to create: a runner given an absolute path for a
         Directory would never create it."""
-        return name_output_targets(view.values, output_target_inputs(view))
+        values: dict[str, Value] = read_value(
+            name_output_targets(write_value(view.values), output_target_inputs(view)))
+        return values
 
     def lower(self, view: ResolvedWorkflow) -> Lowered[CompilationArtifact]:
         """The artifact tree emitted from the view, and `wic056` at each `when` that cannot give `true` or `false`."""
@@ -101,9 +104,9 @@ class _Nextflow:
     write_option = None
     takes_plain_cwl = False
 
-    def run_values(self, view: ResolvedWorkflow) -> dict[str, OpaqueCwl]:
+    def run_values(self, view: ResolvedWorkflow) -> dict[str, Value]:
         """Each local `location` a `path`, and no format: the model refuses a URI, which an absolute `location` is."""
-        values: dict[str, OpaqueCwl] = local_locations_as_paths(view.values)
+        values: dict[str, Value] = local_paths(view.values)
         return values
 
     def lower(self, view: ResolvedWorkflow) -> Lowered[ExecutableNextflowWorkflow]:

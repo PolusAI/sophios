@@ -7,21 +7,19 @@ from os import PathLike
 import posixpath
 from typing import Any
 
-from cwl_utils.parser import cwl_v1_2 as standard
-
 from ..ir.resolved import (
-    Crossing, InputRef, ResolvedStep, ResolvedWorkflow, StepInput, Through, ToolStep, boolean_problem, spelling,
+    Crossing, InputRef, ResolvedStep, ResolvedWorkflow, StepInput, Through, ToolStep, spelling,
 )
-from ..lang.cwl import LINK_MERGES, PICK_VALUES, SCATTER_METHODS, canonical, required
 from ..lang.error_codes import SophiosErrorCode
-from ..lang.subset import Expr, is_safe_subset_text, references
+from ..lang.subset import Expr, boolean_problem, is_safe_subset_text, references
+from ..lang.tools import BodyKind, Stream
+from ..lang.types import Array, Atom, Other, ScatterMethod, Type, Unknown, lists, quote, without_null
+from ..lang.values import FileValue, write_value
 from .model import PARAM_TYPES, gives_list, merge_of, text_stays_out, wildcard_problem
-from .support import FIELDS, consumed
 from .tool import (
-    _FEATURES, _Finding, _Tool, _Unsupported, _WORKFLOW_CONSUMED_FIELDS, _array_item_type, _declared_findings,
-    _default_value_findings, _identifier, _is_array_type, _iwdr_entries, _literal_text, _normalized_identifiers,
-    _output_capture, _phase1_value_matches, _qualifier, _referenced_names, _reported, _type_problem,
-    _unconsumed_field_findings, cwl_type_to_nf_qualifier, local_locations_as_paths,
+    _Finding, _Tool, _Unsupported, _declared_findings, _default_value_findings, _element, _identifier, _iwdr_entries,
+    _literal_text, _normalized_identifiers, _glob, _output_capture, _phase1_value_matches, _qualifier,
+    _referenced_names, _refusals, _reported, _stream_file, _type_problem, type_to_nf_qualifier, local_paths,
 )
 
 
@@ -61,17 +59,15 @@ class _Step:
 
 def _idioms(port: StepInput) -> set[str]:
     """The fixed step-input idioms a step input writes."""
-    return {name for name, written in (("default", port.has_default), ("linkMerge", port.link_merge is not None),
-                                       ("pickValue", port.pick_value is not None)) if written}
+    link_merge, pick_value = written_link(port)
+    return {name for name, written in (("default", port.has_default), ("linkMerge", link_merge is not None),
+                                       ("pickValue", pick_value is not None)) if written}
 
 
-_NULLABLE_FIELDS = frozenset({"linkMerge", "pickValue", "valueFrom"})
-
-
-def _record_fields(port: StepInput) -> set[str]:
-    """Every WorkflowStepInput field a step input writes besides its sources: a `linkMerge`, `pickValue` or
-    `valueFrom` written as null says nothing."""
-    return {name for name, value in port.written if value is not None or name not in _NULLABLE_FIELDS}
+def written_link(port: StepInput) -> tuple[Any, Any]:
+    """How a step input joins its sources and which value it picks, as it wrote them: a name the standard has, or
+    else the value left unread."""
+    return (port.merge.value if port.merge is not None else None, port.pick.value if port.pick is not None else None)
 
 
 def _wired(port: StepInput, sources: tuple[Through | Crossing, ...]) -> list[str] | None:
@@ -85,15 +81,15 @@ def _wired(port: StepInput, sources: tuple[Through | Crossing, ...]) -> list[str
     if any(isinstance(found, Crossing) for found in sources):
         return None
     if port.sources:
-        if _record_fields(port) - consumed(FIELDS["WorkflowStepInput"]):
+        if port.unread:
             return None
         return [spelling(found.ref) for found in sources if isinstance(found, Through)]
-    return [] if port.has_default and _record_fields(port) <= {"default", "label"} else None
+    return [] if port.has_default and not port.unread else None
 
 
 def _gives_non_null(port: StepInput) -> bool:
     """Whether a step input's idioms give a value that is not null whatever its sources: a pickValue or a default."""
-    return port.pick_value is not None or port.has_default
+    return port.pick is not None or port.has_default
 
 
 def _call_findings(workflow: ResolvedWorkflow) -> list[_Finding]:
@@ -116,8 +112,6 @@ def _call_findings(workflow: ResolvedWorkflow) -> list[_Finding]:
             found.append(_Finding(SophiosErrorCode.NF_SCATTERED_CALL, ".scatter",
                                   "scatter on a nested workflow step is deferred beyond this lowering; scattering a "
                                   "sub-DAG is not the single-process shape scatter supports"))
-        else:
-            found.extend(_scatter_method_alone(step))
         found.extend(_own_findings(step, path=""))
         for port in step.inputs:
             input_path = f".in.{port.name}"
@@ -132,13 +126,11 @@ def _call_findings(workflow: ResolvedWorkflow) -> list[_Finding]:
                 for name in merging
             )
             if port.expression is None:
-                found.extend(_unconsumed_field_findings(
-                    _record_fields(port) - _idioms(port), "WorkflowStepInput",
-                    path=input_path))
+                found.extend(_refusals(port.unread, path=input_path))
         found.extend(_own_findings(child, path=".run"))
         for declared in child.inputs:
             port_path = f".run.inputs.{declared.name}"
-            found.extend(_declared_findings(declared.declaration, "WorkflowInputParameter", path=port_path))
+            found.extend(_declared_findings(declared.declaration, path=port_path))
             # Inlining replaces a nested workflow's input with the calling step's binding, where CWL would apply the
             # input's default to a null one.
             if declared.declaration.has_default and not declared.declaration.shorthand:
@@ -146,8 +138,7 @@ def _call_findings(workflow: ResolvedWorkflow) -> list[_Finding]:
                                       "a nested workflow input's default is not supported: bind the input on the "
                                       "calling step"))
         for output in child.outputs:
-            found.extend(_declared_findings(output.declaration, "WorkflowOutputParameter",
-                                            path=f".run.outputs.{output.name}", source=output.source))
+            found.extend(_declared_findings(output.declaration, path=f".run.outputs.{output.name}"))
         findings.extend(replace(each, step=step) for each in found)
         findings.extend(_call_findings(child))
     return findings
@@ -165,11 +156,6 @@ def _carried(tool: ToolStep) -> frozenset[str]:
                          not isinstance(found, Through) or not isinstance(found.ref, InputRef) for found in sources)))
 
 
-def _lists(cwl_type: Any) -> bool:
-    """Whether a value of `cwl_type` is a list, null aside."""
-    return _is_array_type(required(cwl_type)[0])
-
-
 def _workflow_capability_findings(workflow: ResolvedWorkflow, steps: tuple[_Step, ...]) -> list[_Finding]:
     """Apply closed-world analysis to the workflow, its steps, and its boundary values."""
     findings = _own_findings(workflow, path="")
@@ -177,83 +163,54 @@ def _workflow_capability_findings(workflow: ResolvedWorkflow, steps: tuple[_Step
         _normalized_identifiers([port.name for port in workflow.inputs], context="workflow input")
     for given in workflow.inputs:
         input_path = f".inputs.{given.name}"
-        findings.extend(_declared_findings(given.declaration, "WorkflowInputParameter", path=input_path))
-        cwl_type = given.declaration.type.canonical
+        findings.extend(_declared_findings(given.declaration, path=input_path))
+        type_ = given.declaration.type
+        accepts_null = without_null(type_)[1]
         has_default = given.declaration.has_default and not given.declaration.shorthand
         if has_default:
-            findings.extend(_default_value_findings(cwl_type, given.declaration.default, path=input_path))
-        if not given.has_value and not has_default and not required(cwl_type)[1]:
+            findings.extend(_default_value_findings(type_, given.declaration.default, path=input_path))
+        if not given.has_value and not has_default and not accepts_null:
             findings.append(_Finding(SophiosErrorCode.NF_INPUT_WITHOUT_VALUE,
                             input_path, "required workflow input value is missing"))
-        if given.has_value and given.value is None and not required(cwl_type)[1]:
+        if given.has_value and given.value is None and not accepts_null:
             findings.append(_Finding(SophiosErrorCode.MISSING_REQUIRED_INPUT,
                             input_path, "explicit null input values are not valid for a required input"))
         elif given.has_value and given.value is None:
             # An explicit null on an optional input is only safe for specific consuming positions;
             # _absent_optional_findings analyzes each consuming step and port for that.
             pass
-        elif (problem := _type_problem(cwl_type)) is not None:
+        elif (problem := _type_problem(type_)) is not None:
             findings.append(_Finding(SophiosErrorCode.NF_TYPE, f"{input_path}.type", problem))
-        elif given.has_value and not _phase1_value_matches(cwl_type, local_locations_as_paths(given.value)):
+        elif given.has_value and not _phase1_value_matches(type_, local_paths(given.value)):
             findings.append(_Finding(SophiosErrorCode.NF_INPUT_VALUE,
                                      input_path, "supplied value does not match its supported CWL type"))
     with _reported(findings, ".outputs"):
         _normalized_identifiers([port.name for port in workflow.outputs], context="workflow output")
     for output in workflow.outputs:
-        findings.extend(_declared_findings(output.declaration, "WorkflowOutputParameter",
-                                           path=f".outputs.{output.name}", source=output.source))
+        findings.extend(_declared_findings(output.declaration, path=f".outputs.{output.name}"))
     with _reported(findings, ".steps"):
         _normalized_identifiers([step.node.name for step in steps], context="workflow step", variable=False)
     for step in steps:
         found = _own_findings(step.node, path="")
-        found.extend(_scatter_method_alone(step.node))
         for port in step.node.inputs:
             if port.expression is None:
-                found.extend(_unconsumed_field_findings(_record_fields(port),
-                                                        "WorkflowStepInput", path=f".in.{port.name}"))
+                found.extend(_refusals(port.unread, path=f".in.{port.name}"))
         findings.extend(replace(each, step=step.node) for each in found)
     return findings
 
 
-def _scatter_method_alone(node: ResolvedStep) -> list[_Finding]:
-    """A step that names a scatterMethod and no scatter."""
-    if node.scatter is None and "scatterMethod" in dict(node.fields):
-        return [_Finding(SophiosErrorCode.NF_SCATTER_METHOD_ALONE, ".scatterMethod",
-                         "scatterMethod without scatter is not executable")]
-    return []
-
-
 def _own_findings(node: ResolvedWorkflow | ResolvedStep, *, path: str) -> list[_Finding]:
-    """A workflow's or a step's own fields, requirements and hints: a field the lowering does not consume; a feature
-    class is consumed in a requirement or hint, an inert declaration with no field of its own; every other class is
+    """A workflow's or a step's own fields, requirements and hints that the lowering does not consume: the refusal of
+    each key nothing reads, and of each field a feature class it declares writes beyond its own; every other class is
     inherited by each tool step inside, and judged there as written on its tool."""
-    fields = {*dict(node.fields), *("hints" if requirement.hint else "requirements"
-                                    for requirement in node.requirements)}
-    if isinstance(node, ResolvedWorkflow):
-        owner, kept = "Workflow", _WORKFLOW_CONSUMED_FIELDS
-        fields |= {"class", "cwlVersion", "inputs", "outputs", "steps"}
-    else:
-        owner, kept = "WorkflowStep", None
-        fields |= {"id", "in", "out", "run"}
-        if node.scatter is not None:
-            fields.add("scatter")
-            if node.scatter.method is not None:
-                fields.add("scatterMethod")
-        if node.condition is not None:
-            fields.add("when")
-    findings = _unconsumed_field_findings(fields, owner, path=path, kept=kept)
-    findings += [_Finding(SophiosErrorCode.NF_INVALID_CWL,
-                          f"{path}.{section}", f"CWL {owner} {section} must be a mapping or list")
-                 for section in ("requirements", "hints") if section in dict(node.fields)]
-    for requirement in node.requirements:
-        if requirement.cls in _FEATURES:
-            findings.extend(_unconsumed_field_findings(
-                requirement.body if isinstance(requirement.body, Mapping) else {}, requirement.cls,
-                path=f"{path}.{'hints' if requirement.hint else 'requirements'}.{requirement.cls}"))
+    findings = _refusals(node.unread, path=path)
+    for requirement in node.needs:
+        findings.extend(_refusals(
+            requirement.unread, path=f"{path}.{'hints' if requirement.hint else 'requirements'}.{requirement.name}"))
     return findings
 
 
-def _scatter_source_findings(step: _Step, raw_name: str, source_types: Mapping[str, Any]) -> list[_Finding]:
+def _scatter_source_findings(step: _Step, raw_name: str, source_types: Mapping[str, Type]) -> list[_Finding]:
     """Require one array-typed workflow-input source for the scattered input.
 
     The compiler has already refused an element type the scattered port cannot take.
@@ -268,10 +225,11 @@ def _scatter_source_findings(step: _Step, raw_name: str, source_types: Mapping[s
     if "/" in source:
         # A process-output source is reported once, by the cross-step pass.
         return []
-    declared = source_types.get(source)
-    if not _lists(declared):
+    declared = source_types.get(source, Other())
+    if not lists(declared):
         return [_Finding(SophiosErrorCode.NF_SCATTER_SOURCE, f".in.{raw_name}",
-                         f"a scattered input needs an array-typed source; {source!r} declares {declared!r}", step.node)]
+                         f"a scattered input needs an array-typed source; {source!r} declares {quote(declared)!r}",
+                         step.node)]
     return []
 
 
@@ -288,9 +246,9 @@ def _scatter_findings(workflow: ResolvedWorkflow, steps: tuple[_Step, ...]) -> l
                                      "scatter must name one input, as a string or a non-empty list", step.node))
             continue
         method = step.node.scatter.method
-        if method is not None and method not in SCATTER_METHODS:
+        if isinstance(method, Unknown):
             findings.append(_Finding(SophiosErrorCode.NF_INVALID_CWL,
-                            ".scatterMethod", f"unsupported CWL scatter method {method!r}", step.node))
+                            ".scatterMethod", f"unsupported CWL scatter method {method.value!r}", step.node))
         elif len(names) > 1 and method is None:
             # At exactly one scattered input all three methods coincide, so a method is required to decide two or
             # more; each of them is an approved multi-input lowering (design §6, Topology).
@@ -307,7 +265,7 @@ def _scatter_findings(workflow: ResolvedWorkflow, steps: tuple[_Step, ...]) -> l
                                          f".in.{raw_name}", "scatter over an input the step's tool does not "
                                          "declare is not supported", step.node))
                 continue
-            if _lists(canonical(port.type_)):
+            if lists(port.type):
                 findings.append(
                     _Finding(SophiosErrorCode.NF_SCATTER_OF_ARRAYS,
                              ".scatter", f"scattered input {raw_name!r} is array-typed; scattering over an "
@@ -337,7 +295,7 @@ def _scatter_edge_findings(steps: tuple[_Step, ...]) -> list[_Finding]:
                 if scatter is not None:
                     # Every scatter is indexed, so its outputs are gathered once, in invocation order (design §6,
                     # Topology, Gather).
-                    if scatter.method == "nested_crossproduct" and len(set(scatter.inputs)) > 1:
+                    if scatter.method is ScatterMethod.nested_crossproduct and len(set(scatter.inputs)) > 1:
                         findings.append(_Finding(SophiosErrorCode.NF_NESTED_RESULT, f".in.{port.name}",
                                                  f"{source!r} is a nested_crossproduct result, which reaches "
                                                  "workflow outputs only", step.node))
@@ -360,34 +318,34 @@ def _step_input_findings(workflow: ResolvedWorkflow, steps: tuple[_Step, ...]) -
     def is_array(source: str) -> bool:
         if "/" in source:  # a scatter's outputs are gathered
             return (producer := by_name.get(source.rsplit("/", maxsplit=1)[0])) is not None and bool(producer.scattered)
-        return _is_array_type(required(source_types.get(source))[0])
+        return lists(source_types.get(source, Other()))
 
     def may_be_null(source: str) -> bool:
         if "/" in source:
             producer = by_name.get(source.rsplit("/", maxsplit=1)[0])
             return producer is not None and producer.node.condition is not None
-        return required(source_types.get(source))[1]
+        return without_null(source_types.get(source, Other()))[1]
 
     def problems(step: _Step, port: StepInput, sources: list[str]) -> Iterator[tuple[SophiosErrorCode, str, str]]:
         """Each problem of one step input: its code, the field of the input it is at, and the reason."""
-        link_merge, pick_value = port.link_merge, port.pick_value
+        link_merge, pick_value = written_link(port)
         if len(sources) < 2 and not _idioms(port):
             return
         if port.name in step.scattered:
             yield SophiosErrorCode.NF_SCATTER_SOURCE, "", "a scattered input takes its one source as it is"
             return
         merges = merge_of(link_merge, sources)
-        if link_merge is not None and link_merge not in LINK_MERGES:
+        if isinstance(port.merge, Unknown):
             yield SophiosErrorCode.NF_INVALID_CWL, ".linkMerge", f"unsupported linkMerge {link_merge!r}"
             return
-        if pick_value is not None and pick_value not in PICK_VALUES:
+        if isinstance(port.pick, Unknown):
             yield SophiosErrorCode.NF_INVALID_CWL, ".pickValue", f"unsupported pickValue {pick_value!r}"
             return
         if pick_value is not None and merges is None:
             yield (SophiosErrorCode.NF_JOIN, ".pickValue",
                    "pickValue picks from a list; one source with no linkMerge is not one")
         # A step-only input has no declaration: its type is what it delivers.
-        declared_type = canonical(step.tool.inputs[port.name].type_) if port.declared is not None else port.type
+        declared_type = step.tool.inputs[port.name].type if port.declared is not None else port.type
         if port.has_default:
             if port.declared is None and _parameter_type(declared_type) not in PARAM_TYPES:
                 yield (SophiosErrorCode.NF_DEFAULT, ".default",
@@ -396,11 +354,11 @@ def _step_input_findings(workflow: ResolvedWorkflow, steps: tuple[_Step, ...]) -
             elif sources and merges is not None:
                 yield (SophiosErrorCode.NF_JOIN, ".default",
                        "a default never applies beside a linkMerge or a pickValue: the joined value is not null")
-            elif required(declared_type)[0] in ("File", "Directory"):
+            elif without_null(declared_type)[0] in (Atom.FILE, Atom.DIRECTORY):
                 yield (SophiosErrorCode.NF_DEFAULT, ".default", "a step-input default of a File or Directory input "
                        "is not supported; give the path as a workflow input")
-            elif port.default is None or isinstance(port.default, (Mapping, list)) or not _phase1_value_matches(
-                    declared_type, port.default):
+            elif port.default is None or isinstance(port.default, list) \
+                    or not _phase1_value_matches(declared_type, port.default):
                 yield (SophiosErrorCode.NF_DEFAULT, ".default",
                        "the Nextflow target supports a JSON scalar default of the tool input's type")
         # A default is a JSON scalar, so it never sits beside an array source of its type.
@@ -415,21 +373,21 @@ def _step_input_findings(workflow: ResolvedWorkflow, steps: tuple[_Step, ...]) -
             yield (SophiosErrorCode.NF_JOIN, "", f"{nullable[0]!r} may be null, and a joined list has no lowering of "
                    "a null element; pick from it with pickValue")
         gives = gives_list(pick_value)
-        if merges is not None and port.declared is not None and gives != _lists(declared_type):
+        if merges is not None and port.declared is not None and gives != lists(declared_type):
             yield (SophiosErrorCode.NF_JOIN, "", f"the step input gives {'a list' if gives else 'one value'}, "
-                   f"but its tool input declares {declared_type!r}")
+                   f"but its tool input declares {quote(declared_type)!r}")
 
     return [_Finding(code, f".in.{port.name}{field}", text, step.node)
             for step in steps for port, sources in step.wired() for code, field, text in problems(step, port, sources)]
 
 
-def _source_types(workflow: ResolvedWorkflow, steps: tuple[_Step, ...]) -> dict[str, Any]:
-    """Every wireable source name, and the CWL type it carries: a workflow input's as declared, a tool output's as its
+def _source_types(workflow: ResolvedWorkflow, steps: tuple[_Step, ...]) -> dict[str, Type]:
+    """Every wireable source name, and the type it carries: a workflow input's as declared, a tool output's as its
     tool declares it."""
-    types: dict[str, Any] = {port.name: port.declaration.type.canonical for port in workflow.inputs}
+    types: dict[str, Type] = {port.name: port.declaration.type for port in workflow.inputs}
     for step in steps:
         for raw_port, port in step.tool.outputs.items():
-            types[f"{step.node.name}/{raw_port}"] = canonical(port.type_)
+            types[f"{step.node.name}/{raw_port}"] = port.type
     return types
 
 
@@ -457,9 +415,9 @@ def _safe_absence_names(tool: _Tool) -> set[str] | None:
         unconditional_names = {
             _identifier(raw_name)
             for raw_name, port in tool.inputs.items()
-            if (binding := port.inputBinding) is not None
-            and (binding.shellQuote is False
-                 or binding.valueFrom is not None and required(canonical(port.type_))[0] != "boolean")
+            if (binding := port.placement) is not None
+            and (binding.shell_quote is False
+                 or binding.value_from is not None and without_null(port.type)[0] is not Atom.BOOLEAN)
         }
     except ValueError:
         return None
@@ -481,7 +439,7 @@ def _absent_optional_findings(workflow: ResolvedWorkflow, steps: tuple[_Step, ..
             continue
         bound = {port.name: (port, sources) for port, sources in step.bound()}
         for raw_name, declared in step.tool.inputs.items():
-            optional = required(canonical(declared.type_))[1]
+            optional = without_null(declared.type)[1]
             if raw_name not in bound:
                 # Unwired inputs are only a missingness problem when optional without a default; required unwired
                 # inputs fail compilation.
@@ -502,7 +460,7 @@ def _absent_optional_findings(workflow: ResolvedWorkflow, steps: tuple[_Step, ..
                 continue
             if optional:
                 # Every input's name normalizes where its absence is judged.
-                if _qualifier(canonical(declared.type_)) == "val" and _identifier(raw_name) in safe_names:
+                if _qualifier(declared.type) == "val" and _identifier(raw_name) in safe_names:
                     continue
                 findings.append(_Finding(
                     SophiosErrorCode.NF_ABSENT_OPTIONAL,
@@ -526,11 +484,11 @@ def _conditional_consumer_findings(steps: tuple[_Step, ...]) -> list[_Finding]:
     findings: list[_Finding] = []
     conditional: set[str] = set()
     for step in steps:
-        if step.node.condition is None or not isinstance(step.tool.process, standard.CommandLineTool):
+        if step.node.condition is None or step.tool.body.kind is not BodyKind.COMMAND:
             continue
         conditional.add(step.node.name)
         for raw_name, produced in step.tool.outputs.items():
-            if _is_array_type(required(canonical(produced.type_))[0]):
+            if lists(produced.type):
                 findings.append(_Finding(SophiosErrorCode.NF_SKIPPED_OUTPUT, f".out.{raw_name}", "array-typed output "
                                          "of a conditional step is not supported outside scatter", step.node))
     if not conditional:
@@ -543,13 +501,12 @@ def _conditional_consumer_findings(steps: tuple[_Step, ...]) -> list[_Finding]:
             declared = step.tool.inputs.get(port.name)
             if declared is None:
                 continue
-            cwl_type = canonical(declared.type_)
-            if _is_array_type(required(cwl_type)[0]):
+            if lists(declared.type):
                 problem = ("an array-typed port cannot consume a conditional step's output; [] already stands for a "
                            "skipped step")
-            elif _qualifier(cwl_type) == "path":
+            elif _qualifier(declared.type) == "path":
                 problem = "a path consumer of a possibly-null conditional step output is not supported"
-            elif not required(cwl_type)[1]:
+            elif not without_null(declared.type)[1]:
                 problem = "a non-optional port cannot consume a possibly-null conditional step output"
             elif (safe_names := _safe_absence_names(step.tool)) is None or _identifier(port.name) in safe_names:
                 continue
@@ -588,7 +545,10 @@ def _literal_outputs(tool: _Tool) -> dict[str, str]:
     """Each output whose glob is one literal name, with no wildcard, by port."""
     names: dict[str, str] = {}
     for raw_port, port in tool.outputs.items():
-        glob = _literal_text(port.outputBinding.glob) if port.outputBinding is not None else None
+        capture = port.capture
+        written = _stream_file(tool.body, capture.stream) if capture is not None and capture.stream is not None \
+            else _glob(capture)
+        glob = _literal_text(written)
         if glob and not wildcard_problem(glob):
             names[raw_port] = glob
     return names
@@ -610,7 +570,7 @@ def _staged_names(step: _Step, produced: Mapping[str, str]) -> dict[str, tuple[s
     staged: dict[str, tuple[set[str], bool]] = {}
     for raw_name, port in step.tool.inputs.items():
         try:
-            if cwl_type_to_nf_qualifier(canonical(port.type_)) != "path":
+            if type_to_nf_qualifier(port.type) != "path":
                 continue
             entry = entries.get(_identifier(raw_name))
         except ValueError:  # an array, or what another finding names
@@ -642,14 +602,14 @@ def _staged_name_findings(steps: tuple[_Step, ...]) -> list[_Finding]:
                 for step in steps for raw_port, glob in _literal_outputs(step.tool).items()}
     findings: list[_Finding] = []
     for step in steps:
-        if not isinstance(step.tool.process, standard.CommandLineTool):
+        if step.tool.body.kind is not BodyKind.COMMAND:
             continue
         path = ".run"
         # Each name once, where it is first written: a stdout's glob names it again.
         written: dict[str, tuple[str, str, bool]] = {}
         for where, name, collects in [
-            *((f"{path}.{stream}", _literal_text(getattr(step.tool.process, stream)), False)
-              for stream in ("stdout", "stderr")),
+            *((f"{path}.{stream.value}", _literal_text(_stream_file(step.tool.body, stream)), False)
+              for stream in Stream),
             *((f"{path}.outputs.{port}.outputBinding.glob", glob, True)
               for port, glob in _literal_outputs(step.tool).items()),
         ]:
@@ -681,11 +641,11 @@ def _condition_value(step: _Step) -> Expr:
     """
     condition = step.node.condition
     assert condition is not None
-    when = condition.written
+    when = step.node.quoted_when
     if not isinstance(when, str):
         raise _WhenError(SophiosErrorCode.NF_INVALID_CWL,
                          f"{when!r} must be a safe JavaScript subset $( … ) expression")
-    if (problem := boolean_problem(condition)) is not None:
+    if (problem := boolean_problem(when, condition.type)) is not None:
         raise _WhenError(SophiosErrorCode.WHEN_NOT_BOOLEAN, problem)
     if not is_safe_subset_text(when):
         raise _WhenError(SophiosErrorCode.NF_WHEN_SUBSET,
@@ -702,19 +662,20 @@ def _condition_value(step: _Step) -> Expr:
     return condition.expr
 
 
-def _parameter_type(cwl_type: Any) -> str | None:
+def _parameter_type(type_: Type) -> str | None:
     """`_param_type`, or None for a type no parameter has."""
     try:
-        return _param_type(cwl_type)
+        return _param_type(type_)
     except ValueError:
         return None
 
 
-def _param_type(cwl_type: Any) -> str:
+def _param_type(type_: Type) -> str:
     """The declared type the generated pipeline checks a parameter's value against, as `PARAM_TYPES` spells it."""
-    inner, optional = required(cwl_type)
-    base = f"{required(_array_item_type(inner))[0]}[]" if _is_array_type(inner) else inner
-    return f"{base}?" if optional else str(base)
+    inner, accepts_null = without_null(type_)
+    named = without_null(_element(inner))[0] if isinstance(inner, Array) else inner
+    base = named.value if isinstance(named, Atom) else str(quote(named))
+    return f"{base}{'[]' * isinstance(inner, Array)}{'?' * accepts_null}"
 
 
 def _json_value(value: Any) -> Any:
@@ -725,6 +686,8 @@ def _json_value(value: Any) -> Any:
             return [_json_value(item) for item in items]
         case PathLike() as path:
             return str(path)
+        case FileValue():
+            return _json_value(write_value(value))
         case _:
             return copy.deepcopy(value)
 
@@ -735,7 +698,7 @@ def _workflow_params(workflow: ResolvedWorkflow) -> dict[str, Any]:
     params: dict[str, Any] = {}
     for port in workflow.inputs:
         if port.has_value:
-            value = local_locations_as_paths(port.value)
+            value = local_paths(port.value)
         elif port.declaration.has_default and not port.declaration.shorthand:
             value = port.declaration.default
         else:

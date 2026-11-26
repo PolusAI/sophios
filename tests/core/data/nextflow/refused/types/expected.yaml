@@ -1,0 +1,13 @@
+why: An enum and a record are types the target does not lower, at a tool's port and at the workflow input made of it; the
+  refusal quotes the type as the tool's loader and the workflow wrote it.
+roots:
+  enum.wic:
+  - [nf-s048, pick, null]
+  - [nf-s014, pick, 'pick~mode']
+  - [nf-s048, pick, 'pick~mode']
+  - [wic012, pick, 'enum.cwl: inputs.mode']
+  record.wic:
+  - [nf-s048, pair, null]
+  - [nf-s014, pair, 'pair~pair']
+  - [nf-s048, pair, 'pair~pair']
+  - [wic012, pair, 'record.cwl: inputs.pair']

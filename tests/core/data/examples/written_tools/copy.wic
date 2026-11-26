@@ -1,0 +1,4 @@
+command: cat {source}
+inputs: {source: File}
+outputs: {text: stdout}
+stdout: copy.txt

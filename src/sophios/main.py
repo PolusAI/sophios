@@ -20,8 +20,8 @@ from . import cli, compiler, config, drawing, plugins, targets
 from .cwl import post_compile as pc
 from .runtime import backends, local, preflight, realtime, setup
 from .runtime.runners import RunSettings
-from .ir import frontdoor
-from .ir.frontdoor import SourceBundle
+from . import frontdoor
+from .frontdoor import SourceBundle
 from .wic_types import Json, Tools
 
 

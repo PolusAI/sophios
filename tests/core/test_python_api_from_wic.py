@@ -14,7 +14,7 @@ from hypothesis import given
 import sophios.compiler
 from sophios.api.python import _workflow_runtime
 from sophios.api.python.workflow import SophiosError, SophiosErrorCode, Workflow
-from sophios.ir.frontdoor import bundle_from_disk
+from sophios.frontdoor import bundle_from_disk
 from sophios.ir.artifacts import CompilationResult
 from sophios.cwl.post_compile import inline_artifact_runs
 from sophios.runtime.inputs import output_target_inputs, runner_job_inputs

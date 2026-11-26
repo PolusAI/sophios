@@ -35,13 +35,13 @@ workflow.wic:
     workflow.cwl:
       steps:
       - {id: a_number, when: $(inputs.n + 1)}
-      - {id: a_string, in: {s: {source: s}}}
+      - {id: a_string, in: {s: s}}
       - {id: a_null}
       - {id: an_element, scatter: [n]}
       - {id: text, when: 'true'}
       - {id: a_template}
       - {id: child, when: $(inputs.n)}
-      - {id: a_boolean, when: '  $(inputs.n > 0)  '}
+      - {id: a_boolean, when: $(inputs.n > 0)}
       - {id: outside_the_subset}
       - {id: a_body}
       - {id: not_a_string, when: true}

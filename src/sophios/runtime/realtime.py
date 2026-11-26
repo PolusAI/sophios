@@ -27,8 +27,8 @@ import yaml
 
 from .. import compiler
 from ..cwl import emit, io
-from ..ir import frontdoor
-from ..ir.artifacts import CompilationArtifact
+from .. import frontdoor
+from ..cwl.artifacts import CompilationArtifact
 from ..ir.realtime import Declaration
 from ..lang.diagnostics import Diagnostic, Severity, SophiosError
 from ..lang.error_codes import SophiosErrorCode

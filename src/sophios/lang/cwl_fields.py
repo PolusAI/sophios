@@ -1,24 +1,26 @@
-"""What the Nextflow backend does with each field it considers: one table.
+"""The table of CWL fields: what a target that cannot read a field does with it, one row for each.
 
-Every row gives a field one of the three states of the design's closed-world
-contract (design_docs/sophios_nextflow_backend.md §3) and a one-line note.
+It is the CWL reader's: where the front door reads a CWL value, a field no node holds a value of is named in an
+`UnreadField` item that carries the refusal the table gives it, so a target refuses it by what the item says and
+looks nothing up. Every row gives a field one of the three states of the design's closed-world contract
+(design_docs/sophios_nextflow_backend.md §3) and a one-line note.
 
-LOWERED: a lowering consumes it.
+LOWERED: the Nextflow target lowers it.
 COMPILE_TIME: Sophios uses it while compiling; the Nextflow output carries nothing for it.
 REJECTED: a finding at the field, whose message is the row's note, and no artifacts.
 
 `FIELDS` is keyed by the `cwl_utils.parser.cwl_v1_2` class whose fields each part classifies, or by
 cwltool's extension class as a tool names it, such as `cwltool:CUDARequirement`.
-Capability analysis (`sophios.nextflow.lower`) consumes exactly the fields that are not rejected, and
 docs/nextflow.md renders this table (docs/conf.py). `tests/core/nextflow/test_support_table.py`
 holds `FIELDS` to the fields cwl_utils or cwltool declares and to Sophios's own `SUPPORT_MATRIX`.
 """
 from dataclasses import dataclass
 from enum import StrEnum
 from types import MappingProxyType
-from typing import Final, Mapping
+from typing import Final, Iterable, Mapping
 
-from ..lang.error_codes import SophiosErrorCode
+from .error_codes import SophiosErrorCode
+from .unread import UnreadField
 
 
 class State(StrEnum):
@@ -329,3 +331,59 @@ REQUIREMENT_CLASSES: Final[Mapping[str, Mapping[str, Row]]] = MappingProxyType({
 def consumed(rows: Mapping[str, Row]) -> frozenset[str]:
     """The names a row lowers or uses at compile time: every one but the rejected."""
     return frozenset(name for name, row in rows.items() if row.state is not State.REJECTED)
+
+
+#: Keys a compiled CWL document carries beside its class's fields, and the one Sophios adds.
+_DOCUMENT_KEYS: Final = frozenset({'$namespaces', '$schemas', 'sophios:lang_version'})
+
+
+def _refusal(owner: str, name: str, rows: Mapping[str, Row], otherwise: tuple[SophiosErrorCode, str]) -> UnreadField:
+    """The item for the field `name` of `owner`: its row's code and note, or `otherwise` where the row has none."""
+    row = rows.get(name)
+    code, note = (row.code, row.note) if row is not None and row.code is not None else otherwise
+    return UnreadField(name, owner, code, note)
+
+
+def unread(owner: str, names: Iterable[str]) -> tuple[UnreadField, ...]:
+    """The fields among `names`, written in a CWL `owner`, that earn a refusal: each one its table rejects or holds no
+    row of, by name; a class the table has no fields of earns none."""
+    rows = FIELDS.get(owner)
+    if rows is None:
+        return ()
+    kept = consumed(rows) | (_DOCUMENT_KEYS if owner == 'Workflow' else frozenset())
+    return tuple(
+        _refusal(owner, name, rows, (SophiosErrorCode.NF_FIELD, f'{name} is not consumed by the Nextflow lowering'))
+        for name in sorted(set(names) - kept))
+
+
+def invalid_section(owner: str, section: str) -> UnreadField:
+    """The item for a `requirements` or `hints` of `owner` that is neither a mapping nor a list."""
+    return UnreadField(section, owner, SophiosErrorCode.NF_INVALID_CWL,
+                       f'CWL {owner} {section} must be a mapping or list')
+
+
+def refused_class(name: str) -> UnreadField | None:
+    """The item for a requirement or hint of the class `name` on a tool, or None where the table lowers it."""
+    rows = REQUIREMENT_CLASSES['CommandLineTool']
+    if name in consumed(rows):
+        return None
+    return _refusal('CommandLineTool', name, rows,
+                    (SophiosErrorCode.NF_REQUIREMENT, f'{name} is not supported by the Nextflow target'))
+
+
+_PERMANENT_PROJECTION_REASON = (
+    "a produced file's directory under this backend is the Nextflow task work "
+    "directory, which Nextflow owns, may relocate, and may clean up; it is never the "
+    "directory the CWL author described, so this projection is refused rather than "
+    "deferred"
+)
+
+#: By the text of an `outputEval`, why the Nextflow target refuses it by name rather than as a form it has no row for.
+OUTPUT_EVAL_REFUSALS: Final[Mapping[str, str]] = MappingProxyType({
+    '$(self[0].dirname)': _PERMANENT_PROJECTION_REASON,
+    '$(self[0].path)': _PERMANENT_PROJECTION_REASON,
+    '$(self[0].location)': 'a CWL location is a URI whose scheme the executable model does not represent',
+    '$(self[0].checksum)': 'computing a checksum is computation, not a projection',
+    '$(self[0].secondaryFiles)': 'secondary files have no approved lowering',
+    '$(self[0].format)': 'output format annotations have no approved lowering',
+})

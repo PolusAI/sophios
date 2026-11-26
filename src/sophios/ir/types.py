@@ -3,20 +3,22 @@
 Each names something the compiler already manipulates, so the checker can
 verify what it means rather than only what it computes. Frozen and slotted.
 """
-from copy import deepcopy
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import NewType, TypeAlias
 
-from ..lang.cwl import expand_shorthand, required
 from ..lang.diagnostics import Diagnostics
-from ..lang.nodes import GraphvizEntry, InputValue, OpaqueCwl
+from ..lang.needs import Inherited
+from ..lang.nodes import GraphvizEntry, InputValue, Value
 from ..lang.spans import SourceSpan
+from ..lang.subset import Guard
+from ..lang.types import BoundaryDeclaration, Merge, Pick, PortDeclaration, ScatterMethod, Type, Unknown
+from ..lang.unread import UnreadField
 
 
 class Direction(StrEnum):
     """Which side of a step a port is on; part of a port's identity because
-    CWL puts inputs and outputs in separate namespaces.
+    a tool's inputs and outputs are in separate namespaces.
     """
 
     INPUT = 'input'
@@ -112,81 +114,13 @@ class PortId:
 
 
 @dataclass(frozen=True, slots=True)
-class PortType:
-    """What a port carries. `declared` keeps the CWL verbatim, for Emit;
-    `canonical` is the one parse of it every other reader uses: CWL's `T?` and
-    `T[]` shorthand expanded, through array items and every union member, so
-    `string?[]` is an array of nullable strings and not a nullable array, and
-    `[File?, string]` accepts null in either spelling of that member.
-    `stdin`, `stdout` and `stderr` canonicalise to `File`.
-    """
-
-    declared: OpaqueCwl
-    canonical: OpaqueCwl = field(init=False)
-
-    def __post_init__(self) -> None:
-        """Parse `declared` once, here, so no port type exists unparsed."""
-        object.__setattr__(self, 'canonical', _canonical(deepcopy(self.declared)))
-
-    @property
-    def optional(self) -> bool:
-        """Whether the port accepts `null` itself, not merely in its items."""
-        return required(self.canonical)[1]
-
-
-def _canonical(raw: OpaqueCwl) -> OpaqueCwl:
-    """Expand `T?` and `T[]` wherever they are written, including inside a member."""
-    if raw in ('stdin', 'stdout', 'stderr'):
-        # A tool's own shorthand for "the stream, as a File". Only a
-        # CommandLineTool port may say it; a workflow boundary promoted from
-        # one must say `File`, which is what cwltool makes of it.
-        return 'File'
-    if isinstance(raw, str) and (layer := expand_shorthand(raw)) is not raw:
-        return _canonical(layer)
-    if isinstance(raw, dict) and raw.get('type') == 'array' and 'items' in raw:
-        return {**raw, 'items': _canonical(raw['items'])}
-    if isinstance(raw, list):
-        # A member's own shorthand, expanded: `null` once, first; no duplicates.
-        members: list[OpaqueCwl] = []
-        for item in raw:
-            expanded = _canonical(item)
-            for member in expanded if isinstance(expanded, list) else [expanded]:
-                if member not in members:
-                    members.append(member)
-        return ['null'] * ('null' in members) + [item for item in members if item != 'null']
-    return raw
-
-
-@dataclass(frozen=True, slots=True)
-class PortDeclaration:  # pylint: disable=too-many-instance-attributes
-    """The complete declaration of one process or workflow port. The fields
-    beside `type` preserve emission facts without inviting Link or Infer to
-    interpret arbitrary CWL; `has_default` distinguishes an authored
-    `default: null` from no default at all.
-    """
-
-    type: PortType
-    format: OpaqueCwl = None
-    has_format: bool = False
-    default: OpaqueCwl = None
-    has_default: bool = False
-    passthrough: tuple[tuple[str, OpaqueCwl], ...] = ()
-    shorthand: bool = False
-
-
-#: A `PortDeclaration` reduced to what a workflow boundary may state. Only
-#: `declarations.boundary_declaration` produces one.
-BoundaryDeclaration = NewType('BoundaryDeclaration', PortDeclaration)
-
-
-@dataclass(frozen=True, slots=True)
 class WorkflowPort:
-    """A port on the workflow boundary, including its CWL declaration."""
+    """A port on the workflow boundary, including its declaration."""
 
     name: PortName
     declaration: BoundaryDeclaration
     #: A resolved producer, or the authored text when Link could not resolve it.
-    output_source: 'StepOutputRef | OpaqueCwl' = None
+    output_source: 'StepOutputRef | Value' = None
     has_output_source: bool = False
     #: Where the port was written, when it was.
     span: SourceSpan | None = None
@@ -194,7 +128,7 @@ class WorkflowPort:
 
 @dataclass(frozen=True, slots=True)
 class StepOutputRef:
-    """An output of a step in the same document: CWL's `step/port`."""
+    """An output of a step in the same document: `step/port`."""
 
     step: StepId
     port: PortName
@@ -202,35 +136,38 @@ class StepOutputRef:
 
 @dataclass(frozen=True, slots=True)
 class Source:
-    """A step input bound to a workflow input or to a step's output.
-
-    `shorthand` is CWL's spelling choice and nothing more, the same
-    distinction `PortDeclaration.shorthand` records: `in: {x: src}` and
-    `in: {x: {source: src}}` mean one thing and are written two ways.
-    """
+    """A step input bound to a workflow input or to a step's output."""
 
     ref: PortName | StepOutputRef
-    shorthand: bool = False
 
 
 @dataclass(frozen=True, slots=True)
 class Expression:
-    """Raw CWL the document supplied for a binding, emitted verbatim."""
+    """Text the document supplied for a binding, which only the target that reads it interprets, emitted verbatim."""
 
     text: str
 
 
 @dataclass(frozen=True, slots=True)
-class Record:
-    """A step input spelled as CWL's WorkflowStepInput: its resolved sources, in
-    the authored order, and the other fields verbatim."""
+class Record:  # pylint: disable=too-many-instance-attributes
+    """A step input that says more than where its value comes from: its resolved sources, in the authored order,
+    what it means by them, and the fields no meaning holds, verbatim."""
 
     sources: tuple['PortName | StepOutputRef', ...]
-    fields: tuple[tuple[str, OpaqueCwl], ...]
+    passthrough: tuple[tuple[str, Value], ...]
+    merge: Merge | Unknown | None = None
+    pick: Pick | Unknown | None = None
+    #: Whether a `valueFrom` is written, and whether it is one that is not null.
+    computed: bool = False
+    computes: bool = False
+    default: Value = None
+    has_default: bool = False
+    #: The fields of `passthrough` a target that reads none of them must refuse, each with its refusal.
+    unread: tuple[UnreadField, ...] = ()
 
 
-#: What a step's `in:` entry can be: a closed set of the shapes CWL has a
-#: field for, distinct from the authored `InputValue` union.
+#: What a step's `in:` entry can be: a closed set of the shapes a target
+#: writes, distinct from the authored `InputValue` union.
 EmittedValue: TypeAlias = Source | Expression | Record
 
 
@@ -239,7 +176,7 @@ class Port:
     """One port of one step: its identity, its type, and where it was written."""
 
     id: PortId
-    type: PortType
+    type: Type
     declaration: PortDeclaration | None = None
     span: SourceSpan | None = None
 
@@ -255,8 +192,8 @@ class Edge:
     source: PortId
     sink: PortId
     span: SourceSpan | None = None
-    #: Whether Infer added it. An inferred edge was never authored, so it is emitted in shorthand; any other
-    #: stands for something the document itself said, and is not.
+    #: Whether Infer added it: an inferred edge was never authored, where any other stands for something the document
+    #: itself said.
     inferred: bool = False
 
 
@@ -273,7 +210,7 @@ class DeferredObligation:
 
 
 #: What a binding resolved to, or None when the value needs no producer -- a
-#: literal, a workflow parameter, a raw CWL reference. `Binding.value` says
+#: literal, a workflow parameter, a passthrough reference. `Binding.value` says
 #: which of those it is; this says where it comes from. A step-input record
 #: resolves to a tuple, what each `source` entry resolved to, in order: an edge,
 #: an obligation, or None for a workflow input relayed by name.
@@ -293,11 +230,19 @@ class Binding:
 
 
 @dataclass(frozen=True, slots=True)
+class Scatter:
+    """A step's scatter: the ports it runs once per element of, in the order written, and how it combines them. A
+    method the enum does not hold is an `Unknown`, for a target to refuse by name."""
+
+    ports: tuple[PortName, ...]
+    method: ScatterMethod | Unknown | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class StepNode:  # pylint: disable=too-many-instance-attributes
     """A step occurrence, with the ports it exposes and what its inputs bind
-    to. `interpreted` holds the CWL keys Sophios acts upon (including
-    `scatter`, `scatterMethod` and `when`, read verbatim by `emit`) and
-    `passthrough` the rest.
+    to. Its scatter and its condition are the two things the compiler reads of
+    what the author wrote beside it; `passthrough` holds the rest, opaque.
     """
 
     id: StepId
@@ -307,15 +252,21 @@ class StepNode:  # pylint: disable=too-many-instance-attributes
     inputs: tuple[Port, ...] = ()
     outputs: tuple[Port, ...] = ()
     bindings: tuple[Binding, ...] = ()
-    interpreted: tuple[tuple[str, OpaqueCwl], ...] = ()
-    passthrough: tuple[tuple[str, OpaqueCwl], ...] = ()
+    #: What the author wrote beside the step that the compiler does not read, in written order. A scatter method with
+    #: no scatter to hold it and a `when` the subset does not read are the first of them.
+    passthrough: tuple[tuple[str, Value], ...] = ()
     span: SourceSpan | None = None
-    #: The ports `interpreted['scatter']` names, resolved where it is read.
-    scatter_ports: tuple[PortName, ...] = ()
+    scatter: Scatter | None = None
+    guard: Guard | None = None
     inference_rules: tuple[tuple[str, str], ...] = ()
     synthesized: bool = False
     #: Its own `wic: steps:` entry's `graphviz:`, which only a drawing reads.
     graphviz: GraphvizEntry = GraphvizEntry()
+    #: What it asks of its tool: its own requirements, then its hints, as written.
+    needs: tuple[Inherited, ...] = ()
+    #: The other keys it wrote that nothing reads, each with its refusal, a scatter method with nothing to scatter
+    #: first.
+    unread: tuple[UnreadField, ...] = ()
 
 
 #: The three mappings the compiler threads through its recursion, as pairs
@@ -341,26 +292,27 @@ class WorkflowGraph:  # pylint: disable=too-many-instance-attributes
     explicit_edge_defs: EdgeMapping = ()
     input_mapping: InputMapping = ()
     output_mapping: PortMapping = ()
-    passthrough: tuple[tuple[str, OpaqueCwl], ...] = ()
+    passthrough: tuple[tuple[str, Value], ...] = ()
     span: SourceSpan | None = None
     name: str = ''
     workflow_inputs: tuple[WorkflowPort, ...] = ()
     workflow_outputs: tuple[WorkflowPort, ...] = ()
     #: Each value of the job input document, by the workflow input it is for.
-    job_bindings: tuple[tuple[PortName, OpaqueCwl], ...] = ()
-    namespaces: tuple[tuple[str, OpaqueCwl], ...] = ()
+    job_bindings: tuple[tuple[PortName, Value], ...] = ()
+    namespaces: tuple[tuple[str, Value], ...] = ()
     children: tuple['WorkflowGraph', ...] = ()
     #: Every edge Link or Infer placed here (not a binding's own resolution).
     linked_edges: tuple[Edge, ...] = ()
-    #: `input_mapping` names emitted in shorthand: a step's own lifted input,
-    #: recorded where Complete or Infer creates it (a name cannot tell).
-    shorthand_relays: tuple[PortName, ...] = ()
     #: False when the workflow is marked `wic: inlineable: false`, in its own file or
     #: at the call site (read from the child's sidecar once call-site keys are folded
     #: in): a caller asking to flatten its calls keeps this one nested.
     inlineable: bool = True
     #: The `wic: graphviz:` of its document, the calling step's entry merged in; only a drawing reads it.
     graphviz: GraphvizEntry = GraphvizEntry()
+    #: What it asks of the tools beneath it: its own requirements, then its hints, as written.
+    needs: tuple[Inherited, ...] = ()
+    #: The other keys it carries that nothing reads, each with its refusal.
+    unread: tuple[UnreadField, ...] = ()
 
     @property
     def edges(self) -> tuple[Edge, ...]:

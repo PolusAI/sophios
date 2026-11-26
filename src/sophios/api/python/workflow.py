@@ -12,9 +12,10 @@ from typing import Any, ClassVar, Final, Literal, overload
 
 import graphviz
 
-from sophios.lang import CwlRecord, EdgeRef, InputValue, OpaqueCwl, UnresolvedName, nodes
-from sophios.lang.compatibility import TypeRelation, reference_relation
+from sophios.lang import EdgeRef, InputRecord, InputValue, UnresolvedName, Value, nodes
+from sophios.lang.types import TypeRelation, relation
 from sophios.lang.cwl import Process, ScatterMethod
+from sophios.lang.types import read_type
 from sophios.lang.diagnostics import Diagnostic, SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
 from sophios.lang.names import check_written_name
@@ -138,7 +139,8 @@ def _python_api_types_match(parameter_type: Any, candidate_type: Any) -> bool:
     the compiler, which knows the scatter.
     """
     def proven_disjoint(sink_type: Any) -> bool:
-        return reference_relation(candidate_type, sink_type) is TypeRelation.DISJOINT
+        return relation(read_type(candidate_type),
+                        read_type(sink_type)) is TypeRelation.DISJOINT
 
     return not (proven_disjoint(parameter_type)
                 and proven_disjoint({'type': 'array', 'items': parameter_type}))
@@ -303,14 +305,14 @@ def _bind_record(process_self: Any, input_name: str, input_port: InputParameter,
     entries = record.sources()
     # Each source is its own edge, so each gets its own name. The `/` keeps it apart from
     # a plain link's `{input}{step}` name, such as that of the same input on a step `sink1`.
-    built = CwlRecord(tuple(
+    built = InputRecord(tuple(
         UnresolvedName(entry.name, span) if isinstance(entry, WorkflowInputReference)
         else EdgeRef(entry.ensure_anchor(f"{input_name}{process_self.process_name}/{position}"), span)
         for position, entry in enumerate(entries, start=1)), record.fields(), span)
     # A workflow input the record delivers as it is to a declared input carries that input's type,
     # as a plain binding's does. Otherwise the record gives it no type: one that nothing else types is `Any`.
     delivered = (_boundary_type(input_port.parameter_type)
-                 if built.delivers_its_source and input_port.declared else None)
+                 if not built.changes and input_port.declared else None)
     ports = tuple(entry.workflow._ensure_input(entry.name, parameter_type=delivered, implicit=entry.implicit)
                   if isinstance(entry, WorkflowInputReference) else entry for entry in entries)
     if record.value_from is None and input_port.declared:
@@ -684,7 +686,7 @@ class Step(_ProcessBase):
 
     def _as_workflow_step(self) -> nodes.Step:
         """Return this step as the language's step node, with `run:` naming its tool."""
-        interpreted: list[tuple[str, OpaqueCwl]] = [("run", _step_run(self.clt_path))]
+        interpreted: list[tuple[str, Value]] = [("run", _step_run(self.clt_path))]
         if self.scatter:
             interpreted += [("scatter", [input_port.name for input_port in self.scatter]),
                             ("scatterMethod", self.scatterMethod or ScatterMethod.dotproduct.value)]

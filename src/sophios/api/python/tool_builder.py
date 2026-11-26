@@ -59,11 +59,11 @@ from ._tool_builder_support import (
     _warn_raw_escape_hatch,
     ToolBuilderValidationError,
     ValidationResult,
+    command_line_tool,
     dump_wic_yaml,
     validate_cwl_document,
 )
 from ._utils import caller_span
-from ...lang.commandline import command_line_tool
 from ...lang.cwl import CWL_VERSION, declare_javascript
 from ...lang.diagnostics import SophiosError
 from ...lang.error_codes import SophiosErrorCode

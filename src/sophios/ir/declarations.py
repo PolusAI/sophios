@@ -1,100 +1,30 @@
-"""Normalize the declared part of CWL process interfaces into the IR."""
+"""Ranks, requiredness and boundary declarations of the ports of a process interface."""
 from collections.abc import Callable
-from copy import deepcopy
 from dataclasses import replace
-from typing import Final
 
-from ..lang.cwl import PICKS_ONE
-from ..lang.nodes import OpaqueCwl
-from .types import (BoundaryDeclaration, DerivedName, Direction, Port, PortDeclaration, PortName, PortType, StepNode,
-                    WorkflowGraph)
-
-#: What a workflow boundary port may state, by direction: the fields the CWL
-#: v1.2 schema gives `WorkflowOutputParameter` and `WorkflowInputParameter`.
-#: An allowlist, not a denylist, because a tool's port record is a superset of a
-#: workflow's (`inputBinding` is a `CommandLineBinding` on a tool and an
-#: `InputBinding` on a workflow input, so a promoted `position` fails
-#: validation; `outputBinding` has no workflow counterpart). Only an input may
-#: ask for `loadContents` and `loadListing`.
-_OUTPUT_BOUNDARY_FIELDS: Final = frozenset({'type', 'format', 'label', 'doc', 'secondaryFiles', 'streamable'})
-_INPUT_BOUNDARY_FIELDS: Final = _OUTPUT_BOUNDARY_FIELDS | {'loadContents', 'loadListing'}
-
-#: What makes a CWL string an expression.
-_EXPRESSION_MARKERS: Final = ('$(', '${')
-
-
-def port_declaration(raw: OpaqueCwl, *, output: bool = False) -> PortDeclaration:
-    """Preserve one CWL port declaration and expose its recognized fields."""
-    if not isinstance(raw, dict):
-        return PortDeclaration(PortType(deepcopy(raw)), shorthand=True)
-    reserved = {'type', 'format', 'default'}
-    if output:
-        reserved.add('outputSource')
-    return PortDeclaration(
-        type=PortType(deepcopy(raw.get('type'))),
-        format=deepcopy(raw.get('format')),
-        has_format='format' in raw,
-        default=deepcopy(raw.get('default')),
-        has_default='default' in raw,
-        passthrough=tuple((key, deepcopy(value)) for key, value in raw.items()
-                          if key not in reserved),
-    )
+from ..lang.types import BoundaryDeclaration, PortDeclaration, ScatterMethod, layered, optional
+from .types import DerivedName, Port, PortName, StepNode, WorkflowGraph
 
 
 def required(declaration: PortDeclaration | None) -> bool:
     """Whether a port must be given a value: no non-null default, not optional."""
     return declaration is None or not (
         (declaration.has_default and declaration.default is not None)
-        or declaration.type.optional)
+        or optional(declaration.type))
 
 
 def input_rank(step: StepNode, port: PortName) -> int:
     """The array layers a value feeding `port` of `step` carries: one per time
     `scatter:` names the port."""
-    return step.scatter_ports.count(port)
+    return step.scatter.ports.count(port) if step.scatter is not None else 0
 
 
 def output_rank(step: StepNode) -> int:
     """The array layers `step`'s scatter adds to each of its outputs: none
     without scatter, one per scattered port for `nested_crossproduct`, else one."""
-    if not step.scatter_ports:
+    if step.scatter is None or not step.scatter.ports:
         return 0
-    nested = dict(step.interpreted).get('scatterMethod') == 'nested_crossproduct'
-    return len(step.scatter_ports) if nested else 1
-
-
-def layered(port_type: PortType, rank: int) -> PortType:
-    """`port_type`'s canonical type inside `rank` array layers."""
-    raw = port_type.canonical
-    for _ in range(rank):
-        raw = {'type': 'array', 'items': raw}
-    return PortType(raw)
-
-
-def delivered(produced: OpaqueCwl, *, sources: int, link_merge: OpaqueCwl, pick_value: OpaqueCwl) -> OpaqueCwl:
-    """The type a step-input record delivers from sources of type `produced`: the list CWL's `linkMerge` makes of
-    them (a merged array stays flat; one source with no `linkMerge` is not wrapped) or, for a `pickValue` that picks
-    one value, one element of it. `Any` where a pick has no array to take an element of, so nothing is proved
-    against it."""
-    match produced:
-        case {'type': 'array'}:
-            flat = True
-        case _:
-            flat = False
-    merged: OpaqueCwl
-    if sources == 1 and link_merge is None:
-        merged = produced
-    elif link_merge == 'merge_flattened' and flat:
-        merged = produced
-    else:
-        merged = {'type': 'array', 'items': produced}
-    if pick_value not in PICKS_ONE:
-        return merged
-    match merged:
-        case {'type': 'array', 'items': items}:
-            return items
-        case _:
-            return 'Any'
+    return len(step.scatter.ports) if step.scatter.method is ScatterMethod.nested_crossproduct else 1
 
 
 def written_order(graph: WorkflowGraph) -> Callable[[PortName], tuple[int, int]]:
@@ -120,29 +50,6 @@ def produced_declaration(step: StepNode, port: Port) -> BoundaryDeclaration:
     return boundary_declaration(port, output_rank(step))
 
 
-def _evaluated(entry: OpaqueCwl) -> bool:
-    """Whether a `secondaryFiles` entry holds an expression, as its pattern or as its `required`."""
-    texts = entry.values() if isinstance(entry, dict) else (entry,)
-    return any(isinstance(text, str) and any(marker in text for marker in _EXPRESSION_MARKERS)
-               for text in texts)
-
-
-def _statable_secondary_files(value: OpaqueCwl) -> OpaqueCwl:
-    """The `secondaryFiles` entries a workflow boundary can state.
-
-    An expression is evaluated by the tool that wrote it, against that tool's
-    `inputs` and `expressionLib`. The boundary has neither, so it would
-    evaluate the expression differently or fail on it at run time; the tool
-    still declares the entry and keeps evaluating it.
-
-    A bare pattern or a single mapping is stated as a one-element list: it is
-    the same declaration, and cwltool's checker reads every entry as a mapping
-    at workflow level, so it fails on the bare form.
-    """
-    entries = value if isinstance(value, list) else [] if value is None else [value]
-    return [entry for entry in entries if not _evaluated(entry)]
-
-
 def boundary_declaration(port: Port, rank: int) -> BoundaryDeclaration:
     """`port` as a workflow boundary may state it, `rank` array layers deep.
 
@@ -157,19 +64,13 @@ def boundary_declaration(port: Port, rank: int) -> BoundaryDeclaration:
 
     Returns:
         BoundaryDeclaration: The port's declaration reduced to what a
-        workflow boundary may say, its type canonical and layered.
+        workflow boundary may say, its type layered.
     """
-    declaration = port.declaration or port_declaration(port.type.declared)
-    allowed = _INPUT_BOUNDARY_FIELDS if port.id.direction is Direction.INPUT else _OUTPUT_BOUNDARY_FIELDS
-    passthrough: list[tuple[str, OpaqueCwl]] = []
-    for name, value in declaration.passthrough:
-        if name not in allowed:
-            continue
-        if name == 'secondaryFiles':
-            value = _statable_secondary_files(value)
-            if not value:
-                continue
-        passthrough.append((name, deepcopy(value)))
-    return BoundaryDeclaration(replace(declaration, type=layered(declaration.type, rank),
-                                       passthrough=tuple(passthrough), shorthand=False,
-                                       default=None, has_default=False))
+    declaration = port.declaration or PortDeclaration(port.type, shorthand=True)
+    inside = ('items',) * rank
+    kept = {name for name, _ in declaration.kept}
+    return BoundaryDeclaration(replace(
+        declaration, type=layered(declaration.type, rank), passthrough=declaration.kept, shorthand=False, default=None,
+        has_default=False, unread=tuple(replace(item, path=(*inside, *item.path)) for item in declaration.unread),
+        refused=tuple(item for item in declaration.refused if item.name in kept),
+        schemas=declaration.schemas if rank == 0 else ()))

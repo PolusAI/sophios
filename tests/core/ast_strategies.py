@@ -6,10 +6,10 @@ from typing import Any, Final, cast
 from hypothesis import strategies as st
 from hypothesis.strategies import SearchStrategy
 
-from sophios.lang import (CwlRecord, Document, EdgeDef, EdgeRef, Grammar, InlineLiteral, InputValue,
-                          OpaqueCwl, OutputBinding, RawCwlRef, Step, StepKey, UnresolvedName, WicSidecar,
+from sophios.lang import (InputRecord, Document, EdgeDef, EdgeRef, Grammar, InlineLiteral, InputValue,
+                          Value, OutputBinding, PassthroughRef, Step, StepKey, UnresolvedName, WicSidecar,
                           parse, render, to_json)
-from sophios.lang.cwl import SCATTER_METHODS
+from sophios.lang.types import SCATTER_METHODS
 from sophios.lang.spans import SourceSpan
 from sophios.wic_types import Yaml
 
@@ -82,7 +82,7 @@ declared_inputs: Final[tuple[tuple[str, Any], ...]] = (
 )
 
 
-def _inputs_declared(referenced: set[str]) -> list[tuple[str, OpaqueCwl]]:
+def _inputs_declared(referenced: set[str]) -> list[tuple[str, Value]]:
     """Top-level `inputs:` declaring exactly what the steps referenced: an undeclared bare name is wic011."""
     types = dict(declared_inputs)
     return [('inputs', {name: {'type': types[name]} for name in sorted(referenced)})] if referenced else []
@@ -114,13 +114,13 @@ def _carried(declared: Any) -> Any:
 
 @st.composite
 def _record(draw: st.DrawFn, sink: Any, fits: list[str], references: tuple[str, ...],
-            referenced_inputs: set[str]) -> CwlRecord:
+            referenced_inputs: set[str]) -> InputRecord:
     """A step-input record: one source with a default, or, into an array, two merged (each fits, so merge_flattened
     keeps it one array)."""
     array = isinstance(sink, dict) and sink.get('type') == 'array'
     if len(fits) > 1 and array and draw(st.booleans()):
         pair = draw(st.permutations(fits))[:2]
-        return CwlRecord(tuple(EdgeRef(edge, _SPAN) for edge in pair), (('linkMerge', 'merge_flattened'),), _SPAN)
+        return InputRecord(tuple(EdgeRef(edge, _SPAN) for edge in pair), (('linkMerge', 'merge_flattened'),), _SPAN)
     source: EdgeRef | UnresolvedName
     if fits and (not references or draw(st.booleans())):
         source = EdgeRef(draw(st.sampled_from(fits)), _SPAN)
@@ -129,7 +129,7 @@ def _record(draw: st.DrawFn, sink: Any, fits: list[str], references: tuple[str, 
         referenced_inputs.add(declared)
         source = UnresolvedName(declared, _SPAN)
     default = draw(_literal_for(sink['items'] if array else sink))
-    return CwlRecord((source,), (('default', [default] if array else default),), _SPAN)
+    return InputRecord((source,), (('default', [default] if array else default),), _SPAN)
 
 
 @st.composite
@@ -141,14 +141,14 @@ def _step(draw: st.DrawFn, stem: str, defined_edges: list[tuple[str, Any]],
     names = sorted(inputs_of(stem))
 
     # Drawn first: a scattered input consumes an array, so a reference must carry one; a literal may be a scalar.
-    interpreted: list[tuple[str, OpaqueCwl]] = []
+    interpreted: list[tuple[str, Value]] = []
     ports: list[str] = []
     layers = 0
     match draw(st.sampled_from([None, 'scatter', 'when'] if names else [None, 'when'])):
         case 'scatter':
             count = draw(st.sampled_from(range(1, min(3, len(names)) + 1)))
             ports = draw(st.permutations(names))[:count]
-            scattered: list[OpaqueCwl] = list(ports)
+            scattered: list[Value] = list(ports)
             interpreted.append(('scatter', scattered))
             # Required by the spec over two or more ports; optional over one.
             method = draw(st.sampled_from(_SCATTER_METHODS) if len(ports) > 1
@@ -198,7 +198,7 @@ def _step(draw: st.DrawFn, stem: str, defined_edges: list[tuple[str, Any]],
                 declared = draw(st.sampled_from(references))
                 referenced_inputs.add(declared)
                 bindings.append((name, UnresolvedName(declared, _SPAN) if form == 'unresolved'
-                                 else RawCwlRef(declared, _SPAN)))
+                                 else PassthroughRef(declared, _SPAN)))
             case 'record':
                 bindings.append((name, draw(_record(sink(name), fits, references, referenced_inputs))))
             case _:
@@ -207,7 +207,7 @@ def _step(draw: st.DrawFn, stem: str, defined_edges: list[tuple[str, Any]],
     # Inference refuses an input inferred from an output another input of the step reads (wic055), so a step that
     # reads an edge binds every required input.
     if any(isinstance(source, EdgeRef) for _, value in bindings
-           for source in (value.sources if isinstance(value, CwlRecord) else (value,))):
+           for source in (value.sources if isinstance(value, InputRecord) else (value,))):
         bindings += [(name, literal(name)) for name in required_inputs_of(stem) if name not in chosen]
 
     # `bool(...)` around the left operand of `and draw(...)`: mypy otherwise types draw's result from that operand.
@@ -224,7 +224,7 @@ def _step(draw: st.DrawFn, stem: str, defined_edges: list[tuple[str, Any]],
             else:
                 outs.append(OutputBinding(out_name, None, _SPAN))
 
-    passthrough: list[tuple[str, OpaqueCwl]] = []
+    passthrough: list[tuple[str, Value]] = []
     if draw(st.booleans()):
         passthrough.append((draw(st.sampled_from(['label', 'doc'])), draw(st.text('abc ', max_size=6))))
 
@@ -250,7 +250,7 @@ def documents(draw: st.DrawFn) -> Document:  # pylint: disable=too-many-locals
     if bool(steps) and draw(st.booleans()):
         body = draw(st.sampled_from(sorted(SUBWORKFLOW_BODIES)))
         call: tuple[tuple[str, InputValue], ...] = ()
-        scatter: tuple[tuple[str, OpaqueCwl], ...] = ()
+        scatter: tuple[tuple[str, Value], ...] = ()
         if 'inputs' in SUBWORKFLOW_BODIES[body]:
             call = (('label', InlineLiteral(draw(_literal_for('string')), _SPAN)),)
             if draw(st.booleans()):
@@ -260,7 +260,7 @@ def documents(draw: st.DrawFn) -> Document:  # pylint: disable=too-many-locals
 
     sidecar = None
     if draw(st.booleans()):
-        entries: tuple[tuple[str, OpaqueCwl], ...] = (('graphviz', {'label': draw(edge_names)}),)
+        entries: tuple[tuple[str, Value], ...] = (('graphviz', {'label': draw(edge_names)}),)
         nested: tuple[tuple[StepKey, WicSidecar], ...] = ()
         if bool(steps) and draw(st.booleans()):
             first = steps[0].id
@@ -328,7 +328,7 @@ _SCATTERABLE_STRING_INPUTS: Final[tuple[tuple[str, str], ...]] = (
 def _scattering_step(draw: st.DrawFn) -> Step:
     """One tool step forced to scatter over a correctly array-valued input."""
     stem, name = draw(st.sampled_from(_SCATTERABLE_STRING_INPUTS))
-    literal = cast(OpaqueCwl, draw(st.lists(
+    literal = cast(Value, draw(st.lists(
         st.text('abcxyz_.', min_size=1, max_size=8), min_size=1, max_size=3)))
     return Step(id=stem, inputs=((name, InlineLiteral(literal, _SPAN)),),
                 interpreted=(('scatter', [name]),), span=_SPAN)

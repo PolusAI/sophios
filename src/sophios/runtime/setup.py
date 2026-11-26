@@ -15,7 +15,7 @@ import tempfile
 from .. import plugins
 from ..cwl import io as cwl_io
 from . import preflight, realtime
-from ..ir.artifacts import CompilationArtifact
+from ..cwl.artifacts import CompilationArtifact
 from ..ir.resolved import ResolvedWorkflow
 from ..lang.diagnostics import Diagnostic
 from .runners import RunSettings

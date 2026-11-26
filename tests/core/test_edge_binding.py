@@ -77,7 +77,8 @@ def test_an_edge_reference_names_one_earlier_definition(case: Yaml) -> None:
         sources = [[index, key, made[value['wic_alias']]] for index, step in enumerate(case['steps'])
                    for key, value in step.get('in', {}).items() if 'wic_alias' in value]
         for index, key, source in sources + case.get('sources', []):
-            assert compiled['steps'][index]['in'][key]['source'] == source
+            written = compiled['steps'][index]['in'][key]
+            assert (written['source'] if isinstance(written, dict) else written) == source
     assert [found.code.value for found in raised] == case['codes']
     assert all(case.get('says', '') in found.message for found in raised)
     if 'port' in case:

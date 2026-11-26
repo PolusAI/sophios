@@ -9,13 +9,13 @@ from typing import Any, Final
 import pytest
 
 from sophios.ir.resolve import RegistrySnapshot, resolve
-from sophios.lang import EdgeRef, InlineLiteral, RawCwlRef, UnresolvedName, parse
+from sophios.lang import EdgeRef, InlineLiteral, PassthroughRef, UnresolvedName, parse
 
 from .cases import DATA, diagnostic, match
 from .helpers import stated
 from .synthetic_tools import SYNTHETIC_NS, SYNTHETIC_TOOLS
 
-_PAYLOAD: Final = {InlineLiteral: 'value', EdgeRef: 'name', RawCwlRef: 'expression', UnresolvedName: 'name'}
+_PAYLOAD: Final = {InlineLiteral: 'value', EdgeRef: 'name', PassthroughRef: 'expression', UnresolvedName: 'name'}
 
 
 def _resolved(case: Path) -> Any:

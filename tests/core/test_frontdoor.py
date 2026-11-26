@@ -11,8 +11,9 @@ import yaml
 from sophios.api.python.workflow import Step as ApiStep, Workflow as ApiWorkflow
 from sophios.compiler import CompileSettings, compile_source
 from sophios.cwl.io import write_artifacts_to_disk
-from sophios.ir.artifacts import CompilationArtifact, CompilationResult
-from sophios.ir.frontdoor import SourceBundle, bundle_from_disk, bundle_from_source
+from sophios.ir.artifacts import CompilationResult
+from sophios.cwl.artifacts import CompilationArtifact
+from sophios.frontdoor import SourceBundle, bundle_from_disk, bundle_from_source
 from sophios.ir.pipeline import front_end
 from sophios.ir.resolve import RegistryKey, RegistrySnapshot
 from sophios.lang import (

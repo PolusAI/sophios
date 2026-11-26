@@ -17,7 +17,7 @@ examples/scripts/tool_builder_workflow.py:
     steps:
     - {id: emit_text}
     - id: read_text
-      in: {text_file: {source: emit_text/text_file}}
+      in: {text_file: emit_text/text_file}
       run: {outputs: [{id: result, type: string,
                        outputBinding: {glob: stdout.txt, loadContents: true, outputEval: '$(self[0].contents)'}}]}
     outputs: {result: {type: string, outputSource: read_text/result}}
@@ -28,7 +28,7 @@ examples/scripts/count_words.py:
     steps:
     - {id: touch}
     - {id: append}
-    - {id: word_count, in: {exact: {text: {source: append/file}}}, run: {baseCommand: [wc, -w], stdout: counts.txt}}
+    - {id: word_count, in: {exact: {text: append/file}}, run: {baseCommand: [wc, -w], stdout: counts.txt}}
 examples/scripts/ichnaea_compact.py:
   why: with a basepath the compute service requires the outputs folder, relative to it; the output folder is a name
   call: main

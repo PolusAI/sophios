@@ -10,7 +10,7 @@ import yaml
 
 from sophios.compiler import CompileSettings, compile_source, cwl_notes, resolved_view
 from sophios.cwl.io import write_artifacts_to_disk
-from sophios.ir.frontdoor import bundle_from_disk
+from sophios.frontdoor import bundle_from_disk
 from sophios.ir.refusals import NotLowered
 from sophios.ir.resolved import bind
 from sophios.lang.diagnostics import SophiosError

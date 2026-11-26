@@ -9,8 +9,9 @@ from ruamel.yaml import YAML as _RuamelYAML
 from ruamel.yaml.nodes import ScalarNode as _RuamelScalarNode
 
 from .. import auto_gen_header
-from ..ir.artifacts import CompilationArtifact
+from .artifacts import CompilationArtifact
 from ..ir.locations import absolute_paths
+from ..lang.values import read_value, write_value
 from ..lang.diagnostics import SophiosError
 from ..lang.error_codes import SophiosErrorCode
 from ..runtime.inputs import EmptyDirectory, directory_literal, runner_job_inputs
@@ -97,8 +98,8 @@ def write_artifacts_to_disk(artifact: CompilationArtifact, path: Path, inputs_fi
     (`runtime.inputs.output_target_inputs`) is a name for the run to create, so it is read as one first and
     written as the empty directory the runner creates, in the form `empty_directory` gives.
     """
-    inputs = absolute_paths(runner_job_inputs(read_inputs_file(inputs_file), output_targets),
-                            Path(inputs_file).absolute().parent) if inputs_file else {}
+    inputs = write_value(absolute_paths(read_value(runner_job_inputs(read_inputs_file(inputs_file), output_targets)),
+                                        Path(inputs_file).absolute().parent)) if inputs_file else {}
     path.mkdir(parents=True, exist_ok=True)
     job = runner_job_inputs({**artifact.job_inputs, **inputs}, output_targets, empty_directory)
     (path / f'{artifact.name}_inputs.yml').write_text(

@@ -11,27 +11,27 @@ import datetime
 import difflib
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass, replace
 from typing import Any, Final
 
-from ..lang.nodes import CwlRecord, InlineLiteral, OpaqueCwl, UnresolvedName
+from ..lang.nodes import InlineLiteral, InputRecord, UnresolvedName, Value
 from ..lang.diagnostics import Locator, SophiosError
 from ..lang.spans import SourceSpan
 from ..lang.error_codes import SophiosErrorCode
+from ..lang.types import (Array, Atom, BoundaryDeclaration, Other, PortDeclaration, Type, Union, optional, spell,
+                          typed)
+from ..lang.values import FileKind, FileValue, Location, read_value, write_value
 from .declarations import feeding_declaration, input_rank, produced_declaration
 from .names import Names, authored_path
 from .types import (
     AuthoredName,
-    BoundaryDeclaration,
     DerivedName,
     Direction,
     Port,
-    PortDeclaration,
     PortId,
     PortName,
-    PortType,
     StepNode,
     StepOutputRef,
     WorkflowGraph,
@@ -84,9 +84,8 @@ def _lift_values(graph: WorkflowGraph) -> WorkflowGraph:
     workflow_inputs = list(graph.workflow_inputs)
     job_bindings = list(graph.job_bindings)
     input_mapping = list(graph.input_mapping)
-    shorthand_relays = list(graph.shorthand_relays)
 
-    def lift(step: StepNode, port: Port, value: OpaqueCwl, span: SourceSpan | None) -> DerivedName:
+    def lift(step: StepNode, port: Port, value: Value, span: SourceSpan | None) -> None:
         name = DerivedName(step.id, port.id.port)
         declaration = feeding_declaration(step, port)
         workflow_inputs.append(WorkflowPort(name, declaration))
@@ -94,28 +93,28 @@ def _lift_values(graph: WorkflowGraph) -> WorkflowGraph:
             port.id.port, declaration, value, scatter_rank=input_rank(step, port.id.port), span=span,
             locator=Locator(step.id.name, step.id.index, '/'.join(authored_path(port.id.port))))))
         input_mapping.append((name, (port.id,)))
-        return name
 
     for step in graph.steps:
         child = graph.child(step.id)
         bound = {binding.sink.port for binding in step.bindings}
         jobs = dict(child.job_bindings) if child is not None else {}
-        shorthand_relays += [lift(step, port, jobs[port.id.port], step.span) for port in step.inputs
-                             if port.id.port in jobs and port.id.port not in bound]
+        for port in step.inputs:
+            if port.id.port in jobs and port.id.port not in bound:
+                lift(step, port, jobs[port.id.port], step.span)
     for step in graph.steps:
         for binding in step.bindings:
             port = next(port for port in step.inputs if port.id == binding.sink)
             value = binding.value
-            for source in value.sources if isinstance(value, CwlRecord) else (value,):
+            for source in value.sources if isinstance(value, InputRecord) else (value,):
                 if isinstance(source, UnresolvedName):
                     _merge_boundary_documentation(workflow_inputs, AuthoredName(source.name), port.declaration)
             if isinstance(value, InlineLiteral):
                 lift(step, port, value.value, value.span)
     return replace(graph, workflow_inputs=tuple(workflow_inputs), job_bindings=tuple(job_bindings),
-                   input_mapping=tuple(input_mapping), shorthand_relays=tuple(shorthand_relays))
+                   input_mapping=tuple(input_mapping))
 
 
-def _produced_type(graph: WorkflowGraph, port_id: PortId) -> PortType:
+def _produced_type(graph: WorkflowGraph, port_id: PortId) -> Type:
     """The boundary type the output `port_id` produces, scatter layers included.
 
     `port_id` is a step of `graph`: Link has not yet redirected an output into
@@ -156,7 +155,7 @@ def _materialize_outputs(graph: WorkflowGraph) -> WorkflowGraph:
     outputs = []
     for output in graph.workflow_outputs:
         producer = resolved.get(output.name)
-        if output.declaration.type.declared is None:
+        if not typed(output.declaration.type):
             if producer is None:
                 raise _untyped_output(graph, output)
             output = replace(output, declaration=BoundaryDeclaration(replace(
@@ -211,8 +210,8 @@ def _as_text(value: Any) -> Any:
 
 
 # pylint: disable-next=too-many-arguments,too-many-positional-arguments
-def coerce_job_value(name: PortName, declaration: PortDeclaration, value: OpaqueCwl, *, scatter_rank: int = 0,
-                     span: SourceSpan | None = None, locator: Locator | None = None) -> OpaqueCwl:
+def coerce_job_value(name: PortName, declaration: PortDeclaration, value: Value, *, scatter_rank: int = 0,
+                     span: SourceSpan | None = None, locator: Locator | None = None) -> Value:
     """`value` in the one plain-JSON form a job document holds for `declaration`.
 
     A projection: a value already in that form (a lifted child job value, an
@@ -229,56 +228,55 @@ def coerce_job_value(name: PortName, declaration: PortDeclaration, value: Opaque
     that made nesting exponential. `span` and `locator` say where the value was
     written, for the diagnostic.
     """
-    value = _plain(value)
+    value = read_value(_plain(value))
     if value is None:
-        if declaration.type.optional:
+        if optional(declaration.type):
             return None
         raise SophiosError.error(SophiosErrorCode.MISSING_REQUIRED_INPUT,
-                                 f'Required input of type {declaration.type.declared} '
+                                 f'Required input of type {spell(declaration.type)} '
                                  'was not provided.', span=span, locator=locator)
     if scatter_rank and not isinstance(value, list):
         raise SophiosError.error(
             SophiosErrorCode.LITERAL_TYPE_MISMATCH,
             f'Input {str(name)!r} is scattered, so its literal must be a list of values to scatter over; '
-            f'{value!r} is a scalar. Write `!ii [...]`, or drop the port from `scatter:`.',
+            f'{write_value(value)!r} is a scalar. Write `!ii [...]`, or drop the port from `scatter:`.',
             span=span, locator=locator)
     try:
-        return _coerce_type(declaration.type.canonical, value, declaration.format if declaration.has_format else None)
+        return _coerce_type(declaration.type, value, declaration.format if declaration.has_format else None)
     except _Mismatch as error:
         raise SophiosError.error(
             SophiosErrorCode.LITERAL_TYPE_MISMATCH,
-            f'Input {str(name)!r} is declared type {error.raw!r} but its literal {error.value!r} '
-            f'{_what_is_wrong(error.raw, error.value)}', span=span, locator=locator) from error
+            f'Input {str(name)!r} is declared type {error.raw!r} but its literal {write_value(error.value)!r} '
+            f'{_what_is_wrong(error.raw, write_value(error.value))}', span=span, locator=locator) from error
 
 
 @dataclass(eq=False)
 class _Mismatch(Exception):
     """A literal that is not of the scalar type its port declares."""
 
-    raw: OpaqueCwl
-    value: OpaqueCwl
+    raw: str
+    value: Value
 
 
-def _coerce_type(raw: OpaqueCwl, value: OpaqueCwl, fmt: OpaqueCwl) -> OpaqueCwl:
-    if isinstance(raw, list):
-        non_null = [item for item in raw if item != 'null']
-        arrays = [item for item in non_null if isinstance(item, dict)
-                  and item.get('type') == 'array']
-        scalars = [item for item in non_null if item not in arrays]
+def _coerce_type(type_: Type, value: Value, fmt: Value) -> Value:
+    if isinstance(type_, Union):
+        non_null = [member for member in type_.members if member is not Atom.NULL]
+        arrays = [member for member in non_null if isinstance(member, Array)]
+        scalars = [member for member in non_null if member not in arrays]
         if arrays and not isinstance(value, list):
             # A scalar that already is a scalar member's type takes that member;
             # any other scalar is wrapped into the array. `False` given to
             # `boolean | string[]` is the boolean, not `['false']`.
-            raw = _scalar_member_for(scalars, value) or arrays[0]
+            type_ = _scalar_member_for(scalars, value) or arrays[0]
         else:
-            raw = arrays[0] if arrays else (non_null[0] if len(non_null) == 1 else non_null)
-    if isinstance(raw, dict) and raw.get('type') == 'array':
+            type_ = arrays[0] if arrays else (non_null[0] if len(non_null) == 1 else Union(tuple(non_null)))
+    if isinstance(type_, Array):
         values = value if isinstance(value, list) else [value]
-        return [_coerce_type(raw.get('items'), item, fmt) for item in values]
-    return _coerce_scalar(raw, value, fmt)
+        return [_coerce_type(Other() if type_.items is None else type_.items, item, fmt) for item in values]
+    return _coerce_scalar(type_.value if isinstance(type_, Atom) else None, value, fmt)
 
 
-def _scalar_member_for(members: list[OpaqueCwl], value: OpaqueCwl) -> str | None:
+def _scalar_member_for(members: Sequence[Type], value: Value) -> Type | None:
     """The scalar member of a union whose type `value` already is, or None.
 
     A bool is a `boolean`, an int an `int` or `long`, a float a `float` or
@@ -287,13 +285,14 @@ def _scalar_member_for(members: list[OpaqueCwl], value: OpaqueCwl) -> str | None
     or record member is not a type name, so neither matches.
     """
     for member in members:
-        if isinstance(member, str) and (_PYTHON_TYPE.get(member) is type(value)
-                                        or isinstance(value, dict) and value.get('class') == member):
-            return member
+        name = member.value if isinstance(member, Atom) else member.name if isinstance(member, Other) else None
+        if isinstance(name, str) and (_PYTHON_TYPE.get(name) is type(value)
+                                      or isinstance(value, FileValue) and value.kind == name):
+            return member if name else None
     return None
 
 
-def _plain(value: OpaqueCwl) -> OpaqueCwl:
+def _plain(value: Value) -> Value:
     """Return `value` with any nested `InlineLiteral` replaced by its data."""
     if isinstance(value, InlineLiteral):
         return _plain(value.value)
@@ -304,32 +303,33 @@ def _plain(value: OpaqueCwl) -> OpaqueCwl:
     return value
 
 
-def _coerce_scalar(raw: OpaqueCwl, value: OpaqueCwl, fmt: OpaqueCwl) -> OpaqueCwl:
-    if raw in ('File', 'Directory'):
+def _coerce_scalar(kind: str | None, value: Value, fmt: Value) -> Value:
+    """`value` as the atom named `kind`; whatever else is not judged, and is taken as it is."""
+    if kind in ('File', 'Directory'):
         if isinstance(value, str):
-            value = {'class': raw, 'location': value}
-        elif not isinstance(value, dict) or value.get('class') != raw:
-            raise _Mismatch(raw, value)
+            value = FileValue(FileKind(kind), Location(value, True))
+        elif not isinstance(value, FileValue) or value.kind != kind:
+            raise _Mismatch(kind, value)
         result = deepcopy(value)
-        if raw == 'File' and fmt and 'format' not in result:
-            result['format'] = fmt
+        if kind == 'File' and fmt and not result.has_format:
+            result = replace(result, format=deepcopy(fmt), has_format=True)
         return result
-    if raw == 'string':
+    if kind == 'string':
         return _coerce_string(value)
-    if raw in ('int', 'long'):
+    if kind in ('int', 'long'):
         if isinstance(value, int) and not isinstance(value, bool):
             return value
-        raise _Mismatch(raw, value)
-    if raw in ('float', 'double'):
-        return _coerce_float(raw, value)
-    if raw == 'boolean':
+        raise _Mismatch(kind, value)
+    if kind in ('float', 'double'):
+        return _coerce_float(kind, value)
+    if kind == 'boolean':
         if isinstance(value, bool):
             return value
-        raise _Mismatch(raw, value)
+        raise _Mismatch(kind, value)
     return deepcopy(value)
 
 
-def _coerce_string(value: OpaqueCwl) -> str:
+def _coerce_string(value: Value) -> str:
     """The text of a scalar literal, or of a mapping or list as JSON.
 
     The one conversion kept besides an int into a float: `!ii 20` cannot be
@@ -338,9 +338,9 @@ def _coerce_string(value: OpaqueCwl) -> str:
     of it (`1.0e-5` is "1e-05"). YAML reads an unquoted 2024-01-15 as a date; its
     text is what the author wrote.
     """
-    if isinstance(value, (dict, list, bool)):
+    if isinstance(value, (dict, list, bool, FileValue)):
         try:
-            return json.dumps(value)
+            return json.dumps(write_value(value))
         except TypeError as exc:
             raise _Mismatch('string', value) from exc
     if isinstance(value, (str, int, float, datetime.date)):
@@ -348,7 +348,7 @@ def _coerce_string(value: OpaqueCwl) -> str:
     raise _Mismatch('string', value)
 
 
-def _coerce_float(raw: OpaqueCwl, value: OpaqueCwl) -> float:
+def _coerce_float(raw: str, value: Value) -> float:
     """A float as it is, or an int the float holds exactly."""
     if isinstance(value, float):
         return float(value)
@@ -374,7 +374,7 @@ _PYTHON_TYPE: Final[Mapping[object, type]] = {
     'int': int, 'long': int, 'float': float, 'double': float, 'boolean': bool, 'string': str}
 
 
-def _what_is_wrong(raw: OpaqueCwl, value: OpaqueCwl) -> str:
+def _what_is_wrong(raw: str, value: Value) -> str:
     """What `value` is, for a message; for a float port, the cause and the fix."""
     if raw in ('float', 'double'):
         if isinstance(value, int) and not isinstance(value, bool):

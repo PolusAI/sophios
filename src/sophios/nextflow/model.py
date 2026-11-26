@@ -10,8 +10,8 @@ import re
 from types import MappingProxyType
 from typing import Any, ClassVar, Final, Generic, TypeVar, get_args
 
-from ..lang.cwl import LINK_MERGES, PICK_VALUES, PICKS_ONE, SCATTER_METHODS
 from ..lang.subset import Expr, canonical, check, references, validate
+from ..lang.types import LINK_MERGES, PICK_VALUES, PICKS_ONE, SCATTER_METHODS, Atom, read_type, without_null
 from .expr import NF_FINITE_HELPER, NF_ROUND_HELPER
 from .symbols import NEXTFLOW_SCRIPT_DECLARED_NAMES, validate_nextflow_identifier
 
@@ -139,7 +139,7 @@ class _Model:
 
         Returns:
             dict[str, Any]: Each field by name. A segment, a command token and a connection state their ``kind``;
-                a process's condition and step-only inputs and a process connection's adapter are left out when
+                a process's condition, step-only inputs and files and a process connection's adapter are left out when
                 it has none.
         """
         item = {each.name: _thaw_json(getattr(self, each.name)) for each in fields(self)
@@ -518,6 +518,34 @@ class NfEntry(_Model):
             raise TypeError("entry copy must be a bool")
 
 
+#: The names a task may write a file of literal text under: a plain name, which the script writes without quoting.
+NF_FILE_NAME: Final = re.compile(r"[A-Za-z0-9._-]+")
+
+
+def file_name_problem(name: Any) -> str | None:
+    """Why `name` cannot name a file a task writes of literal text, or None."""
+    if (problem := entryname_problem(name)) is not None:
+        return problem
+    if not NF_FILE_NAME.fullmatch(name):
+        return f"a staged file's name is letters, digits, `.`, `_` and `-`, not {name!r}"
+    return None
+
+
+@dataclass(frozen=True, slots=True)
+class NfFile(_Model):
+    """A file the task writes into its directory before the command runs, made of literal text: a tool's own script,
+    which an ``InitialWorkDirRequirement`` entry of literal content stages."""
+
+    name: str
+    text: str
+
+    def __post_init__(self) -> None:
+        if (problem := file_name_problem(self.name)) is not None:
+            raise ValueError(problem)
+        if (problem := literal_problem(self.text)) is not None:
+            raise ValueError(problem)
+
+
 def linked_reference(template: NfTemplate | None) -> str | None:
     """The input whose staged name a path is, or lies inside: a reference to it, alone or before a path.
 
@@ -758,6 +786,7 @@ class NfProcess(_Model):
     resources: NfResources = field(default_factory=NfResources)
     condition: Expr | None = None
     step_only_inputs: Sequence[NfPort] = ()
+    files: Sequence[NfFile] = ()
 
     @property
     def all_inputs(self) -> tuple[NfPort, ...]:
@@ -775,6 +804,10 @@ class NfProcess(_Model):
         object.__setattr__(self, "inputs", inputs)
         object.__setattr__(self, "outputs", outputs)
         object.__setattr__(self, "step_only_inputs", step_only)
+        files = tuple(self.files)
+        if not all(isinstance(file, NfFile) for file in files):
+            raise TypeError("process files must contain only NfFile values")
+        object.__setattr__(self, "files", files)
         for kind, ports in (("input", (*inputs, *step_only)), ("output", outputs)):
             names = [port.name for port in ports]
             if len(names) != len(set(names)):
@@ -810,6 +843,9 @@ class NfProcess(_Model):
             )
         if len(entry_names) != len(set(entry_names)):
             raise ValueError(f"process {self.name!r} makes two InitialWorkDirRequirement entries with one literal name")
+        file_names = [file.name for file in files]
+        if len(file_names) != len(set(file_names)) or set(file_names) & set(entry_names):
+            raise ValueError(f"process {self.name!r} makes two staged files with one name")
         if staged := staged_write_problems(self.name, inputs, outputs, self.command):
             raise ValueError(staged[0])
         match self.container:
@@ -1025,7 +1061,7 @@ _KINDS: Final = {
     NfWorkflowOutputConnection: "workflow_output", NfStepInputConnection: "step_input",
 }
 #: The fields the JSON form leaves out when they hold nothing.
-_LEFT_OUT: Final = frozenset({(NfProcess, "condition"), (NfProcess, "step_only_inputs"),
+_LEFT_OUT: Final = frozenset({(NfProcess, "condition"), (NfProcess, "step_only_inputs"), (NfProcess, "files"),
                              (NfProcessConnection, "adapter")})
 
 
@@ -1128,8 +1164,11 @@ def topological_order(position: Mapping[str, int], connections: Iterable[NfConne
     return ordered
 
 
-#: The parameter types whose absent value has no lowering: no path parameter takes the `[]` sentinel.
-ABSENT_PATH_TYPES: Final = ("File?", "Directory?")
+def absent_path(declared: str) -> bool:
+    """Whether the parameter type `declared` is an optional File or Directory, whose absent value has no lowering: no
+    path parameter takes the `[]` sentinel."""
+    type_, accepts_null = without_null(read_type(declared))
+    return accepts_null and type_ in (Atom.FILE, Atom.DIRECTORY)
 
 
 def gives_list(pick_value: object) -> bool:
@@ -1153,7 +1192,7 @@ def absent_path_problems(params: Mapping[str, Any], param_types: Mapping[str, st
     absent value."""
     return [f"workflow input {name!r} is an absent optional {declared}, which has no lowering; give it a value"
             for name, declared in sorted(param_types.items())
-            if declared in ABSENT_PATH_TYPES and isinstance(params.get(name), (list, tuple)) and not params[name]]
+            if absent_path(declared) and isinstance(params.get(name), (list, tuple)) and not params[name]]
 
 
 def optional_output_problems(processes: Sequence[NfProcess], connections: Sequence["NfConnection"]) -> list[str]:

@@ -1,5 +1,5 @@
 """A step's `in:`, derived from the finished graph at Emit."""
-from ..lang.nodes import CwlRecord, EdgeRef, InlineLiteral, RawCwlRef, UnresolvedName
+from ..lang.nodes import EdgeRef, InlineLiteral, InputRecord, PassthroughRef, UnresolvedName
 from .types import (
     AuthoredName,
     DeferredObligation,
@@ -28,27 +28,26 @@ def step_inputs(graph: WorkflowGraph) -> dict[StepId, tuple[tuple[PortName, Emit
             match binding.value:
                 case InlineLiteral():
                     ins[step.id][binding.sink.port] = Source(DerivedName(step.id, binding.sink.port))
-                case RawCwlRef(expression=expression):
+                case PassthroughRef(expression=expression):
                     ins[step.id][binding.sink.port] = Expression(expression)
                 case UnresolvedName(name=text):
-                    ins[step.id][binding.sink.port] = Source(AuthoredName(text), shorthand=True)
+                    ins[step.id][binding.sink.port] = Source(AuthoredName(text))
 
-    def bind(edge: Edge, *, explicit: bool) -> None:
+    def bind(edge: Edge) -> None:
         sink = direct_sink(graph, edge.sink)
-        ins[sink.step][sink.port] = Source(direct_source(graph, edge.source), shorthand=not explicit)
+        ins[sink.step][sink.port] = Source(direct_source(graph, edge.source))
 
     for step in graph.steps:
         for binding in step.bindings:
             if isinstance(binding.resolution, Edge):
-                bind(binding.resolution, explicit=True)
+                bind(binding.resolution)
     for edge in graph.linked_edges:
-        bind(edge, explicit=not edge.inferred)
+        bind(edge)
 
-    shorthand_relays = set(graph.shorthand_relays)
     for name, sinks in graph.input_mapping:
         for sink in sinks:
             local = direct_sink(graph, sink)
-            ins[local.step].setdefault(local.port, Source(name, shorthand=name in shorthand_relays))
+            ins[local.step].setdefault(local.port, Source(name))
 
     _spell_records(graph, ins)
     return {step_id: tuple(values.items()) for step_id, values in ins.items()}
@@ -58,12 +57,13 @@ def _spell_records(graph: WorkflowGraph, ins: dict[StepId, dict[PortName, Emitte
     """Replace each record-bound entry of `ins` by the record, spelled from its own sources."""
     for step in graph.steps:
         for binding in step.bindings:
-            if isinstance(binding.value, CwlRecord) and isinstance(binding.resolution, tuple):
+            if isinstance(binding.value, InputRecord) and isinstance(binding.resolution, tuple):
                 relayed = ins[step.id].get(binding.sink.port)
                 ins[step.id][binding.sink.port] = Record(
                     tuple(_record_source(graph, source, item, relayed)
                           for source, item in zip(binding.value.sources, binding.resolution, strict=True)),
-                    binding.value.fields)
+                    binding.value.passthrough, binding.value.merge, binding.value.pick, binding.value.computed,
+                    binding.value.computes, binding.value.default, binding.value.has_default, binding.value.unread)
 
 
 def _record_source(graph: WorkflowGraph, source: EdgeRef | UnresolvedName,

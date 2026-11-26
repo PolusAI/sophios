@@ -26,8 +26,8 @@ compiled:
     touch_file: {}
     copy_file: {in: {source: touch_file/result}}
     emit: {}
-    copy_emitted: {in: {source: {source: emit/stdout}}}
-    count_bytes: {in: {source: {source: emit/stdout}}}
+    copy_emitted: {in: {source: emit/stdout}}
+    count_bytes: {in: {source: emit/stdout}}
     three_words: {}
     a_dollar: {}
     an_ampersand: {}
@@ -36,5 +36,5 @@ compiled:
     three_commands: {}
     print_bindings: {}
     produce: {}
-    read_once: {in: {source: {source: produce/result}}}
-    read_again: {in: {source: {source: produce/result}}}
+    read_once: {in: {source: produce/result}}
+    read_again: {in: {source: produce/result}}

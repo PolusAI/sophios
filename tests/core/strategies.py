@@ -33,7 +33,7 @@ scalar_payload_texts = st.sampled_from([
 #: elsewhere), so neither spelling is here.
 construct_payload_texts = st.sampled_from(['!* e', '!cwl a/b', '{wic_alias: n}'])
 
-#: Recursive payload text over the closed OpaqueCwl union: scalars, nested constructs, flow collections of both.
+#: Recursive payload text over the closed Value union: scalars, nested constructs, flow collections of both.
 _payload_collections = st.recursive(
     st.one_of(scalar_payload_texts, construct_payload_texts),
     lambda children: st.one_of(

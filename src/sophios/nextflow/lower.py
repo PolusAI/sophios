@@ -12,16 +12,18 @@ from ..ir.resolved import (
     Crossing, InputRef, ResolvedStep, ResolvedWorkflow, Through, WorkflowInput, WorkflowOutput, output_sources,
     output_unbound, spelling, tool_steps,
 )
-from ..ir.types import AuthoredName, PortDeclaration, PortType
-from ..lang.cwl import canonical, required
+from ..ir.types import AuthoredName
 from ..lang.diagnostics import Diagnostic, SophiosError
 from ..lang.error_codes import SophiosErrorCode
 from ..lang.subset import Expr
-from ..wic_types import Tool
+from ..lang.tools import ToolNode
+from ..lang.types import PortDeclaration, ScatterMethod, lists, read_type, without_null
+from ..lang.values import write_value
 from .analyze import (
     _Step, _WhenError, _absent_optional_findings, _call_findings, _carried, _condition_value,
-    _conditional_consumer_findings, _json_value, _lists, _param_type, _scatter_findings, _staged_name_findings,
+    _conditional_consumer_findings, _json_value, _param_type, _scatter_findings, _staged_name_findings,
     _step_input_findings, _text_capture_sink_findings, _wired, _workflow_capability_findings, _workflow_params,
+    written_link,
 )
 from .model import (
     ARRAY_REFERENCE, ExecutableNextflowWorkflow, NfConnection, NfPort, NfProcess, NfProcessConnection,
@@ -30,8 +32,9 @@ from .model import (
     reference_problems, staged_write_problems, topological_order, with_scalar_types,
 )
 from .tool import (
-    ABSENT_VAL_SENTINEL, _Finding, _Tool, _Unsupported, _command, _container, _cuda_notes, _identifier, _iwdr_entries,
-    _normalized_identifiers, _ports, _resources, _tool_capability_findings, local_locations_as_paths,
+    ABSENT_VAL_SENTINEL, _Finding, _Tool, _Unsupported, _command, _container, _cuda_notes, _generated_files,
+    _identifier, _iwdr_entries, _normalized_identifiers, _ports, _resources, _tool_capability_findings,
+    local_paths,
 )
 
 
@@ -45,18 +48,19 @@ def _process(step: _Step) -> tuple[NfProcess, Expr | None]:
     """A step's process, before the workflow types its inputs, and its condition, which needs them typed."""
     name = _identifier(step.node.name, variable=False)
     inputs = _ports(step.tool.inputs, outputs=False, entries=_iwdr_entries(step.tool))
-    outputs = _ports(step.tool.outputs, outputs=True)
+    outputs = _ports(step.tool.outputs, outputs=True, body=step.tool.body)
     command, container, resources = _command(step.tool), _container(step.tool), _resources(step.tool)
     condition = _condition_value(step) if step.node.condition is not None else None
     # A carried input is a val, staging nothing, and a list where what it delivers is one.
-    carried = [NfPort(_identifier(port.name), "val", is_array=_lists(port.type))
+    carried = [NfPort(_identifier(port.name), "val", is_array=lists(port.type))
                for port, _sources in step.bound() if port.declared is None]
     if broken := reference_problems(name, inputs, carried, outputs, command):
         rule, problem = broken[0]
         raise _Unsupported(_REFERENCE_CODES.get(rule, SophiosErrorCode.NF_INVALID_CWL), problem)
     if problems := staged_write_problems(name, inputs, outputs, command):
         raise _Unsupported(SophiosErrorCode.NF_WRITE_THROUGH_STAGED, problems[0])
-    return NfProcess(name, inputs, outputs, command, container, resources, step_only_inputs=carried), condition
+    return NfProcess(name, inputs, outputs, command, container, resources, step_only_inputs=carried,
+                     files=_generated_files(step.tool)), condition
 
 
 def _typed(processes: list[NfProcess], connections: list[NfConnection], param_types: Mapping[str, str],
@@ -109,7 +113,7 @@ def _step_connections(
         # Capability analysis already admitted only an approved method for two or more; at one scattered input the
         # three methods coincide.
         method = step.node.scatter.method if step.node.scatter is not None else None
-        scatter_method = str(method or "dotproduct") if len(scattered) > 1 else "dotproduct"
+        scatter_method = method.value if isinstance(method, ScatterMethod) and len(scattered) > 1 else "dotproduct"
         for port, found in step.bound():
             destination_port = _identifier(port.name)
             spelled = _wired(port, found)
@@ -129,8 +133,8 @@ def _step_connections(
                         (scatter_method if destination_port in scattered else "gather") if gathers else None,
                     ))
             # Capability analysis admitted only the step inputs the idioms lower.
-            link_merge = merge_of(port.link_merge, sources)
-            pick_value = port.pick_value
+            written_merge, pick_value = written_link(port)
+            link_merge = merge_of(written_merge, sources)
             if sources and port.has_default:
                 # The default takes the place of a null source: the first value that is not null.
                 sources.append(defaults[(process.name, destination_port)])
@@ -215,7 +219,7 @@ def _default_bindings(
                 continue
             elif declared.default is not None:
                 value = _json_value(declared.default)
-            elif required(canonical(declared.type_))[1]:
+            elif without_null(declared.type)[1]:
                 # Capability analysis has already proven this unwired, no-default optional input is a safe absence.
                 # _apply_absent_sentinel converts None to the runtime-proven [] representation once, at the end of
                 # the conversion.
@@ -224,7 +228,7 @@ def _default_bindings(
                 continue
             port_name = _identifier(raw_name)
             made.append((f"{step.node.name}~{raw_name}", process.name, port_name, value,
-                         _param_type(canonical(declared.type_))))
+                         _param_type(declared.type)))
     names = _normalized_identifiers([*workflow_inputs, *(name for name, *_ in made)], context="workflow parameter")
     return (
         [NfWorkflowInputConnection(names[name], process, port) for name, process, port, *_ in made],
@@ -236,7 +240,8 @@ def _default_bindings(
 def _workflow_param_types(workflow: ResolvedWorkflow) -> dict[str, str]:
     """Each workflow input's declared type, by parameter name."""
     names = _normalized_identifiers([port.name for port in workflow.inputs], context="workflow input")
-    return {names[port.name]: _param_type(port.declaration.type.canonical) for port in workflow.inputs}
+    return {names[port.name]: _param_type(port.declaration.type)
+            for port in workflow.inputs}
 
 
 def _apply_absent_sentinel(params: Mapping[str, Any]) -> dict[str, Any]:
@@ -268,7 +273,7 @@ class _Lowering:
         steps: list[_Step] = []
         refused: list[_Finding] = []
         for found in tool_steps(view):
-            if not isinstance(run := found.step.run, Tool):
+            if not isinstance(run := found.step.run, ToolNode):
                 continue
             try:
                 steps.append(_Step(found, _Tool.of(run, found.step.inherited), _carried(found)))
@@ -348,7 +353,7 @@ def _step_refusal(node: ResolvedStep, finding: _Finding, *, root: str) -> Refusa
         case "run":
             field_path = after.removeprefix(".")
             construct, text = Construct.TOOL, finding.text
-            tool_file = Path(node.run.run_path).name if isinstance(node.run, Tool) else node.name
+            tool_file = Path(node.run.run_path).name if isinstance(node.run, ToolNode) else node.name
             subject = f"{tool_file}: {field_path}" if field_path else tool_file
         case "requirements" | "hints":
             construct, subject, text = Construct.REQUIREMENT, name or None, _with_field(within, finding.text)
@@ -466,8 +471,8 @@ def _assembled(lowering: _Lowering, processes: list[NfProcess],
         name = f"_{name}"
     # A default is as authored; each value is held as a value written on a step is (design §4.2, Losses): coerced
     # to its declared type, so an int given for a float is the float, and a local location a path.
-    values = _apply_absent_sentinel({key: local_locations_as_paths(coerce_job_value(
-        AuthoredName(key), PortDeclaration(PortType(param_types[key])), value)) for key, value in params.items()})
+    values = _apply_absent_sentinel({key: write_value(local_paths(coerce_job_value(
+        AuthoredName(key), PortDeclaration(read_type(param_types[key])), value))) for key, value in params.items()})
     problems = {SophiosErrorCode.NF_SOURCE_NAMES_NO_STEP: endpoint_problems(processes, connections),
                 SophiosErrorCode.NF_ABSENT_OPTIONAL: absent_path_problems(values, param_types),
                 SophiosErrorCode.NF_OPTIONAL_OUTPUT: optional_output_problems(processes, connections)}
@@ -563,6 +568,6 @@ def nextflow_names(view: ResolvedWorkflow) -> dict[str, dict[str, str]]:
     """
     return {
         "processes": {_identifier(tool.step.name, variable=False): tool.step.name
-                      for tool in tool_steps(view) if isinstance(tool.step.run, Tool)},
+                      for tool in tool_steps(view) if isinstance(tool.step.run, ToolNode)},
         "outputs": {_identifier(port.name): port.name for port in view.outputs},
     }

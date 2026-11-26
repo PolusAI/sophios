@@ -9,11 +9,16 @@ from collections import Counter
 from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Final
 
-from ..lang import CWL_VERSION, Document, OpaqueCwl, ParseResult, Step, ToolDocument, UnresolvedName, parse
-from ..wic_types import StepId, Tool, Tools
-from .resolve import (RegistrySnapshot, inline_run_name, namespace_of, path_from_root, run_path_name, step_sidecar,
-                      version_pins)
+from .ir.resolve import (RegistrySnapshot, inline_run_name, namespace_of, path_from_root, run_path_name, step_sidecar,
+                         version_pins)
+from .lang import CWL_VERSION, Document, ParseResult, Step, ToolDocument, UnresolvedName, Value, parse
+from .wic_types import StepId, Tool, Tools
+
+
+#: What the door sets over an inline `run:` body: it is read as the one version Sophios writes, whatever it declares.
+_STAMP: Final = (('cwlVersion', CWL_VERSION),)
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,17 +62,17 @@ class _Reading:
         tool, and each port of the tool is an input of the workflow of its own name, so the job of the workflow is the
         job of the tool.
         """
-        if (tool := parsed.tool) is not None and tool.cwl is not None and not parsed.diagnostics.has_errors:
+        if (tool := parsed.tool) is not None and not parsed.diagnostics.has_errors:
             self.generated[StepId(name, 'global')] = _written_tool(self.root_directory / f'{name}.wic', tool)
             step = Step(name, tuple((port.name, UnresolvedName(port.name, port.span)) for port in tool.inputs),
                         interpreted=(('run', f'{name}.wic'),), span=tool.span)
-            inputs: OpaqueCwl = {port.name: {key: value for key, value in port.fields if key in ('type', 'default')}
-                                 for port in tool.inputs}
+            inputs: Value = {port.name: {key: value for key, value in port.fields if key in ('type', 'default')}
+                             for port in tool.inputs}
             parsed = ParseResult(Document((step,), passthrough=(('inputs', inputs),), span=tool.span, port_spans=tuple(
                 ('inputs', port.name, port.span) for port in tool.inputs if port.span)), parsed.diagnostics)
         registry = RegistrySnapshot.from_tools(
             {**self.tools, **self.generated}, workflows=self.workflows, directories=self.directories,
-            run_names=self.run_names, root_directory=self.root_directory)
+            run_names=self.run_names, root_directory=self.root_directory, stamp=_STAMP)
         return SourceBundle(parsed, name, registry, tuple(self.pins))
 
 
@@ -172,9 +177,9 @@ def _register_document(key: tuple[str, str], path: Path, reading: _Reading) -> N
 
 
 def _written_tool(path: Path, tool: ToolDocument, refused: bool = False) -> Tool:
-    """The tool the `.wic` at ``path`` says, with the CWL its parse lowered; a tool the parse refused is left to be
-    read, and refused, when a step runs it."""
-    return Tool(str(path)) if refused or tool.cwl is None else Tool(str(path), tool.cwl, written=tool)
+    """The tool the `.wic` at ``path`` says; a tool the parse refused is left to be read, and refused, when a step runs
+    it."""
+    return Tool(str(path)) if refused else Tool(str(path), written=tool)
 
 
 def _register_run(step: Step, namespace: str, document_dir: Path, reading: _Reading) -> bool:
@@ -193,14 +198,14 @@ def _register_run(step: Step, namespace: str, document_dir: Path, reading: _Read
     """
     run = dict(step.interpreted).get('run')
     if isinstance(run, dict):
-        name = inline_run_name(step.id, run, path_from_root(document_dir, reading.root_directory))
+        name = inline_run_name(step.id, run, path_from_root(document_dir, reading.root_directory), _STAMP)
         # Written in the document, so its relative references are read beside it, as the step's own file would be.
         beside = document_dir / Path(step.id).stem
-        if step.tool is not None and step.tool.cwl is not None:  # a tool written in `.wic`, lowered by the parse
+        if step.tool is not None:  # a tool written in `.wic`
             reading.generated[StepId(name, namespace)] = _written_tool(Path(f'{beside}.wic'), step.tool)
         else:
             reading.generated[StepId(name, namespace)] = Tool(
-                f'{beside}.cwl', {**deepcopy(run), 'cwlVersion': CWL_VERSION})
+                f'{beside}.cwl', {**deepcopy(run), **dict(_STAMP)})
         return True
     # Any other string names a registry entry, not a file.
     if not isinstance(run, str) or not run.endswith(('.cwl', '.wic')):

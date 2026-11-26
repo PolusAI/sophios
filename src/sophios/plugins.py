@@ -12,7 +12,7 @@ from .lang.diagnostics import SophiosError
 from .lang.error_codes import SophiosErrorCode
 from .runtime import preflight
 from .wic_types import DEFAULT_BASEPATH, Cwl, StepId, Tool, Tools, Json
-from .ir.artifacts import CompilationArtifact
+from .cwl.artifacts import CompilationArtifact
 
 
 def validate_cwl(cwl_path_str: str) -> None:

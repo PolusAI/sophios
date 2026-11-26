@@ -8,7 +8,7 @@ result carrying whatever was parsed plus whatever went wrong.
 import math
 import re
 from collections.abc import Callable
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from itertools import chain
 from types import MappingProxyType
 from typing import Any, Final, Iterator, Mapping, NoReturn, TypedDict, cast, final, get_args
@@ -20,28 +20,31 @@ from ..utils_yaml import KEY_OF_TAG, Key, Tag
 from .diagnostics import Diagnostics
 from .error_codes import SophiosErrorCode
 from .nodes import (
-    CwlRecord,
     Document,
     EdgeDef,
     EdgeRef,
     GraphvizEntry,
     InlineLiteral,
+    InputRecord,
     InputValue,
-    OpaqueCwl,
     OutputBinding,
+    PassthroughRef,
     Port,
-    RawCwlRef,
     Step,
     StepKey,
     ToolDocument,
     UnresolvedName,
+    Value,
     WicSidecar,
     Word,
 )
-from .commandline import command_line_tool
-from .cwl import CWL_VERSIONS, EXPRESSION, SCATTER_METHODS, SIZE
+from . import wic_tool
+from .cwl import CWL_VERSIONS, SIZE
 from .spans import SourceSpan
+from .subset import EXPRESSION
 from .support import STEP_INPUT_RECORD_KEYS
+from .types import SCATTER_METHODS
+from .values import read_value
 
 #: A `graphviz: style:` value: one or more styles, comma separated.
 _GRAPHVIZ_STYLE: Final = ('((,\\s*)*(dashed|dotted|solid|invis|bold|tapered|filled|striped|wedged'
@@ -407,8 +410,8 @@ class _Reader:
         return kept
 
     def _listed(self, key: str, node: yaml.nodes.Node,
-                named: list[tuple[str, yaml.nodes.Node, OpaqueCwl]] | None = None,
-                malformed: SophiosErrorCode = SophiosErrorCode.EXPECTED_MAPPING) -> OpaqueCwl:
+                named: list[tuple[str, yaml.nodes.Node, Value]] | None = None,
+                malformed: SophiosErrorCode = SophiosErrorCode.EXPECTED_MAPPING) -> Value:
         """Materialise `inputs`, `outputs`, `requirements` or `hints`, reading CWL's list form as its mapping form.
 
         CWL writes each as a mapping or as a list of entries named by `id:` (ports)
@@ -427,7 +430,7 @@ class _Reader:
                 isinstance(entry, dict) and entry.keys() & Grammar.IMPORT_KEYS for entry in value):
             return value
         named_by = Grammar.LISTED_BY[key]
-        mapping: dict[str, OpaqueCwl] = {}
+        mapping: dict[str, Value] = {}
         for entry_node, entry in zip(node.value, value, strict=True):
             name = entry.get(named_by) if isinstance(entry, dict) else None
             if not isinstance(entry, dict) or not isinstance(name, str):
@@ -454,7 +457,7 @@ class _Reader:
         steps: tuple[Step, ...] = ()
         as_mapping = False
         sidecar: WicSidecar | None = None
-        passthrough: list[tuple[str, OpaqueCwl]] = []
+        passthrough: list[tuple[str, Value]] = []
         port_spans: list[tuple[str, str, SourceSpan]] = []
         for _, key, value_node in self._entries(root.value, 'top-level key'):
             if key == 'steps':
@@ -469,7 +472,7 @@ class _Reader:
                                       if isinstance(name, yaml.nodes.ScalarNode))
         return Document(steps, sidecar, tuple(passthrough), self.span(root), as_mapping, tuple(port_spans))
 
-    def _passed(self, key: str, node: yaml.nodes.Node) -> OpaqueCwl:
+    def _passed(self, key: str, node: yaml.nodes.Node) -> Value:
         """A top-level key the language does not read: CWL, kept as written, its list forms keyed."""
         value = self._listed(key, node) if key in Grammar.LISTED_BY else self._opaque(node)
         if key == 'cwlVersion' and value not in CWL_VERSIONS:
@@ -500,7 +503,7 @@ class _Reader:
         # A placeholder is an input, so `inputs:` is read first, wherever it is written.
         said: dict[str, Any] = {'inputs': self._ports('inputs', nodes['inputs'][1]) if 'inputs' in nodes else ()}
         declared = {port.name: port for port in said['inputs']} if len(self.diags) == reported else None
-        passthrough: list[tuple[str, OpaqueCwl]] = []
+        passthrough: list[tuple[str, Value]] = []
         for key, (_, node) in nodes.items():
             reported = len(self.diags)
             if key == 'wic':
@@ -519,7 +522,9 @@ class _Reader:
                 passthrough.append((key, value))
         tool = ToolDocument(**said, passthrough=tuple(passthrough), span=self.span(root),
                             keys=tuple((key, self.span(at)) for key, (at, _) in nodes.items()))
-        return tool if declared is None else replace(tool, cwl=command_line_tool(tool, self.diags))
+        if declared is not None:
+            wic_tool.read(tool, self.diags)
+        return tool
 
     def _ports(self, key: str, node: yaml.nodes.Node, declared: Mapping[str, Port] | None = None) -> tuple[Port, ...]:
         """The `inputs:` or `outputs:` of a tool as its ports, each where it is named: a mapping of names, or CWL's
@@ -528,7 +533,7 @@ class _Reader:
         the first is. An output that says a line, alone or as its `from:`, has it read where it is written, a
         placeholder of it one of the inputs `declared`."""
         port = cast(JsonSchema, Grammar.TOOL_VALUES[key]['additionalProperties'])
-        entries: list[tuple[str, yaml.nodes.Node, OpaqueCwl]] = []
+        entries: list[tuple[str, yaml.nodes.Node, Value]] = []
         if isinstance(node, yaml.nodes.MappingNode):
             named = [(name, at, body, self._opaque(body)) for at, name, body in self._entries(node.value, key[:-1])]
         elif isinstance(node, yaml.nodes.SequenceNode):
@@ -611,13 +616,13 @@ class _Reader:
                                  'twice, `{{`', where)
         return parts + [Word(run + text[last:])] * bool(run + text[last:])
 
-    def _plain(self, value: OpaqueCwl, node: yaml.nodes.Node) -> None:
+    def _plain(self, value: Value, node: yaml.nodes.Node) -> None:
         """Report a Sophios construct in `value`, read from `node`: a tool takes none."""
         if _holds_construct(value):
             self._refuse('a tool takes no edge and no workflow input, so a Sophios construct (`!ii`, `!*`, `!cwl`) '
                          'says nothing in one: write the value CWL takes', self.span(node))
 
-    def _shaped(self, schema: JsonSchema, value: OpaqueCwl, node: yaml.nodes.Node, where: str) -> bool:
+    def _shaped(self, schema: JsonSchema, value: Value, node: yaml.nodes.Node, where: str) -> bool:
         """Whether `value`, one of a tool's own read from `node`, is of the shape `schema` gives it. Each way it is
         not is reported (`wic059`), at the node that holds the fault."""
         refused = list(_refusals(schema, value, node, where))
@@ -713,8 +718,8 @@ class _Reader:
         """Split a step's keys into inputs, outputs, interpreted CWL, and passthrough."""
         inputs: tuple[tuple[str, InputValue], ...] = ()
         outputs: tuple[OutputBinding, ...] = ()
-        interpreted: list[tuple[str, OpaqueCwl]] = []
-        passthrough: list[tuple[str, OpaqueCwl]] = []
+        interpreted: list[tuple[str, Value]] = []
+        passthrough: list[tuple[str, Value]] = []
         tool: ToolDocument | None = None
         for key_node, key, value_node in self._entries(entries, 'step key'):
             if key == 'id':
@@ -764,12 +769,12 @@ class _Reader:
                 return UnresolvedName(payload.value if isinstance(payload, yaml.nodes.ScalarNode) else '', span)
             case Key.ALIAS, payload:
                 return EdgeRef(self._name_text(payload), span)
-            case Key.RAW_CWL, payload:
+            case Key.PASSTHROUGH, payload:
                 return self._raw_cwl(payload, span, frozenset(), [0])
             case Key.INLINE_INPUT, payload:
                 # A literal is the first node its own reading spends.
                 return self._literal(node, frozenset(), [1]) if payload is node else InlineLiteral(
-                    self._opaque(payload), span)
+                    read_value(self._opaque(payload)), span)
         if isinstance(node, yaml.nodes.ScalarNode):
             return UnresolvedName(node.value, span)
         if isinstance(node, yaml.nodes.MappingNode):
@@ -788,7 +793,7 @@ class _Reader:
                            'this mapping spells a CWL step input (' + ', '.join(sorted(keys)) + '), which '
                            'Sophios does not read untagged; write `!cwl {source: ..., default: ...}` for a CWL '
                            'step input, `!ii` for a literal of that shape', node)
-        return InlineLiteral(self._opaque(node), span)
+        return InlineLiteral(read_value(self._opaque(node)), span)
 
     def _raw_cwl(self, node: yaml.nodes.Node, span: SourceSpan, path: frozenset[int], spent: list[int]) -> InputValue:
         """`!cwl name` is a raw reference; `!cwl {source: ..., ...}` is a step-input record, written at `span`.
@@ -798,7 +803,7 @@ class _Reader:
         so a record holding itself is an alias cycle.
         """
         if not isinstance(node, yaml.nodes.MappingNode):
-            return RawCwlRef(self._name_text(node), span)
+            return PassthroughRef(self._name_text(node), span)
         fields = {self._key_text(key): self._opaque(value, path | {id(node)}, spent) for key, value in node.value}
         written = fields.pop('source', [])
         sources: list[EdgeRef | UnresolvedName] = []
@@ -825,7 +830,8 @@ class _Reader:
                           'leave it unbound for Sophios to connect, or give it a source or a default')
         for fault in faults:
             self.diags.error(SophiosErrorCode.STEP_INPUT_RECORD, f'!cwl record: {fault}', span)
-        return CwlRecord(tuple(sources), tuple(fields.items()), span)
+        return InputRecord(tuple(sources), tuple((key, read_value(item) if key == 'default' else item)
+                                                 for key, item in fields.items()), span)
 
     def _outputs(self, node: yaml.nodes.Node) -> tuple[OutputBinding, ...]:
         """Parse a step's `out:` sequence."""
@@ -864,7 +870,7 @@ class _Reader:
         block is closed (.wic reference §7); a value is checked against its schema.
         """
         steps: list[tuple[StepKey, WicSidecar]] = []
-        entries: list[tuple[str, OpaqueCwl]] = []
+        entries: list[tuple[str, Value]] = []
         implementations: list[tuple[str, Document]] = []
         graphviz = GraphvizEntry()
         if id(node) in path:
@@ -914,14 +920,14 @@ class _Reader:
                 steps.append((named, self._sidecar(_unwrapped(value_node), Grammar.SIDECAR_STEP_VALUES, path)))
         return steps
 
-    def _sidecar_value(self, key: str, node: yaml.nodes.Node, schema: JsonSchema) -> OpaqueCwl:
+    def _sidecar_value(self, key: str, node: yaml.nodes.Node, schema: JsonSchema) -> Value:
         """Materialise one `wic:` value and check it against its schema (`wic034`).
 
         A value that already earned a diagnostic while being read is not checked
         again: one mistake, one diagnostic.
         """
         reported = len(self.diags)
-        value: OpaqueCwl
+        value: Value
         if key == 'out':
             # Read as a step's own `out:` is (.wic reference §3.6), and kept in the desugared spelling the writer
             # gives an edge definition, which is no passthrough value itself.
@@ -948,11 +954,11 @@ class _Reader:
         span = self.span(node)
         if not isinstance(node, yaml.nodes.ScalarNode):
             untagged = type(node)('', node.value, node.start_mark, node.end_mark)
-            return InlineLiteral(self._read(untagged, path | {id(node)}, spent), span)
+            return InlineLiteral(read_value(self._read(untagged, path | {id(node)}, spent)), span)
         text: str = node.value
         if node.style is not None:
             return InlineLiteral(text, span)
-        value: OpaqueCwl = text
+        value: Value = text
         try:
             value = yaml.safe_load(text) if text else text
         except yaml.YAMLError:
@@ -961,10 +967,10 @@ class _Reader:
             read = yaml.compose(text, Loader=yaml.SafeLoader)
             assert read is not None  # a non-empty scalar composes to a node
             self.error(SophiosErrorCode.UNKNOWN_TAG, f'YAML cannot read this value as {_tag_name(read.tag)}', node)
-        return InlineLiteral(value, span, None if '\n' in text else text)
+        return InlineLiteral(read_value(value), span, None if '\n' in text else text)
 
     def _opaque(self, node: yaml.nodes.Node, path: frozenset[int] = frozenset(),
-                spent: list[int] | None = None) -> OpaqueCwl:
+                spent: list[int] | None = None) -> Value:
         """Materialise a node Sophios does not interpret, as YAML reads it.
 
         A construct inside it is still read as one, so an edge reference buried in passthrough is not flattened to a
@@ -986,10 +992,10 @@ class _Reader:
             return None
         return self._read(node, path | {id(node)}, spent)
 
-    def _read(self, node: yaml.nodes.Node, path: frozenset[int], spent: list[int]) -> OpaqueCwl:
+    def _read(self, node: yaml.nodes.Node, path: frozenset[int], spent: list[int]) -> Value:
         """Read a node `_opaque` has entered, or the untagged copy of one."""
         match _construct(node, True), node:
-            case (Key.RAW_CWL, yaml.nodes.MappingNode() as body), _:
+            case (Key.PASSTHROUGH, yaml.nodes.MappingNode() as body), _:
                 return self._raw_cwl(body, self.span(node), path, spent)
             case (Key.INLINE_INPUT, payload), _ if payload is node:
                 return self._literal(node, path, spent)
@@ -1042,13 +1048,13 @@ def _construct(node: yaml.nodes.Node, passthrough: bool = False) -> tuple[str, y
     tagged = KEY_OF_TAG.get(node.tag)
     match node:
         case yaml.nodes.MappingNode(value=[(yaml.nodes.ScalarNode(value=key), payload)]) if tagged != Key.ANCHOR:
-            record = passthrough and key == Key.RAW_CWL != tagged and isinstance(payload, yaml.nodes.MappingNode)
+            record = passthrough and key == Key.PASSTHROUGH != tagged and isinstance(payload, yaml.nodes.MappingNode)
             if key == Key.ANCHOR or record or key in Key.ALL and tagged is None:
                 return key, payload
     return (tagged, node) if tagged else None
 
 
-def _holds_construct(value: OpaqueCwl) -> bool:
+def _holds_construct(value: Value) -> bool:
     """Whether a Sophios construct sits anywhere inside `value`."""
     match value:
         case dict():
@@ -1085,7 +1091,7 @@ def _unwrapped(node: yaml.nodes.Node) -> yaml.nodes.Node:
     return yaml.nodes.MappingNode(tag, siblings, node.start_mark, node.end_mark)
 
 
-def _refusals(schema: JsonSchema, value: OpaqueCwl, node: yaml.nodes.Node,
+def _refusals(schema: JsonSchema, value: Value, node: yaml.nodes.Node,
               where: str) -> Iterator[tuple[str, yaml.nodes.Node]]:
     """Each way `schema` refuses `value`, which was read from `node`, with the node that holds the fault.
 
@@ -1116,7 +1122,7 @@ def _refusals(schema: JsonSchema, value: OpaqueCwl, node: yaml.nodes.Node,
 _KINDS: Final[Mapping[str, str]] = MappingProxyType({
     'string': 'a string', 'boolean': 'true or false', 'object': 'a mapping', 'array': 'a list'})
 #: What each schema keyword of `Grammar.SIDECAR_VALUES` refuses, in the words of a `.wic` author.
-_REFUSED: Final[Mapping[str, Callable[[Any, OpaqueCwl], str]]] = MappingProxyType({
+_REFUSED: Final[Mapping[str, Callable[[Any, Value], str]]] = MappingProxyType({
     'type': lambda kind, value: f'must be {_KINDS[kind]}, found {_found(value)}',
     'enum': lambda choices, value: f'must be one of {", ".join(choices)}, found {_found(value)}',
     'minLength': lambda _least, _value: 'must not be empty',
@@ -1124,7 +1130,7 @@ _REFUSED: Final[Mapping[str, Callable[[Any, OpaqueCwl], str]]] = MappingProxyTyp
 })
 
 
-def _found(value: OpaqueCwl) -> str:
+def _found(value: Value) -> str:
     """What a value is, for a message: a scalar as YAML read it, anything else by its kind."""
     match value:
         case dict():
@@ -1136,7 +1142,7 @@ def _found(value: OpaqueCwl) -> str:
     return 'a Sophios construct' if isinstance(value, get_args(InputValue)) else f'a {type(value).__name__}'
 
 
-def _graphviz(value: OpaqueCwl) -> GraphvizEntry:
+def _graphviz(value: Value) -> GraphvizEntry:
     """The `graphviz:` value as an entry. A value its schema refused (`wic034`) was reported, and reads as far as it
     is well formed."""
     if not isinstance(value, dict):
@@ -1167,7 +1173,7 @@ def step_key(text: str) -> StepKey | None:
 _EXPANSION_BUDGET: Final = 100_000
 
 
-def _resolved_scalar(node: yaml.nodes.Node) -> OpaqueCwl:
+def _resolved_scalar(node: yaml.nodes.Node) -> Value:
     """Convert a resolved scalar node to its Python value, exactly as `yaml.SafeLoader` would.
 
     Delegated to PyYAML's own `SafeConstructor` rather than re-implemented,
@@ -1177,7 +1183,7 @@ def _resolved_scalar(node: yaml.nodes.Node) -> OpaqueCwl:
     """
     text: str = node.value
     try:
-        scalar: OpaqueCwl = yaml.constructor.SafeConstructor().construct_object(node)
+        scalar: Value = yaml.constructor.SafeConstructor().construct_object(node)
         return scalar
     except (yaml.YAMLError, *_UNREADABLE):  # reported by `_load`
         return text

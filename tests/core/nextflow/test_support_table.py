@@ -12,8 +12,8 @@ import yaml
 from cwl_utils.parser import cwl_v1_2
 
 from sophios.lang import SUPPORT_MATRIX
+from sophios.lang.cwl_fields import FIELDS, REQUIREMENT_CLASSES, State
 from sophios.ir.refusals import NotLowered, Refusal
-from sophios.nextflow.support import FIELDS, REQUIREMENT_CLASSES, State
 from sophios.wic_types import Yaml
 
 from .testkit import lowered_case, step, tool

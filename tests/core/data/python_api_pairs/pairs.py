@@ -117,6 +117,15 @@ def merged_scatter() -> Workflow:
     return Workflow([a, b, sink], 'merged_scatter')
 
 
+def array_output_scatter() -> Workflow:
+    """A step scatters over the array output of a tool loaded from its `.cwl`: the API reads the tool's port types as
+    plain CWL, as it reads a built tool's, and not as the loader's objects, which its array test did not know."""
+    glob = _step('glob_pattern', directory='.', glob_pattern='*.txt', output_file_format='edam:format_1964')
+    sink = _sink('File', x=glob.outputs.output_files_path)
+    sink.scatter_on(sink.inputs.x)
+    return Workflow([glob, sink], 'array_output_scatter')
+
+
 def picked_all_non_null() -> Workflow:
     """`all_non_null` keeps the list the sources make, so its input can be scattered."""
     a, b = _step('touch', 'a', filename='a.txt'), _step('touch', 'b', filename='b.txt')

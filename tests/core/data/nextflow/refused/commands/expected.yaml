@@ -5,6 +5,8 @@ why: An optional input with no value is read only by its own binding; a variable
 # Each refusal: its code, its step, and its subject (a tool's file and field, or a requirement); a binding the lowering
 # cannot write has no subject.
 roots:
+  a_written_tool.wic:
+  - [nf-s045, computed, 'computed_argument.wic: arguments[0].valueFrom']
   a_shell_inherited_beside_a_container.wic:
   - [nf-s038, on_the_host, 'ShellCommandRequirement']
   workflow.wic:

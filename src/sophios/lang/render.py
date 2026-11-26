@@ -3,7 +3,7 @@
 Rendering is the inverse of parsing. A literal parsed from tagged YAML
 carries its source text and is emitted verbatim, so the round-trip is exact
 by construction; only literals that never had a spelling are serialised.
-`OpaqueCwl` is closed and matched exhaustively, so a construct nested in a
+`Value` is closed and matched exhaustively, so a construct nested in a
 collection is re-spelled rather than handed raw to the dumper.
 
     render(document)   ->  text,  tagged spelling      (`!ii x`)
@@ -17,21 +17,22 @@ import yaml
 
 from ..utils_yaml import KEY_OF_TAG, Key, Tag
 from .nodes import (
-    CwlRecord,
     Document,
     EdgeRef,
     InlineLiteral,
+    InputRecord,
     InputValue,
-    OpaqueCwl,
     OutputBinding,
-    RawCwlRef,
+    PassthroughRef,
     Step,
     ToolDocument,
     UnresolvedName,
+    Value,
     WicSidecar,
     Word,
 )
 from .parser import SIDECAR_WRAPPER_KEY, Grammar
+from .values import FileValue, write_value
 
 
 def _spelled(word: Word, typed: bool = False) -> str:
@@ -155,11 +156,11 @@ class _Writer:
                 return self._literal(value)
             case EdgeRef(name=name):
                 return self.construct(Tag.ALIAS, name)
-            case RawCwlRef(expression=expression):
-                return self.construct(Tag.RAW_CWL, expression)
+            case PassthroughRef(expression=expression):
+                return self.construct(Tag.PASSTHROUGH, expression)
             case UnresolvedName(name=name):
                 return name
-            case CwlRecord(sources=sources, fields=fields):
+            case InputRecord(sources=sources, fields=fields):
                 body: dict[str, object] = {}
                 if sources:
                     spelled = [self.input_value(source) for source in sources]
@@ -167,13 +168,13 @@ class _Writer:
                     body['source'] = spelled[0] if len(spelled) == 1 and 'linkMerge' not in dict(fields) \
                         else spelled
                 body.update({key: self.plain(value) for key, value in fields})
-                return self.construct(Tag.RAW_CWL, body)
+                return self.construct(Tag.PASSTHROUGH, body)
 
     def _literal(self, literal: InlineLiteral) -> object:
         """Spell an `!ii` literal: transcribed from source text when parsed, else serialised."""
         if self.tagged and literal.text is not None:
             return _Tagged(Tag.INLINE_INPUT, literal.text)
-        if not self.tagged or isinstance(literal.value, (list, dict)):
+        if not self.tagged or isinstance(literal.value, (list, dict, FileValue)):
             return self.construct(Tag.INLINE_INPUT, self.plain(literal.value))
         if isinstance(literal.value, get_args(InputValue)):
             # A construct as the direct payload has no tagged spelling — two
@@ -181,11 +182,13 @@ class _Writer:
             return {Key.INLINE_INPUT: self.plain(literal.value)}
         return _spell_scalar(literal.value)
 
-    def plain(self, value: OpaqueCwl) -> object:
-        """Spell passthrough content, exhaustively over the closed `OpaqueCwl` union."""
+    def plain(self, value: Value) -> object:
+        """Spell passthrough content, exhaustively over the closed `Value` union."""
         match value:
-            case InlineLiteral() | EdgeRef() | RawCwlRef() | UnresolvedName() | CwlRecord():
+            case InlineLiteral() | EdgeRef() | PassthroughRef() | UnresolvedName() | InputRecord():
                 return self.input_value(value)
+            case FileValue():
+                return self.plain(write_value(value))
             case dict():
                 return {k: self.plain(v) for k, v in value.items()}
             case list():
@@ -201,7 +204,7 @@ class _Writer:
 # --------------------------------------------------------------------------
 
 
-def _spell_scalar(value: OpaqueCwl) -> _Tagged:
+def _spell_scalar(value: Value) -> _Tagged:
     """Return the tagged spelling that reads back as the scalar `value`.
 
     The parser reads an `!ii` scalar as YAML reads the same scalar untagged

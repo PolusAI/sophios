@@ -4,19 +4,21 @@ The language spec pins Sophios to one CWL version; that version belongs
 here, in the language definition, not to whichever module emits a document.
 Import `CWL_VERSION` rather than writing a version literal.
 """
-from collections.abc import Iterator, Mapping, Sequence
-from enum import Enum, StrEnum
-from itertools import chain
+from collections.abc import Mapping, Sequence
+import enum
+from enum import StrEnum
 from pathlib import Path
 import re
-from typing import Any, Final, TypeAlias, TypeGuard, TypeVar
+from typing import Any, Final, TypeAlias, TypeGuard
 
 from cwl_utils.parser import cwl_v1_2 as _standard
 import yaml
 
 from .diagnostics import SophiosError
 from .error_codes import SophiosErrorCode
-from .nodes import OpaqueCwl
+from .nodes import Value
+from .subset import EXPRESSION, inputs_read, strings
+from .types import Atom, Merge, Pick, ScatterMethod, expand_shorthand
 
 
 class CwlVersion(StrEnum):
@@ -47,49 +49,18 @@ CWL_VERSIONS: Final[tuple[str, ...]] = tuple(version.value for version in CwlVer
 #: The types that are not arrays, records or enums.
 ATOMIC_TYPES: Final[frozenset[str]] = frozenset(_standard.CWLTypeLoader.symbols)
 
-#: `scatterMethod`.
-SCATTER_METHODS: Final[frozenset[str]] = frozenset(_standard.ScatterMethodLoader.symbols)
 
-#: `linkMerge`.
-LINK_MERGES: Final[frozenset[str]] = frozenset(_standard.LinkMergeMethodLoader.symbols)
-
-#: `pickValue`, and the two of its methods that give one value where `all_non_null` gives a list.
-PICK_VALUES: Final[frozenset[str]] = frozenset(_standard.PickValueMethodLoader.symbols)
-PICKS_ONE: Final[frozenset[str]] = PICK_VALUES - {'all_non_null'}
-
-
-def _hold_to_the_standard(enum: type[Enum], *standard: Sequence[str]) -> None:
+def _hold_to_the_standard(enum: type[enum.Enum], *standard: Sequence[str]) -> None:
     """Fail at import when `enum` has a member more or a member less than the standard's own enumerations."""
     symbols = {symbol for each in standard for symbol in each}
     if (values := {member.value for member in enum}) != symbols:
         raise TypeError(f"{enum.__name__} is not the CWL standard's: {sorted(values ^ symbols)}")
 
 
-class CWLAtomicType(str, Enum):
-    """The names of `ATOMIC_TYPES`, and `Any`."""
-
-    NULL = "null"
-    BOOLEAN = "boolean"
-    INT = "int"
-    LONG = "long"
-    FLOAT = "float"
-    DOUBLE = "double"
-    STRING = "string"
-    FILE = "File"
-    DIRECTORY = "Directory"
-    ANY = "Any"
-
-
-class ScatterMethod(str, Enum):
-    """The names of `SCATTER_METHODS`."""
-
-    dotproduct = "dotproduct"
-    flat_crossproduct = "flat_crossproduct"
-    nested_crossproduct = "nested_crossproduct"
-
-
-_hold_to_the_standard(CWLAtomicType, _standard.CWLTypeLoader.symbols, _standard.AnyLoader.symbols)
+_hold_to_the_standard(Atom, _standard.CWLTypeLoader.symbols, _standard.AnyLoader.symbols)
 _hold_to_the_standard(ScatterMethod, _standard.ScatterMethodLoader.symbols)
+_hold_to_the_standard(Merge, _standard.LinkMergeMethodLoader.symbols)
+_hold_to_the_standard(Pick, _standard.PickValueMethodLoader.symbols)
 
 
 #: What a tool document loads as: the standard's own classes.
@@ -104,7 +75,6 @@ _NAMED: Final = {'requirements': ('class', 'value'), 'hints': ('class', 'value')
 #: By section, the place of each requirement or hint a document wrote, in its order: the vendor's class and plain
 #: fields, or `None` for one its process holds.
 Written: TypeAlias = dict[str, dict[str, tuple[str, dict[str, object]] | None]]
-_Requirement = TypeVar('_Requirement')
 
 
 def _local(identifier: str) -> str:
@@ -112,7 +82,7 @@ def _local(identifier: str) -> str:
     return identifier.rsplit('#', maxsplit=1)[-1].rsplit('/', maxsplit=1)[-1]
 
 
-def _listed(document: dict[str, OpaqueCwl], section: str) -> list[tuple[str, OpaqueCwl]]:
+def _listed(document: dict[str, Value], section: str) -> list[tuple[str, Value]]:
     """The entries a document wrote in a section, in the order it wrote them, each with its place (its key in a
     mapping, its index in a list) and as the list form writes it: the standard sorts a mapping's."""
     name, bare = _NAMED[section]
@@ -125,12 +95,12 @@ def _listed(document: dict[str, OpaqueCwl], section: str) -> list[tuple[str, Opa
     return []
 
 
-def _is_extension(item: OpaqueCwl) -> TypeGuard[dict[str, Any]]:
+def _is_extension(item: Value) -> TypeGuard[dict[str, Any]]:
     """Whether a requirement or hint is a vendor's, such as `cwltool:CUDARequirement`: the standard's have no colon."""
     return isinstance(item, dict) and ':' in str(item.get('class'))
 
 
-def _separate_read_as_false(binding: OpaqueCwl) -> OpaqueCwl:
+def separate_read_as_false(binding: Value) -> Value:
     """A binding that writes `separate: null` and no prefix, as cwltool reads it at run: `separate: false`, which it
     refuses. The loader reads null as unset, so the refusal would be lost."""
     if isinstance(binding, dict) and binding.get('separate', True) is None and binding.get('prefix') is None:
@@ -143,7 +113,7 @@ def _refusal(error: Exception) -> SophiosError:
     return SophiosError.error(SophiosErrorCode.INVALID_TOOL, ' '.join(str(error).split()))
 
 
-def load_process(document: dict[str, OpaqueCwl], run_path: str) -> tuple[Process, Written]:
+def load_process(document: dict[str, Value], run_path: str) -> tuple[Process, Written]:
     """A tool document read once, whole, into the standard's classes, with its ports in the order it wrote them and
     its vendor's requirements and hints set aside.
 
@@ -160,7 +130,7 @@ def load_process(document: dict[str, OpaqueCwl], run_path: str) -> tuple[Process
             items = _listed(document, section)
             kept = [item for _, item in items if not _is_extension(item)]
             if section == 'inputs':
-                kept = [{**port, 'inputBinding': _separate_read_as_false(port['inputBinding'])}
+                kept = [{**port, 'inputBinding': separate_read_as_false(port['inputBinding'])}
                         if isinstance(port, dict) and 'inputBinding' in port else port for port in kept]
             standard[section] = kept
             if section in written:
@@ -168,7 +138,7 @@ def load_process(document: dict[str, OpaqueCwl], run_path: str) -> tuple[Process
                     place: (item['class'], {key: value for key, value in item.items() if key != 'class'})
                     if _is_extension(item) else None for place, item in items}
     if isinstance(arguments := document.get('arguments'), list):
-        standard['arguments'] = [_separate_read_as_false(argument) for argument in arguments]
+        standard['arguments'] = [separate_read_as_false(argument) for argument in arguments]
     # The real file URI lets relative `$include` / `$import` resolve beside the tool; no link check across files.
     base = Path(run_path).absolute().as_uri()
     try:
@@ -184,9 +154,9 @@ def ports_named(loaded: list[Any]) -> dict[str, Any]:
     return {_local(port.id): port for port in loaded}
 
 
-def inherited(process: Process, name: str, body: Mapping[str, object]) -> _standard.Saveable | dict[str, object]:
-    """The requirement or hint `name` that a process inherits, read as the standard's class, else as the loader leaves
-    a class it does not know.
+def inherited(name: str, body: Mapping[str, object]) -> _standard.Saveable | dict[str, object]:
+    """The requirement or hint `name` that a step or a workflow wrote, read as the standard's class, else as the
+    loader leaves a class it does not know.
 
     Raises:
         SophiosError: `api004` with the loader's own message, for a body that is not that class.
@@ -195,24 +165,12 @@ def inherited(process: Process, name: str, body: Mapping[str, object]) -> _stand
     if not (isinstance(cls, type) and issubclass(cls, _standard.ProcessRequirement)):
         return {'class': name, **body}
     try:
-        return cls.fromDoc({'class': name, **body}, str(process.id), process.loadingOptions)
+        return cls.fromDoc({'class': name, **body}, 'file:///', _standard.LoadingOptions())
     except _standard.ValidationException as error:
         raise _refusal(error) from error
 
 
-def expand_shorthand(declared: OpaqueCwl) -> OpaqueCwl:
-    """One layer of CWL's type shorthand, without changing the caller's declaration: `T[]` is an array of `T`, and
-    `T?` is `T` or null."""
-    if not isinstance(declared, str):
-        return declared
-    if declared.endswith('[]') and len(declared) > 2:
-        return {'type': 'array', 'items': declared[:-2]}
-    if declared.endswith('?') and len(declared) > 1:
-        return ['null', declared[:-1]]
-    return declared
-
-
-def canonical_type(declared: OpaqueCwl) -> OpaqueCwl:
+def canonical_type(declared: Value) -> Value:
     """A written type with its shorthand expanded at every layer, through an array's items."""
     match expand_shorthand(declared):
         case ['null', inner] if isinstance(declared, str):
@@ -222,8 +180,8 @@ def canonical_type(declared: OpaqueCwl) -> OpaqueCwl:
     return declared
 
 
-def canonical(type_: LoadedType) -> OpaqueCwl:
-    """A loaded port type as `PortType.canonical` spells one, so a tool's types and a workflow's read alike: a union
+def canonical(type_: LoadedType) -> Value:
+    """A loaded port type as `spell` writes one, so a tool's types and a workflow's read alike: a union
     is a list, an array `{type: array, items}`, and any other schema as the standard writes it."""
     match type_:
         case list():
@@ -235,24 +193,6 @@ def canonical(type_: LoadedType) -> OpaqueCwl:
     # An inline schema's name is the loader's `_:` id, no path: made relative, Windows reads `_:` as a drive.
     return type_.save(top=False, relative_uris=not str(getattr(type_, 'name', '')).startswith('_:'))
 
-
-def required(type_: OpaqueCwl) -> tuple[OpaqueCwl, bool]:
-    """A port's type without its `null`, and whether it had one: the one type that remains, or the list of the
-    several."""
-    if not isinstance(type_, list) or 'null' not in type_:
-        return type_, False
-    rest = [member for member in type_ if member != 'null']
-    return (rest[0] if len(rest) == 1 else rest), True
-
-
-def requirement(process: Process, cls: type[_Requirement]) -> _Requirement | None:
-    """The first requirement of the standard's class `cls`, else the first hint of it."""
-    return next((each for each in (*(process.requirements or ()), *(process.hints or ())) if isinstance(each, cls)),
-                None)
-
-
-#: Where a CWL expression starts: a parameter reference or a JavaScript expression, `$(`, or a function body, `${`.
-EXPRESSION: Final = re.compile(r'\$[({]')
 
 #: A size, as `needs: ram:` may write one: a whole number, not zero, of mebibytes, gibibytes or tebibytes.
 SIZE: Final = re.compile('([0-9]*[1-9][0-9]*)([MGT])')
@@ -286,17 +226,6 @@ def literal(text: str) -> str:
     return text.replace('\\', '\\\\').replace('$(', '\\$(').replace('${', '\\${')
 
 
-def strings(value: Any) -> Iterator[str]:
-    """Every string in `value`: itself, or the strings at any depth of a list or of a mapping's values."""
-    match value:
-        case str():
-            yield value
-        case list():
-            yield from chain.from_iterable(map(strings, value))
-        case Mapping():
-            yield from strings(list(value.values()))
-
-
 def declare_javascript(process: dict[str, Any]) -> None:
     """Declare `InlineJavascriptRequirement` in a tool that holds an expression and declares it nowhere, as a
     requirement or a hint: one rule, for a tool written in `.wic` and for the Python builder. A `requirements` that is
@@ -305,16 +234,6 @@ def declare_javascript(process: dict[str, Any]) -> None:
     if any(map(EXPRESSION.search, strings(process))):
         if not declared(process, javascript):
             require(process, 'requirements', javascript)
-
-
-#: An input a CWL expression reads, `inputs.name` or `inputs["name"]`: `inputs.name-1` is `inputs.name` minus 1.
-_INPUT_READ: Final = re.compile(r'\binputs(?:\.([A-Za-z_]\w*)|\[\s*["\']([^"\']+)["\']\s*\])')
-
-
-def inputs_read(value: Any) -> tuple[str, ...]:
-    """Every input the CWL expressions in `value` (a string, or the strings at any depth of a list or mapping) read,
-    in order of first mention."""
-    return tuple(dict.fromkeys(a or b for text in strings(value) for a, b in _INPUT_READ.findall(text)))
 
 
 def input_reference(name: str, field: str = '') -> str | None:

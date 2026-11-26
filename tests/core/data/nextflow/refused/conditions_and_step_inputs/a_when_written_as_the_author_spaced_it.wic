@@ -1,0 +1,10 @@
+# A message quotes a `when` as its author wrote it, spacing and quotes as they were.
+steps:
+- id: spaced_unbound
+  run: say.cwl
+  when: $(  inputs.nothing  ==  1 )
+  in: {word: !ii a}
+- id: spaced_not_a_boolean
+  run: say.cwl
+  when: "$(  inputs.word  +  'a' )"
+  in: {word: !ii a}

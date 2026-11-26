@@ -15,10 +15,10 @@ compiled:
   requirements: {exact: {}}
   steps:
     write_source: {}
-    copy_named_after_source: {in: {source: {source: write_source/result}}}
-    stage_own_basename: {in: {source: {source: write_source/result}}}
-    stage_and_read: {in: {source: {source: write_source/result}}}
-    capture_own_entry: {in: {source: {source: write_source/result}}}
-    copy_captured: {in: {source: {source: capture_own_entry/same}}}
-    capture_renamed_entry: {in: {source: {source: write_source/result}}}
+    copy_named_after_source: {in: {source: write_source/result}}
+    stage_own_basename: {in: {source: write_source/result}}
+    stage_and_read: {in: {source: write_source/result}}
+    capture_own_entry: {in: {source: write_source/result}}
+    copy_captured: {in: {source: capture_own_entry/same}}
+    capture_renamed_entry: {in: {source: write_source/result}}
     plugin: {}

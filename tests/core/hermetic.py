@@ -13,8 +13,9 @@ import yaml
 import sophios.compiler
 from sophios import targets
 from sophios.cwl.io import NoAliasDumper
-from sophios.ir.artifacts import CompilationArtifact, CompilationResult
-from sophios.ir.frontdoor import SourceBundle
+from sophios.ir.artifacts import CompilationResult
+from sophios.cwl.artifacts import CompilationArtifact
+from sophios.frontdoor import SourceBundle
 from sophios.ir.resolve import RegistrySnapshot
 from sophios.lang import Document, ParseResult, parse
 from sophios.wic_types import Tools, Yaml

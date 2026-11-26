@@ -17,7 +17,7 @@ compiled:
   requirements: {SubworkflowFeatureRequirement: {}}
   steps:
     write_source: {}
-    child: {in: {source: {source: write_source/result}}}
-    count_lines: {in: {source: {source: child/copy}}}
-    sibling: {in: {source: {source: write_source/result}}}
+    child: {in: {source: write_source/result}}
+    count_lines: {in: {source: child/copy}}
+    sibling: {in: {source: write_source/result}}
     touch_n: {}

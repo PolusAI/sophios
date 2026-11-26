@@ -12,10 +12,10 @@ edge_reference_desugared:
   - {depth: 1, inputs: {name: [EdgeRef, shared.txt]}}
 raw_cwl_reference_tagged:
   expect:
-  - {depth: 1, inputs: {name: [RawCwlRef, shared.txt]}}
+  - {depth: 1, inputs: {name: [PassthroughRef, shared.txt]}}
 raw_cwl_reference_desugared:
   expect:
-  - {depth: 1, inputs: {name: [RawCwlRef, shared.txt]}}
+  - {depth: 1, inputs: {name: [PassthroughRef, shared.txt]}}
 bare_name:
   expect:
   - {depth: 1, inputs: {name: [UnresolvedName, shared.txt]}}

@@ -105,6 +105,18 @@ def test_a_literal_binds_only_as_the_value_it_is(case: Any) -> None:
 
 
 @pytest.mark.fast
+@pytest.mark.parametrize('literal', ["{class: Directory, basename: d, listing: [{class: File, path: x.txt}]}",
+                                     "{path: d, class: Directory}", "{location: a, path: b, class: Directory}"])
+def test_a_file_literal_of_the_wrong_kind_is_printed_as_the_author_wrote_it(literal: str) -> None:
+    """wic020 prints a File or Directory mapping with its keys in the order written, not in CWL's."""
+    tool = clt({'f': {'type': 'File', 'inputBinding': {'position': 1}}}, {})
+    with pytest.raises(SophiosError) as caught:
+        compile_hermetic_source(f'steps:\n- id: probe\n  in:\n    f: !ii {literal}\n',
+                                tools=registered({'probe': tool}, {}))
+    assert repr(yaml.safe_load(literal)) in caught.value.diagnostics[0].message, caught.value.diagnostics[0].message
+
+
+@pytest.mark.fast
 @given(st.from_regex(r'[-+]?[0-9]+(\.[0-9]*)?[eE][-+]?[0-9]+', fullmatch=True))
 @pinned('1e-5', '1E3', '2.5e10')
 @example('.5e3').xfail(raises=AssertionError, reason='no advice for a mantissa with no digit before its point')
