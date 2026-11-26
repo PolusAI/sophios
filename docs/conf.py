@@ -117,7 +117,7 @@ html_static_path = ['_static']
 
 
 # -- Tables rendered from the code -------------------------------------------
-# docs/nextflow.md shows src/sophios/nextflow/support.py's table and docs/error_codes.md the catalog of
+# docs/nextflow.md shows src/sophios/lang/cwl_fields.py's table and docs/error_codes.md the catalog of
 # src/sophios/lang/error_codes.py and docs/cli-reference.md the flags of src/sophios/cli.py, each where the page
 # holds its marker (`_RENDERED`).
 
@@ -155,7 +155,7 @@ def nf_support_markdown() -> str:
     from collections import Counter  # pylint: disable=import-outside-toplevel
     from sophios.lang import SUPPORT_MATRIX, Support  # pylint: disable=import-outside-toplevel
     # pylint: disable-next=import-outside-toplevel
-    from sophios.nextflow.support import FIELDS, REQUIREMENT_CLASSES, State
+    from sophios.lang.cwl_fields import FIELDS, REQUIREMENT_CLASSES, State
 
     native = Counter(FIELDS[cwl_class][name].state for cwl_class, rows in SUPPORT_MATRIX.items()
                      for name, support in rows.items() if support is Support.NATIVE)

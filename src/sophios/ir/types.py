@@ -9,15 +9,16 @@ from typing import NewType, TypeAlias
 
 from ..lang.diagnostics import Diagnostics
 from ..lang.needs import Inherited
-from ..lang.nodes import GraphvizEntry, InputValue, OpaqueCwl
+from ..lang.nodes import GraphvizEntry, InputValue, Value
 from ..lang.spans import SourceSpan
-from ..lang.subset import Expr
-from ..lang.types import BoundaryDeclaration, Merge, Pick, PortDeclaration, ScatterMethod, Type
+from ..lang.subset import Guard
+from ..lang.types import BoundaryDeclaration, Merge, Pick, PortDeclaration, ScatterMethod, Type, Unknown
+from ..lang.unread import UnreadField
 
 
 class Direction(StrEnum):
     """Which side of a step a port is on; part of a port's identity because
-    CWL puts inputs and outputs in separate namespaces.
+    a tool's inputs and outputs are in separate namespaces.
     """
 
     INPUT = 'input'
@@ -114,12 +115,12 @@ class PortId:
 
 @dataclass(frozen=True, slots=True)
 class WorkflowPort:
-    """A port on the workflow boundary, including its CWL declaration."""
+    """A port on the workflow boundary, including its declaration."""
 
     name: PortName
     declaration: BoundaryDeclaration
     #: A resolved producer, or the authored text when Link could not resolve it.
-    output_source: 'StepOutputRef | OpaqueCwl' = None
+    output_source: 'StepOutputRef | Value' = None
     has_output_source: bool = False
     #: Where the port was written, when it was.
     span: SourceSpan | None = None
@@ -127,7 +128,7 @@ class WorkflowPort:
 
 @dataclass(frozen=True, slots=True)
 class StepOutputRef:
-    """An output of a step in the same document: CWL's `step/port`."""
+    """An output of a step in the same document: `step/port`."""
 
     step: StepId
     port: PortName
@@ -142,7 +143,7 @@ class Source:
 
 @dataclass(frozen=True, slots=True)
 class Expression:
-    """Raw CWL the document supplied for a binding, emitted verbatim."""
+    """Text the document supplied for a binding, which only the target that reads it interprets, emitted verbatim."""
 
     text: str
 
@@ -153,18 +154,20 @@ class Record:  # pylint: disable=too-many-instance-attributes
     what it means by them, and the fields no meaning holds, verbatim."""
 
     sources: tuple['PortName | StepOutputRef', ...]
-    passthrough: tuple[tuple[str, OpaqueCwl], ...]
-    merge: Merge | None = None
-    pick: Pick | None = None
+    passthrough: tuple[tuple[str, Value], ...]
+    merge: Merge | Unknown | None = None
+    pick: Pick | Unknown | None = None
     #: Whether a `valueFrom` is written, and whether it is one that is not null.
     computed: bool = False
     computes: bool = False
-    default: OpaqueCwl = None
+    default: Value = None
     has_default: bool = False
+    #: The fields of `passthrough` a target that reads none of them must refuse, each with its refusal.
+    unread: tuple[UnreadField, ...] = ()
 
 
-#: What a step's `in:` entry can be: a closed set of the shapes CWL has a
-#: field for, distinct from the authored `InputValue` union.
+#: What a step's `in:` entry can be: a closed set of the shapes a target
+#: writes, distinct from the authored `InputValue` union.
 EmittedValue: TypeAlias = Source | Expression | Record
 
 
@@ -207,7 +210,7 @@ class DeferredObligation:
 
 
 #: What a binding resolved to, or None when the value needs no producer -- a
-#: literal, a workflow parameter, a raw CWL reference. `Binding.value` says
+#: literal, a workflow parameter, a passthrough reference. `Binding.value` says
 #: which of those it is; this says where it comes from. A step-input record
 #: resolves to a tuple, what each `source` entry resolved to, in order: an edge,
 #: an obligation, or None for a workflow input relayed by name.
@@ -229,21 +232,10 @@ class Binding:
 @dataclass(frozen=True, slots=True)
 class Scatter:
     """A step's scatter: the ports it runs once per element of, in the order written, and how it combines them. A
-    method the enum does not hold is None, and rides unread in `StepNode.passthrough`."""
+    method the enum does not hold is an `Unknown`, for a target to refuse by name."""
 
     ports: tuple[PortName, ...]
-    method: ScatterMethod | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class Guard:
-    """A step's condition: its tree when the safe subset reads the text, the inputs the text reads, and, where there
-    is no tree, why, in the subset's words. The text the subset does not read rides unread in
-    `StepNode.passthrough`."""
-
-    expr: Expr | None
-    reads: tuple[str, ...]
-    problem: str | None = None
+    method: ScatterMethod | Unknown | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -260,10 +252,9 @@ class StepNode:  # pylint: disable=too-many-instance-attributes
     inputs: tuple[Port, ...] = ()
     outputs: tuple[Port, ...] = ()
     bindings: tuple[Binding, ...] = ()
-    #: What the author wrote beside the step that the compiler does not read, in written order. A `scatterMethod`
-    #: with no `scatter`, which is no scatter, or one the standard does not have, and a `when` the subset does not
-    #: read, are the first of them.
-    passthrough: tuple[tuple[str, OpaqueCwl], ...] = ()
+    #: What the author wrote beside the step that the compiler does not read, in written order. A scatter method with
+    #: no scatter to hold it and a `when` the subset does not read are the first of them.
+    passthrough: tuple[tuple[str, Value], ...] = ()
     span: SourceSpan | None = None
     scatter: Scatter | None = None
     guard: Guard | None = None
@@ -273,8 +264,9 @@ class StepNode:  # pylint: disable=too-many-instance-attributes
     graphviz: GraphvizEntry = GraphvizEntry()
     #: What it asks of its tool: its own requirements, then its hints, as written.
     needs: tuple[Inherited, ...] = ()
-    #: The names of the other keys it wrote that nothing reads, an orphan `scatterMethod` first.
-    unread: tuple[str, ...] = ()
+    #: The other keys it wrote that nothing reads, each with its refusal, a scatter method with nothing to scatter
+    #: first.
+    unread: tuple[UnreadField, ...] = ()
 
 
 #: The three mappings the compiler threads through its recursion, as pairs
@@ -300,14 +292,14 @@ class WorkflowGraph:  # pylint: disable=too-many-instance-attributes
     explicit_edge_defs: EdgeMapping = ()
     input_mapping: InputMapping = ()
     output_mapping: PortMapping = ()
-    passthrough: tuple[tuple[str, OpaqueCwl], ...] = ()
+    passthrough: tuple[tuple[str, Value], ...] = ()
     span: SourceSpan | None = None
     name: str = ''
     workflow_inputs: tuple[WorkflowPort, ...] = ()
     workflow_outputs: tuple[WorkflowPort, ...] = ()
     #: Each value of the job input document, by the workflow input it is for.
-    job_bindings: tuple[tuple[PortName, OpaqueCwl], ...] = ()
-    namespaces: tuple[tuple[str, OpaqueCwl], ...] = ()
+    job_bindings: tuple[tuple[PortName, Value], ...] = ()
+    namespaces: tuple[tuple[str, Value], ...] = ()
     children: tuple['WorkflowGraph', ...] = ()
     #: Every edge Link or Infer placed here (not a binding's own resolution).
     linked_edges: tuple[Edge, ...] = ()
@@ -319,8 +311,8 @@ class WorkflowGraph:  # pylint: disable=too-many-instance-attributes
     graphviz: GraphvizEntry = GraphvizEntry()
     #: What it asks of the tools beneath it: its own requirements, then its hints, as written.
     needs: tuple[Inherited, ...] = ()
-    #: The names of the other keys it carries that nothing reads.
-    unread: tuple[str, ...] = ()
+    #: The other keys it carries that nothing reads, each with its refusal.
+    unread: tuple[UnreadField, ...] = ()
 
     @property
     def edges(self) -> tuple[Edge, ...]:

@@ -12,7 +12,7 @@ from typing import Any, ClassVar, Final, Literal, overload
 
 import graphviz
 
-from sophios.lang import CwlRecord, EdgeRef, InputValue, OpaqueCwl, UnresolvedName, nodes
+from sophios.lang import EdgeRef, InputRecord, InputValue, UnresolvedName, Value, nodes
 from sophios.lang.types import TypeRelation, relation
 from sophios.lang.cwl import Process, ScatterMethod
 from sophios.lang.types import read_type
@@ -305,7 +305,7 @@ def _bind_record(process_self: Any, input_name: str, input_port: InputParameter,
     entries = record.sources()
     # Each source is its own edge, so each gets its own name. The `/` keeps it apart from
     # a plain link's `{input}{step}` name, such as that of the same input on a step `sink1`.
-    built = CwlRecord(tuple(
+    built = InputRecord(tuple(
         UnresolvedName(entry.name, span) if isinstance(entry, WorkflowInputReference)
         else EdgeRef(entry.ensure_anchor(f"{input_name}{process_self.process_name}/{position}"), span)
         for position, entry in enumerate(entries, start=1)), record.fields(), span)
@@ -686,7 +686,7 @@ class Step(_ProcessBase):
 
     def _as_workflow_step(self) -> nodes.Step:
         """Return this step as the language's step node, with `run:` naming its tool."""
-        interpreted: list[tuple[str, OpaqueCwl]] = [("run", _step_run(self.clt_path))]
+        interpreted: list[tuple[str, Value]] = [("run", _step_run(self.clt_path))]
         if self.scatter:
             interpreted += [("scatter", [input_port.name for input_port in self.scatter]),
                             ("scatterMethod", self.scatterMethod or ScatterMethod.dotproduct.value)]

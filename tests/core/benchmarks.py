@@ -19,7 +19,7 @@ from core.hermetic import compile_hermetic, nested_workflow
 from core.synthetic_tools import SYNTHETIC_TOOLS
 from core.test_setup import load_test_registry, workflow_paths
 
-from sophios.ir import frontdoor
+from sophios import frontdoor
 import sophios.cli
 import sophios.compiler
 from sophios.lang import parse

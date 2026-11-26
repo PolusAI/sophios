@@ -19,12 +19,12 @@ import re
 from typing import Any, Final
 
 from . import cwl_tool
-from .cwl import ATOMIC_TYPES, SIZE, Process, Written, canonical_type, declared, input_reference, strings
+from .cwl import ATOMIC_TYPES, SIZE, Process, Written, canonical_type, declared, input_reference
 from .diagnostics import Diagnostics, SophiosError
 from .error_codes import SophiosErrorCode
-from .nodes import OpaqueCwl, Port, ToolDocument, Word
+from .nodes import Port, ToolDocument, Value, Word
 from .spans import SourceSpan
-from .subset import EXPRESSION
+from .subset import EXPRESSION, strings
 from .tools import (
     Capture, Container, Generated, Need, NeedKind, Part, Placement, Reference, Resources, Staging, Stream, ToolBody,
     ToolInput, ToolNode, ToolOutput,
@@ -117,7 +117,7 @@ def read(tool: ToolDocument, refused: Diagnostics | None = None) -> Plan:
     return plan
 
 
-def _one(written: OpaqueCwl) -> tuple[OpaqueCwl, bool, bool]:
+def _one(written: Value) -> tuple[Value, bool, bool]:
     """A port's type as what one value of it is, without `?` and `[]`; whether it is an array; whether it may be
     null."""
     one, optional = required(canonical_type(written))
@@ -409,5 +409,4 @@ def node(document: ToolDocument, run_path: str) -> ToolNode:
         tuple(cwl_tool.tool_port(port.name, _written_port(port, line), output=True)
               for port, line in zip(document.outputs, plan.outputs)),
         False, cwl_tool.namespaces(dict(document.passthrough).get('$namespaces')), document, (),
-        *cwl_tool.held(lambda: cwl_tool.read_body(load, lambda process, written: _body(
-            document, plan, process, written))))
+        *cwl_tool.held(lambda: _body(document, plan, *load())))

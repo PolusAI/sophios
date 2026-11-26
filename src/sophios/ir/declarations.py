@@ -2,9 +2,8 @@
 from collections.abc import Callable
 from dataclasses import replace
 
-from ..lang.cwl import port_declaration
-from ..lang.types import BoundaryDeclaration, PortDeclaration, ScatterMethod, layered, optional, spell
-from .types import DerivedName, Direction, Port, PortName, StepNode, WorkflowGraph
+from ..lang.types import BoundaryDeclaration, PortDeclaration, ScatterMethod, layered, optional
+from .types import DerivedName, Port, PortName, StepNode, WorkflowGraph
 
 
 def required(declaration: PortDeclaration | None) -> bool:
@@ -67,8 +66,11 @@ def boundary_declaration(port: Port, rank: int) -> BoundaryDeclaration:
         BoundaryDeclaration: The port's declaration reduced to what a
         workflow boundary may say, its type layered.
     """
-    declaration = port.declaration or port_declaration(spell(port.type), output=port.id.direction is Direction.OUTPUT)
+    declaration = port.declaration or PortDeclaration(port.type, shorthand=True)
     inside = ('items',) * rank
+    kept = {name for name, _ in declaration.kept}
     return BoundaryDeclaration(replace(
         declaration, type=layered(declaration.type, rank), passthrough=declaration.kept, shorthand=False, default=None,
-        has_default=False, unread=tuple(replace(item, path=(*inside, *item.path)) for item in declaration.unread)))
+        has_default=False, unread=tuple(replace(item, path=(*inside, *item.path)) for item in declaration.unread),
+        refused=tuple(item for item in declaration.refused if item.name in kept),
+        schemas=declaration.schemas if rank == 0 else ()))

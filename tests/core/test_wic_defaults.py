@@ -6,8 +6,8 @@ import shutil
 import pytest
 
 from sophios.compiler import CompileSettings, compile_source
-from sophios.ir.artifacts import CompilationArtifact
-from sophios.ir.frontdoor import bundle_from_disk
+from sophios.cwl.artifacts import CompilationArtifact
+from sophios.frontdoor import bundle_from_disk
 
 from .cases import DATA
 from .hermetic import cwl_tree

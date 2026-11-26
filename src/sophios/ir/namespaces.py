@@ -19,7 +19,7 @@ from typing import Final
 
 from ..lang.diagnostics import Diagnostics, Locator, SophiosError
 from ..lang.error_codes import SophiosErrorCode
-from ..lang.nodes import OpaqueCwl
+from ..lang.nodes import Value
 from ..lang.spans import SourceSpan
 from .resolve import RegistrySnapshot
 from .types import DerivedName, StepId, StepNode, WorkflowGraph
@@ -34,7 +34,7 @@ _BOUND_BY_EMIT: Final = frozenset({EDAM_NAMESPACE[0]})
 class _Binding:
     """What one source binds a prefix to, and where to point when it disagrees."""
 
-    uri: OpaqueCwl
+    uri: Value
     source: str
     span: SourceSpan | None = None
     locator: Locator | None = None
@@ -138,7 +138,7 @@ def _bindings(prefix: str, graph: WorkflowGraph, owners: Iterable[StepNode],
 
 
 def _process_namespaces(graph: WorkflowGraph, step: StepNode,
-                        registry: RegistrySnapshot) -> tuple[tuple[str, OpaqueCwl], ...]:
+                        registry: RegistrySnapshot) -> tuple[tuple[str, Value], ...]:
     """The `$namespaces` the process behind `step` of `graph` declares: a tool's as written, a subworkflow's as
     declared."""
     child = graph.child(step.id)

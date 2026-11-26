@@ -22,7 +22,7 @@ from sophios.config import SHIPPED_RENAMINGS
 from sophios.cwl import io as cwl_io, post_compile as pc
 from sophios.ir.artifacts import CompilationResult
 from sophios.ir.complete import coerce_job_value
-from sophios.ir.frontdoor import SourceBundle
+from sophios.frontdoor import SourceBundle
 from sophios.ir.infer import InferencePolicy
 from sophios.ir.locations import absolute_paths
 from sophios.lang.values import read_value
@@ -32,7 +32,7 @@ from sophios.ir.resolve import RegistrySnapshot
 from sophios.ir.refusals import NotLowered
 from sophios.ir.resolved import ResolvedWorkflow, bind
 from sophios.ir.types import AuthoredName
-from sophios.lang import CwlRecord, Diagnostic, Diagnostics, Document, ParseResult, Severity, SophiosError, render
+from sophios.lang import Diagnostic, Diagnostics, Document, InputRecord, ParseResult, Severity, SophiosError, render
 from sophios.lang.cwl import Process, canonical, ports_named, tool_process
 from sophios.lang.types import SCATTER_METHODS
 from sophios.lang.diagnostics import report
@@ -231,7 +231,7 @@ def _with_defaults_resolved(step: LangStep, base: Path) -> LangStep:
     return replace(step, inputs=tuple(
         (name, replace(value, fields=tuple(
             (key, absolute_paths({"default": read_value(field)}, base)["default"] if key == "default" else field)
-            for key, field in value.fields)) if isinstance(value, CwlRecord) else value)
+            for key, field in value.fields)) if isinstance(value, InputRecord) else value)
         for name, value in step.inputs))
 
 

@@ -8,11 +8,13 @@ that wrote it back reads. Pure data and functions over it, importing nothing of 
 """
 import enum
 from copy import deepcopy
-from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Any, Final, NewType, TypeAlias
+from dataclasses import dataclass, field, replace
+from typing import TYPE_CHECKING, Any, Final, NewType, TypeAlias, TypeVar
+
+from .unread import UnreadField
 
 if TYPE_CHECKING:
-    from .nodes import OpaqueCwl
+    from .nodes import Value
 
 
 class Atom(str, enum.Enum):
@@ -50,6 +52,8 @@ class Record:
     """A value with the named `fields`, each a type, in the order they were declared."""
 
     fields: 'tuple[tuple[str, Type], ...]'
+    #: The schema as the door read it, which `quote` prints; it settles nothing.
+    text: 'Value' = field(default=None, compare=False, repr=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,6 +61,8 @@ class Enum:
     """One of the `symbols`, in the order they were declared."""
 
     symbols: tuple[str, ...]
+    #: The schema as the door read it, which `quote` prints; it settles nothing.
+    text: 'Value' = field(default=None, compare=False, repr=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,7 +90,7 @@ class Unread:
 
     path: Place
     key: str | None
-    value: 'OpaqueCwl'
+    value: 'Value'
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,16 +102,20 @@ class PortDeclaration:  # pylint: disable=too-many-instance-attributes
     """
 
     type: Type
-    format: 'OpaqueCwl' = None
+    format: 'Value' = None
     has_format: bool = False
-    default: 'OpaqueCwl' = None
+    default: 'Value' = None
     has_default: bool = False
-    passthrough: 'tuple[tuple[str, OpaqueCwl], ...]' = ()
+    passthrough: 'tuple[tuple[str, Value], ...]' = ()
     shorthand: bool = False
     #: What the type wrote that none of its nodes holds, in the order the door found it.
     unread: tuple[Unread, ...] = ()
     #: The fields of `passthrough` a workflow boundary promoted from this port may state, already reduced, in order.
-    kept: 'tuple[tuple[str, OpaqueCwl], ...]' = ()
+    kept: 'tuple[tuple[str, Value], ...]' = ()
+    #: The fields of `passthrough` that earn a refusal, and for each array of the type (or of the members of a union
+    #: it is) the fields its schema writes beside `type` and `items` that do.
+    refused: tuple[UnreadField, ...] = ()
+    schemas: tuple[tuple[UnreadField, ...], ...] = ()
 
 
 #: A `PortDeclaration` reduced to what a workflow boundary may state. Only
@@ -136,6 +146,24 @@ class Pick(str, enum.Enum):
     ALL = 'all_non_null'
 
 
+_Name = TypeVar('_Name', bound=enum.Enum)
+
+
+@dataclass(frozen=True, slots=True)
+class Unknown:
+    """A merge, a pick or a scatter method the standard has no name for: `value`, as the author wrote it. Nothing
+    judges it; a target that cannot run it refuses it by name."""
+
+    value: 'Value'
+
+
+def named(names: 'type[_Name]', written: 'Value') -> '_Name | Unknown | None':
+    """The member of `names` that `written` is, an `Unknown` of it where it is none of them, None where it is null."""
+    if written is None:
+        return None
+    return next((way for way in names if way == written), Unknown(written))
+
+
 #: The names of the methods above, which a document spells them with.
 SCATTER_METHODS: Final = frozenset(method.value for method in ScatterMethod)
 LINK_MERGES: Final = frozenset(way.value for way in Merge)
@@ -152,28 +180,30 @@ class TypeRelation(enum.Enum):
     UNKNOWN = 'unknown'
 
 
-def spell(type_: Type, unread: tuple[Unread, ...] = (), path: Place = ()) -> 'OpaqueCwl':
-    """`type_` as 0.1.0 writes it, in plain `str`, `list` and `dict` values: the text a diagnostic prints and a
-    target reads where it has no spelling of its own. With the `unread` items of its port, the spelling that read as
-    `type_` and said what no node holds."""
+def spell(type_: Type, unread: tuple[Unread, ...] = (), path: Place = (), *, quoted: bool = False) -> 'Value':
+    """`type_` as 0.1.0 writes it, in plain `str`, `list` and `dict` values: the text a target reads where it has no
+    spelling of its own. With the `unread` items of its port, the spelling that read as `type_` and said what no node
+    holds. `quoted` gives a record or an enum as the door read it, name and keys in the order written."""
     held = [item for item in unread if item.path == path]
     if any(item.key is None for item in held):
         return deepcopy(held[0].value)
-    body: dict[str, OpaqueCwl]
+    body: dict[str, Value]
     match type_:
         case Atom():
             return type_.value
         case Other(name=name):
             return name
         case Union(members=members):
-            return [spell(member, unread, (*path, index)) for index, member in enumerate(members)]
+            return [spell(member, unread, (*path, index), quoted=quoted) for index, member in enumerate(members)]
         case Array(items=items):
             body = {'type': 'array'}
             if items is not None:
-                body['items'] = spell(items, unread, (*path, 'items'))
+                body['items'] = spell(items, unread, (*path, 'items'), quoted=quoted)
+        case Record(text=text) | Enum(text=text) if quoted and text is not None:
+            return deepcopy(text)
         case Record(fields=fields):
             body = {'type': 'record', 'fields': [
-                {'name': name, 'type': spell(field, unread, (*path, 'fields', name, 'type')),
+                {'name': name, 'type': spell(field, unread, (*path, 'fields', name, 'type'), quoted=quoted),
                  **{str(item.key): deepcopy(item.value) for item in unread if item.path == (*path, 'fields', name)}}
                 for name, field in fields]}
         case Enum(symbols=symbols):
@@ -181,6 +211,11 @@ def spell(type_: Type, unread: tuple[Unread, ...] = (), path: Place = ()) -> 'Op
         case _:
             raise TypeError(f'not a type: {type_!r}')
     return body | {str(item.key): deepcopy(item.value) for item in held}
+
+
+def quote(type_: Type, unread: tuple[Unread, ...] = ()) -> 'Value':
+    """`type_` as a diagnostic quotes it: what the author or the loaded document wrote, not what Sophios writes."""
+    return spell(type_, unread, quoted=True)
 
 
 def nullable(type_: Type) -> Type:
@@ -231,7 +266,7 @@ def layered(type_: Type, rank: int) -> Type:
     return type_
 
 
-def delivered(produced: Type, *, sources: int, merge: 'Merge | OpaqueCwl', pick: 'Pick | OpaqueCwl') -> Type:
+def delivered(produced: Type, *, sources: int, merge: 'Merge | Unknown | None', pick: 'Pick | Unknown | None') -> Type:
     """The type a step-input record delivers from sources of type `produced`: the list `merge` makes of them (a
     merged array stays flat; one source with no `merge` is not wrapped) or, for a `pick` that picks one value, one
     element of it. `Any` where a pick has no array to take an element of, so nothing is proved against it."""
@@ -308,7 +343,7 @@ def permits_format(type_: Type | None) -> bool:
     return False
 
 
-def expand_shorthand(declared: 'OpaqueCwl') -> 'OpaqueCwl':
+def expand_shorthand(declared: 'Value') -> 'Value':
     """One layer of CWL's type shorthand, without changing the caller's declaration: `T[]` is an array of `T`, and
     `T?` is `T` or null."""
     if not isinstance(declared, str):
@@ -324,7 +359,7 @@ _ATOMS: Final = {atom.value: atom for atom in Atom}
 _STREAMS: Final = ('stdin', 'stdout', 'stderr')
 
 
-def read_type(raw: 'OpaqueCwl') -> Type:
+def read_type(raw: 'Value') -> Type:
     """The neutral type a written one means; `read_typed` says what it wrote beyond that. `T?` and `T[]` shorthand
     is expanded wherever it is written, through array items and every union member, so `string?[]` is an array of
     nullable strings and not a nullable array, and `[File?, string]` accepts null in either spelling of that member.
@@ -334,7 +369,7 @@ def read_type(raw: 'OpaqueCwl') -> Type:
     return _read(raw, (), [], frozenset())
 
 
-def read_typed(raw: 'OpaqueCwl') -> tuple[Type, tuple[Unread, ...]]:
+def read_typed(raw: 'Value') -> tuple[Type, tuple[Unread, ...]]:
     """`read_type`, and what the type wrote that no node of it holds: every key of a schema but the ones its node
     holds, a record field's keys but its name and type, and the whole of a shape that is none of the types."""
     found: list[Unread] = []
@@ -405,12 +440,12 @@ def _read(raw: Any, path: Place, unread: list[Unread], open_: frozenset[int]) ->
         case 'record':
             for name, _, other in fields or ():
                 unread.extend(Unread((*path, 'fields', name), key, deepcopy(value)) for key, value in other.items())
-            return Record(tuple((name, _read(field, (*path, 'fields', name, 'type'), unread, inside))
-                                for name, field, _ in fields or ()))
-    return Enum(tuple(raw['symbols']))
+            return Record(tuple((name, _read(member, (*path, 'fields', name, 'type'), unread, inside))
+                                for name, member, _ in fields or ()), deepcopy(raw))
+    return Enum(tuple(raw['symbols']), deepcopy(raw))
 
 
-def required(type_: 'OpaqueCwl') -> 'tuple[OpaqueCwl, bool]':
+def required(type_: 'Value') -> 'tuple[Value, bool]':
     """A port's type without its `null`, and whether it had one: the one type that remains, or the list of the
     several."""
     if not isinstance(type_, list) or 'null' not in type_:

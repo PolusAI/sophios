@@ -17,7 +17,7 @@ import sophios.compiler
 from sophios.cwl import io as cwl_io, post_compile
 from sophios.runtime import backends, local, realtime, runners, setup
 import sophios.utils
-from sophios.ir import frontdoor
+from sophios import frontdoor
 from sophios import plugins, targets
 from sophios.cli import get_args
 from sophios.runtime.runners import RunSettings
@@ -26,7 +26,8 @@ from sophios.cwl.post_compile import apply_inline_options, inline_artifact_runs
 from sophios.lang import ParseResult, parse
 from sophios.lang.diagnostics import Diagnostics, SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
-from sophios.ir.artifacts import CompilationArtifact, CompilationResult
+from sophios.ir.artifacts import CompilationResult
+from sophios.cwl.artifacts import CompilationArtifact
 from sophios.ir.names import Names
 from sophios.ir.resolve import ResolvedDocument, resolve
 from sophios.ir.types import WorkflowGraph

@@ -11,7 +11,7 @@ import yaml
 
 from sophios.compiler import CompileSettings, compile_source, resolved_view
 from sophios.ir.artifacts import CompilationResult
-from sophios.ir.frontdoor import bundle_from_disk
+from sophios.frontdoor import bundle_from_disk
 from sophios.ir.refusals import NotLowered
 from sophios.ir.resolved import bind
 from sophios.lang.diagnostics import Diagnostic

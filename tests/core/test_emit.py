@@ -19,9 +19,9 @@ from sophios import compute
 from sophios.cwl import post_compile
 from sophios.compiler import resolved_view
 from sophios.cwl.io import dump_wic_yaml
-from sophios.ir.artifacts import CompilationArtifact
+from sophios.cwl.artifacts import CompilationArtifact
 from sophios.ir.complete import coerce_job_value, complete
-from sophios.lang.cwl import port_declaration
+from sophios.lang.ports import port_declaration
 from sophios.lang.types import read_type
 from sophios.cwl.emit import artifact_tree
 from sophios.ir.infer import infer

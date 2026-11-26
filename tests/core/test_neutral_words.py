@@ -3,8 +3,8 @@ from typing import Any
 
 import pytest
 
-from sophios.lang.cwl_tool import read_word, write_word
-from sophios.lang.tools import Collect, Part, Reference, Word
+from sophios.lang.cwl_tool import read_text, read_word, write_word
+from sophios.lang.tools import Collect, Computed, Part, Reference, Word
 from sophios.wic_types import Tool
 
 _FILE = Reference('f', Part.PATH)
@@ -52,14 +52,24 @@ def test_a_binding_and_an_output_binding_are_read_into_words_and_kinds() -> None
     body = _tool({'valueFrom': '$(inputs.n)'}, {'glob': '$(inputs.n).txt', 'outputEval': ' $(self[0].contents) '}
                  ).node.body()
     placement, capture = body.inputs[0].placement, body.outputs[0].capture
-    assert placement is not None and placement.value_from == Word(('', Reference('n'), '')) \
-        and placement.unread_value is None
+    assert placement is not None and placement.value_from == Word(('', Reference('n'), ''))
     assert capture is not None and capture.glob == Word(('', Reference('n'), '.txt')) \
         and capture.output_eval is Collect.TEXT and (capture.unread_glob, capture.unread_eval) == (None, None)
 
     body = _tool({'valueFrom': '$(inputs.n.length)'}, {'glob': ['a', 'b'], 'outputEval': '$(self[0].dirname)'}
                  ).node.body()
     placement, capture = body.inputs[0].placement, body.outputs[0].capture
-    assert placement is not None and (placement.value_from, placement.unread_value) == (None, '$(inputs.n.length)')
+    assert placement is not None and placement.value_from == Computed('$(inputs.n.length)', True)
     assert capture is not None and (capture.glob, capture.output_eval) == (None, None) \
-        and (capture.unread_glob, capture.unread_eval) == (['a', 'b'], '$(self[0].dirname)')
+        and (capture.unread_glob, capture.unread_eval) == (['a', 'b'], '$(self[0].dirname)') \
+        and capture.eval_reason is not None
+
+
+@pytest.mark.fast
+def test_text_no_word_holds_is_kept_as_written_with_the_inputs_it_names() -> None:
+    """An expression, or text no program takes, is `Computed`: as written, flagged an expression or not, and with
+    every input it refers to by `$(inputs.name)`, wherever in it."""
+    assert read_text('$(inputs.n) $(inputs.n.length)') == Computed(
+        '$(inputs.n) $(inputs.n.length)', True, (Reference('n'),))
+    assert read_text('a\x00b') == Computed('a\x00b', False)
+    assert read_text('$(inputs.f.path)') == Word(('', _FILE, ''))

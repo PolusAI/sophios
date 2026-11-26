@@ -17,7 +17,7 @@ from hypothesis import example, given, strategies as st
 import sophios.plugins
 from sophios.runtime import preflight
 from sophios.compiler import CompileSettings, compile_source
-from sophios.ir.frontdoor import bundle_from_disk
+from sophios.frontdoor import bundle_from_disk
 from sophios.lang.types import read_type
 from sophios.lang.types import optional, spell
 from sophios.cwl.policy import tolerant_tool

@@ -8,10 +8,12 @@ the typing rules is rejected with a ValueError naming the construct. The
 Nextflow target's Groovy rendering and reading are ``sophios.nextflow.expr``.
 """
 
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
+from itertools import chain
 import math
 import re
-from typing import Final, Mapping, TypeAlias
+from typing import Any, Final, TypeAlias
 
 from cwl_utils.errors import SubstitutionError
 from cwl_utils.expression import scanner
@@ -488,3 +490,51 @@ def one_expression(field: str) -> str | None:
     except SubstitutionError:
         return None
     return text[:2] if span == (0, len(text)) and text[:2] in ('$(', '${') else None
+
+
+def strings(value: Any) -> Iterator[str]:
+    """Every string in `value`: itself, or the strings at any depth of a list or of a mapping's values."""
+    match value:
+        case str():
+            yield value
+        case list():
+            yield from chain.from_iterable(map(strings, value))
+        case Mapping():
+            yield from strings(list(value.values()))
+
+
+#: An input a CWL expression reads, `inputs.name` or `inputs["name"]`: `inputs.name-1` is `inputs.name` minus 1.
+_INPUT_READ: Final = re.compile(r'\binputs(?:\.([A-Za-z_]\w*)|\[\s*["\']([^"\']+)["\']\s*\])')
+
+
+def inputs_read(value: Any) -> tuple[str, ...]:
+    """Every input the CWL expressions in `value` (a string, or the strings at any depth of a list or mapping) read,
+    in order of first mention."""
+    return tuple(dict.fromkeys(a or b for text in strings(value) for a, b in _INPUT_READ.findall(text)))
+
+
+@dataclass(frozen=True, slots=True)
+class Guard:
+    """A step's condition: its tree when the safe subset reads the text, the inputs the text reads, and, where there
+    is no tree, why, in the subset's words. `text` is what the author wrote, which only a diagnostic quotes: the text
+    the subset does not read rides unread in the step's `passthrough`, and the tree is what a target writes."""
+
+    expr: Expr | None
+    reads: tuple[str, ...]
+    problem: str | None = None
+    text: Any = None
+
+
+def read_guard(written: object) -> Guard:
+    """A step's `when` read: its tree where the safe subset reads the text, the inputs the text reads, and where there
+    is no tree, why, in the subset's words."""
+    reads = inputs_read(written)
+    if not isinstance(written, str):
+        return Guard(None, reads, 'a when is a string', written)
+    if not is_safe_subset_text(written):
+        return Guard(None, reads, 'the safe JavaScript subset requires the whole field to be one $( … ) reference',
+                     written)
+    try:
+        return Guard(parse(written), reads, None, written)
+    except ValueError as error:
+        return Guard(None, reads, str(error), written)

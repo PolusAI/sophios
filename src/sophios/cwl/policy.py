@@ -5,7 +5,7 @@ import hashlib
 import json
 
 from ..ir.policy import RunPolicy
-from ..lang.nodes import OpaqueCwl
+from ..lang.nodes import Value
 from ..lang.subset import one_expression
 from ..lang.types import optional, read_type
 from ..wic_types import Cwl
@@ -14,7 +14,7 @@ from ..wic_types import Cwl
 _STREAMS = ('stdout', 'stderr')
 
 
-def effective_when(authored: OpaqueCwl, needed: Sequence[str], policy: RunPolicy) -> OpaqueCwl:
+def effective_when(authored: Value, needed: Sequence[str], policy: RunPolicy) -> Value:
     """The `when` a step is written with: the null checks of every input it requires, then its own.
 
     The checks come first, so the author's condition is evaluated only once every
@@ -65,12 +65,12 @@ def tolerant_tool(document: Cwl, policy: RunPolicy) -> Cwl:
     return tool
 
 
-def _type(entry: OpaqueCwl) -> OpaqueCwl:
+def _type(entry: Value) -> Value:
     """The type an output declares, written alone or as its mapping's `type`."""
     return entry.get('type') if isinstance(entry, dict) else entry
 
 
-def _captured(entry: OpaqueCwl) -> str | None:
+def _captured(entry: Value) -> str | None:
     """The stream an output captures, if it says so as CWL lets it: without a binding of its own."""
     match _type(entry):
         case str() as declared if declared in _STREAMS and not (isinstance(entry, dict) and 'outputBinding' in entry):
@@ -78,7 +78,7 @@ def _captured(entry: OpaqueCwl) -> str | None:
     return None
 
 
-def _tolerant_output(entry: OpaqueCwl, tool: Cwl) -> OpaqueCwl:
+def _tolerant_output(entry: Value, tool: Cwl) -> Value:
     """One output of `tool`, as it accepts `null`. A stream output with a binding of its own is no CWL, and is
     left for cwltool to refuse."""
     declared = _type(entry)
@@ -89,7 +89,7 @@ def _tolerant_output(entry: OpaqueCwl, tool: Cwl) -> OpaqueCwl:
         return entry
     match declared:
         case str():
-            tolerant: OpaqueCwl = f'{declared}?'
+            tolerant: Value = f'{declared}?'
         case list():
             tolerant = ['null', *declared]
         case _:

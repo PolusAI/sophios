@@ -9,7 +9,7 @@ from ruamel.yaml import YAML as _RuamelYAML
 from ruamel.yaml.nodes import ScalarNode as _RuamelScalarNode
 
 from .. import auto_gen_header
-from ..ir.artifacts import CompilationArtifact
+from .artifacts import CompilationArtifact
 from ..ir.locations import absolute_paths
 from ..lang.values import read_value, write_value
 from ..lang.diagnostics import SophiosError

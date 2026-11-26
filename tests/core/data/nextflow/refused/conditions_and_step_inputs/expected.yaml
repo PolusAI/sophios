@@ -7,6 +7,9 @@ roots:
   - [nf-s012, no_inputs, null]
   an_absent_optional_file.wic:
   - [nf-s020, null, null]
+  a_when_written_as_the_author_spaced_it.wic:
+  - [nf-s011, spaced_unbound, null]
+  - [nf-s010, spaced_not_a_boolean, null]
   workflow.wic:
   - [nf-s011, reads_a_tool_default, null]
   - [wic056, not_a_boolean, null]

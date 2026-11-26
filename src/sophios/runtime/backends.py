@@ -26,7 +26,7 @@ from typing import Any, Final, Protocol
 from cwl_utils.parser import cwl_v1_2
 
 from . import preflight, realtime, setup
-from ..ir.artifacts import CompilationArtifact
+from ..cwl.artifacts import CompilationArtifact
 from ..lang.diagnostics import Diagnostic, SophiosError
 from ..lang.values import FileKind, FileValue, Location
 from ..nextflow import render as io_nf

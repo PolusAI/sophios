@@ -11,7 +11,7 @@ from typing import Final
 
 from ..lang.diagnostics import Diagnostics, Locator, SophiosError
 from ..lang.error_codes import SophiosErrorCode
-from ..lang.nodes import InlineLiteral, OpaqueCwl
+from ..lang.nodes import InlineLiteral, Value
 from ..lang.spans import SourceSpan
 from ..lang.values import FileValue, write_value
 from ..utils_yaml import Key
@@ -42,7 +42,7 @@ class Declaration:
     max_times: int
     interval: int
     #: A `.wic` analysis's `wic: steps:` mapping, or a tool step's own keys (`{in: ...}`).
-    config: dict[str, OpaqueCwl]
+    config: dict[str, Value]
     span: SourceSpan | None = None
 
 
@@ -93,7 +93,7 @@ def _declaration(document: str, step: StepNode, diagnostics: Diagnostics) -> Dec
                           f'real-time analysis step {step.id.name!r}: {message}', step.span,
                           Locator(step=step.id.name, index=step.id.index, port=port))
 
-    values: dict[str, OpaqueCwl] = {}
+    values: dict[str, Value] = {}
     for binding in step.bindings:
         port = str(binding.sink.port)
         if isinstance(binding.value, InlineLiteral):
@@ -126,7 +126,7 @@ def _declaration(document: str, step: StepNode, diagnostics: Diagnostics) -> Dec
     return None
 
 
-def _plain(value: OpaqueCwl) -> OpaqueCwl:
+def _plain(value: Value) -> Value:
     """`value` with every `!ii` inside it, tagged or desugared, replaced by the value it carries."""
     match value:
         case InlineLiteral(value=inner):

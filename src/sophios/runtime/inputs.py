@@ -9,8 +9,8 @@ from typing import Any, TypeAlias
 
 from ..edam import resolve_file_format
 from ..ir.resolved import InputRef, ResolvedWorkflow, Through, tool_steps
-from ..lang.cwl import inputs_read
-from ..lang.tools import Dirent, NeedKind, Staging, ToolBody, ToolNode
+from ..lang.subset import inputs_read
+from ..lang.tools import Computed, Dirent, NeedKind, Staging, Text, ToolBody, ToolNode, Word
 from ..lang.types import required, spell
 from ..wic_types import Json
 
@@ -95,19 +95,29 @@ def _output_target_inputs(run: ToolNode) -> set[str]:
     target_inputs: set[str] = set()
     for output in body.outputs:
         if _is_directory(spell(output.type)) and output.capture is not None:
-            for input_name in (output.capture.glob.names if output.capture.glob is not None
-                               else inputs_read(output.capture.unread_glob)):
+            for input_name in _names(output.capture.glob if output.capture.glob is not None
+                                     else output.capture.unread_glob):
                 if input_name in writable_inputs and input_name in inputs \
                         and _is_directory(spell(inputs[input_name].type)):
                     target_inputs.add(input_name)
     return target_inputs
 
 
+def _names(text: Text | str | list[str] | None) -> tuple[str, ...]:
+    """The inputs a word, or the text no word holds, refers to."""
+    match text:
+        case Word():
+            return text.names
+        case Computed():
+            return inputs_read(text.text)
+    return inputs_read(text)
+
+
 def _writable_initial_workdir_inputs(body: ToolBody) -> set[str]:
     staging = body.need(NeedKind.STAGING)
     listing = staging.body.entries if staging is not None and isinstance(staging.body, Staging) else None
     return {name for entry in listing or () if isinstance(entry, Dirent) and entry.writable is True
-            for name in inputs_read(entry.entry)}
+            for name in _names(entry.entry)}
 
 
 def _is_directory(cwl_type: Any) -> bool:

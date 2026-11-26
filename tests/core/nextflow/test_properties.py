@@ -36,7 +36,8 @@ from sophios.nextflow.model import (
 from sophios.nextflow.tool import _command as lower_command
 from sophios.nextflow.tool import _Tool
 from sophios.wic_types import Tool
-from sophios.nextflow.tool import _template as lower_template
+from sophios.lang.cwl_tool import read_text
+from sophios.nextflow.tool import _template
 
 from ..budgets import budget
 
@@ -109,9 +110,9 @@ def test_a_command_is_read_as_cwltool_reads_it(text: str, order: tuple[str, ...]
         expected = interpolate(text, {"inputs": {"x": "VALUE"}}) if "$(" in text or "${" in text else text
     except (JavascriptException, SubstitutionError):
         with pytest.raises(ValueError, match="unsupported CWL expression"):
-            lower_template(text)
+            _template(read_text(text))
     else:
-        template = lower_template(text)
+        template = _template(read_text(text))
         assert "".join(segment.value if isinstance(segment, NfLiteral) else "VALUE"
                        for segment in template.segments) == expected
     command = lower_command(_Tool.of(Tool("cmd.cwl", {

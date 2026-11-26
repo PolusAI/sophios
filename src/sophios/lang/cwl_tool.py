@@ -15,43 +15,25 @@ from cwl_utils.parser import cwl_v1_2 as standard
 
 from .cwl import (
     Process, Written, separate_read_as_false, canonical, fields_set, inherited as loaded_inherited, input_reference,
-    literal, load_process, named_entries, port_declaration, ports_named,
+    literal, load_process, ports_named,
 )
+from .cwl_fields import OUTPUT_EVAL_REFUSALS, invalid_section, refused_class, unread
 from .diagnostics import SophiosError
-from .nodes import OpaqueCwl, ToolDocument
+from .needs import FEATURES, Inherited
+from .nodes import Value
+from .ports import named_entries, port_declaration
 from .subset import EXPRESSION
 from .tools import (
-    Accelerator, Arg, BodyKind, Capture, Collect, Container, Dirent, Generated, Need, NeedKind, Network, Other,
-    Placement,
-    Part, Reference, Resources, Staged, Staging, Stream, ToolBody, ToolInput, ToolNode, ToolOutput, ToolPort, Variable,
-    Variables, Word,
+    Accelerator, BodyKind, Capture, Collect, Computed, Container, Dirent, Generated, Need, NeedKind, Network,
+    Other, Part, Placement, Reference, Resources, Staged, Staging, Stream, Text, ToolBody, ToolInput, ToolNode,
+    ToolOutput, ToolPort, Variable, Variables, Word,
 )
+from .unread import UnreadField
 from .types import read_type
 from .values import read_value
 
 #: The vendor's accelerator class, which no field of the standard says.
 CUDA: Final = 'cwltool:CUDARequirement'
-
-#: By owner, the fields the reader holds a value of in a node field: the rest of an owner's written fields are
-#: `unread`, which a target judges by name.
-READ: Final[dict[str, frozenset[str]]] = {
-    'CommandLineTool': frozenset({
-        'class', 'id', 'inputs', 'outputs', 'baseCommand', 'arguments', 'stdin', 'stdout', 'stderr', 'requirements',
-        'hints'}),
-    'CommandInputParameter': frozenset({'id', 'type', 'default', 'inputBinding'}),
-    'CommandOutputParameter': frozenset({'id', 'type', 'outputBinding'}),
-    'CommandInputArraySchema': frozenset({'type', 'items'}),
-    'CommandLineBinding': frozenset({'position', 'prefix', 'separate', 'shellQuote', 'valueFrom'}),
-    'CommandOutputBinding': frozenset({'glob', 'loadContents', 'outputEval'}),
-    'DockerRequirement': frozenset({'class', 'dockerPull', 'dockerImageId'}),
-    'EnvVarRequirement': frozenset({'class', 'envDef'}),
-    'EnvironmentDef': frozenset({'envName', 'envValue'}),
-    'InitialWorkDirRequirement': frozenset({'class', 'listing'}),
-    'Dirent': frozenset({'entry', 'entryname', 'writable'}),
-    'ResourceRequirement': frozenset({'class', 'coresMin', 'coresMax', 'ramMin', 'ramMax'}),
-    'NetworkAccess': frozenset({'class', 'networkAccess'}),
-    CUDA: frozenset({'cudaDeviceCountMin', 'cudaDeviceCountMax', 'cudaVersionMin', 'cudaComputeCapability'}),
-}
 
 _KINDS: Final = {
     'DockerRequirement': NeedKind.CONTAINER, 'EnvVarRequirement': NeedKind.ENVIRONMENT,
@@ -71,14 +53,14 @@ _PARTS: Final = {None: Part.VALUE, 'path': Part.PATH, 'basename': Part.BASENAME}
 _COLLECTS: Final = {'$(self[0])': Collect.FIRST, '$(self[0].contents)': Collect.TEXT}
 
 
-def read_word(text: OpaqueCwl) -> Word | None:
+def read_word(text: Value) -> Word | None:
     """The word a CWL string says: literal text, and references to inputs (`$(inputs.x)`, `$(inputs.x.path)` and
     `$(inputs.x.basename)`); None for any other text, which holds no word: one with a NUL byte, which no program
     takes, and one with an expression CWL would evaluate. cwltool interpolates only text that holds an expression,
     stripping it and unescaping what the text escapes."""
     if not isinstance(text, str) or '\x00' in text:
         return None
-    interpolated = EXPRESSION.search(text)
+    written, interpolated = text, EXPRESSION.search(text)
     if interpolated:
         text = text.strip()
     parts: list[str | Reference] = []
@@ -92,7 +74,7 @@ def read_word(text: OpaqueCwl) -> Word | None:
     # two sides cannot join into an expression's start: `{$$(inputs.x){$` is `{$`, a reference and `{$`.
     if interpolated and EXPRESSION.search(_INTERPOLATION.sub(' ', text)):
         return None
-    return Word(tuple(parts))
+    return Word(tuple(parts), written)
 
 
 _SUFFIXES: Final = {Part.VALUE: '', Part.PATH: '.path', Part.BASENAME: '.basename'}
@@ -109,20 +91,49 @@ def write_word(word: Word | Computed) -> str:
                    else input_reference(part.name, _SUFFIXES[part.part]) or '' for part in word.parts)
 
 
-def _unread(value: Any, owner: str) -> tuple[str, ...]:
-    """The fields `value` writes that `owner`'s node fields hold no value of, in the order the loader gives them."""
-    return tuple(name for name in fields_set(value) if name not in READ.get(owner, {'class'}))
+def _references(text: str) -> tuple[Reference, ...]:
+    """The inputs `text` refers to, wherever in it, in the order it does."""
+    return tuple(Reference(found['name'], _PARTS[found['suffix']])
+                 for found in _INTERPOLATION.finditer(text) if found['name'])
+
+
+def read_text(text: Value) -> Text:
+    """The word `text` says, else the text as written: an expression a target would have to evaluate, or text no
+    target can take as it is."""
+    return read_word(text) or Computed(str(text), bool(isinstance(text, str) and EXPRESSION.search(text)),
+                                       _references(str(text)))
+
+
+def _amount(value: Any) -> Any:
+    """A number a requirement asks for as it is written; text is not a number, and is held as it was written."""
+    return Computed(value, bool(EXPRESSION.search(value)), _references(value)) if isinstance(value, str) else value
+
+
+def _position(value: Any) -> Any:
+    """A command line position as written: a whole number, the text of one as that number, or any other text as
+    written."""
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return Computed(value, bool(EXPRESSION.search(value)), _references(value))
+    return value
+
+
+def _unread(value: Any, owner: str) -> tuple[UnreadField, ...]:
+    """The fields `value` writes that earn a refusal, those of a CWL `owner` that no node of Sophios holds."""
+    return unread(owner, fields_set(value))
 
 
 def _placement(binding: Any) -> Placement:
     """A binding, a `CommandLineBinding` or the `InputBinding` of a process that is no tool, which writes only its
     `loadContents`."""
     written = getattr(binding, 'valueFrom', None)
-    word = read_word(written)
     return Placement(
-        getattr(binding, 'position', None), getattr(binding, 'prefix', None), getattr(binding, 'separate', None),
-        getattr(binding, 'itemSeparator', None), getattr(binding, 'shellQuote', None), word,
-        _unread(binding, 'CommandLineBinding'), written if word is None else None)
+        _position(getattr(binding, 'position', None)), getattr(binding, 'prefix', None),
+        getattr(binding, 'separate', None), getattr(binding, 'itemSeparator', None),
+        getattr(binding, 'shellQuote', None), None if written is None else read_text(written),
+        _unread(binding, 'CommandLineBinding'))
 
 
 def _members(written: Any) -> list[Any]:
@@ -137,7 +148,8 @@ def _input(name: str, port: Any) -> ToolInput:
         None if binding is None else _placement(binding),
         _unread(port, 'CommandInputParameter'),
         tuple(_unread(member, 'CommandInputArraySchema') for member in _members(port.type_)
-              if isinstance(member, (standard.CommandInputArraySchema, standard.CommandOutputArraySchema))))
+              if isinstance(member, (standard.CommandInputArraySchema, standard.CommandOutputArraySchema))),
+        'stdin' in _members(canonical(port.type_)))
 
 
 def _output(name: str, port: Any) -> ToolOutput:
@@ -147,20 +159,22 @@ def _output(name: str, port: Any) -> ToolOutput:
     capture = None
     if binding is not None or stream is not None:
         glob, collect = getattr(binding, 'glob', None), getattr(binding, 'outputEval', None)
-        word = read_word(glob) if isinstance(glob, str) and glob else None
+        text = read_text(glob) if isinstance(glob, str) and glob else None
         collected = _COLLECTS.get(collect.strip()) if isinstance(collect, str) else None
-        capture = Capture(stream, word, getattr(binding, 'loadContents', None), collected,
+        capture = Capture(stream, text, getattr(binding, 'loadContents', None), collected,
                           () if binding is None else _unread(binding, 'CommandOutputBinding'),
-                          glob if word is None else None, collect if collected is None else None)
+                          glob if text is None else None, collect if collected is None else None,
+                          OUTPUT_EVAL_REFUSALS.get(collect.strip()) if isinstance(collect, str) else None)
     return ToolOutput(name, read_type(written), capture, _unread(port, 'CommandOutputParameter'))
 
 
 def _staged(item: Any) -> Staged:
     match item:
         case str():
-            return item
+            return read_text(item)
         case standard.Dirent():
-            return Dirent(item.entry, item.entryname, item.writable, _unread(item, 'Dirent'))
+            return Dirent(read_text(item.entry), None if item.entryname is None else read_text(item.entryname),
+                          item.writable, _unread(item, 'Dirent'))
         case standard.File() if (isinstance(item.basename, str) and isinstance(item.contents, str)
                                  and set(fields_set(item)) <= {'class', 'basename', 'contents'}):
             return Generated(item.basename, item.contents)
@@ -173,12 +187,13 @@ def _body_of(each: Any) -> Any:
         case standard.DockerRequirement():
             return Container(each.dockerPull, each.dockerImageId)
         case standard.EnvVarRequirement():
-            return Variables(tuple(Variable(entry.envName, entry.envValue, _unread(entry, 'EnvironmentDef'))
-                                   for entry in each.envDef))
+            return Variables(tuple(
+                Variable(entry.envName, read_text(entry.envValue), _unread(entry, 'EnvironmentDef'))
+                for entry in each.envDef))
         case standard.InitialWorkDirRequirement():
             return Staging(tuple(map(_staged, each.listing)) if isinstance(each.listing, list) else None)
         case standard.ResourceRequirement():
-            return Resources(each.coresMin, each.coresMax, each.ramMin, each.ramMax)
+            return Resources(*map(_amount, (each.coresMin, each.coresMax, each.ramMin, each.ramMax)))
         case standard.NetworkAccess():
             return Network(each.networkAccess)
 
@@ -190,14 +205,22 @@ def _need(place: str, hint: bool, each: Any) -> Need:
     if not isinstance(each, standard.ProcessRequirement):
         return Need(place, str(each.get('class') if isinstance(each, dict) else each), hint, NeedKind.OTHER, False)
     name = type(each).__name__
-    return Need(place, name, hint, _KINDS.get(name, NeedKind.OTHER), True, _unread(each, name), _body_of(each))
+    return Need(place, name, hint, _KINDS.get(name, NeedKind.OTHER), True, _unread(each, name), _body_of(each),
+                refused_class(name))
+
+
+def _accelerator(fields: Mapping[str, Any]) -> Accelerator:
+    """The accelerator the vendor's fields say."""
+    return Accelerator(_amount(fields.get('cudaDeviceCountMin')), _amount(fields.get('cudaDeviceCountMax')),
+                       fields.get('cudaVersionMin'), fields.get('cudaComputeCapability'),
+                       tuple((name, fields[name]) for name in ('cudaVersionMin', 'cudaComputeCapability')
+                             if name in fields))
 
 
 def _vendor(place: str, hint: bool, name: str, fields: Mapping[str, Any]) -> Need:
     """The need a vendor's requirement or hint is: no class of the standard holds it."""
     return Need(place, name, hint, NeedKind.ACCELERATOR if name == CUDA else NeedKind.OTHER, True,
-                tuple(key for key in fields if key not in READ.get(name, ())),
-                Accelerator(dict(fields)) if name == CUDA else None)
+                unread(name, fields), _accelerator(fields) if name == CUDA else None, refused_class(name))
 
 
 def _needs(process: Process, written: Written) -> tuple[Need, ...]:
@@ -214,15 +237,6 @@ def _needs(process: Process, written: Written) -> tuple[Need, ...]:
     return tuple(found)
 
 
-def _arguments(process: standard.CommandLineTool) -> tuple[Arg, ...]:
-    return tuple(_placement(argument) if isinstance(argument, standard.CommandLineBinding) else argument
-                 for argument in process.arguments or ())
-
-
-def _base(process: standard.CommandLineTool) -> str | tuple[str, ...] | None:
-    return tuple(process.baseCommand) if isinstance(process.baseCommand, list) else process.baseCommand
-
-
 def command(process: Process, written: Written) -> ToolBody:
     """The body a loaded process says. The ports it declares are its own, and a tool written in `.wic` that carries
     its CWL beside its lines loads it as one of no ports, which its lines then give."""
@@ -231,8 +245,13 @@ def command(process: Process, written: Written) -> ToolBody:
     if not isinstance(process, standard.CommandLineTool):
         return ToolBody(BodyKind.OTHER, process.class_, (), None, (), None, None, None, inputs, (), needs)
     outputs = tuple(_output(name, port) for name, port in ports_named(process.outputs).items())
-    return ToolBody(BodyKind.COMMAND, process.class_, _unread(process, 'CommandLineTool'), _base(process),
-                    _arguments(process), process.stdin, process.stdout, process.stderr, inputs, outputs, needs)
+    stdin, stdout, stderr = (None if stream is None else read_text(stream)
+                             for stream in (process.stdin, process.stdout, process.stderr))
+    base = tuple(process.baseCommand) if isinstance(process.baseCommand, list) else process.baseCommand
+    arguments = tuple(_placement(argument) if isinstance(argument, standard.CommandLineBinding) else read_text(argument)
+                      for argument in process.arguments or ())
+    return ToolBody(BodyKind.COMMAND, process.class_, _unread(process, 'CommandLineTool'), base, arguments,
+                    stdin, stdout, stderr, inputs, outputs, needs)
 
 
 def laid(read: Placement | None, slot: Placement) -> Placement:
@@ -242,8 +261,8 @@ def laid(read: Placement | None, slot: Placement) -> Placement:
     given = {name: value for name in ('position', 'prefix', 'separate', 'item_separator')
              if (value := getattr(slot, name)) is not None}
     placement = replace(read or Placement(), **given)
-    if slot.item_separator is not None and 'itemSeparator' not in placement.unread:
-        placement = replace(placement, unread=(*placement.unread, 'itemSeparator'))
+    if slot.item_separator is not None and not any(item.name == 'itemSeparator' for item in placement.unread):
+        placement = replace(placement, unread=(*placement.unread, *unread('CommandLineBinding', ('itemSeparator',))))
     return placement
 
 
@@ -261,7 +280,7 @@ def read_output(process: Process, name: str, fields: Mapping[str, Any]) -> ToolO
         {'id': name, **fields}, str(process.id), process.loadingOptions))
 
 
-def read_inherited(name: str, written: OpaqueCwl, hint: bool) -> tuple[Need | None, Exception | None]:
+def read_inherited(name: str, written: Value, hint: bool) -> tuple[Need | None, Exception | None]:
     """The need a step's or a workflow's requirement or hint `name` is, read once where it is written; a body the
     standard's loader refuses is held as its refusal, with the loader's message, for a tool that inherits it to raise.
     """
@@ -274,40 +293,47 @@ def read_inherited(name: str, written: OpaqueCwl, hint: bool) -> tuple[Need | No
         return None, refusal
 
 
-def read_body(load: Callable[[], tuple[Process, Written]],
-              read: Callable[[Process, Written], ToolBody] = command) -> ToolBody:
-    """The body of the tool `load` reads, once. `read` is the reader of the loaded process: the tool's own, or a
-    `.wic` tool's, which lays its lines over the CWL it carries beside them.
+def split(passthrough: 'tuple[tuple[str, Value], ...]', owner: str
+          ) -> tuple[tuple[Inherited, ...], tuple[UnreadField, ...]]:
+    """The requirements then the hints a step or a workflow (`owner`) writes as a mapping, in the order written; and
+    the refusal of every other key, a `requirements` or `hints` of another shape among them."""
+    found: list[Inherited] = []
+    other: list[str] = []
+    for key, value in passthrough:
+        if key in ('requirements', 'hints') and isinstance(value, dict):
+            found.extend(Inherited(str(name), body, key == 'hints', *read_inherited(str(name), body, key == 'hints'),
+                                   unread=unread(str(name), body) if str(name) in FEATURES and isinstance(body, dict)
+                                   else ()) for name, body in value.items())
+        else:
+            other.append(key)
+    return (tuple(sorted(found, key=lambda each: each.hint)),
+            (*unread(owner, other), *(invalid_section(owner, section) for section in ('requirements', 'hints')
+                                      if section in other)))
 
-    Raises:
-        SophiosError: `api004`, when the standard's loader refuses the tool.
-    """
-    return read(*load())
 
-
-def beside(keys: Iterable[tuple[str, OpaqueCwl]], run_path: str) -> tuple[Process, Written]:
+def beside(keys: Iterable[tuple[str, Value]], run_path: str) -> tuple[Process, Written]:
     """The CWL a `.wic` tool carries beside its lines (its requirements, hints, arguments, streams and the rest of what
     CommandLineTool says), read as a process of no ports, which its lines give.
 
     Raises:
         SophiosError: `api004` with the loader's own message, for a key the standard's loader refuses.
     """
-    head: dict[str, OpaqueCwl] = {'class': standard.CommandLineTool.__name__, 'inputs': [], 'outputs': []}
+    head: dict[str, Value] = {'class': standard.CommandLineTool.__name__, 'inputs': [], 'outputs': []}
     return load_process(head | {key: value for key, value in keys if key not in head and value is not None},
                         run_path)
 
 
-def tool_port(name: str, declaration: OpaqueCwl, *, output: bool) -> ToolPort:
+def tool_port(name: str, declaration: Value, *, output: bool) -> ToolPort:
     """The port `name` that writes `declaration`, a type or CWL's port of fields."""
     return ToolPort(name, port_declaration(declaration, output=output))
 
 
-def ports(raw: OpaqueCwl, *, output: bool) -> tuple[ToolPort, ...]:
+def ports(raw: Value, *, output: bool) -> tuple[ToolPort, ...]:
     """The ports a process declares under its `inputs:` or its `outputs:`, in CWL's map or list form."""
     return tuple(tool_port(name, declaration, output=output) for name, declaration in named_entries(raw))
 
 
-def namespaces(raw: OpaqueCwl) -> tuple[tuple[str, OpaqueCwl], ...]:
+def namespaces(raw: Value) -> tuple[tuple[str, Value], ...]:
     """The prefixes a process declares in its `$namespaces`."""
     return tuple((str(prefix), uri) for prefix, uri in raw.items()) if isinstance(raw, dict) else ()
 
@@ -321,17 +347,11 @@ def held(body: Callable[[], ToolBody]) -> tuple[ToolBody | None, Exception | Non
         return None, refusal
 
 
-def read_node(cwl: dict[str, Any], run_path: str, document: ToolDocument | None, passthrough: tuple[Any, ...],
-              body: Callable[[], ToolBody]) -> ToolNode:
-    """The tool with the ports `cwl` declares, the body `body` reads, once, and a body the standard's loader refuses
-    held as its refusal, with the loader's message, for a target that needs the body to raise."""
-    return ToolNode(
-        run_path, ports(cwl.get('inputs', {}), output=False), ports(cwl.get('outputs', {}), output=True),
-        cwl.get('class') == 'Workflow', namespaces(cwl.get('$namespaces')), document, passthrough, *held(body))
-
-
 def node(cwl: dict[str, Any], run_path: str, load: Callable[[], tuple[Process, Written]]) -> ToolNode:
     """The tool the CWL process `cwl` says, whose body is read through `load` (the standard's loader, once, shared by
-    every reader of the tool); held as it was read, for the CWL target to write back."""
-    return read_node(cwl, run_path, None, tuple((key, deepcopy(value)) for key, value in cwl.items()),
-                     lambda: read_body(load))
+    every reader of the tool) and a body the standard's loader refuses held as its refusal, with the loader's message,
+    for a target that needs the body to raise; held as it was read, for the CWL target to write back."""
+    return ToolNode(
+        run_path, ports(cwl.get('inputs', {}), output=False), ports(cwl.get('outputs', {}), output=True),
+        cwl.get('class') == 'Workflow', namespaces(cwl.get('$namespaces')), None,
+        tuple((key, deepcopy(value)) for key, value in cwl.items()), *held(lambda: command(*load())))

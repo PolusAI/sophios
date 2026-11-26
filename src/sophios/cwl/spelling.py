@@ -1,9 +1,9 @@
 """A neutral type, spelled as CWL writes one."""
-from ..lang.nodes import OpaqueCwl
+from ..lang.nodes import Value
 from ..lang.types import Array, Atom, Type, Unread, Union, spell
 
 
-def written_type(type_: Type, unread: tuple[Unread, ...] = ()) -> OpaqueCwl:
+def written_type(type_: Type, unread: tuple[Unread, ...] = ()) -> Value:
     """`type_` as a port's `type:` field, with what the type wrote beyond its nodes (`unread`) put back: a `null` and
     one other type `X?`, an array of one type `X[]`, where `X` is a named type (and `X?` an array of one) -- CWL
     expands one suffix in that field alone; any other shape in the long form."""

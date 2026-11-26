@@ -5,8 +5,10 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
-from sophios.lang.nodes import CwlRecord
+from sophios.lang.error_codes import SophiosErrorCode
+from sophios.lang.nodes import InputRecord
 from sophios.lang.subset import Boolean, Expr, Number, Op, Ref, Text, parse, written_text
+from sophios.lang.types import Unknown
 
 from .hermetic import compile_hermetic, cwl_tree
 
@@ -47,18 +49,34 @@ def test_a_scatter_method_the_standard_lacks_is_unread_and_written_back() -> Non
     result = compile_hermetic(_steps(scatterMethod='bogus'))
     assert result.graph.steps[1].scatter is None
     assert dict(result.graph.steps[1].passthrough) == {'scatterMethod': 'bogus'}
+    assert [(item.name, item.code) for item in result.graph.steps[1].unread] == [
+        ('scatterMethod', SophiosErrorCode.NF_SCATTER_METHOD_ALONE)]
     assert _second(_steps(scatterMethod='bogus'))['scatterMethod'] == 'bogus'
 
 
 @pytest.mark.fast
+def test_a_scatter_method_the_standard_lacks_is_an_unknown_the_scatter_holds() -> None:
+    """With a scatter to hold it, the unknown method is the scatter's, not unread on the step, and CWL gets it back
+    where the method goes."""
+    document = {'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': ['a.txt', 'b.txt']}},
+                           'scatter': 'name', 'scatterMethod': 'bogus'}]}
+    result = compile_hermetic(document)
+    step = result.graph.steps[0]
+    assert step.scatter is not None and step.scatter.method == Unknown('bogus')
+    assert 'scatterMethod' not in dict(step.passthrough) and not step.unread
+    assert cwl_tree(result).cwl['steps'][0]['scatterMethod'] == 'bogus'
+
+
+@pytest.mark.fast
 @pytest.mark.parametrize('field, known', [('linkMerge', 'merge_flattened'), ('pickValue', 'first_non_null')])
-def test_a_merge_or_pick_the_standard_lacks_is_unread_and_one_it_has_is_a_meaning(field: str, known: str) -> None:
-    """A step input that merges or picks as no way of the standard does holds neither: its field stays in `passthrough`
-    for the target that refuses it by name, where a way of the standard is a meaning and no field."""
-    unread = CwlRecord(fields=(('default', 1), (field, 'bogus'), ('label', 'x')))
-    assert (unread.merge, unread.pick) == (None, None)
-    assert unread.passthrough == ((field, 'bogus'), ('label', 'x'))
-    meant = CwlRecord(fields=((field, known), ('label', 'x')))
+def test_a_merge_or_pick_the_standard_lacks_is_unknown_and_one_it_has_is_a_meaning(field: str, known: str) -> None:
+    """A step input that merges or picks as no way of the standard does holds an `Unknown` of it, for the target that
+    refuses it by name, and no field; a way of the standard is a meaning and no field."""
+    unread = InputRecord(fields=(('default', 1), (field, 'bogus'), ('label', 'x'), ('loadContents', True)))
+    assert (unread.merge, unread.pick) in ((Unknown('bogus'), None), (None, Unknown('bogus')))
+    assert unread.passthrough == (('label', 'x'), ('loadContents', True))
+    assert [(item.name, item.code) for item in unread.unread] == [('loadContents', SophiosErrorCode.NF_LOAD_CONTENTS)]
+    meant = InputRecord(fields=((field, known), ('label', 'x')))
     assert (meant.merge or meant.pick) is not None and meant.passthrough == (('label', 'x'),)
 
 

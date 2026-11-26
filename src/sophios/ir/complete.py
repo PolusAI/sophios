@@ -16,7 +16,7 @@ from copy import deepcopy
 from dataclasses import dataclass, replace
 from typing import Any, Final
 
-from ..lang.nodes import CwlRecord, InlineLiteral, OpaqueCwl, UnresolvedName
+from ..lang.nodes import InlineLiteral, InputRecord, UnresolvedName, Value
 from ..lang.diagnostics import Locator, SophiosError
 from ..lang.spans import SourceSpan
 from ..lang.error_codes import SophiosErrorCode
@@ -85,7 +85,7 @@ def _lift_values(graph: WorkflowGraph) -> WorkflowGraph:
     job_bindings = list(graph.job_bindings)
     input_mapping = list(graph.input_mapping)
 
-    def lift(step: StepNode, port: Port, value: OpaqueCwl, span: SourceSpan | None) -> None:
+    def lift(step: StepNode, port: Port, value: Value, span: SourceSpan | None) -> None:
         name = DerivedName(step.id, port.id.port)
         declaration = feeding_declaration(step, port)
         workflow_inputs.append(WorkflowPort(name, declaration))
@@ -105,7 +105,7 @@ def _lift_values(graph: WorkflowGraph) -> WorkflowGraph:
         for binding in step.bindings:
             port = next(port for port in step.inputs if port.id == binding.sink)
             value = binding.value
-            for source in value.sources if isinstance(value, CwlRecord) else (value,):
+            for source in value.sources if isinstance(value, InputRecord) else (value,):
                 if isinstance(source, UnresolvedName):
                     _merge_boundary_documentation(workflow_inputs, AuthoredName(source.name), port.declaration)
             if isinstance(value, InlineLiteral):
@@ -210,8 +210,8 @@ def _as_text(value: Any) -> Any:
 
 
 # pylint: disable-next=too-many-arguments,too-many-positional-arguments
-def coerce_job_value(name: PortName, declaration: PortDeclaration, value: OpaqueCwl, *, scatter_rank: int = 0,
-                     span: SourceSpan | None = None, locator: Locator | None = None) -> OpaqueCwl:
+def coerce_job_value(name: PortName, declaration: PortDeclaration, value: Value, *, scatter_rank: int = 0,
+                     span: SourceSpan | None = None, locator: Locator | None = None) -> Value:
     """`value` in the one plain-JSON form a job document holds for `declaration`.
 
     A projection: a value already in that form (a lifted child job value, an
@@ -255,10 +255,10 @@ class _Mismatch(Exception):
     """A literal that is not of the scalar type its port declares."""
 
     raw: str
-    value: OpaqueCwl
+    value: Value
 
 
-def _coerce_type(type_: Type, value: OpaqueCwl, fmt: OpaqueCwl) -> OpaqueCwl:
+def _coerce_type(type_: Type, value: Value, fmt: Value) -> Value:
     if isinstance(type_, Union):
         non_null = [member for member in type_.members if member is not Atom.NULL]
         arrays = [member for member in non_null if isinstance(member, Array)]
@@ -276,7 +276,7 @@ def _coerce_type(type_: Type, value: OpaqueCwl, fmt: OpaqueCwl) -> OpaqueCwl:
     return _coerce_scalar(type_.value if isinstance(type_, Atom) else None, value, fmt)
 
 
-def _scalar_member_for(members: Sequence[Type], value: OpaqueCwl) -> Type | None:
+def _scalar_member_for(members: Sequence[Type], value: Value) -> Type | None:
     """The scalar member of a union whose type `value` already is, or None.
 
     A bool is a `boolean`, an int an `int` or `long`, a float a `float` or
@@ -292,7 +292,7 @@ def _scalar_member_for(members: Sequence[Type], value: OpaqueCwl) -> Type | None
     return None
 
 
-def _plain(value: OpaqueCwl) -> OpaqueCwl:
+def _plain(value: Value) -> Value:
     """Return `value` with any nested `InlineLiteral` replaced by its data."""
     if isinstance(value, InlineLiteral):
         return _plain(value.value)
@@ -303,7 +303,7 @@ def _plain(value: OpaqueCwl) -> OpaqueCwl:
     return value
 
 
-def _coerce_scalar(kind: str | None, value: OpaqueCwl, fmt: OpaqueCwl) -> OpaqueCwl:
+def _coerce_scalar(kind: str | None, value: Value, fmt: Value) -> Value:
     """`value` as the atom named `kind`; whatever else is not judged, and is taken as it is."""
     if kind in ('File', 'Directory'):
         if isinstance(value, str):
@@ -329,7 +329,7 @@ def _coerce_scalar(kind: str | None, value: OpaqueCwl, fmt: OpaqueCwl) -> Opaque
     return deepcopy(value)
 
 
-def _coerce_string(value: OpaqueCwl) -> str:
+def _coerce_string(value: Value) -> str:
     """The text of a scalar literal, or of a mapping or list as JSON.
 
     The one conversion kept besides an int into a float: `!ii 20` cannot be
@@ -348,7 +348,7 @@ def _coerce_string(value: OpaqueCwl) -> str:
     raise _Mismatch('string', value)
 
 
-def _coerce_float(raw: str, value: OpaqueCwl) -> float:
+def _coerce_float(raw: str, value: Value) -> float:
     """A float as it is, or an int the float holds exactly."""
     if isinstance(value, float):
         return float(value)
@@ -374,7 +374,7 @@ _PYTHON_TYPE: Final[Mapping[object, type]] = {
     'int': int, 'long': int, 'float': float, 'double': float, 'boolean': bool, 'string': str}
 
 
-def _what_is_wrong(raw: str, value: OpaqueCwl) -> str:
+def _what_is_wrong(raw: str, value: Value) -> str:
     """What `value` is, for a message; for a float port, the cause and the fix."""
     if raw in ('float', 'double'):
         if isinstance(value, int) and not isinstance(value, bool):

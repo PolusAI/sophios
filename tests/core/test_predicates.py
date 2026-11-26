@@ -5,7 +5,7 @@ import pytest
 from hypothesis import example, given
 from hypothesis import strategies as st
 
-from sophios.ir.artifacts import CompilationArtifact
+from sophios.cwl.artifacts import CompilationArtifact
 from sophios.wic_types import Tools, Yaml
 
 from .hermetic import ORACLE, compile_hermetic, cwl_tree, subworkflow_step

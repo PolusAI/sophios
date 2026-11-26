@@ -13,19 +13,18 @@ from hashlib import sha256
 import json
 import os
 from pathlib import Path
-from typing import Iterable, Mapping
+from typing import Iterable, Mapping, Protocol, TypeVar
 
 from ..lang import (
-    CWL_VERSION,
-    CwlRecord,
     Document,
     EdgeDef,
     EdgeRef,
     InlineLiteral,
+    InputRecord,
     Key,
     OutputBinding,
     ParseResult,
-    RawCwlRef,
+    PassthroughRef,
     SophiosErrorCode,
     SourceSpan,
     StepKey,
@@ -34,14 +33,46 @@ from ..lang import (
     WicSidecar,
 )
 from ..lang.diagnostics import Diagnostic, Diagnostics, Locator, SophiosError
-from ..lang.cwl import named_entries, port_declaration
-from ..lang.nodes import GraphvizEntry, InputValue, OpaqueCwl, Step
-from ..lang.tools import ToolNode
+from ..lang.nodes import GraphvizEntry, InputValue, Step, Value
+from ..lang.tools import ToolNode, stem
 from ..lang.types import PortDeclaration
 from ..lang.values import read_value
-from ..wic_types import Tool, Tools
 from .check import CheckedDocument, check as check_document
 from .types import RegistryKey
+
+
+class ToolSource(Protocol):
+    """What the registry holds of a tool: where it is, and the node it reads as when first asked."""
+
+    @property
+    def run_path(self) -> str:
+        """Where the tool is, or is named as."""
+
+    @property
+    def from_file(self) -> bool:
+        """Whether `run_path` is the tool's own file."""
+
+    @property
+    def node(self) -> ToolNode:
+        """The tool as a node."""
+
+    def read(self) -> None:
+        """Read the tool; raises `SophiosError` for one that cannot be read."""
+
+
+class ToolId(Protocol):
+    """How the registry's index names a tool: the stem of its file under the namespace it was found in."""
+
+    @property
+    def stem(self) -> str:
+        """The file name without its extension."""
+
+    @property
+    def plugin_ns(self) -> str:
+        """The namespace."""
+
+
+_Id = TypeVar('_Id', bound=ToolId)
 
 
 @dataclass(frozen=True)
@@ -49,7 +80,7 @@ class ToolDefinition:
     """An owned snapshot of one runnable process definition."""
 
     key: RegistryKey
-    source: Tool
+    source: ToolSource
 
     @property
     def run_path(self) -> str:
@@ -58,7 +89,7 @@ class ToolDefinition:
 
     @property
     def from_file(self) -> bool:
-        """Whether `run_path` is the tool's own CWL file."""
+        """Whether `run_path` is the tool's own file."""
         return self.source.from_file
 
     @cached_property
@@ -67,7 +98,7 @@ class ToolDefinition:
         return self.source.node
 
 
-#: Why a tool is not a valid CWL process, or None when it is: what `resolve` asks of each tool a step runs, before it
+#: Why a tool is not a valid process, or None when it is: what `resolve` asks of each tool a step runs, before it
 #: reads the tool. Resolution touches no file, so a caller that validates supplies this.
 ToolCheck = Callable[[ToolDefinition], str | None]
 
@@ -98,13 +129,16 @@ class RegistrySnapshot:
     run_names: tuple[tuple[Path, str, str], ...] = ()
     #: Where the root document is, for the ``run:`` paths it writes.
     root_directory: Path | None = None
+    #: What the door sets in an inline ``run:`` body before it is identified: the version it is read as.
+    stamp: tuple[tuple[str, Value], ...] = ()
 
     @classmethod
-    def from_tools(cls, tools: Tools, *,
+    def from_tools(cls, tools: Mapping[_Id, ToolSource], *,
                    workflows: Mapping[tuple[str, str], ParseResult] | None = None,
                    directories: Mapping[tuple[str, str], Path] | None = None,
                    run_names: Mapping[tuple[Path, str], str] | None = None,
-                   root_directory: Path | None = None) -> 'RegistrySnapshot':
+                   root_directory: Path | None = None,
+                   stamp: tuple[tuple[str, Value], ...] = ()) -> 'RegistrySnapshot':
         """Own a deterministic snapshot of the legacy public registry."""
         definitions = tuple(sorted((
             ToolDefinition(RegistryKey(step_id.plugin_ns, step_id.stem), tool)
@@ -115,7 +149,7 @@ class RegistrySnapshot:
             for (namespace, name), parsed in (workflows or {}).items()
         ), key=lambda item: item.key))
         named = tuple(sorted((directory, run, name) for (directory, run), name in (run_names or {}).items()))
-        return cls(definitions, sources, named, root_directory)
+        return cls(definitions, sources, named, root_directory, stamp)
 
     def tool(self, key: RegistryKey) -> ToolDefinition | None:
         """Look up a tool without exposing a mutable mapping."""
@@ -238,7 +272,7 @@ def _resolve_process(step: Step, index: int, sidecar: WicSidecar | None, registr
                      directory: Path | None, check: ToolCheck | None) -> ResolvedProcess | None:
     namespace = namespace_of(sidecar)
     run = dict(step.interpreted).get('run')
-    name = _stem(run if isinstance(run, str) else step.id)
+    name = stem(run if isinstance(run, str) else step.id)
     own_name = _own_run_name(step, registry, directory)
     own_key = RegistryKey(namespace, own_name or name)
     key = own_key if registry.tool(own_key) is not None or registry.workflow(own_key) is not None \
@@ -250,10 +284,10 @@ def _resolve_process(step: Step, index: int, sidecar: WicSidecar | None, registr
         or (isinstance(run, str) and run.endswith('.wic'))
     tool = registry.tool(key)
     if tool is None and isinstance(run, str):
-        tool = registry.tool(RegistryKey(namespace, _stem(run)))
+        tool = registry.tool(RegistryKey(namespace, stem(run)))
     workflow = registry.workflow(key) if explicit_workflow or tool is None else None
     if workflow is None and explicit_workflow:
-        workflow = registry.workflow(RegistryKey(namespace, _stem(step.id)))
+        workflow = registry.workflow(RegistryKey(namespace, stem(step.id)))
     if workflow is not None:
         return _resolve_workflow(step, sidecar, workflow, registry, trail, diagnostics, reported, check)
 
@@ -281,7 +315,7 @@ def _resolve_process(step: Step, index: int, sidecar: WicSidecar | None, registr
     # A packed document was read as its `main` where the tool was loaded, so it is the process's own class.
     if node.workflow:
         diagnostics.error(SophiosErrorCode.SUBWORKFLOW_INVALID,
-                          _cwl_workflow_step(step, tool, own_name, directory), step.span)
+                          _foreign_workflow_step(step, tool, own_name, directory), step.span)
         return None
     return ResolvedProcess(
         tool.key,
@@ -320,10 +354,10 @@ def _resolve_workflow(step: Step, sidecar: WicSidecar | None, workflow: Workflow
     interface = _workflow_interface(source, key, diagnostics)
     if interface is None:
         return None
-    return ResolvedProcess(key, f'{key.name}.cwl', *interface, child=child)
+    return ResolvedProcess(key, key.name, *interface, child=child)
 
 
-def _cwl_workflow_step(step: Step, tool: ToolDefinition, own_name: str | None, directory: Path | None) -> str:
+def _foreign_workflow_step(step: Step, tool: ToolDefinition, own_name: str | None, directory: Path | None) -> str:
     """Why a step whose process is a CWL ``class: Workflow`` is refused, and what works.
 
     The step would run a copy of the file without the files its own steps run,
@@ -353,7 +387,7 @@ def _own_run_name(step: Step, registry: RegistrySnapshot, directory: Path | None
     run = dict(step.interpreted).get('run')
     if isinstance(run, dict):
         assert directory is not None and registry.root_directory is not None, 'an inline body was read from a document'
-        return inline_run_name(step.id, run, path_from_root(directory, registry.root_directory))
+        return inline_run_name(step.id, run, path_from_root(directory, registry.root_directory), registry.stamp)
     return registry.run_name(directory, run) if isinstance(run, str) else None
 
 
@@ -365,18 +399,19 @@ def path_from_root(path: Path, root: Path) -> str:
         return path.as_posix()
 
 
-def inline_run_name(step_id: str, run: Mapping[str, OpaqueCwl], document_dir: str) -> str:
+def inline_run_name(step_id: str, run: Mapping[str, Value], document_dir: str,
+                    stamp: tuple[tuple[str, Value], ...]) -> str:
     """The registry name of the inline ``run:`` body of the step ``step_id``.
 
     A body is identified by its content and by the directory of the document
     that writes it (``document_dir``, from the root document's), so two steps
     with the same id but different bodies are different processes, and so are
     two copies of one body in two directories, whose relative references name
-    different files. It is identified as it is registered, in ``CWL_VERSION``:
-    a ``cwlVersion`` inside it is ignored.
+    different files. It is identified as it is registered, with the door's ``stamp`` set over it:
+    a key of the stamp inside it is ignored.
     """
-    identity = json.dumps([document_dir, {**run, 'cwlVersion': CWL_VERSION}], sort_keys=True, default=str)
-    return _hashed(_stem(step_id), identity)
+    identity = json.dumps([document_dir, {**run, **dict(stamp)}], sort_keys=True, default=str)
+    return _hashed(stem(step_id), identity)
 
 
 def run_path_name(run: str, root_relative: str) -> str:
@@ -386,7 +421,7 @@ def run_path_name(run: str, root_relative: str) -> str:
     so the name does not depend on where the checkout is, and two files with
     one stem are two names.
     """
-    return _hashed(_stem(run), root_relative)
+    return _hashed(stem(run), root_relative)
 
 
 def _hashed(stem: str, identity: str) -> str:
@@ -422,12 +457,6 @@ def _select_implementation(document: Document,
     return source.parsed.document, diagnostics
 
 
-def process_ports(raw: object, *, output: bool) -> tuple[ResolvedPort, ...]:
-    """The ports a process declares under its `inputs:` or its `outputs:`, in CWL's map or list form."""
-    return tuple(ResolvedPort(name, port_declaration(declaration, output=output))
-                 for name, declaration in named_entries(raw))
-
-
 def _workflow_interface(document: Document, key: RegistryKey, diagnostics: Diagnostics) \
         -> tuple[tuple[ResolvedPort, ...], tuple[ResolvedPort, ...]] | None:
     """The ports a called workflow declares, or None, reported, when it declares them in a list.
@@ -437,17 +466,15 @@ def _workflow_interface(document: Document, key: RegistryKey, diagnostics: Diagn
     which names ports in a file only cwltool reads, so no step could be checked
     against them.
     """
-    passthrough = dict(document.passthrough)
-    listed = [name for name in ('inputs', 'outputs') if isinstance(passthrough.get(name), list)]
-    for name in listed:
+    for name in document.boundary.listed:
         diagnostics.error(SophiosErrorCode.SUBWORKFLOW_INVALID,
                           f'workflow {key.namespace}/{key.name} lists its {name}: with an $import or $include, '
                           'whose ports only cwltool can read; write them as a mapping to call it',
                           document.span)
-    if listed:
+    if document.boundary.listed:
         return None
-    return (process_ports(passthrough.get('inputs', {}), output=False),
-            process_ports(passthrough.get('outputs', {}), output=True))
+    return (tuple(ResolvedPort(port.name, port.declaration) for port in document.boundary.inputs),
+            tuple(ResolvedPort(port.name, port.declaration) for port in document.boundary.outputs))
 
 
 #: The two keys a `(N, name)` body contributes to the step it names; every
@@ -484,28 +511,28 @@ def _contributed_step(step: Step, sidecar: WicSidecar | None) -> Step:
     return replace(step, inputs=inputs, outputs=outputs)
 
 
-def _contributed_input(value: OpaqueCwl, span: SourceSpan) -> InputValue:
+def _contributed_input(value: Value, span: SourceSpan) -> InputValue:
     """Read one contributed `in:` value back into the closed input union.
 
     Accepts either an already-typed tagged construct or its desugared mapping
     spelling; both surfaces mean one thing (.wic reference §3.1).
     """
     match value:
-        case InlineLiteral() | EdgeRef() | RawCwlRef() | UnresolvedName() | CwlRecord():
+        case InlineLiteral() | EdgeRef() | PassthroughRef() | UnresolvedName() | InputRecord():
             return value
         case {Key.INLINE_INPUT: literal}:
             return InlineLiteral(read_value(literal), span)
         case {Key.ALIAS: name}:
             return EdgeRef(str(name), span)
-        case {Key.RAW_CWL: expression}:
-            return RawCwlRef(str(expression), span)
+        case {Key.PASSTHROUGH: expression}:
+            return PassthroughRef(str(expression), span)
         case dict() | list():
             return InlineLiteral(read_value(value), span)
         case _:
             return UnresolvedName(str(value), span)
 
 
-def _contributed_output(entry: OpaqueCwl, span: SourceSpan) -> OutputBinding:
+def _contributed_output(entry: Value, span: SourceSpan) -> OutputBinding:
     """Read one contributed `out:` entry -- a bare name, or a single-key
     mapping to a desugared edge definition -- back into an output binding.
     """
@@ -579,7 +606,7 @@ def _inherited_step(steps: dict[StepKey, WicSidecar], key: StepKey,
     return key, steps.pop(bare, None)
 
 
-def _merged_value(own: OpaqueCwl, contributed: OpaqueCwl) -> OpaqueCwl:
+def _merged_value(own: Value, contributed: Value) -> Value:
     """Mappings merge key by key; any other contributed value replaces."""
     if not isinstance(own, dict) or not isinstance(contributed, dict):
         return contributed
@@ -660,11 +687,6 @@ def version_pins(document: Document | ToolDocument) -> tuple[str, ...]:
     """The `wic: lang_version:` `document` pins, if it pins one."""
     value = dict(document.sidecar.entries).get('lang_version') if document.sidecar is not None else None
     return () if value is None else (str(value),)
-
-
-def _stem(value: str) -> str:
-    leaf = value.replace('\\', '/').rsplit('/', 1)[-1]
-    return leaf[:-4] if leaf.endswith(('.wic', '.cwl')) else leaf
 
 
 def _copy_diagnostics(target: Diagnostics, source: Iterable[Diagnostic]) -> None:

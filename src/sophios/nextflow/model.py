@@ -11,7 +11,7 @@ from types import MappingProxyType
 from typing import Any, ClassVar, Final, Generic, TypeVar, get_args
 
 from ..lang.subset import Expr, canonical, check, references, validate
-from ..lang.types import LINK_MERGES, PICK_VALUES, PICKS_ONE, SCATTER_METHODS
+from ..lang.types import LINK_MERGES, PICK_VALUES, PICKS_ONE, SCATTER_METHODS, Atom, read_type, without_null
 from .expr import NF_FINITE_HELPER, NF_ROUND_HELPER
 from .symbols import NEXTFLOW_SCRIPT_DECLARED_NAMES, validate_nextflow_identifier
 
@@ -1164,8 +1164,11 @@ def topological_order(position: Mapping[str, int], connections: Iterable[NfConne
     return ordered
 
 
-#: The parameter types whose absent value has no lowering: no path parameter takes the `[]` sentinel.
-ABSENT_PATH_TYPES: Final = ("File?", "Directory?")
+def absent_path(declared: str) -> bool:
+    """Whether the parameter type `declared` is an optional File or Directory, whose absent value has no lowering: no
+    path parameter takes the `[]` sentinel."""
+    type_, accepts_null = without_null(read_type(declared))
+    return accepts_null and type_ in (Atom.FILE, Atom.DIRECTORY)
 
 
 def gives_list(pick_value: object) -> bool:
@@ -1189,7 +1192,7 @@ def absent_path_problems(params: Mapping[str, Any], param_types: Mapping[str, st
     absent value."""
     return [f"workflow input {name!r} is an absent optional {declared}, which has no lowering; give it a value"
             for name, declared in sorted(param_types.items())
-            if declared in ABSENT_PATH_TYPES and isinstance(params.get(name), (list, tuple)) and not params[name]]
+            if absent_path(declared) and isinstance(params.get(name), (list, tuple)) and not params[name]]
 
 
 def optional_output_problems(processes: Sequence[NfProcess], connections: Sequence["NfConnection"]) -> list[str]:

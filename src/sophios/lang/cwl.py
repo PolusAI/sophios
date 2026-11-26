@@ -4,11 +4,9 @@ The language spec pins Sophios to one CWL version; that version belongs
 here, in the language definition, not to whichever module emits a document.
 Import `CWL_VERSION` rather than writing a version literal.
 """
-from collections.abc import Iterator, Mapping, Sequence
-from copy import deepcopy
+from collections.abc import Mapping, Sequence
 import enum
 from enum import StrEnum
-from itertools import chain
 from pathlib import Path
 import re
 from typing import Any, Final, TypeAlias, TypeGuard
@@ -18,10 +16,9 @@ import yaml
 
 from .diagnostics import SophiosError
 from .error_codes import SophiosErrorCode
-from .nodes import OpaqueCwl
-from .subset import EXPRESSION, Expr, is_safe_subset_text, parse
-from .types import Atom, Merge, Pick, PortDeclaration, ScatterMethod, expand_shorthand, read_typed
-from .values import read_value
+from .nodes import Value
+from .subset import EXPRESSION, inputs_read, strings
+from .types import Atom, Merge, Pick, ScatterMethod, expand_shorthand
 
 
 class CwlVersion(StrEnum):
@@ -85,7 +82,7 @@ def _local(identifier: str) -> str:
     return identifier.rsplit('#', maxsplit=1)[-1].rsplit('/', maxsplit=1)[-1]
 
 
-def _listed(document: dict[str, OpaqueCwl], section: str) -> list[tuple[str, OpaqueCwl]]:
+def _listed(document: dict[str, Value], section: str) -> list[tuple[str, Value]]:
     """The entries a document wrote in a section, in the order it wrote them, each with its place (its key in a
     mapping, its index in a list) and as the list form writes it: the standard sorts a mapping's."""
     name, bare = _NAMED[section]
@@ -98,12 +95,12 @@ def _listed(document: dict[str, OpaqueCwl], section: str) -> list[tuple[str, Opa
     return []
 
 
-def _is_extension(item: OpaqueCwl) -> TypeGuard[dict[str, Any]]:
+def _is_extension(item: Value) -> TypeGuard[dict[str, Any]]:
     """Whether a requirement or hint is a vendor's, such as `cwltool:CUDARequirement`: the standard's have no colon."""
     return isinstance(item, dict) and ':' in str(item.get('class'))
 
 
-def separate_read_as_false(binding: OpaqueCwl) -> OpaqueCwl:
+def separate_read_as_false(binding: Value) -> Value:
     """A binding that writes `separate: null` and no prefix, as cwltool reads it at run: `separate: false`, which it
     refuses. The loader reads null as unset, so the refusal would be lost."""
     if isinstance(binding, dict) and binding.get('separate', True) is None and binding.get('prefix') is None:
@@ -116,7 +113,7 @@ def _refusal(error: Exception) -> SophiosError:
     return SophiosError.error(SophiosErrorCode.INVALID_TOOL, ' '.join(str(error).split()))
 
 
-def load_process(document: dict[str, OpaqueCwl], run_path: str) -> tuple[Process, Written]:
+def load_process(document: dict[str, Value], run_path: str) -> tuple[Process, Written]:
     """A tool document read once, whole, into the standard's classes, with its ports in the order it wrote them and
     its vendor's requirements and hints set aside.
 
@@ -173,7 +170,7 @@ def inherited(name: str, body: Mapping[str, object]) -> _standard.Saveable | dic
         raise _refusal(error) from error
 
 
-def canonical_type(declared: OpaqueCwl) -> OpaqueCwl:
+def canonical_type(declared: Value) -> Value:
     """A written type with its shorthand expanded at every layer, through an array's items."""
     match expand_shorthand(declared):
         case ['null', inner] if isinstance(declared, str):
@@ -183,99 +180,7 @@ def canonical_type(declared: OpaqueCwl) -> OpaqueCwl:
     return declared
 
 
-def read_when(written: OpaqueCwl) -> tuple[Expr | None, tuple[str, ...], str | None]:
-    """A step's `when` read: its tree where the safe subset reads the text, the inputs the text reads, and where there
-    is no tree, why, in the subset's words."""
-    reads = inputs_read(written)
-    if not isinstance(written, str):
-        return None, reads, 'a when is a string'
-    if not is_safe_subset_text(written):
-        return None, reads, 'the safe JavaScript subset requires the whole field to be one $( … ) reference'
-    try:
-        return parse(written), reads, None
-    except ValueError as error:
-        return None, reads, str(error)
-
-
-#: What a workflow boundary port may state, by direction: the fields the CWL
-#: v1.2 schema gives `WorkflowOutputParameter` and `WorkflowInputParameter`.
-#: An allowlist, not a denylist, because a tool's port record is a superset of a
-#: workflow's (`inputBinding` is a `CommandLineBinding` on a tool and an
-#: `InputBinding` on a workflow input, so a promoted `position` fails
-#: validation; `outputBinding` has no workflow counterpart). Only an input may
-#: ask for `loadContents` and `loadListing`.
-_OUTPUT_BOUNDARY_FIELDS: Final = frozenset({'type', 'format', 'label', 'doc', 'secondaryFiles', 'streamable'})
-_INPUT_BOUNDARY_FIELDS: Final = _OUTPUT_BOUNDARY_FIELDS | {'loadContents', 'loadListing'}
-
-
-def _evaluated(entry: OpaqueCwl) -> bool:
-    """Whether a `secondaryFiles` entry holds an expression, as its pattern or as its `required`."""
-    texts = entry.values() if isinstance(entry, dict) else (entry,)
-    return any(isinstance(text, str) and EXPRESSION.search(text) for text in texts)
-
-
-def _statable_secondary_files(value: OpaqueCwl) -> OpaqueCwl:
-    """The `secondaryFiles` entries a workflow boundary can state.
-
-    An expression is evaluated by the tool that wrote it, against that tool's
-    `inputs` and `expressionLib`. The boundary has neither, so it would
-    evaluate the expression differently or fail on it at run time; the tool
-    still declares the entry and keeps evaluating it.
-
-    A bare pattern or a single mapping is stated as a one-element list: it is
-    the same declaration, and cwltool's checker reads every entry as a mapping
-    at workflow level, so it fails on the bare form.
-    """
-    entries = value if isinstance(value, list) else [] if value is None else [value]
-    return [entry for entry in entries if not _evaluated(entry)]
-
-
-def named_entries(raw: object) -> tuple[tuple[str, OpaqueCwl], ...]:
-    """CWL's map form (`{name: decl}`) or its `id`-keyed list form."""
-    match raw:
-        case dict():
-            return tuple(raw.items())
-        case list():
-            return tuple((str(item['id']).rsplit('#', 1)[-1], {k: v for k, v in item.items() if k != 'id'})
-                         for item in raw)
-        case _:
-            return ()
-
-
-def port_declaration(raw: OpaqueCwl, *, output: bool = False) -> PortDeclaration:
-    """Preserve one CWL port declaration and expose its recognized fields, with those a workflow boundary may state
-    of it (`kept`) reduced here, where the direction is known."""
-    if not isinstance(raw, dict):
-        type_, unread = read_typed(raw)
-        return PortDeclaration(type_, unread=unread, shorthand=True)
-    reserved = {'type', 'format', 'default'}
-    if output:
-        reserved.add('outputSource')
-    passthrough = tuple((key, deepcopy(value)) for key, value in raw.items() if key not in reserved)
-    allowed = _OUTPUT_BOUNDARY_FIELDS if output else _INPUT_BOUNDARY_FIELDS
-    kept: list[tuple[str, OpaqueCwl]] = []
-    for name, value in passthrough:
-        if name not in allowed:
-            continue
-        if name == 'secondaryFiles':
-            value = _statable_secondary_files(value)
-            if not value:
-                continue
-        kept.append((name, deepcopy(value)))
-    type_, unread = read_typed(raw.get('type'))
-    return PortDeclaration(
-        type=type_,
-        unread=unread,
-        format=deepcopy(raw.get('format')),
-        has_format='format' in raw,
-        default=read_value(deepcopy(raw.get('default'))),
-        has_default='default' in raw,
-        passthrough=passthrough,
-        kept=tuple(kept),
-    )
-
-
-def canonical(type_: LoadedType) -> OpaqueCwl:
+def canonical(type_: LoadedType) -> Value:
     """A loaded port type as `spell` writes one, so a tool's types and a workflow's read alike: a union
     is a list, an array `{type: array, items}`, and any other schema as the standard writes it."""
     match type_:
@@ -321,17 +226,6 @@ def literal(text: str) -> str:
     return text.replace('\\', '\\\\').replace('$(', '\\$(').replace('${', '\\${')
 
 
-def strings(value: Any) -> Iterator[str]:
-    """Every string in `value`: itself, or the strings at any depth of a list or of a mapping's values."""
-    match value:
-        case str():
-            yield value
-        case list():
-            yield from chain.from_iterable(map(strings, value))
-        case Mapping():
-            yield from strings(list(value.values()))
-
-
 def declare_javascript(process: dict[str, Any]) -> None:
     """Declare `InlineJavascriptRequirement` in a tool that holds an expression and declares it nowhere, as a
     requirement or a hint: one rule, for a tool written in `.wic` and for the Python builder. A `requirements` that is
@@ -340,16 +234,6 @@ def declare_javascript(process: dict[str, Any]) -> None:
     if any(map(EXPRESSION.search, strings(process))):
         if not declared(process, javascript):
             require(process, 'requirements', javascript)
-
-
-#: An input a CWL expression reads, `inputs.name` or `inputs["name"]`: `inputs.name-1` is `inputs.name` minus 1.
-_INPUT_READ: Final = re.compile(r'\binputs(?:\.([A-Za-z_]\w*)|\[\s*["\']([^"\']+)["\']\s*\])')
-
-
-def inputs_read(value: Any) -> tuple[str, ...]:
-    """Every input the CWL expressions in `value` (a string, or the strings at any depth of a list or mapping) read,
-    in order of first mention."""
-    return tuple(dict.fromkeys(a or b for text in strings(value) for a, b in _INPUT_READ.findall(text)))
 
 
 def input_reference(name: str, field: str = '') -> str | None:

@@ -1,0 +1,3 @@
+steps:
+- id: pair
+  run: record.cwl

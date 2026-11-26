@@ -3,7 +3,7 @@
 Partial failure is compile input. A job that exits with one of the policy's
 success codes counts as a success, and leaves `null` where it wrote nothing; a
 step runs only once every input it requires has arrived. Each document is written
-for the policy as it is emitted, and nothing rewrites the CWL afterwards.
+for the policy as it is emitted, and nothing rewrites it afterwards.
 """
 from dataclasses import dataclass
 

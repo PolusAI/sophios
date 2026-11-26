@@ -8,11 +8,11 @@ from pathlib import Path
 import pytest
 
 from sophios.compiler import CompileSettings, compile_source
-from sophios.ir.frontdoor import bundle_from_disk
+from sophios.frontdoor import bundle_from_disk
 from sophios.nextflow.model import NfLiteral
 from sophios.plugins import get_tools_cwl
 
-from .testkit import lowered
+from .testkit import lowered, refusal_of
 
 
 def _lowered(root: Path):  # type: ignore[no-untyped-def]
@@ -39,3 +39,26 @@ def test_a_script_is_a_file_the_task_writes_before_it_runs_it(tmp_path: Path) ->
     (tmp_path / "root.wic").write_text("steps:\n- id: run\n  run: run.wic\n  in: {message: !ii hi}\n", encoding="utf-8")
     (process,) = _lowered(tmp_path / "root.wic").processes
     assert [(file.name, file.text) for file in process.files] == [(".script.sh", 'echo "$message"\n')]
+
+
+@pytest.mark.fast
+def test_a_stdin_input_is_refused_as_the_type_the_target_does_not_lower(tmp_path: Path) -> None:
+    (tmp_path / "t.wic").write_text("command: cat\ninputs: {f: stdin}\noutputs: {o: stdout}\nstdout: o.txt\n",
+                                    encoding="utf-8")
+    (tmp_path / "root.wic").write_text("steps:\n- id: t\n  run: t.wic\n  in: {f: !ii x.txt}\n", encoding="utf-8")
+    (refusal,) = refusal_of(tmp_path / "root.wic").refusals
+    assert (refusal.code.value, refusal.step, refusal.reason) == (
+        "nf-s048", "t", "unsupported CWL type for the Nextflow target: 'stdin'")
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("written", ["$( inputs.msg )", "it's $(inputs.msg)"])
+def test_a_boolean_value_from_is_quoted_as_the_author_wrote_it(tmp_path: Path, written: str) -> None:
+    (tmp_path / "t.cwl").write_text(
+        "cwlVersion: v1.2\nclass: CommandLineTool\nbaseCommand: echo\ninputs:\n  msg: string\n  b:\n"
+        f"    type: boolean\n    inputBinding: {{position: 1, valueFrom: \"{written}\"}}\noutputs: {{}}\n",
+        encoding="utf-8")
+    (tmp_path / "root.wic").write_text("steps:\n- id: t\n  run: t.cwl\n  in: {msg: !ii hi, b: !ii true}\n",
+                                       encoding="utf-8")
+    (refusal,) = refusal_of(tmp_path / "root.wic").refusals
+    assert refusal.reason.endswith(f"{written!r} does not have that shape"), refusal.reason

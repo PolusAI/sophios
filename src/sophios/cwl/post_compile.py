@@ -1,7 +1,7 @@
 import copy
 from dataclasses import dataclass, replace
 from typing import Any, Final
-from ..ir.artifacts import CompilationArtifact
+from .artifacts import CompilationArtifact
 from ..ir.names import NAMESPACE_SEPARATOR
 from ..lang.cwl import CwlVersion
 from ..lang.diagnostics import Diagnostic, Locator, Severity, SophiosError

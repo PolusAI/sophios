@@ -2,7 +2,7 @@
 from collections.abc import Iterator
 from dataclasses import replace
 
-from ..lang import CwlRecord, SophiosErrorCode
+from ..lang import InputRecord, SophiosErrorCode
 from ..lang.diagnostics import Diagnostics, Locator
 from ..lang.types import Other, Type, TypeRelation, delivered, layered, relation, spell
 from .declarations import boundary_declaration, input_rank, output_rank
@@ -67,7 +67,7 @@ def link(graph: WorkflowGraph) -> PhaseResult:
 
 
 def _normalize_explicit_edges(graph: WorkflowGraph, universe: WorkflowGraph,
-                              merging: dict[PortId, CwlRecord | None], diagnostics: Diagnostics) -> WorkflowGraph:
+                              merging: dict[PortId, InputRecord | None], diagnostics: Diagnostics) -> WorkflowGraph:
     """Move wrapper sources to producers and judge every authored local edge, as `merging` says its input
     is judged."""
     def moved(binding: Binding, item: Edge | DeferredObligation | None) -> Edge | DeferredObligation | None:
@@ -98,7 +98,7 @@ def _normalize_explicit_edges(graph: WorkflowGraph, universe: WorkflowGraph,
     return replace(graph, steps=tuple(steps), children=children)
 
 
-def _merging(graph: WorkflowGraph) -> dict[PortId, CwlRecord | None]:
+def _merging(graph: WorkflowGraph) -> dict[PortId, InputRecord | None]:
     """Every input in `graph`'s tree bound by a record whose input is not its one source's value as it is.
 
     CWL types such an input from the merge, pick or `valueFrom` that makes it,
@@ -109,10 +109,10 @@ def _merging(graph: WorkflowGraph) -> dict[PortId, CwlRecord | None]:
     """
     return {binding.sink: None if binding.value.computed else binding.value
             for step in graph.all_steps for binding in step.bindings
-            if isinstance(binding.value, CwlRecord) and binding.value.changes}
+            if isinstance(binding.value, InputRecord) and binding.value.changes}
 
 
-def _check_workflow_inputs(graph: WorkflowGraph, merging: dict[PortId, CwlRecord | None],
+def _check_workflow_inputs(graph: WorkflowGraph, merging: dict[PortId, InputRecord | None],
                            diagnostics: Diagnostics) -> None:
     """Apply the same conservative relation to typed workflow-input references."""
     declarations = {port.name: port.declaration.type
@@ -136,7 +136,7 @@ def _check_workflow_inputs(graph: WorkflowGraph, merging: dict[PortId, CwlRecord
 
 
 def _reject_if_disjoint(graph: WorkflowGraph, edge: Edge, diagnostics: Diagnostics,
-                        record: CwlRecord | None = None) -> bool:
+                        record: InputRecord | None = None) -> bool:
     """Diagnose one edge only when the language relation proves rejection, judged in its own scope.
 
     Ancestor scatter layers that wrap both endpoints alike are excluded; they

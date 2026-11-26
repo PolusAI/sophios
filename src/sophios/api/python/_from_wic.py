@@ -11,15 +11,15 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, cast
 
 from sophios import compiler
-from sophios.ir.frontdoor import SourceBundle, bundle_from_disk
+from sophios.frontdoor import SourceBundle, bundle_from_disk
 from sophios.ir.lower import output_step
 from sophios.ir.resolve import RegistrySnapshot, ResolvedDocument, ResolvedStep, resolve
-from sophios.lang import (CwlRecord, Diagnostic, Document, EdgeRef, InlineLiteral, InputValue, RawCwlRef,
+from sophios.lang import (InputRecord, Diagnostic, Document, EdgeRef, InlineLiteral, InputValue, PassthroughRef,
                           Severity, SophiosError, SophiosErrorCode, SourceSpan, UnresolvedName, WicSidecar, to_json)
 from sophios.cwl.lowering import process_of
 from sophios.lang.values import write_value
 from sophios.lang.diagnostics import report
-from sophios.wic_types import StepId, Tools
+from sophios.wic_types import StepId, Tool, Tools
 
 from ._ports import OutputParameter, _validate_namespace_name
 from ._utils import authored_at, validate_python_identifier_name
@@ -276,11 +276,11 @@ def _read_value(step_id: str, name: str, value: InputValue, declared: set[str], 
             reading.refuse(where, f'step {step_id!r} input {name!r} reads !* {edge}, which no earlier step of '
                            'this document defines; a Python step binds only to earlier steps of its own '
                            'workflow: pass the value in through a workflow input')
-        case RawCwlRef(expression=expression) if expression not in declared:
+        case PassthroughRef(expression=expression) if expression not in declared:
             reading.refuse(where, f'step {step_id!r} input {name!r} is !cwl {expression}; the Python API binds '
                            'sources as objects, never as CWL text: declare it in inputs: or bind a step '
                            'output')
-        case CwlRecord(sources=sources):
+        case InputRecord(sources=sources):
             for source in sources:
                 _read_value(step_id, name, source, declared, defined, span, reading)
         case _:
@@ -354,6 +354,7 @@ def _build_process(resolved: ResolvedStep, registry: RegistrySnapshot) -> "Step 
                                       run_path=resolved.process.run_path)
     tool = registry.tool(resolved.process.key)
     if tool is not None:  # the tool's own document, which a compile is held to the version of
+        assert isinstance(tool.source, Tool)
         step._tool_registry[StepId(step.clt_path.stem, 'global')] = tool.source
     return step
 
@@ -391,9 +392,9 @@ def _python_value(value: InputValue, workflow: "Workflow", edges: dict[str, Outp
             return write_value(literal)
         case EdgeRef(name=edge):
             return edges[edge]
-        case UnresolvedName(name=name) | RawCwlRef(expression=name):
+        case UnresolvedName(name=name) | PassthroughRef(expression=name):
             return getattr(workflow.inputs, name)
-        case CwlRecord(sources=sources, fields=fields):
+        case InputRecord(sources=sources, fields=fields):
             mapped = [_python_value(source, workflow, edges) for source in sources]
             options: dict[str, Any] = {_RECORD_FIELDS[key]: write_value(item) for key, item in fields}
             return StepInput(source=mapped[0] if len(mapped) == 1 else mapped or None, **options)

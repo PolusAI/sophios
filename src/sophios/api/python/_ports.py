@@ -4,7 +4,7 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast
 
-from sophios.lang import CwlRecord, EdgeRef, InlineLiteral, InputValue, UnresolvedName
+from sophios.lang import EdgeRef, InlineLiteral, InputRecord, InputValue, UnresolvedName
 from sophios.lang.types import PICKS_ONE, layered, read_type, spell
 from sophios.lang.spans import SourceSpan
 
@@ -27,7 +27,7 @@ ViewT = TypeVar("ViewT")
 class InputBinding:
     """Bound input value, upstream alias, workflow input reference, or step-input record.
 
-    A `record` binding's `value` is the language's `CwlRecord` and its `source` the
+    A `record` binding's `value` is the language's `InputRecord` and its `source` the
     port objects the record names, each a step `OutputParameter` or a workflow `InputParameter`.
     `span` is the Python line that bound it.
     """
@@ -56,7 +56,7 @@ class InputBinding:
             case "alias":
                 return EdgeRef(self.value, self.span)
             case "record":
-                return cast(CwlRecord, self.value)
+                return cast(InputRecord, self.value)
             case _:
                 return UnresolvedName(self.value, self.span)
 
@@ -274,7 +274,7 @@ def _produced_type(source: Any) -> Any:
     return source.parameter_type
 
 
-def _record_type(record: CwlRecord, sources: tuple[Any, ...]) -> Any:
+def _record_type(record: InputRecord, sources: tuple[Any, ...]) -> Any:
     """The type a record delivers, from its first source: one source as it is, or,
     when sources are merged, the list CWL's `linkMerge` makes of them; a `pickValue`
     that picks one value then delivers one element of that list."""

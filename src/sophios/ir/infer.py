@@ -3,7 +3,7 @@ from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 
-from ..lang import OpaqueCwl, SophiosErrorCode
+from ..lang import SophiosErrorCode, Value
 from ..lang.diagnostics import Diagnostics, Locator
 from ..lang.types import PortDeclaration, Type, layered, permits_format, types_match
 from .complete import call_interfaces, promote_outputs
@@ -383,14 +383,14 @@ def _converter(steps: Sequence[StepNode], tool: ToolDefinition, policy: Inferenc
     return StepNode(identity, tool.key, inputs, outputs, inference_rules=rules, synthesized=True)
 
 
-def _formats(declaration: PortDeclaration | None) -> tuple[OpaqueCwl, ...]:
+def _formats(declaration: PortDeclaration | None) -> tuple[Value, ...]:
     if declaration is None or not declaration.has_format:
         return ()
     value = declaration.format
     return tuple(value) if isinstance(value, list) else (value,)
 
 
-def _formats_match(sink: tuple[OpaqueCwl, ...], source: tuple[OpaqueCwl, ...],
+def _formats_match(sink: tuple[Value, ...], source: tuple[Value, ...],
                    source_type: Type) -> bool:
     if not sink:
         return True

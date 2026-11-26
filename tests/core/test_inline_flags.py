@@ -12,8 +12,8 @@ import yaml
 import sophios.main
 from sophios.cwl import post_compile
 from sophios.compiler import CompileSettings, compile_source
-from sophios.ir.artifacts import CompilationArtifact
-from sophios.ir.frontdoor import bundle_from_disk
+from sophios.cwl.artifacts import CompilationArtifact
+from sophios.frontdoor import bundle_from_disk
 from sophios.lang.diagnostics import SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
 from sophios.wic_types import Yaml

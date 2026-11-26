@@ -9,7 +9,7 @@ from typing import Any, Final, Iterator
 import networkx as nx
 from networkx.algorithms import isomorphism
 
-from sophios.ir.artifacts import CompilationArtifact
+from sophios.cwl.artifacts import CompilationArtifact
 from sophios.utils import recursively_delete_dict_key
 from sophios.wic_types import Yaml
 

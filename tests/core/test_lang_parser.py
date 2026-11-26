@@ -16,16 +16,16 @@ from hypothesis import example, given
 from hypothesis import strategies as st
 
 from sophios.lang import (
-    SophiosError,
-    SophiosErrorCode,
-    CwlRecord,
     Document,
     EdgeDef,
     EdgeRef,
     InlineLiteral,
+    InputRecord,
     InputValue,
+    PassthroughRef,
     Port,
-    RawCwlRef,
+    SophiosError,
+    SophiosErrorCode,
     Step,
     ToolDocument,
     UnresolvedName,
@@ -86,9 +86,9 @@ def reading(node: Any) -> Any:  # pylint: disable=too-many-return-statements,too
             return {'!*': node.name}
         case EdgeDef():
             return {'!&': node.name}
-        case RawCwlRef():
+        case PassthroughRef():
             return {'!cwl': node.expression}
-        case CwlRecord():
+        case InputRecord():
             return {'!cwl': {'source': [reading(source) for source in node.sources], **reading(dict(node.fields))}}
         case UnresolvedName():
             return node.name
@@ -213,7 +213,7 @@ def _spans(node: Any) -> list[SourceSpan | None]:
                     *(out.span for out in node.outputs), *edges]
         case WicSidecar():
             return [*_present(node.span), *(span for _, child in node.steps for span in _spans(child))]
-        case InlineLiteral() | EdgeRef() | RawCwlRef() | UnresolvedName():
+        case InlineLiteral() | EdgeRef() | PassthroughRef() | UnresolvedName():
             return [node.span]
     return []
 
@@ -253,7 +253,7 @@ def test_a_well_formed_document_is_read_whole(source: str) -> None:
 
 
 #: Each tag and its desugared key.
-SPELLINGS: Final = {'!ii': Key.INLINE_INPUT, '!*': Key.ALIAS, '!cwl': Key.RAW_CWL, '!&': Key.ANCHOR}
+SPELLINGS: Final = {'!ii': Key.INLINE_INPUT, '!*': Key.ALIAS, '!cwl': Key.PASSTHROUGH, '!&': Key.ANCHOR}
 
 
 @pytest.mark.fast
@@ -462,7 +462,7 @@ def test_a_merge_builds_what_yaml_builds(merged: tuple[str, str]) -> None:
         assert all(v.value == yaml.safe_load(written[n]) for n, v in inputs if isinstance(v, InlineLiteral))
     else:
         node = result.document.steps[0].inputs[0][1]
-        built = dict(node.fields) if isinstance(node, CwlRecord) else _payload(node)
+        built = dict(node.fields) if isinstance(node, InputRecord) else _payload(node)
         read = loaded['steps']['s']['in']['f']
     assert list(built.items()) == list(read.items()), source
 

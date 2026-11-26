@@ -21,7 +21,7 @@ from sophios.api.python.workflow import Step, Workflow
 from sophios.compiler import CompileSettings, compile_source
 from sophios.cwl.io import dump_wic_yaml
 from sophios.cwl.lowering import command_line_tool
-from sophios.ir.frontdoor import bundle_from_disk
+from sophios.frontdoor import bundle_from_disk
 from sophios.lang import SophiosErrorCode, ToolDocument, parse
 from sophios.lang.cwl import canonical_type
 from sophios.lang.diagnostics import SophiosError

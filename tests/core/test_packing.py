@@ -15,8 +15,8 @@ from schema_salad.fetcher import DefaultFetcher
 from sophios.runtime import local
 from sophios.api.python.workflow import Step, Workflow
 from sophios.compiler import CompileSettings, compile_source
-from sophios.ir.artifacts import CompilationArtifact
-from sophios.ir.frontdoor import bundle_from_disk
+from sophios.cwl.artifacts import CompilationArtifact
+from sophios.frontdoor import bundle_from_disk
 from sophios.lang.diagnostics import SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
 from sophios.plugins import get_tools_cwl
