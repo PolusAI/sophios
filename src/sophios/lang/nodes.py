@@ -14,6 +14,7 @@ from typing import Any, TypeAlias
 from .needs import Inherited, split
 from .spans import SourceSpan
 from .types import Merge, Pick
+from .values import FileValue
 
 
 class Shape(StrEnum):
@@ -225,10 +226,10 @@ InputValue: TypeAlias = InlineLiteral | EdgeRef | RawCwlRef | UnresolvedName | C
 #: recursive union of what YAML's safe schema can produce, plus the Sophios
 #: constructs the passthrough walk preserves. `date`/`datetime` are members
 #: because YAML resolves timestamps; their JSON projection is ISO-8601 text
-#: (see `render.to_json`).
+#: (see `render.to_json`). A File or Directory a door read is a `FileValue`.
 OpaqueCwl: TypeAlias = (
     None | bool | int | float | str | date | datetime
-    | list['OpaqueCwl'] | dict[str, 'OpaqueCwl'] | InputValue
+    | list['OpaqueCwl'] | dict[str, 'OpaqueCwl'] | InputValue | FileValue
 )
 
 

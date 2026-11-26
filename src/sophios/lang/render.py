@@ -32,6 +32,7 @@ from .nodes import (
     Word,
 )
 from .parser import SIDECAR_WRAPPER_KEY, Grammar
+from .values import FileValue, write_value
 
 
 def _spelled(word: Word, typed: bool = False) -> str:
@@ -173,7 +174,7 @@ class _Writer:
         """Spell an `!ii` literal: transcribed from source text when parsed, else serialised."""
         if self.tagged and literal.text is not None:
             return _Tagged(Tag.INLINE_INPUT, literal.text)
-        if not self.tagged or isinstance(literal.value, (list, dict)):
+        if not self.tagged or isinstance(literal.value, (list, dict, FileValue)):
             return self.construct(Tag.INLINE_INPUT, self.plain(literal.value))
         if isinstance(literal.value, get_args(InputValue)):
             # A construct as the direct payload has no tagged spelling — two
@@ -186,6 +187,8 @@ class _Writer:
         match value:
             case InlineLiteral() | EdgeRef() | RawCwlRef() | UnresolvedName() | CwlRecord():
                 return self.input_value(value)
+            case FileValue():
+                return self.plain(write_value(value))
             case dict():
                 return {k: self.plain(v) for k, v in value.items()}
             case list():

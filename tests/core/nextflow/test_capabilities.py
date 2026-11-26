@@ -85,3 +85,23 @@ def test_a_refusal_only_python_reaches_names_the_line_python_wrote(
             assert diagnostic.span is not None and Path(diagnostic.span.file) == Path(__file__), diagnostic
             assert lines[diagnostic.span.start_line - 1].lstrip().startswith(
                 ("ratio.inputs.x", "index.inputs.f", "workflow = ", "pick.inputs.input_array")), diagnostic
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("value, expected", [
+    ({"class": "File", "location": "x.txt"}, {"class": "File", "path": "x.txt"}),
+    ({"class": "File", "path": "x.txt"}, {"class": "File", "path": "x.txt"}),
+    ({"class": "File", "format": "f", "location": "x.txt"}, {"class": "File", "path": "x.txt"}),
+    ({"class": "File", "location": "file:///x.txt"}, "nf-s015"),
+    ({"class": "File", "location": "x.txt", "basename": "b"}, "nf-s015"),
+])
+def test_a_file_value_is_lowered_as_its_local_path_or_refused_for_what_the_model_does_not_hold(
+        value: dict[str, str], expected: dict[str, str] | str) -> None:
+    index = Step(CommandLineTool("index", Inputs(f=Input(cwl.file, position=1)), Outputs()).base_command("cat"))
+    index.inputs.f = value
+    if isinstance(expected, str):
+        with pytest.raises(NotLowered) as refused:
+            Workflow([index], "wf").compile(target="nextflow")
+        assert [refusal.code.value for refusal in refused.value.refusals] == [expected]
+    else:
+        assert dict(Workflow([index], "wf").compile(target="nextflow").nextflow_workflow.params["index_f"]) == expected

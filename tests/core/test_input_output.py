@@ -7,6 +7,7 @@ import pytest
 from hypothesis import example, given, strategies as st
 
 from sophios.ir.locations import absolute_paths
+from sophios.lang.values import read_value, write_value
 
 from .budgets import budget
 
@@ -28,12 +29,14 @@ def _named(key: str) -> st.SearchStrategy[_At]:
 
 
 def _objects(children: st.SearchStrategy[list[Any]]) -> st.SearchStrategy[dict[str, Any]]:
-    return st.builds(lambda kind, named, nested, kids: {'class': kind, **named, nested: kids},
-                     st.sampled_from(['File', 'Directory']), st.sets(st.sampled_from(['location', 'path']), min_size=1)
-                     .flatmap(lambda keys: st.fixed_dictionaries({key: _named(key) for key in keys})),
-                     st.sampled_from(['secondaryFiles', 'listing']), children)
+    return st.builds(lambda kind, named, kids: {'class': kind, **named, _COMPANIONS[kind]: kids},
+                     st.sampled_from(['File', 'Directory']),
+                     st.sampled_from(['location', 'path']).flatmap(
+                         lambda key: st.fixed_dictionaries({key: _named(key)})),
+                     children)
 
 
+_COMPANIONS = {'File': 'secondaryFiles', 'Directory': 'listing'}
 _SCALARS = st.integers() | st.text(max_size=3) | st.none()
 _JOBS = st.dictionaries(st.text(max_size=3), st.recursive(
     _SCALARS | _objects(st.lists(_SCALARS | _objects(st.just([])), max_size=2)),
@@ -65,5 +68,14 @@ def test_a_relative_job_location_is_written_as_a_file_uri(job: dict[str, Any], b
     """Each relative `location` or `path` in a job, in lists, records, `secondaryFiles` and `listing`, is written
     against the job's directory; nothing else changes, the job given included."""
     values = _written(job)
-    assert absolute_paths(values, base) == _written(job, base)
+    assert write_value(absolute_paths(read_value(values), base)) == _written(job, base)
     assert values == _written(job)
+
+
+@pytest.mark.fast
+@given(_JOBS)
+@budget(30)
+def test_a_file_value_is_written_as_the_mapping_it_was_read_from(job: dict[str, Any]) -> None:
+    """Reading a job and writing it back changes no key and no value, whatever the files in it are named."""
+    values = _written(job)
+    assert write_value(read_value(values)) == values

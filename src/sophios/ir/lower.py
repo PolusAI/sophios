@@ -13,6 +13,7 @@ relative location in a `default:` is read against it.
 """
 import difflib
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import Final, cast
 
@@ -257,13 +258,11 @@ def _workflow_ports(document: ResolvedDocument, side: str) -> tuple[WorkflowPort
     spans = {name: span for section, name, span in document.source.port_spans if section == side}
     ports: list[WorkflowPort] = []
     for name, declaration_raw in raw.items():
-        if isinstance(declaration_raw, dict) and 'default' in declaration_raw:
-            declaration_raw = {**declaration_raw,
-                               'default': _resolved_default(declaration_raw['default'], document.directory)}
         # Asserted, not reduced via `boundary_declaration`: it is already a
         # boundary declaration by where it's written, and reducing it would
         # discard fields the author wrote at the boundary on purpose.
-        declaration = BoundaryDeclaration(port_declaration(declaration_raw, output=output))
+        read = port_declaration(declaration_raw, output=output)
+        declaration = BoundaryDeclaration(replace(read, default=_resolved_default(read.default, document.directory)))
         has_source = output and isinstance(declaration_raw, dict) \
             and 'outputSource' in declaration_raw
         source = declaration_raw.get('outputSource') if has_source else None

@@ -27,6 +27,7 @@ from .tools import (
     Variables, Word,
 )
 from .types import read_type
+from .values import read_value
 
 #: The vendor's accelerator class, which no field of the standard says.
 CUDA: Final = 'cwltool:CUDARequirement'
@@ -132,7 +133,8 @@ def _members(written: Any) -> list[Any]:
 def _input(name: str, port: Any) -> ToolInput:
     binding = getattr(port, 'inputBinding', None)
     return ToolInput(
-        name, read_type(canonical(port.type_)), port.default, None if binding is None else _placement(binding),
+        name, read_type(canonical(port.type_)), read_value(port.default),
+        None if binding is None else _placement(binding),
         _unread(port, 'CommandInputParameter'),
         tuple(_unread(member, 'CommandInputArraySchema') for member in _members(port.type_)
               if isinstance(member, (standard.CommandInputArraySchema, standard.CommandOutputArraySchema))))

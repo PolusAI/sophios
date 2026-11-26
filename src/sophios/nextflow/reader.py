@@ -47,6 +47,7 @@ from ..lang.diagnostics import SophiosError
 from ..lang.error_codes import SophiosErrorCode
 from ..lang.types import PortDeclaration
 from ..lang.spans import SourceSpan
+from ..lang.values import write_value
 from .expr import GROOVY_IDENTIFIER, GROOVY_LITERAL, groovy_unescape, read_groovy
 from .model import (
     ABSENT_PATH_TYPES,
@@ -756,7 +757,7 @@ def _written(name: str, declared: str, value: Any) -> bool:
         kept = coerce_job_value(AuthoredName(name), PortDeclaration(read_type(declared)), None if absent else value)
     except SophiosError:
         return False
-    return json.dumps([] if kept is None else kept, sort_keys=True) == json.dumps(value, sort_keys=True)
+    return json.dumps([] if kept is None else write_value(kept), sort_keys=True) == json.dumps(value, sort_keys=True)
 
 
 def _read(path: Path, code: SophiosErrorCode) -> str:

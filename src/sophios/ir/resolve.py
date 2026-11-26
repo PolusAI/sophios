@@ -38,6 +38,7 @@ from ..lang.cwl import named_entries, port_declaration
 from ..lang.nodes import GraphvizEntry, InputValue, OpaqueCwl, Step
 from ..lang.tools import ToolNode
 from ..lang.types import PortDeclaration
+from ..lang.values import read_value
 from ..wic_types import Tool, Tools
 from .check import CheckedDocument, check as check_document
 from .types import RegistryKey
@@ -493,13 +494,13 @@ def _contributed_input(value: OpaqueCwl, span: SourceSpan) -> InputValue:
         case InlineLiteral() | EdgeRef() | RawCwlRef() | UnresolvedName() | CwlRecord():
             return value
         case {Key.INLINE_INPUT: literal}:
-            return InlineLiteral(literal, span)
+            return InlineLiteral(read_value(literal), span)
         case {Key.ALIAS: name}:
             return EdgeRef(str(name), span)
         case {Key.RAW_CWL: expression}:
             return RawCwlRef(str(expression), span)
         case dict() | list():
-            return InlineLiteral(value, span)
+            return InlineLiteral(read_value(value), span)
         case _:
             return UnresolvedName(str(value), span)
 

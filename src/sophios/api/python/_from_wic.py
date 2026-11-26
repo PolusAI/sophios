@@ -17,6 +17,7 @@ from sophios.ir.resolve import RegistrySnapshot, ResolvedDocument, ResolvedStep,
 from sophios.lang import (CwlRecord, Diagnostic, Document, EdgeRef, InlineLiteral, InputValue, RawCwlRef,
                           Severity, SophiosError, SophiosErrorCode, SourceSpan, UnresolvedName, WicSidecar, to_json)
 from sophios.cwl.lowering import process_of
+from sophios.lang.values import write_value
 from sophios.lang.diagnostics import report
 from sophios.wic_types import StepId, Tools
 
@@ -387,12 +388,12 @@ def _python_value(value: InputValue, workflow: "Workflow", edges: dict[str, Outp
 
     match value:
         case InlineLiteral(value=literal):
-            return literal
+            return write_value(literal)
         case EdgeRef(name=edge):
             return edges[edge]
         case UnresolvedName(name=name) | RawCwlRef(expression=name):
             return getattr(workflow.inputs, name)
         case CwlRecord(sources=sources, fields=fields):
             mapped = [_python_value(source, workflow, edges) for source in sources]
-            options: dict[str, Any] = {_RECORD_FIELDS[key]: item for key, item in fields}
+            options: dict[str, Any] = {_RECORD_FIELDS[key]: write_value(item) for key, item in fields}
             return StepInput(source=mapped[0] if len(mapped) == 1 else mapped or None, **options)

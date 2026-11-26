@@ -29,6 +29,7 @@ from .names import Names
 from .policy import RunPolicy
 from .stepin import step_inputs
 from ..lang.tools import ToolNode
+from ..lang.values import read_value
 from .types import (
     DerivedName, EmittedValue, Expression, Guard, PortName, Record, Source, StepId,
     StepNode, StepOutputRef, WorkflowGraph, WorkflowPort,
@@ -324,7 +325,7 @@ def bind(view: ResolvedWorkflow, *, values: Mapping[str, OpaqueCwl] | None = Non
     Args:
         view (ResolvedWorkflow): A workflow as `resolve` made it.
         values (Mapping[str, OpaqueCwl] | None): This run's values, by root input as the job spells it, each in
-            place of the value the root holds; `None` keeps them.
+            place of the value the root holds, read as a job is (`read_value`); `None` keeps them.
         outputs (Collection[str] | None): The root outputs to keep; `None` keeps them all.
 
     Raises:
@@ -334,7 +335,7 @@ def bind(view: ResolvedWorkflow, *, values: Mapping[str, OpaqueCwl] | None = Non
     for name in values or {}:
         if name not in {port.name for port in view.inputs}:
             raise ValueError(f'value {name!r} has no declared workflow input')
-    bound.update(values or {})
+    bound.update(read_value(values or {}))
     kept = view.outputs
     if outputs is not None:
         if unknown := sorted(set(outputs) - {port.name for port in view.outputs}):

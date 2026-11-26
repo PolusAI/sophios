@@ -21,6 +21,7 @@ from .error_codes import SophiosErrorCode
 from .nodes import OpaqueCwl
 from .subset import EXPRESSION, Expr, is_safe_subset_text, parse
 from .types import Atom, Merge, Pick, PortDeclaration, ScatterMethod, expand_shorthand, read_typed
+from .values import read_value
 
 
 class CwlVersion(StrEnum):
@@ -267,7 +268,7 @@ def port_declaration(raw: OpaqueCwl, *, output: bool = False) -> PortDeclaration
         unread=unread,
         format=deepcopy(raw.get('format')),
         has_format='format' in raw,
-        default=deepcopy(raw.get('default')),
+        default=read_value(deepcopy(raw.get('default'))),
         has_default='default' in raw,
         passthrough=passthrough,
         kept=tuple(kept),

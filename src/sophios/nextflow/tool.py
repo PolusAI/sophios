@@ -2,7 +2,7 @@
 
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import math
 from os import PathLike
 import re
@@ -20,6 +20,7 @@ from ..lang.tools import (
     Reference, Resources, Staging, Stream, ToolBody, ToolInput, ToolNode, ToolOutput, Variable, Variables, Word,
 )
 from ..lang.types import PortDeclaration, required, spell
+from ..lang.values import FileKind, FileValue, Location
 from .model import (
     NF_INTERNAL_IDENTIFIERS, NfArrayBinding, NfBasenameReference, NfCommand, NfCommandToken, NfEntry, NfEnvVar, NfFile,
     NfFlag, NfInputReference, NfLiteral, NfOptionalBinding, NfPort, NfResources, NfShellLiteral, NfTemplate,
@@ -1103,7 +1104,7 @@ def _default_value_findings(cwl_type: Any, default: Any, *, path: str) -> list[_
     if _type_names(cwl_type) & _UNSUPPORTED_NUMBER_TYPES \
             or _type_problem(cwl_type) is not None:  # the type has its own refusal
         return []
-    if default is None or isinstance(default, (Mapping, list)):
+    if default is None or isinstance(default, (Mapping, list, FileValue)):
         note = "the Nextflow target supports JSON scalar defaults only"
     elif not _phase1_value_matches(cwl_type, default):
         note = "value does not match its supported CWL type"
@@ -1180,25 +1181,25 @@ def _declared_findings(declaration: PortDeclaration, cwl_class: str, *, path: st
         arrays=[member for member in _members(cwl_type) if _is_array_type(member)])
 
 
-def local_locations_as_paths(value: Any) -> Any:
-    """Rewrite a File or Directory object's plain local ``location`` as its ``path``, and drop a File's ``format``.
+def local_paths(value: Any) -> Any:
+    """`value` with a File or Directory's plain local location as its path, and a File's ``format`` dropped.
 
-    The Python API writes file values in CWL's ``location`` form; for a local
-    path with no URI scheme the two keys mean the same file. A URI keeps its
-    ``location`` and stays rejected, since the model does not represent schemes.
-    A File value's ``format`` is compile-time, as the input's is (design §3).
+    The Python API writes file values by location; for a local path with no URI scheme the two mean the same
+    file. A URI keeps its location and stays rejected, since the model does not represent schemes. A File value's
+    ``format`` is compile-time, as the input's is (design §3).
     """
     match value:
-        case {"class": "File", "format": _}:
-            return local_locations_as_paths({key: item for key, item in value.items() if key != "format"})
-        case {"class": "File" | "Directory", "location": str() as location} if (
-            set(value) == {"class", "location"} and "://" not in location
-        ):
-            return {"class": value["class"], "path": location}
+        case FileValue(kind=FileKind.FILE, has_format=True):
+            return local_paths(replace(value, format=None, has_format=False))
+        case FileValue(location=Location(text=text, uri=True), companions=(), written=()) if "://" not in text:
+            return replace(value, location=Location(text, False))
+        case FileValue():
+            return replace(value, companions=tuple(local_paths(item) for item in value.companions),
+                           written=tuple((key, local_paths(item)) for key, item in value.written))
         case Mapping():
-            return {key: local_locations_as_paths(item) for key, item in value.items()}
+            return {key: local_paths(item) for key, item in value.items()}
         case list():
-            return [local_locations_as_paths(item) for item in value]
+            return [local_paths(item) for item in value]
     return value
 
 
@@ -1224,6 +1225,9 @@ def _phase1_value_matches(cwl_type: Any, value: Any) -> bool:
             return math.isfinite(value)
         case ("File" | "Directory") as expected, (str() | PathLike()):
             return True
+        case ("File" | "Directory") as expected, FileValue() as found:
+            return (found.kind == expected and found.location is not None and not found.location.uri
+                    and not found.companions and not found.written)
         case ("File" | "Directory") as expected, Mapping() as mapping:
             return (
                 set(mapping) <= {"class", "path"}

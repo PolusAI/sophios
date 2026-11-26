@@ -13,6 +13,7 @@ from ..lang.diagnostics import Diagnostics, Locator, SophiosError
 from ..lang.error_codes import SophiosErrorCode
 from ..lang.nodes import InlineLiteral, OpaqueCwl
 from ..lang.spans import SourceSpan
+from ..lang.values import FileValue, write_value
 from ..utils_yaml import Key
 from .types import StepNode, WorkflowGraph
 
@@ -130,6 +131,8 @@ def _plain(value: OpaqueCwl) -> OpaqueCwl:
     match value:
         case InlineLiteral(value=inner):
             return _plain(inner)
+        case FileValue():
+            return _plain(write_value(value))
         case dict() if set(value) == {Key.INLINE_INPUT}:
             return _plain(value[Key.INLINE_INPUT])
         case dict():

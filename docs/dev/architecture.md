@@ -46,6 +46,10 @@ real-time declarations.
    `unread` for a target that cannot run it to refuse by name, and the document stays in the node, opaque, for the
    CWL target to write back: a `.cwl` as it was read, a `.wic` tool spelled as a `CommandLineTool` from its `Plan`
    (`cwl/lowering.py`). The Nextflow target lowers the node and reads no CWL.
+   A value is JSON plus a `FileValue` (`sophios.lang.values`): each door that meets a `{class: File, ...}`
+   mapping (a literal, a default, a job, the Python API) reads it into the kind, the location, the companions, the
+   format and the fields no other part holds. The CWL target writes it back as a CWL File or Directory, and the Nextflow target
+   as its path.
 3. **Lower** builds an immutable `WorkflowGraph`: steps with complete port
    declarations, authored bindings, the workflow boundary, child graphs for
    subworkflows, and the real-time declarations. The compiler takes those out of

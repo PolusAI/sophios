@@ -22,6 +22,7 @@ from ..lang.spans import SourceSpan
 from ..lang.error_codes import SophiosErrorCode
 from ..lang.types import (Array, Atom, BoundaryDeclaration, Other, PortDeclaration, Type, Union, optional, spell,
                           typed)
+from ..lang.values import FileKind, FileValue, Location, read_value, write_value
 from .declarations import feeding_declaration, input_rank, produced_declaration
 from .names import Names, authored_path
 from .types import (
@@ -227,7 +228,7 @@ def coerce_job_value(name: PortName, declaration: PortDeclaration, value: Opaque
     that made nesting exponential. `span` and `locator` say where the value was
     written, for the diagnostic.
     """
-    value = _plain(value)
+    value = read_value(_plain(value))
     if value is None:
         if optional(declaration.type):
             return None
@@ -238,15 +239,15 @@ def coerce_job_value(name: PortName, declaration: PortDeclaration, value: Opaque
         raise SophiosError.error(
             SophiosErrorCode.LITERAL_TYPE_MISMATCH,
             f'Input {str(name)!r} is scattered, so its literal must be a list of values to scatter over; '
-            f'{value!r} is a scalar. Write `!ii [...]`, or drop the port from `scatter:`.',
+            f'{write_value(value)!r} is a scalar. Write `!ii [...]`, or drop the port from `scatter:`.',
             span=span, locator=locator)
     try:
         return _coerce_type(declaration.type, value, declaration.format if declaration.has_format else None)
     except _Mismatch as error:
         raise SophiosError.error(
             SophiosErrorCode.LITERAL_TYPE_MISMATCH,
-            f'Input {str(name)!r} is declared type {error.raw!r} but its literal {error.value!r} '
-            f'{_what_is_wrong(error.raw, error.value)}', span=span, locator=locator) from error
+            f'Input {str(name)!r} is declared type {error.raw!r} but its literal {write_value(error.value)!r} '
+            f'{_what_is_wrong(error.raw, write_value(error.value))}', span=span, locator=locator) from error
 
 
 @dataclass(eq=False)
@@ -286,7 +287,7 @@ def _scalar_member_for(members: Sequence[Type], value: OpaqueCwl) -> Type | None
     for member in members:
         name = member.value if isinstance(member, Atom) else member.name if isinstance(member, Other) else None
         if isinstance(name, str) and (_PYTHON_TYPE.get(name) is type(value)
-                                      or isinstance(value, dict) and value.get('class') == name):
+                                      or isinstance(value, FileValue) and value.kind == name):
             return member if name else None
     return None
 
@@ -306,12 +307,12 @@ def _coerce_scalar(kind: str | None, value: OpaqueCwl, fmt: OpaqueCwl) -> Opaque
     """`value` as the atom named `kind`; whatever else is not judged, and is taken as it is."""
     if kind in ('File', 'Directory'):
         if isinstance(value, str):
-            value = {'class': kind, 'location': value}
-        elif not isinstance(value, dict) or value.get('class') != kind:
+            value = FileValue(FileKind(kind), Location(value, True))
+        elif not isinstance(value, FileValue) or value.kind != kind:
             raise _Mismatch(kind, value)
         result = deepcopy(value)
-        if kind == 'File' and fmt and 'format' not in result:
-            result['format'] = fmt
+        if kind == 'File' and fmt and not result.has_format:
+            result = replace(result, format=deepcopy(fmt), has_format=True)
         return result
     if kind == 'string':
         return _coerce_string(value)
@@ -337,9 +338,9 @@ def _coerce_string(value: OpaqueCwl) -> str:
     of it (`1.0e-5` is "1e-05"). YAML reads an unquoted 2024-01-15 as a date; its
     text is what the author wrote.
     """
-    if isinstance(value, (dict, list, bool)):
+    if isinstance(value, (dict, list, bool, FileValue)):
         try:
-            return json.dumps(value)
+            return json.dumps(write_value(value))
         except TypeError as exc:
             raise _Mismatch('string', value) from exc
     if isinstance(value, (str, int, float, datetime.date)):

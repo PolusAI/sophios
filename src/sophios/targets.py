@@ -18,10 +18,11 @@ from .ir.artifacts import CompilationArtifact
 from .ir.locations import absolute_paths
 from .ir.resolved import ResolvedWorkflow, bind
 from .lang.nodes import OpaqueCwl
+from .lang.values import read_value, write_value
 from .nextflow import render as io_nf
 from .nextflow.lower import NEXTFLOW as _NEXTFLOW_LOWERING
 from .nextflow.model import ExecutableNextflowWorkflow
-from .nextflow.tool import local_locations_as_paths
+from .nextflow.tool import local_paths
 from .runtime import realtime
 from .runtime.backends import Backend, CwltoolBackend, NextflowBackend, ToilBackend
 from .runtime.inputs import name_output_targets, output_target_inputs
@@ -77,7 +78,9 @@ class _Cwl:
     def run_values(self, view: ResolvedWorkflow) -> dict[str, OpaqueCwl]:
         """Each output-target Directory a name for the run to create: a runner given an absolute path for a
         Directory would never create it."""
-        return name_output_targets(view.values, output_target_inputs(view))
+        values: dict[str, OpaqueCwl] = read_value(
+            name_output_targets(write_value(view.values), output_target_inputs(view)))
+        return values
 
     def lower(self, view: ResolvedWorkflow) -> Lowered[CompilationArtifact]:
         """The artifact tree emitted from the view, and `wic056` at each `when` that cannot give `true` or `false`."""
@@ -103,7 +106,7 @@ class _Nextflow:
 
     def run_values(self, view: ResolvedWorkflow) -> dict[str, OpaqueCwl]:
         """Each local `location` a `path`, and no format: the model refuses a URI, which an absolute `location` is."""
-        values: dict[str, OpaqueCwl] = local_locations_as_paths(view.values)
+        values: dict[str, OpaqueCwl] = local_paths(view.values)
         return values
 
     def lower(self, view: ResolvedWorkflow) -> Lowered[ExecutableNextflowWorkflow]:

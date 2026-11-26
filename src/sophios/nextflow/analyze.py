@@ -15,13 +15,14 @@ from ..lang.needs import FEATURES
 from ..lang.subset import Expr, boolean_problem, is_safe_subset_text, references
 from ..lang.tools import BodyKind, Stream
 from ..lang.types import LINK_MERGES, PICK_VALUES, SCATTER_METHODS, ScatterMethod, required, spell
+from ..lang.values import FileValue, write_value
 from .model import PARAM_TYPES, gives_list, merge_of, text_stays_out, wildcard_problem
 from .support import FIELDS, consumed
 from .tool import (
     _Finding, _Tool, _Unsupported, _WORKFLOW_CONSUMED_FIELDS, _array_item_type, _declared_findings,
     _default_value_findings, _identifier, _is_array_type, _iwdr_entries, _literal_text, _normalized_identifiers,
     _glob, _output_capture, _phase1_value_matches, _qualifier, _referenced_names, _reported, _stream_file,
-    _type_problem, _unconsumed_field_findings, cwl_type_to_nf_qualifier, local_locations_as_paths,
+    _type_problem, _unconsumed_field_findings, cwl_type_to_nf_qualifier, local_paths,
 )
 
 
@@ -192,7 +193,7 @@ def _workflow_capability_findings(workflow: ResolvedWorkflow, steps: tuple[_Step
             pass
         elif (problem := _type_problem(cwl_type)) is not None:
             findings.append(_Finding(SophiosErrorCode.NF_TYPE, f"{input_path}.type", problem))
-        elif given.has_value and not _phase1_value_matches(cwl_type, local_locations_as_paths(given.value)):
+        elif given.has_value and not _phase1_value_matches(cwl_type, local_paths(given.value)):
             findings.append(_Finding(SophiosErrorCode.NF_INPUT_VALUE,
                                      input_path, "supplied value does not match its supported CWL type"))
     with _reported(findings, ".outputs"):
@@ -397,8 +398,8 @@ def _step_input_findings(workflow: ResolvedWorkflow, steps: tuple[_Step, ...]) -
             elif required(declared_type)[0] in ("File", "Directory"):
                 yield (SophiosErrorCode.NF_DEFAULT, ".default", "a step-input default of a File or Directory input "
                        "is not supported; give the path as a workflow input")
-            elif port.default is None or isinstance(port.default, (Mapping, list)) or not _phase1_value_matches(
-                    declared_type, port.default):
+            elif port.default is None or isinstance(port.default, (Mapping, list, FileValue)) \
+                    or not _phase1_value_matches(declared_type, port.default):
                 yield (SophiosErrorCode.NF_DEFAULT, ".default",
                        "the Nextflow target supports a JSON scalar default of the tool input's type")
         # A default is a JSON scalar, so it never sits beside an array source of its type.
@@ -727,6 +728,8 @@ def _json_value(value: Any) -> Any:
             return [_json_value(item) for item in items]
         case PathLike() as path:
             return str(path)
+        case FileValue():
+            return _json_value(write_value(value))
         case _:
             return copy.deepcopy(value)
 
@@ -737,7 +740,7 @@ def _workflow_params(workflow: ResolvedWorkflow) -> dict[str, Any]:
     params: dict[str, Any] = {}
     for port in workflow.inputs:
         if port.has_value:
-            value = local_locations_as_paths(port.value)
+            value = local_paths(port.value)
         elif port.declaration.has_default and not port.declaration.shorthand:
             value = port.declaration.default
         else:

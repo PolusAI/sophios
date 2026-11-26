@@ -17,7 +17,7 @@ import shutil
 import subprocess as sub
 import sysconfig
 import tempfile
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final
@@ -28,6 +28,7 @@ import cwl_utils.parser as cwl
 import requests
 
 from ..ir.locations import input_paths
+from ..lang.values import FileValue, read_value
 from ..lang.diagnostics import Diagnostic, Severity, SophiosError
 from ..lang.error_codes import SophiosErrorCode
 from .runners import RunSettings
@@ -268,12 +269,12 @@ def path_problems(jobs: Sequence[Job]) -> list[Diagnostic]:
     """One `wic016` for each File or Directory one of `jobs` names that the run could not use."""
     problems = []
     for job in jobs:
-        for name, value in input_paths(job.values):
+        for name, value in input_paths(read_value(job.values)):
             written = _written_path(value)
             if written is None:
                 continue
             resolved = Path(written) if Path(written).is_absolute() else job.base / written
-            if (why := _unusable(resolved, value['class'])) is not None:
+            if (why := _unusable(resolved, value.kind)) is not None:
                 problems.append(Diagnostic(
                     Severity.ERROR, SophiosErrorCode.MISSING_INPUT_FILE,
                     f"input '{name}' (from {job.origin}, whose relative paths are read from "
@@ -295,12 +296,12 @@ def _unusable(path: Path, kind: object) -> str | None:
     return None
 
 
-def _written_path(value: Mapping[str, Any]) -> str | None:
-    """The local path a File or Directory names: its `location` or `path`, without `file://`;
-    None for a literal (`contents`, `listing`) or a remote URL."""
-    written = value.get('location', value.get('path'))
-    if not isinstance(written, str):
+def _written_path(value: FileValue) -> str | None:
+    """The local path a File or Directory names, without `file://`; None for a literal (one with no location)
+    or a remote URL."""
+    if value.location is None:
         return None
+    written = value.location.text
     parsed = urlparse(written)
     if parsed.scheme == 'file':
         return url2pathname(parsed.path)

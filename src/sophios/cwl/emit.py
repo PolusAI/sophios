@@ -20,6 +20,7 @@ from ..lang.nodes import OpaqueCwl
 from ..lang.spans import SourceSpan
 from ..lang.tools import ToolNode
 from ..lang.types import PortDeclaration
+from ..lang.values import write_value
 from ..wic_types import Cwl
 from .lowering import process_of
 from .policy import effective_when, tolerant_tool
@@ -49,7 +50,7 @@ def _artifact(workflow: ResolvedWorkflow, tree: _Tree, name: str, namespace: tup
              for step in workflow.steps]
     return CompilationArtifact(
         namespace, name, f'{name}.cwl', _document(workflow, whens, tree.root),
-        deepcopy(workflow.values),
+        write_value(workflow.values),
         tuple(_child(step, tree, namespace, workflow.policy) for step in workflow.steps),
         Inlining(workflow.inlineable, span))
 
@@ -140,7 +141,7 @@ def _binding(value: StepValue) -> str | dict[str, OpaqueCwl]:
             if pick is not None:
                 known['pickValue'] = pick.value
             if has_default:
-                known['default'] = deepcopy(default)
+                known['default'] = write_value(default)
             known.update({key: deepcopy(field) for key, field in passthrough})
             return known['source'] if list(known) == ['source'] and isinstance(known['source'], str) else known
 
@@ -153,7 +154,7 @@ def _port(declaration: PortDeclaration, source: OutputSource = None) -> OpaqueCw
     if declaration.has_format:
         known['format'] = deepcopy(declaration.format)
     if declaration.has_default:
-        known['default'] = deepcopy(declaration.default)
+        known['default'] = write_value(declaration.default)
     match source:
         case None:
             pass
@@ -197,9 +198,10 @@ def _uses_edam(workflow: ResolvedWorkflow) -> bool:
     declarations += [port.declaration for port in workflow.outputs]
     formats = [declaration.format for declaration in declarations if declaration.has_format]
     formats += [found for declaration in declarations if declaration.has_default
-                for found in _job_formats(declaration.default)]
-    formats += [found for step in workflow.steps for entry in step.inputs for found in _job_formats(entry.default)]
-    formats += [found for port in workflow.inputs if port.has_value for found in _job_formats(port.value)]
+                for found in _job_formats(write_value(declaration.default))]
+    formats += [found for step in workflow.steps for entry in step.inputs for found in _job_formats(
+        write_value(entry.default))]
+    formats += [found for port in workflow.inputs if port.has_value for found in _job_formats(write_value(port.value))]
     return any(isinstance(text, str) and text.startswith(f'{EDAM_NAMESPACE[0]}:')
                for value in formats for text in (value if isinstance(value, list) else [value]))
 

@@ -18,6 +18,7 @@ from ..lang.error_codes import SophiosErrorCode
 from ..lang.subset import Expr
 from ..lang.tools import ToolNode
 from ..lang.types import PortDeclaration, read_type, required, spell
+from ..lang.values import write_value
 from .analyze import (
     _Step, _WhenError, _absent_optional_findings, _call_findings, _carried, _condition_value,
     _conditional_consumer_findings, _json_value, _lists, _param_type, _scatter_findings, _staged_name_findings,
@@ -33,7 +34,7 @@ from .model import (
 from .tool import (
     ABSENT_VAL_SENTINEL, _Finding, _Tool, _Unsupported, _command, _container, _cuda_notes, _generated_files,
     _identifier, _iwdr_entries, _normalized_identifiers, _ports, _resources, _tool_capability_findings,
-    local_locations_as_paths,
+    local_paths,
 )
 
 
@@ -470,8 +471,8 @@ def _assembled(lowering: _Lowering, processes: list[NfProcess],
         name = f"_{name}"
     # A default is as authored; each value is held as a value written on a step is (design §4.2, Losses): coerced
     # to its declared type, so an int given for a float is the float, and a local location a path.
-    values = _apply_absent_sentinel({key: local_locations_as_paths(coerce_job_value(
-        AuthoredName(key), PortDeclaration(read_type(param_types[key])), value)) for key, value in params.items()})
+    values = _apply_absent_sentinel({key: write_value(local_paths(coerce_job_value(
+        AuthoredName(key), PortDeclaration(read_type(param_types[key])), value))) for key, value in params.items()})
     problems = {SophiosErrorCode.NF_SOURCE_NAMES_NO_STEP: endpoint_problems(processes, connections),
                 SophiosErrorCode.NF_ABSENT_OPTIONAL: absent_path_problems(values, param_types),
                 SophiosErrorCode.NF_OPTIONAL_OUTPUT: optional_output_problems(processes, connections)}

@@ -44,6 +44,7 @@ from .spans import SourceSpan
 from .subset import EXPRESSION
 from .support import STEP_INPUT_RECORD_KEYS
 from .types import SCATTER_METHODS
+from .values import read_value
 
 #: A `graphviz: style:` value: one or more styles, comma separated.
 _GRAPHVIZ_STYLE: Final = ('((,\\s*)*(dashed|dotted|solid|invis|bold|tapered|filled|striped|wedged'
@@ -773,7 +774,7 @@ class _Reader:
             case Key.INLINE_INPUT, payload:
                 # A literal is the first node its own reading spends.
                 return self._literal(node, frozenset(), [1]) if payload is node else InlineLiteral(
-                    self._opaque(payload), span)
+                    read_value(self._opaque(payload)), span)
         if isinstance(node, yaml.nodes.ScalarNode):
             return UnresolvedName(node.value, span)
         if isinstance(node, yaml.nodes.MappingNode):
@@ -792,7 +793,7 @@ class _Reader:
                            'this mapping spells a CWL step input (' + ', '.join(sorted(keys)) + '), which '
                            'Sophios does not read untagged; write `!cwl {source: ..., default: ...}` for a CWL '
                            'step input, `!ii` for a literal of that shape', node)
-        return InlineLiteral(self._opaque(node), span)
+        return InlineLiteral(read_value(self._opaque(node)), span)
 
     def _raw_cwl(self, node: yaml.nodes.Node, span: SourceSpan, path: frozenset[int], spent: list[int]) -> InputValue:
         """`!cwl name` is a raw reference; `!cwl {source: ..., ...}` is a step-input record, written at `span`.
@@ -829,7 +830,8 @@ class _Reader:
                           'leave it unbound for Sophios to connect, or give it a source or a default')
         for fault in faults:
             self.diags.error(SophiosErrorCode.STEP_INPUT_RECORD, f'!cwl record: {fault}', span)
-        return CwlRecord(tuple(sources), tuple(fields.items()), span)
+        return CwlRecord(tuple(sources), tuple((key, read_value(item) if key == 'default' else item)
+                                               for key, item in fields.items()), span)
 
     def _outputs(self, node: yaml.nodes.Node) -> tuple[OutputBinding, ...]:
         """Parse a step's `out:` sequence."""
@@ -952,7 +954,7 @@ class _Reader:
         span = self.span(node)
         if not isinstance(node, yaml.nodes.ScalarNode):
             untagged = type(node)('', node.value, node.start_mark, node.end_mark)
-            return InlineLiteral(self._read(untagged, path | {id(node)}, spent), span)
+            return InlineLiteral(read_value(self._read(untagged, path | {id(node)}, spent)), span)
         text: str = node.value
         if node.style is not None:
             return InlineLiteral(text, span)
@@ -965,7 +967,7 @@ class _Reader:
             read = yaml.compose(text, Loader=yaml.SafeLoader)
             assert read is not None  # a non-empty scalar composes to a node
             self.error(SophiosErrorCode.UNKNOWN_TAG, f'YAML cannot read this value as {_tag_name(read.tag)}', node)
-        return InlineLiteral(value, span, None if '\n' in text else text)
+        return InlineLiteral(read_value(value), span, None if '\n' in text else text)
 
     def _opaque(self, node: yaml.nodes.Node, path: frozenset[int] = frozenset(),
                 spent: list[int] | None = None) -> OpaqueCwl:

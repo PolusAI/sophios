@@ -25,6 +25,7 @@ from sophios.ir.complete import coerce_job_value
 from sophios.ir.frontdoor import SourceBundle
 from sophios.ir.infer import InferencePolicy
 from sophios.ir.locations import absolute_paths
+from sophios.lang.values import read_value
 from sophios.ir.policy import RunPolicy
 from sophios.ir.realtime import ADAPTER, Declaration
 from sophios.ir.resolve import RegistrySnapshot
@@ -229,7 +230,7 @@ def _with_defaults_resolved(step: LangStep, base: Path) -> LangStep:
     `base` and written absolute, as a bound path is: the document is written elsewhere."""
     return replace(step, inputs=tuple(
         (name, replace(value, fields=tuple(
-            (key, absolute_paths({"default": field}, base)["default"] if key == "default" else field)
+            (key, absolute_paths({"default": read_value(field)}, base)["default"] if key == "default" else field)
             for key, field in value.fields)) if isinstance(value, CwlRecord) else value)
         for name, value in step.inputs))
 
