@@ -243,17 +243,17 @@ runs it from wherever you start it.
 ## Outputs
 
 The pipeline publishes every workflow output into one folder, the output
-folder, once every output has completed: a local run's, the folder
-`-output-dir` names when you run the files yourself, or a compute service's
-outputs folder. Each path is placed as a CWL run places it: a path inside a
+folder, once every output has completed: a local run's, a
+[site](sites.md)'s, the folder `-output-dir` names when you run the files
+yourself, or a compute service's outputs folder. Each path is placed as a CWL run places it: a path inside a
 folder the workflow also returns is at its place in that folder's copy, and
 every other path is copied once, the outputs in the order of their names,
 under its own name or, when a copy has taken it, the name and `_2`, `_3` and
 on, so a file globbed in a subfolder lands at the top, two of one name land
 as `out.txt` and `out.txt_2`, and a file two outputs return is copied once.
 The copies are files and folders, never links; the originals stay in the work
-directory. A file or directory a local run reports has its own name as its
-`basename`, as cwltool reports it, whatever name its copy took: a second
+directory. A file or directory a local run or a site reports has its own
+name as its `basename`, as cwltool reports it, whatever name its copy took: a second
 `out.txt` is at `<folder>/out.txt_2`, named `out.txt`.
 
 A local outputs folder may already hold files. Each copy replaces what the
@@ -261,9 +261,9 @@ folder holds under the copy's name, a file, a folder and everything in it, or
 a link (never what the link names), and leaves everything else there as it
 was, so a run into the folder of an earlier run of the workflow publishes as
 the first did, and reports the same paths. `-resume` runs no task again, but
-copies every output again, as a new run does. A compute service's outputs
-folder is missing or empty when its run starts, and its pipeline replaces
-nothing.
+copies every output again, as a new run does. A site's and a compute
+service's outputs folder is missing or empty when the run starts, so nothing
+is replaced there.
 
 ## Names
 
@@ -573,6 +573,23 @@ output whose name Nextflow would change, such as
 `Result`, which it publishes as `_Result`, is refused with
 [`wic061`](error_codes.md), and so is each output of a workflow that declares
 none, named `<step>~<port>`: declare the outputs to return.
+
+## On a site
+
+A workflow submitted to a [site](sites.md) with `target="nextflow"` runs the
+pipeline a local run runs, the `sophios-output` lines with it, written for
+the site's `container_engine`, `docker` or `singularity`
+([Containers](#containers)); on a site with another engine each step with a
+container is refused with [`wic065`](error_codes.md). Nextflow runs with
+`-output-dir` the run's outputs folder, which is missing or empty when the
+run starts, and publishes the outputs there ([Outputs](#outputs)); an
+output folder given a name is made in the run and published under that
+name, and one given an absolute path is refused. The site reads `-qs` (or
+`-queue-size`) from `Nextflow(...)` and writes it as `executor.queueSize` in
+a block it appends to the run's `nextflow.config`, 64 when not given; the
+other flags of `nextflow run` are passed on, but those the site sets itself,
+by either of their names (`-o`, `-output-dir`; `-w`, `-work-dir`), and the
+settings of that block (`-executor.queueSize`).
 
 ## GPUs
 

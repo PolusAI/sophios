@@ -13,6 +13,9 @@ concrete modules:
 
 The guides explain how the pieces fit: the pages under **Write workflows**
 for ``Step`` and ``Workflow``, and :doc:`tool-builder` for ``CommandLineTool``.
+``RunConfig`` and ``SlurmSettings`` are also what a site (:doc:`sites`) and the
+compute service (:doc:`compute`) take; ``sophios.sites`` and ``sophios.compute``
+are not part of the Python API.
 
 sophios.api.python.workflow
 ---------------------------

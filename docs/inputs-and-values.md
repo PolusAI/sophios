@@ -58,11 +58,9 @@ python greeting_input.py
 ```
 
 The Python script passes the same file to `run()` in its last line,
-`run(inputs_file='job.yml')`. It also says what it did as
-you built the workflow:
+`run(inputs_file='job.yml')`, and prints:
 
 ```text
-Adding a new input message to workflow greeting_input
  starting compilation of greeting_input
 finishing compilation of greeting_input
 ...

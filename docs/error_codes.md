@@ -4,7 +4,7 @@ What does a code in a Sophios message mean, and what do I change? This page is
 the catalog, one row per code; `sophios --explain <code>` prints the same row.
 
 Every problem Sophios reports carries a code: `wic0NN` for a document or for
-what running it needs from this machine, `api0NN` for a Python API call, and
+what running it needs from this machine or a [site](sites.md), `api0NN` for a Python API call, and
 `nf-sNNN` for what the Nextflow target cannot run yet. A
 diagnostic reads `file:line:col: error [code] message (step, port)`; the
 position and the step are there when Sophios knows them. A note reports a
@@ -14,7 +14,7 @@ The kind says what to change:
 
 - `document`: the `.wic` file, the Python workflow, a tool's CWL file, or an imported Nextflow pipeline;
 - `call`: the Python API call;
-- `machine`: this machine, what is installed, running, readable or writable;
+- `machine`: this machine or a site, what is installed, running, readable or writable;
 - `run`: nothing in Sophios, a tool failed while it ran;
 - `target`: nothing in the workflow; the target cannot run it yet. Change the
   construct the message names, or compile with `--target cwl`.
