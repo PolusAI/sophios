@@ -1,4 +1,5 @@
-"""A site, `Machine`, which checks, submits and attaches a run, and the base class every site shares."""
+"""A site, `Machine`, which checks, submits and attaches a run, and the base class every site shares, which `Slurm`
+(`_slurm`) fills in too."""
 # pylint: disable=protected-access  # a site starts its run in the run's folder
 import json
 import posixpath
@@ -30,15 +31,15 @@ from ..runtime import preflight
 from ..runtime.backends import RunRequest, nextflow_directory
 from ..runtime.inputs import output_target_inputs
 from ..runtime.runners import (SHELL_PATH, URL_SCHEME, Cwltool, LogLevel, Nextflow, RunConfig, Runner, RunSettings,
-                               Toil, build, read_config)
+                               SlurmSettings, Toil, build, read_config)
 from ..runtime.setup import Lowered
 from ..wic_types import Json, TargetName, Tool, Tools
 
 from ._run import Run, _run_folder
-from ._runners import (DEFAULT_RUNNER, OLDEST, ON_A_MACHINE, argv, nextflow_block, nextflow_config, read_runner,
-                       set_by_the_site, _DEFAULTS, _recorded)
+from ._runners import (DEFAULT_RUNNER, OLDEST, ON_A_MACHINE, SAMPLE, argv, nextflow_block, nextflow_config, read_runner,
+                       set_by_the_site, _recorded)
 from ._ssh import _ALIVE, _CHECKS, _PUT, _USED, URL, _Said, _call, _q, _unreachable, host
-from ._states import UNCLAIMED_MINUTES
+from ._states import UNCLAIMED_MINUTES, Job
 
 if TYPE_CHECKING:
     from ..api.python.workflow import Workflow
@@ -55,19 +56,25 @@ _UNREAD: Final = ((re.compile(r'[\x00-\x1f\x7f-\x9f]'), 'holds a control charact
                   (re.compile(r'%[0-9A-Fa-f]{2}'), 'holds a %-escape, which CWL decodes'))
 #: A question a check asks the site: a command that prints one line, and the judge of that line.
 _Ask = tuple[str, Callable[[str], Diagnostic | None]]
+#: Where a site placed a run, by setting: its value, and where it came from.
+_Placed = dict[str, tuple[str, str]]
+#: What a site places, in the order its record and `submit` say it.
+_PLACED: Final = ('partition', 'time', 'memory', 'cpus', 'gpus', 'steps_partition', 'steps_time', 'gpu_partition',
+                  'account')
 
 
 def _error(code: Code, message: str) -> Diagnostic:
     return Diagnostic(Severity.ERROR, code, message)
 
 
-def site_config(config: RunConfig | None) -> tuple[str | None, str | None, LogLevel | None]:
-    """`config` as a site reads it: the outputs folder, absolute, None for the run's own; `relative_to`; and the log
-    level. The pair rules are `read_config`'s, read as where there is no working directory; a site also refuses what
-    that reading leaves to the compute service, as it has no service behind it: an outputs folder or `relative_to`
-    that is not a string or is written for a shell, and an outputs folder that is empty, a URL (`file:` too: a site
-    takes paths), or that the service's driver refuses as cwltool would misread it (`_UNREAD`). The folder is read as
-    the driver reads it: from `relative_to`, `..`, `.` and a doubled or trailing `/` resolved by name.
+def site_config(config: RunConfig | None) -> tuple[str | None, str | None, LogLevel | None, SlurmSettings]:
+    """`config` as a site reads it: the outputs folder, absolute, None for the run's own; `relative_to`; the log
+    level; and the Slurm settings, which only a `Slurm` site reads. The pair rules are `read_config`'s, read as where
+    there is no working directory; a site also refuses what that reading leaves to the compute service, as it has no
+    service behind it: an outputs folder or `relative_to` that is not a string or is written for a shell, and an
+    outputs folder that is empty, a URL (`file:` too: a site takes paths), or that the service's driver refuses as
+    cwltool would misread it (`_UNREAD`). The folder is read as the driver reads it: from `relative_to`, `..`, `.`
+    and a doubled or trailing `/` resolved by name.
 
     Raises:
         ValueError: Every problem, a line each, in the user's words.
@@ -93,7 +100,7 @@ def site_config(config: RunConfig | None) -> tuple[str | None, str | None, LogLe
     if problems:
         raise ValueError('\n'.join(problems))
     folder = None if out is None else '/' + posixpath.normpath(posixpath.join(relative_to or '/', out)).lstrip('/')
-    return folder, relative_to, read.log_level
+    return folder, relative_to, read.log_level, read.slurm
 
 
 class _Site:
@@ -137,8 +144,9 @@ class _Site:
         one call there then checks each File and Directory it reads, the runner in `bin` and its version, the
         container engine when a step runs in a container, that `runs` can be written, and that the outputs folder
         is missing in a folder that exists, or empty, named by no run there that has not ended, and inside no
-        Directory the run reads. Under Toil, a note, `wic066`, at each step whose tool declares no memory: Toil gives
-        it 4 GiB there.
+        Directory the run reads; on Slurm also its commands, your `SBATCH_` settings, and that every partition a job
+        of the run goes to is there (`wic067`). Under Toil, a note, `wic066`, at each step whose tool declares no
+        memory: Toil gives it 4 GiB there.
 
         Args:
             workflow: The workflow, built with the Python API.
@@ -147,7 +155,8 @@ class _Site:
                 exists, or empty, and neither `runs`, inside it nor around it. None for the run's own folder,
                 `<runs>/<id>/out`. Its `relative_to` is also where a
                 relative File or Directory the workflow reads is read from, and its `log_level` Toil's `--logLevel`,
-                before the runner's own flags. Its Slurm settings are not used on a machine.
+                before the runner's own flags. Its Slurm settings say where a run's jobs go on Slurm (`Slurm`), and
+                are not used on a machine.
             target: The language the runner is given it in: `cwl` or `nextflow`.
             runner: The runner as a value, as `Workflow.run` takes it; None for Toil (`cwl`) or Nextflow. Toil's
                 `--maxJobs` and Nextflow's `-qs`, how many steps run at once, 64 when not given, and Toil's
@@ -159,8 +168,9 @@ class _Site:
         Raises:
             SophiosError: The workflow does not compile; `wic062` when the site cannot be reached.
             ValueError: No `bin`; a config that is not a RunConfig, whose outputs folder and `relative_to` do not go
-                together, or one a site cannot read; no target of that name; a runner that does not run the target,
-                with a setting of its own, or with a flag the site sets or reads a value it cannot have.
+                together, or one a site cannot read; on Slurm, a Slurm setting the run uses in a form the compute
+                service refuses, in the compute client's words; no target of that name; a runner that does not run
+                the target, with a setting of its own, or with a flag the site sets or reads a value it cannot have.
         """
         return self._prepare(workflow, config, target, runner, tool_registry, inference)[0]
 
@@ -169,16 +179,19 @@ class _Site:
                runner: Runner | None = None, tool_registry: Tools | None = None,
                inference: Inference = Inference()) -> 'Run':
         """Start `workflow` there, as `check` checks it, and return its run at once, having printed its id, its
-        runner with its flags, how many steps run at once and where its outputs go, each with where it comes from.
-        The run outlives ssh and Python.
+        runner with its flags, how many steps run at once, on Slurm where its jobs go and for how long, and where its
+        outputs go, each with where it comes from. The run outlives ssh and Python.
 
         Every argument is `check`'s. The outputs folder is made as the run starts, missing or empty then too, and
         used by no run there that has not ended: of two runs that start into one folder at once, at least one finds
-        the other and does not start, claimed by no job, its `reason` saying why.
+        the other and does not start, claimed by no job, its `reason` saying why. On Slurm, when the call that
+        submits fails or its answer is lost, a job named after the run is adopted, or the run is submitted again: its
+        claim lets only one leader run it.
 
         Raises:
             SophiosError: Every error `check` returns, nothing written; `wic021` when another run there took the
-                outputs folder since the check, naming it; `wic062` when the run could not be started, saying how to
+                outputs folder since the check, naming it; `wic062` when the run could not be started: on Slurm, when
+                Slurm refused its job twice, saying it did not start, its outputs folder free; else saying how to
                 attach to it should it have started all the same.
             ValueError: As `check` raises it.
         """
@@ -191,14 +204,12 @@ class _Site:
         try:
             said = _call(self.url, self._start(run._folder, record, files))
         except SophiosError as error:
-            try:
-                said = self._again(run._folder, files['job.sh'], error)
-            except SophiosError as failed:
-                raise SophiosError([*failed.diagnostics, _error(Code.SITE_UNREACHABLE, f'run {run.id} may have started '
-                                                                f'all the same: {run!r} follows it')]) from None
+            said = self._again(run, files['job.sh'], error)
         if said.startswith(b'used\n'):   # another run took the outputs folder since the check
             raise SophiosError([self._used(record['outdir'][0], *line.split(' ', 1))
                                 for line in said.decode('utf-8').splitlines()[1:]])
+        if said.strip():   # the scheduler's job
+            print(f'{type(self).__name__} has it as job {" ".join(said.decode().split())}.')
         print(f'From anywhere, {run!r} follows it.')
         return run
 
@@ -206,7 +217,8 @@ class _Site:
         """The run `run_id` there, from any computer: its folder is its record. It needs no `bin`.
 
         Raises:
-            SophiosError: `wic064` when it names no run there; `wic062` when the site cannot be reached.
+            SophiosError: `wic064` when it names no run there, or one another kind of site submitted, which the message
+                names; `wic062` when the site cannot be reached.
             ValueError: `run_id` is not a run id.
         """
         # A run id is its workflow's name and more of a name's characters, so the names a workflow may have are
@@ -217,7 +229,12 @@ class _Site:
         if record is None:
             raise SophiosError.error(Code.SITE_RUN_UNKNOWN, f'{host(self.url)} has no run {run_id} under '
                                      f'{self.runs}: check the id, the URL and runs=')
-        return Run(self, json.loads(record))
+        found, kind = json.loads(record), type(self).__name__
+        if found['site'] != kind:
+            raise SophiosError.error(Code.SITE_RUN_UNKNOWN, f'{host(self.url)} has no run {run_id} of a {kind} under '
+                                     f"{self.runs}: a {found['site']} site submitted it, so attach to it with "
+                                     f"{found['site']}({self.url!r}, runs={self.runs!r})")
+        return Run(self, found)
 
     # pylint: disable-next=too-many-arguments,too-many-positional-arguments,too-many-locals  # check's, and all it reads
     def _prepare(self, workflow: 'Workflow', config: RunConfig | None, target: str, runner: Runner | None,
@@ -226,13 +243,17 @@ class _Site:
         there is no error."""
         if self.bin is None:
             raise ValueError(f'bin= names the folder on {host(self.url)} that holds the runners, which check() and '
-                             'submit() run: give it, as Machine(url, runs=..., bin=...)')
-        outdir, relative_to, log_level = site_config(config)
+                             f'submit() run: give it, as {type(self).__name__}(url, runs=..., bin=...)')
+        outdir, relative_to, log_level, slurm = site_config(config)
         row = targets.target(target)
         given = runner is not None
         runner = targets.resolve(row.name, runner) if runner is not None else build(row.name, DEFAULT_RUNNER[row.name],
                                                                                     ())
+        if runner.name not in self._RUNNERS:   # Nextflow on Slurm
+            return [_error(Code.SITE_SLURM, f'Sophios does not run {runner.name} on a {type(self).__name__} site yet: '
+                           f"run it on a Machine, or with target='cwl' on {host(self.url)}")], {}, {}
         passed, read = self._read(runner)
+        self._slurm(slurm, runner)
         run_id = f'{workflow.process_name}-{datetime.now(timezone.utc):%Y%m%dT%H%M%S}-{secrets.token_hex(4)}'
         run = _run_folder(self.runs, run_id)
         result = compile_workflow_result(workflow, tool_registry=tool_registry, inference=inference)
@@ -255,10 +276,7 @@ class _Site:
         if row.name == 'cwl':
             lowered = replace(lowered, model=post_compile.inline_artifact_runs(lowered.model))
         refused = self._engine_refused(runner, lowered)
-        values = {setting: value for setting, (value, _) in read.items()}
-        runner_there = self._there(runner, run, values, (
-            *(('--logLevel', log_level) if log_level is not None and runner.name == Toil.name else ()), *passed))
-        settings = RunSettings(runner_there, outdir or f'{run}/out')
+        settings = RunSettings(self._engined(runner), outdir or f'{run}/out')
         # A CWL run's files as cwltool's backend writes them for either CWL runner: an output folder given a name is
         # an empty Directory as CWL writes one, which Toil reads under `--bypass-file-store`, as a site runs it, where
         # it cannot read its own form (`ToilBackend.empty_directory`), which needs its file store.
@@ -269,14 +287,19 @@ class _Site:
             files = {path.relative_to(staging).as_posix(): path.read_bytes().decode('utf-8')
                      for path in sorted(Path(staging).rglob('*')) if path.is_file()}
         notes = _memory_notes(lowered.view, host(self.url)) if runner.name == Toil.name else []
-        found += [*lowered.notes, *notes, *refused, *self._ask(runner_there, needs, asks, outdir, refused)]
+        problems, placed = self._ask(settings.runner, needs, asks, outdir, refused, partial(
+            self._place, slurm=slurm, runner=runner.name, view=lowered.view))
+        found += [*lowered.notes, *notes, *refused, *problems]
         if any(diagnostic.severity is Severity.ERROR for diagnostic in found):
             return found, {}, {}
+        read |= placed
+        values = {setting: value for setting, (value, _) in read.items()}
+        settings = replace(settings, runner=self._there(runner, run, values, (
+            *(('--logLevel', log_level) if log_level is not None and runner.name == Toil.name else ()), *passed)))
         if runner.name == Nextflow.name:
             files[(nextflow_directory(Path(), written.name) / NEXTFLOW_CONFIG).as_posix()] += nextflow_config(
                 self._block(values, runner))
-        files['job.sh'] = self._job(RunRequest(written.name, Path(run), settings),
-                                    read['clean'][0] if 'clean' in read else None, written.folders)
+        files['job.sh'] = self._job(RunRequest(written.name, Path(run), settings), values, written.folders)
         record: Json = {
             'id': run_id, 'site': type(self).__name__, 'workflow': written.name, 'target': row.name,
             'sophios': __version__,
@@ -290,20 +313,24 @@ class _Site:
 
     def _read(self, runner: Runner) -> tuple[tuple[str, ...], dict[str, tuple[str, str]]]:
         """`read_runner` of the value `runner` here: what this site sets itself is the command line it runs with none
-        of the user's flags, and the block it writes into Nextflow's configuration."""
-        there = self._there(runner, '/run', _DEFAULTS)
-        return read_runner(runner, set_by_the_site(there, self._block(_DEFAULTS, runner)))
+        of the user's flags, given every setting it may give the runner (`SAMPLE`), and the block it writes into
+        Nextflow's configuration."""
+        there = self._there(runner, '/run', SAMPLE)
+        return read_runner(runner, set_by_the_site(there, self._block(SAMPLE, runner)))
 
-    def _there(self, runner: Runner, run: str, read: Mapping[str, str], flags: Sequence[str] = ()) -> Runner:
-        """The runner a site runs for the value `runner`, in the run's folder `run`: what the scheduler adds to its
-        launch, given the settings the site read, then `flags`; the site's engine; never quiet, as its log is where a
-        failed step is read from. Nextflow's pipeline runs its containers with Docker or Singularity; under another
-        engine no process runs a container, or check refuses it, so the pipeline is the one for Docker, which it never
-        starts."""
+    def _engined(self, runner: Runner) -> Runner:
+        """The runner a site runs for the value `runner`, with none of its flags: the site's engine; never quiet, as
+        its log is where a failed step is read from. Nextflow's pipeline runs its containers with Docker or
+        Singularity; under another engine no process runs a container, or check refuses it, so the pipeline is the one
+        for Docker, which it never starts."""
         engine = 'docker' if runner.name == Nextflow.name and self.container_engine not in NF_ENGINE_CONFIG else \
             self.container_engine
-        return build(runner.target, runner.name, (*self._RUNNERS[runner.name](run, read), *flags),
-                     container_engine=engine, quiet=False)
+        return build(runner.target, runner.name, (), container_engine=engine, quiet=False)
+
+    def _there(self, runner: Runner, run: str, read: Mapping[str, str], flags: Sequence[str] = ()) -> Runner:
+        """`_engined(runner)`, in the run's folder `run`, with what the scheduler adds to its launch, given the
+        settings the site read and placed, then `flags`."""
+        return self._engined(runner).evolve(flags=(*self._RUNNERS[runner.name](run, read), *flags))
 
     def _apart(self, outdir: str | None) -> list[Diagnostic]:
         """`wic021` when the outputs folder `outdir` is `runs`, inside it or around it: a run that fails empties
@@ -392,10 +419,11 @@ class _Site:
 
     # pylint: disable-next=too-many-arguments,too-many-positional-arguments,too-many-locals  # one call, every question
     def _ask(self, runner: Runner, needs: preflight.Needs, asks: list[_Ask], outdir: str | None,
-             refused: list[Diagnostic]) -> list[Diagnostic]:
+             refused: list[Diagnostic], place: Callable[[Sequence[str]], tuple[list[Diagnostic], _Placed]]
+             ) -> tuple[list[Diagnostic], _Placed]:
         """Every problem the site has with the run, in one call: each check a command printing one line, and a judge
-        of that line; the scheduler's questions; and, for an outputs folder the config names, the record of each run
-        there that has not ended, which may name it too."""
+        of that line; the scheduler's questions, which `place` answers with where the run's jobs go; and, for an
+        outputs folder the config names, the record of each run there that has not ended, which may name it too."""
         asks = [('uname -s', self._platform), *asks]
         program, engine = runner.name, runner.container_engine
         flag = '-version' if program == Nextflow.name else '--version'
@@ -415,9 +443,9 @@ class _Site:
             users = list(iter(said.line, '')) if outdir is not None else []
         except ValueError as error:
             raise _unreachable(self.url, f'its checks printed what Sophios cannot read ({error})') from None
-        return [found for (_, judge), line in zip(asks, lines) if (found := judge(line)) is not None] + \
-            self._place(lines[len(asks):]) + [self._used(outdir, *user.split(' ', 1)) for user in users
-                                              if outdir is not None]
+        placing, placed = place(lines[len(asks):])
+        return [found for (_, judge), line in zip(asks, lines) if (found := judge(line)) is not None] + placing + [
+            self._used(outdir, *user.split(' ', 1)) for user in users if outdir is not None], placed
 
     def _platform(self, said: str) -> Diagnostic | None:
         if said in ('Darwin', 'Linux'):
@@ -490,11 +518,12 @@ class _Site:
         return ['unset "${!TOIL_@}" "${!PYTHON@}"', 'export PYTHONNOUSERSITE=1 TOIL_HISTORY=False',
                 f'export PATH={_q(self.bin)}:"$PATH"']
 
-    def _job(self, request: RunRequest, clean: str | None, folders: Iterable[str]) -> str:
-        """`job.sh`, the leader script (design Appendix A), for `request`: the claim, by the leader's pid, the record
-        of how it ended in `exit` whatever happens after the claim, `folders` made, and the runner's launch run from
-        `bin`. `clean` is Toil's `--clean`, None for a runner that leaves no scratch."""
-        runner, run, outdir = request.run.runner, str(request.basepath), request.run.outdir
+    def _job(self, request: RunRequest, read: Mapping[str, str], folders: Iterable[str]) -> str:
+        """`job.sh`, the leader script (design Appendix A), for `request`, given the settings the site read and
+        placed, `read`: on Slurm its header; the claim, by the leader's pid or job id, the record of how it ended in
+        `exit` whatever happens after the claim, `folders` made, and the runner's launch run from `bin`. Toil's
+        `--clean`, `read`'s `clean`, says when its scratch is removed; a runner that leaves none has none."""
+        runner, run, outdir, clean = request.run.runner, str(request.basepath), request.run.outdir, read.get('clean')
         launch = targets.backend(runner).launch(request)
         if runner.name == Toil.name:
             folders = (*folders, f'{run}/toil/work', f'{run}/toil/tmp')
@@ -506,7 +535,7 @@ class _Site:
         assert self.bin is not None, 'check and submit refuse a site without bin='
         claimant = f'"{self._CLAIMANT}"'
         return '\n'.join([
-            '#!/bin/bash -l', 'set -euo pipefail',
+            '#!/bin/bash -l', *self._header(run, read), 'set -euo pipefail',
             f'ln -s {claimant} {leader} 2> /dev/null || [ -L {leader} ] || ln -s {claimant} {leader}',
             f'[ "$(readlink {leader})" = {claimant} ] || exit 0',
             f'trap {_q(_recorded(run, clean, outdir))} EXIT', "trap 'exit 143' TERM", *self._environment(), *caches,
@@ -560,9 +589,23 @@ class _Site:
         """The scheduler's questions a check asks, each printing one line: none on a machine."""
         return []
 
-    def _place(self, said: Sequence[str]) -> list[Diagnostic]:
-        """What the answers to `_questions` say: the scheduler's problems with the run; none on a machine."""
-        del said
+    def _slurm(self, slurm: SlurmSettings, runner: Runner) -> None:
+        """Check the config's Slurm settings, `slurm`, that the run uses under `runner`, before anything is compiled
+        or sent: none on a machine, which reads none."""
+        del slurm, runner
+
+    def _place(self, said: Sequence[str], *, slurm: SlurmSettings, runner: str,
+               view: ResolvedWorkflow) -> tuple[list[Diagnostic], _Placed]:
+        """What the answers to `_questions` say, for the run of `view` by `runner` with the config's Slurm settings,
+        `slurm`: the scheduler's problems with the run, and where its jobs go, each setting with where it came from;
+        none on a machine."""
+        del said, slurm, runner, view
+        return [], {}
+
+    def _header(self, run: str, read: Mapping[str, str]) -> list[str]:
+        """The lines of the leader's script before its first command, for the run in `run`, placed as `read` says:
+        none on a machine."""
+        del run, read
         return []
 
     def _block(self, read: Mapping[str, str], runner: Runner) -> dict[str, dict[str, str]]:
@@ -578,16 +621,22 @@ class _Site:
         return [f'cd {_q(run)}', 'set -m', f'nohup bash -l {_q(f"{run}/job.sh")} >> {_q(f"{run}/run.log")} 2>&1 '
                 '< /dev/null &']
 
-    def _again(self, run: str, job: str, error: SophiosError) -> bytes:
-        """When the call that starts a run failed or its answer was lost, the run's one leader, by another call; on a
-        machine, which starts it once, `error`."""
-        del run, job
-        raise error
+    def _again(self, run: Run, job: str, error: SophiosError) -> bytes:
+        """When the call that starts `run` failed or its answer was lost, the run's one leader, by another call; on a
+        machine, which starts it once, `error`, and how to follow the run should it have started all the same."""
+        del job
+        raise SophiosError([*error.diagnostics, _started(run)]) from None
 
     def _asked(self, run_id: str) -> list[str]:
         """The lines a status asks the scheduler with, before it reads the folder: none on a machine."""
         del run_id
         return []
+
+    # pylint: disable-next=useless-return  # a machine is asked nothing
+    def _queue(self, run_id: str, said: _Said, now: int) -> Callable[[], Sequence[Job]] | None:
+        """What `_asked` said, read from `said`: the run's jobs, as `decide` asks for them; None on a machine."""
+        del run_id, said, now
+        return None
 
 
 @dataclass(frozen=True)
@@ -618,19 +667,26 @@ class Machine(_Site):
     container_engine: str = 'docker'
 
 
+def _started(run: Run) -> Diagnostic:
+    """`wic062`: the run may have started though its start failed, and how to follow it."""
+    return _error(Code.SITE_UNREACHABLE, f'run {run.id} may have started all the same: {run!r} follows it')
+
+
 def _around(path: str, folder: str) -> bool:
     """Whether `path` is `folder`, or inside it, by name."""
     return PurePosixPath(folder) in (PurePosixPath(path), *PurePosixPath(path).parents)
 
 
 def _announce(there: str, record: Json) -> str:
-    """What `submit` prints first: the id, the runner and its flags, how many steps run at once, and the outputs,
-    each with where it comes from."""
+    """What `submit` prints first: the id, the runner and its flags, how many steps run at once, on Slurm where the
+    run's jobs go and for how long, and the outputs, each with where it comes from."""
     (runner, runner_from), flags = record['runner'], record['flags']
     parallel = (f", at most {record['max_parallel'][0]} at once ({record['max_parallel'][1]})"
                 if 'max_parallel' in record else '')
+    placed = ', '.join(f'{setting} {record[setting][0]} ({record[setting][1]})' for setting in _PLACED
+                       if setting in record)
     return (f'Submitting {record["id"]} to {there}: {shlex.join([runner, *flags])} ({runner_from}){parallel}.\n'
-            f'Outputs: {record["outdir"][0]} ({record["outdir"][1]})')
+            + (f'Slurm: {placed}.\n' if placed else '') + f'Outputs: {record["outdir"][0]} ({record["outdir"][1]})')
 
 
 def _memory_notes(view: ResolvedWorkflow, there: str) -> list[Diagnostic]:

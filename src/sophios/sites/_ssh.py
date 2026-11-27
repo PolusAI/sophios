@@ -76,10 +76,13 @@ def _unreachable(url: str, why: str) -> SophiosError:
 #: file. The length is read first, so a file that grows meanwhile is cut where it was.
 _PUT: Final = ('put() { if [ -f "$1" ]; then n=$(($(wc -c < "$1") - $2)); [ "$n" -gt 0 ] || n=0; echo "$n"; '
                'if [ "$n" -gt 0 ]; then tail -c +$(($2 + 1)) "$1" | head -c "$n"; fi; else echo -1; fi; }')
+#: A script's function that runs a command and prints its exit status and the length of what it said, on a line, then
+#: what it said on both streams.
+_ANSWER: Final = 'answer() { out=$("$@" 2>&1); code=$?; echo "$code $(printf %s "$out" | wc -c)"; printf %s "$out"; }'
 
 
 class _Said:
-    """What a script printed: lines, and files as `_PUT` prints them."""
+    """What a script printed: lines, files as `_PUT` prints them, and answers as `_ANSWER` prints them."""
 
     def __init__(self, data: bytes) -> None:
         self._data, self._at = data, 0
@@ -90,13 +93,19 @@ class _Said:
         found, self._at = self._data[self._at:end], end + 1
         return found.decode('utf-8', 'replace')
 
+    def _bytes(self, size: int) -> bytes:
+        found, self._at = self._data[self._at:self._at + size], self._at + size
+        return found
+
     def file(self) -> bytes | None:
         """The next file's bytes, None for no file."""
         size = int(self.line())
-        if size < 0:
-            return None
-        found, self._at = self._data[self._at:self._at + size], self._at + size
-        return found
+        return None if size < 0 else self._bytes(size)
+
+    def answer(self) -> tuple[int, str]:
+        """The next command's exit status, and what it said."""
+        status, size = self.line().split()
+        return int(status), self._bytes(int(size)).decode('utf-8', 'replace')
 
 
 #: A script's function: whether the leader whose pid `$1` is, a run's claim, runs the `job.sh` of the run whose id is
@@ -110,8 +119,9 @@ _ALIVE: Final = ('alive() { case $1 in ""|*[!0-9]*) return 1 ;; esac; '
 _USED: Final = ('used() { for r in "$1"/*/; do r=${r%/}; [ "$r" != "$3" ] && [ -f "$r/run.json" ] && '
                 'o=$(readlink "$r/out") && unfinished "$r" || continue; case "$2/" in "$o/"*) ;; *) '
                 'case "$o/" in "$2/"*) ;; *) continue ;; esac ;; esac; printf "%s %s\\n" "${r##*/}" "$o"; done; }')
-#: The checks' functions, each printing one line: what a path is, what a program printed and its exit status, whether a
-#: folder can be made, and whether an outputs folder is free: missing in a folder that exists, or empty, and no link.
+#: The checks' functions, each printing one line: what a path is, what a program printed and its exit status, a
+#: variable's value, whether a folder can be made, and whether an outputs folder is free: missing in a folder that
+#: exists, or empty, and no link.
 _CHECKS: Final = '\n'.join((
     'kind() { if [ -d "$1" ]; then if [ -r "$1" ] && [ -x "$1" ]; then echo Directory; else echo unreadable; fi; '
     'elif [ -e "$1" ]; then if [ -r "$1" ]; then echo File; else echo unreadable; fi; else echo missing; fi; }',
@@ -119,6 +129,7 @@ _CHECKS: Final = '\n'.join((
     'runs() { if command -v "$1" > /dev/null 2>&1; then out=$("$@" 2>&1); said $? "$out"; else echo missing; fi; }',
     'probe() { if command -v "$1" > /dev/null 2>&1; then out=$("$@" 2>&1 > /dev/null); said $? "$out"; '
     'else echo missing; fi; }',
+    'variable() { printf %s "${!1-}" | tr "\\n\\r" "  "; echo; }',
     'writable() { p=$1; while [ ! -e "$p" ]; do p=$(dirname "$p"); done; '
     'if [ -d "$p" ] && [ -w "$p" ] && [ -x "$p" ]; then echo yes; else echo "no $p"; fi; }',
     'free() { if [ -L "$1" ]; then echo link; elif [ -e "$1" ]; then if [ ! -d "$1" ]; then echo exists; '

@@ -1,9 +1,11 @@
-"""What a site adds to each runner (the table of design §5), how it reads a runner value, and the parts of the leader
-script (Appendix A)."""
+"""What each site adds to each runner (the table of design §5), how it reads a runner value, and the parts of the
+leader script (Appendix A)."""
+import math
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import fields
-from pathlib import Path
+from functools import reduce
+from pathlib import Path, PurePosixPath
 from typing import Final
 
 from .. import targets
@@ -32,6 +34,9 @@ _OTHER_NAMES: Final[Mapping[str, Mapping[str, str]]] = {
     'nextflow': {'-queue-size': '-qs', '-o': '-output-dir', '-w': '-work-dir'}}
 #: Each setting a site reads, when its flag is not given.
 _DEFAULTS: Final[Mapping[str, str]] = {'max_parallel': str(MAX_PARALLEL), 'clean': 'always'}
+#: Every setting a site may give a runner, each with a value: what a run is given its runner's options from, when
+#: what the site sets itself is read off its command line (`set_by_the_site`), so every option it may set is there.
+SAMPLE: Final[Mapping[str, str]] = {**_DEFAULTS, 'steps_partition': 'p', 'steps_time': '1', 'gpu_partition': 'g'}
 _COUNT: Final = re.compile(r'[1-9][0-9]*')
 #: The runner a site runs each target with when `runner=` is None, by name: Toil for CWL, where a local run's default
 #: is cwltool.
@@ -42,11 +47,42 @@ OLDEST: Final[Mapping[str, tuple[int, ...]]] = {
     'cwltool': (3, 1, 20241217163858), 'toil-cwl-runner': (9, 5, 0), 'nextflow': (26, 4, 2)}
 
 
-def _toil(run: str, max_parallel: str, clean: str, system: str) -> tuple[str, ...]:
-    """Toil's flags on a site (design Appendix A): its batch system, the scratch in the run, and `--clean`."""
+def _toil(run: str, max_parallel: str, clean: str, system: str, *more: str) -> tuple[str, ...]:
+    """Toil's flags on a site (design Appendix A): its batch system, the scratch in the run, `more`, and `--clean`."""
     return ('--batchSystem', system, '--bypass-file-store', '--leave-tmpdir', '--no-cwl-default-ram',
             '--defaultMemory', '4Gi', '--maxJobs', max_parallel, '--workDir', f'{run}/toil/work',
-            '--tmpdir-prefix', f'{run}/toil/tmp/t', '--tmp-outdir-prefix', f'{run}/toil/tmp/o', '--clean', clean)
+            '--tmpdir-prefix', f'{run}/toil/tmp/t', '--tmp-outdir-prefix', f'{run}/toil/tmp/o', *more, '--clean',
+            clean)
+
+
+def seconds(limit: str) -> float:
+    """A Slurm time in seconds, as Slurm reads its forms (M, M:S, H:M:S, D-H, D-H:M, D-H:M:S); a partition's
+    `infinite`, no limit, is infinite."""
+    if limit == 'infinite':
+        return math.inf
+    days, _, rest = limit.rpartition('-')
+    parts = [int(part) for part in rest.split(':')]
+    parts += [0] * ((3 if days else 2) - len(parts))
+    return int(days or 0) * 86400 + reduce(lambda total, part: total * 60 + part, parts, 0)
+
+
+def _steps_options(run: str, read: Mapping[str, str]) -> str:
+    """The `sbatch` options a runner gives each step job of its own on Slurm: the run's comment, and the account."""
+    return f'--comment=sophios:{PurePosixPath(run).name}' + (f' --account={read["account"]}' if 'account' in read
+                                                             else '')
+
+
+def _toil_on_slurm(run: str, read: Mapping[str, str]) -> tuple[str, ...]:
+    """Toil's flags on Slurm: each step a job of its own, on the steps' partition, or the GPU partition for a step that
+    asks for a GPU, with the steps' time, the run's comment and the account, its Slurm logs in the run. The time as
+    hours, minutes and seconds, Toil's reading of every form being Slurm's but for days of 0 (`0-12`, 12 hours to
+    Slurm, 12 minutes to Toil 9.5); it is never none (`_slurm.placement`)."""
+    limit = int(seconds(read['steps_time']))
+    return _toil(run, read['max_parallel'], read['clean'], 'slurm', '--batchLogsDir', f'{run}/batch',
+                 f"--slurmPartition={read['steps_partition']}", '--slurmTime',
+                 f'{limit // 3600}:{limit // 60 % 60:02}:{limit % 60:02}',
+                 *((f"--slurmGPUPartition={read['gpu_partition']}",) if 'gpu_partition' in read else ()),
+                 f'--slurmArgs={_steps_options(run, read)}')
 
 
 #: The design's table: what a machine adds to the launch of each runner, by its name, given the run's folder and the
@@ -56,6 +92,12 @@ ON_A_MACHINE: Final[Mapping[str, Callable[[str, Mapping[str, str]], tuple[str, .
     'cwltool': lambda run, read: (),
     'toil-cwl-runner': lambda run, read: _toil(run, read['max_parallel'], read['clean'], 'single_machine'),
     'nextflow': lambda run, read: (),
+}
+#: What Slurm adds: cwltool is the run's one job, which its header places; Toil runs each step as a job of its own.
+#: Nextflow is not run on Slurm yet.
+ON_SLURM: Final[Mapping[str, Callable[[str, Mapping[str, str]], tuple[str, ...]]]] = {
+    'cwltool': lambda run, read: (),
+    'toil-cwl-runner': _toil_on_slurm,
 }
 
 
