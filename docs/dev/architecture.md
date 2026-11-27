@@ -195,8 +195,8 @@ for a `StepInput` default against the working directory.
   the Python API (`Workflow.run(runner=..., config=...)`) build the same value,
   and the deprecated dictionary form of `run()` is translated onto it in one
   function. The parser reads its defaults and choices from it. It also holds
-  `RunConfig` and `SlurmSettings`, the one configuration a local run and the
-  compute service take, and `read_config`, which every door reads a config
+  `RunConfig` and `SlurmSettings`, the one configuration a local run, a site
+  and the compute service take, and `read_config`, which every door reads a config
   with and where the rules of its outputs folder and `relative_to` live; the
   Python API resolves a config's folder into `RunSettings.outdir` once.
 - `sophios.runtime.backends` describes a run once, as a `RunRequest` that carries the
@@ -243,6 +243,23 @@ for a `StepInput` default against the working directory.
   service's `run-request.schema.json`, and follows the run over HTTP on the
   service's Unix socket, reached through the user's own `ssh`. The Python API
   does not import it, and it never goes through the pre-flight.
+- `sophios.sites` runs a workflow on another computer over the user's own
+  `ssh` (`design_docs/sites-design.md`). It reads the `RunConfig` with
+  `read_config` as the compute service does, and refuses itself what it
+  leaves to the service (`_site.site_config`); compiles and lowers through
+  `targets`, the workflow's output folders made in the run; builds the
+  `RunSettings` of the runner on that computer, its engine the site's, and
+  calls the backend's `write` into a local folder and its `needs`; judges
+  them there in one call; copies the files into a folder of the run there;
+  and starts the backend's `launch` from `bin` in a job script that records
+  how it ended and empties the outputs folder of a run that did not
+  succeed. `status` reads the folder, and the backend's `outcome` reads what
+  the run left. A package: `_ssh` (the transport and the shell functions),
+  `_states` (a run's state from its folder), `_runners` (what a site reads
+  from a runner value and adds to its command line), `_site` (the base
+  class, whose scheduler hooks a `Machine` fills, and `Machine`) and `_run`
+  (`Run`). The Python API does not import it, and it never goes through
+  the pre-flight.
 
 ## Compatibility contract
 

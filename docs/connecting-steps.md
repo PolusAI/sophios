@@ -73,10 +73,9 @@ sophios --yaml greeting_output.wic --run_local
 python greeting_output.py
 ```
 
-The Python run first says what you added:
+The Python run prints:
 
 ```text
-Adding a new output greeting to workflow greeting_output
  starting compilation of greeting_output
 finishing compilation of greeting_output
 ...

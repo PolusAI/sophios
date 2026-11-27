@@ -57,10 +57,9 @@ python nested.py
 ```
 
 Both succeed, and `cat` reads back `Hello`, the greeting the subworkflow
-made. The Python run first reports the output you named in the child:
+made. The Python run prints:
 
 ```text
-Adding a new output greeting to workflow make_greeting
  starting compilation of nested
 finishing compilation of nested
 ...

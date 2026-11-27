@@ -33,6 +33,7 @@
    :caption: Run and manage
 
    running
+   sites
    checks-and-errors
    partial-failures
    realtime-analysis

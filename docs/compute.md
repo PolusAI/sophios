@@ -11,7 +11,8 @@ job, and each step as a Slurm job of its own.
 Python API**: nothing under `sophios.api.python` exports or documents it, and
 its interface follows the service's contract rather than the API's. The
 `RunConfig` it takes is the API's own, the one a local run takes
-([Choose where the results go](running.md#choose-where-the-results-go)). This page
+([Choose where the results go](running.md#choose-where-the-results-go)) and a
+[site](sites.md) takes, which reads it as the service does. This page
 covers Sophios's side; how the service checks a request, runs it and is
 deployed is in the service's own README.
 
