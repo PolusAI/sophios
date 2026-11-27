@@ -76,8 +76,8 @@ def _invocations(workflow: Path) -> list[list[str]]:
     return found
 
 
-def _collect_all(argvs: list[list[str]]) -> list[set[str]]:
-    """The tests pytest selects for each of `argvs`, as `path::name` without parameters.
+def _collect_all(argvs: list[list[str]], *, parameters: bool = False) -> list[set[str]]:
+    """The tests pytest selects for each of `argvs`, as `path::name`, with its parameters when `parameters`.
 
     `lane_collector` asks pytest about all of them in one interpreter, so the
     imports every collection needs are paid for once.
@@ -95,7 +95,7 @@ def _collect_all(argvs: list[list[str]]) -> list[set[str]]:
     selected = []
     for argv, (code, ids, output) in zip(argvs, results):
         assert code in (0, 5), f'pytest could not collect `pytest {" ".join(argv)}`:\n{output}'
-        selected.append({node.split('[')[0] for node in ids})
+        selected.append(set(ids) if parameters else {node.split('[')[0] for node in ids})
     return selected
 
 
@@ -173,12 +173,26 @@ def test_the_corpus_lane_round_trips_every_wic_root_through_the_python_api() -> 
 @pytest.mark.fast
 @pytest.mark.parametrize('workflow_name', ['build_wheel.yml', 'test_and_publish_pypi.yml'])
 def test_package_lanes_leave_nextflow_runtime_to_its_runtime_lane(workflow_name: str) -> None:
-    """Package lanes do not collect tests whose executable they do not install."""
+    """Package lanes do not collect tests whose executable they do not install: no test marked `nextflow`, in any
+    file, a parameter marked so included, as `tests/core/test_sites.py` marks its Nextflow rows."""
     runtime_tests, *package_tests = _collect_all(
-        [['tests/core/nextflow', '-m', 'nextflow'], *_invocations(WORKFLOWS / workflow_name)]
+        [['tests/core', '-m', 'nextflow'], *_invocations(WORKFLOWS / workflow_name)], parameters=True
     )
     assert runtime_tests
     assert runtime_tests.isdisjoint(set().union(*package_tests))
+
+
+@pytest.mark.fast
+def test_every_nextflow_runtime_test_runs_in_a_pull_request_lane() -> None:
+    """Each test marked `nextflow`, but the corpus's, is selected by a lane a pull request runs, a parameter marked
+    so included: a file whose other parameters the package job runs, as `tests/core/test_sites.py`, would otherwise
+    hide that its Nextflow rows run only in the weekly matrix."""
+    pull_request = [argv for lane in sorted(WORKFLOWS.glob('*.yml')) if lane.name != RELEASE_LANE
+                    and 'weekly' not in lane.name for argv in _invocations(lane)]
+    runtime, *lanes = _collect_all([['tests/core', '-m', 'nextflow and not nextflow_corpus'], *pull_request],
+                                   parameters=True)
+    missing = sorted(runtime - set().union(*lanes))
+    assert runtime and not missing, 'no pull-request lane runs these Nextflow tests:\n  ' + '\n  '.join(missing)
 
 
 @pytest.mark.fast

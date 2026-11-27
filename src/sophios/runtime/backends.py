@@ -55,10 +55,10 @@ def _check_env_var_names(env_vars: Mapping[str, str]) -> None:
 
 @dataclass(frozen=True, slots=True)
 class RunRequest:
-    """One local run of a workflow, as every front door describes it.
+    """One run of a workflow, as every front door describes it.
 
     A backend launches it as it is given; `runtime.local.launch` first makes its paths absolute, as this machine reads
-    them, and names its output directory.
+    them, and names its output directory; a site gives them as its computer reads them.
 
     Attributes:
         workflow_name: The workflow's name: its files are `<name>.cwl`, `output_<name>.json`, ...

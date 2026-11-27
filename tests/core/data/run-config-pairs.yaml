@@ -1,7 +1,8 @@
 # Each pair of an outputs folder and a relative_to a RunConfig may be made with, and the lines every door that takes a
 # RunConfig refuses it with, by hand: [] for one every door takes. `remote_only` marks a pair only a door with no
-# working directory to read a relative folder from refuses (the compute service); a local run takes it.
-# Read by tests/core/test_run_config.py.
+# working directory to read a relative folder from refuses (a site and the compute service); a local run takes it.
+# `site_refused` is the lines a site adds, after those: it refuses itself what the compute service refuses in its own
+# words, having no service behind it. Read by tests/core/test_run_config.py.
 - id: nothing
   folder: null
   relative_to: null
@@ -58,6 +59,8 @@
   folder: file:///projects/lab/out
   relative_to: null
   refused: []
+  site_refused:
+  - "the outputs folder 'file:///projects/lab/out' is a URL: a site takes a path"
 - id: file-url-folder-with-relative-to
   why: the compute service reads a file:// URL as absolute, so refuses it with basepath; a local run takes it
   folder: file:///projects/lab/out
@@ -66,11 +69,15 @@
   refused:
   - "the outputs folder 'file:///projects/lab/out' is an absolute path, and relative_to('/projects/lab') is given: give
     the folder relative to it, or give no relative_to"
+  site_refused:
+  - "the outputs folder 'file:///projects/lab/out' is a URL: a site takes a path"
 - id: upper-case-file-url-folder
   why: the compute service reads the scheme of a file:// URL in any case, as it reads a URL's scheme
   folder: FILE:///projects/lab/out
   relative_to: null
   refused: []
+  site_refused:
+  - "the outputs folder 'FILE:///projects/lab/out' is a URL: a site takes a path"
 - id: upper-case-file-url-folder-with-relative-to
   folder: FILE:///projects/lab/out
   relative_to: /projects/lab
@@ -78,21 +85,68 @@
   refused:
   - "the outputs folder 'FILE:///projects/lab/out' is an absolute path, and relative_to('/projects/lab') is given: give
     the folder relative to it, or give no relative_to"
+  site_refused:
+  - "the outputs folder 'FILE:///projects/lab/out' is a URL: a site takes a path"
 - id: folder-for-a-shell
   why: the compute service refuses a path written for a shell in its own words, whatever relative_to is
   folder: ~/out
   relative_to: null
   refused: []
+  site_refused:
+  - "the outputs folder '~/out' is written for a shell, which no shell expands on a site: give the path
+    itself"
 - id: folder-with-a-variable
   folder: $HOME/out
   relative_to: null
   refused: []
+  site_refused:
+  - "the outputs folder '$HOME/out' is written for a shell, which no shell expands on a site: give the path
+    itself"
+- id: relative-to-with-a-variable
+  why: the compute service refuses a basepath written for a shell in its own words; a local run reads it as a name
+  folder: results
+  relative_to: /home/$USER/lab
+  refused: []
+  site_refused:
+  - "relative_to('/home/$USER/lab') is written for a shell, which no shell expands on a site: give the path itself"
 - id: url-folder
   why: "the compute service refuses a URL as an outputs folder in its own words, and to it C: is a URL's scheme"
   folder: http://x/y
   relative_to: null
   refused: []
+  site_refused:
+  - "the outputs folder 'http://x/y' is a URL: a site takes a path"
 - id: drive-letter-folder
   folder: C:\out
   relative_to: null
   refused: []
+  site_refused:
+  - 'the outputs folder ''C:\\out'' is a URL: a site takes a path'
+- id: folder-with-a-query-or-fragment-mark
+  why: the compute service refuses in its own words a folder cwltool would read as a URI; a local run takes it
+  folder: results/a?b#c
+  relative_to: /projects/lab
+  refused: []
+  site_refused:
+  - "the outputs folder 'results/a?b#c' holds \"?\" or \"#\", where CWL ends a path, as the compute service refuses
+    it: rename the folder"
+- id: folder-with-a-percent-escape
+  folder: /projects/lab/%41
+  relative_to: null
+  refused: []
+  site_refused:
+  - "the outputs folder '/projects/lab/%41' holds a %-escape, which CWL decodes, as the compute service refuses it:
+    rename the folder"
+- id: folder-with-a-control-character
+  folder: "/projects/lab/a\tb"
+  relative_to: null
+  refused: []
+  site_refused:
+  - "the outputs folder '/projects/lab/a\\tb' holds a control character, as the compute service refuses it: rename
+    the folder"
+- id: folder-starting-with-a-blank
+  folder: " results"
+  relative_to: /projects/lab
+  refused: []
+  site_refused:
+  - "the outputs folder ' results' starts with a blank, as the compute service refuses it: rename the folder"

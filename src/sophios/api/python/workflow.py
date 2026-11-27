@@ -1,8 +1,7 @@
-# pylint: disable=logging-fstring-interpolation,too-many-lines,protected-access
+# pylint: disable=too-many-lines,protected-access
 """Python API for building Sophios workflows that compile to CWL."""
 
 import inspect
-import logging
 import sys
 import warnings
 from collections.abc import Mapping, Sequence
@@ -74,9 +73,6 @@ from ._workflow_runtime import (
     validate_step_assignment as _validate_step_assignment,
     write_workflow_wic as _write_workflow_wic,
 )
-
-
-logger = logging.getLogger("Sophios Python API")
 
 
 StrPath = str | Path
@@ -775,7 +771,6 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
 
     def _ensure_input(self, name: str, parameter_type: Any = None, *, implicit: bool = True) -> InputParameter:
         def create_input(parameter_name: str) -> InputParameter:
-            logger.warning("Adding a new input %s to workflow %s", parameter_name, self.process_name)
             if implicit:
                 _warn_implicit_workflow_parameter(self, parameter_name, "input")
             created = InputParameter(parameter_name, parameter_type, parent_obj=self)
@@ -796,7 +791,6 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
     def _add_output(self, name: str, *, implicit: bool = False) -> OutputParameter:
         """The workflow output ``name``, declared by the first call."""
         def create_output(parameter_name: str) -> OutputParameter:
-            logger.warning("Adding a new output %s to workflow %s", parameter_name, self.process_name)
             if implicit:
                 _warn_implicit_workflow_parameter(self, parameter_name, "output")
             return OutputParameter(parameter_name, None, parent_obj=self)
@@ -1188,8 +1182,8 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
             user_env_vars (dict[str, str] | None): Environment variables to expose to the run.
             basepath (str): Directory used for generated files and execution artifacts.
             tool_registry (Tools | None): Optional tool registry override.
-            config (RunConfig | None): Where the outputs go, the same :class:`RunConfig` the compute service
-                takes: its outputs folder, relative to its ``relative_to``, else to the working directory, or
+            config (RunConfig | None): Where the outputs go, the same :class:`RunConfig` a site and the compute
+                service take: its outputs folder, relative to its ``relative_to``, else to the working directory, or
                 absolute, which may exist and hold files; with none, ``<basepath>/outdir_<runner>_<name>_<time>``.
                 Its ``relative_to`` is also where a relative File or Directory bound in Python is read from, and its
                 ``log_level`` is Toil's ``--logLevel``, before the runner's own flags. Its Slurm settings are not

@@ -157,8 +157,8 @@ def test_a_built_tool_is_one_step_through_every_door(drawn: tuple[CommandLineToo
                                                      step_name: str | None) -> None:
     """Each in-memory door, binding by attribute or `step_inputs=`, writes nothing and makes the step `Step(clt_path=)`
     makes of the tool's file: named `step_name` or for the tool, with a path of that name, compiling alike; and the
-    job holds plain values, a numpy float a Python one. No door logs a line: schema-salad's warning that an input
-    and an output of one name share an id is no one's to act on."""
+    job holds plain values, a numpy float a Python one. No door logs a line, nor does declaring a workflow's input or
+    output: schema-salad's warning that an input and an output of one name share an id is no one's to act on."""
     tool, values = drawn
     name = step_name or tool.name
     with (tempfile.TemporaryDirectory() as directory, pytest.MonkeyPatch.context() as monkeypatch,
@@ -171,6 +171,9 @@ def test_a_built_tool_is_one_step_through_every_door(drawn: tuple[CommandLineToo
         assert not list(Path(directory).iterdir())
         steps.append(_bind(Step(clt_path=tool.write_cwl(Path(directory) / f'{name}.cwl')), **values))
         compiled = [Workflow([step], 'wf').compile() for step in steps]
+        declared = Workflow([steps[0]], 'declared')
+        declared.inputs.given.as_type(cwl.string)
+        declared.outputs.made = steps[0].outputs[0]
     assert {(step.process_name, step.clt_path.name) for step in steps} == {(name, f'{name}.cwl')}
     assert all((each.cwl_workflow, each.cwl_job_inputs) == (compiled[-1].cwl_workflow, compiled[-1].cwl_job_inputs)
                for each in compiled)
