@@ -3,8 +3,8 @@ is given wherever it runs.
 
 `Cwltool`, `Toil` and `Nextflow` are what `Workflow.run(runner=...)` takes and the command line's flags build; a
 `RunSettings` is a runner and what is given to the job. A `RunConfig`, with its `SlurmSettings`, is where a run's
-outputs go and how its jobs are run, the same object for a local run and the compute service, which each read it
-with `read_config`. This module imports nothing from Sophios, so the command line's parser reads its defaults here
+outputs go and how its jobs are run, the same object for a local run, a site and the compute service, which each read
+it with `read_config`. This module imports nothing from Sophios, so the command line's parser reads its defaults here
 without importing a backend.
 """
 import copy
@@ -173,7 +173,7 @@ def build(target: str, name: str | None, flags: Iterable[str], **settings: Any) 
 
 @dataclass(frozen=True, slots=True)
 class RunSettings:
-    """One local run: its runner, and what is given to the job.
+    """One run, here or on a site: its runner, and what is given to the job.
 
     Attributes:
         runner: The program that runs it, with its flags and settings; the target is `runner.target`.
@@ -192,8 +192,8 @@ class RunSettings:
 @dataclass(frozen=True, kw_only=True)
 class SlurmSettings:
     """Where a run's Slurm jobs go and how long they may last, each a string in Slurm's own form, checked where it is
-    used. A field about a job the run does not have is not used, never refused: a local run has no Slurm job, and
-    cwltool no step jobs.
+    used. A field about a job the run does not have is not used, never refused: a local run and a `Machine` have no
+    Slurm job, and cwltool no step jobs.
 
     Args:
         partition: The partition of the leader, the job that lasts the whole run.
@@ -217,9 +217,9 @@ LogLevel: TypeAlias = Literal['DEBUG', 'INFO', 'WARNING', 'ERROR']
 
 
 class RunConfig:
-    """Where a run's outputs go and how its jobs are run: the same object for a local run (`Workflow.run(config=)`)
-    and the compute service. Made with the outputs folder, and given the rest by setters that set and return
-    it, so the calls chain::
+    """Where a run's outputs go and how its jobs are run: the same object for a local run (`Workflow.run(config=)`),
+    a site (`sophios.sites`) and the compute service. Made with the outputs folder, and given the rest by setters
+    that set and return it, so the calls chain::
 
         RunConfig('results').relative_to('/shared/lab').slurm_settings(SlurmSettings(time='2:00:00'))
 
@@ -228,7 +228,7 @@ class RunConfig:
 
     Args:
         workflow_out_dir: The outputs folder, which every output lands in. Relative, it is read from `relative_to`,
-            which the compute service then requires, or, in a local run without one, from the working
+            which a site and the compute service then require, or, in a local run without one, from the working
             directory; absolute, it is used as it is, and takes no `relative_to`. None for the place's own: a local
             run's `<basepath>/outdir_<runner>_<name>_<time>`, the run's own folder elsewhere.
     """
@@ -241,7 +241,8 @@ class RunConfig:
 
     def relative_to(self, path: str) -> Self:
         """The absolute folder the run's relative paths are read from: the outputs folder's, which it requires, and
-        those of the File and Directory inputs bound in Python; the compute service's `basepath`."""
+        those of the File and Directory inputs bound in Python, which on a site it must be given for; the compute
+        service's `basepath`."""
         self._relative_to = path
         return self
 
@@ -267,16 +268,21 @@ class ReadConfig(NamedTuple):
 
 
 #: How the compute service reads an outputs folder: absolute when it is a path from `/` or a `file:` URL, in any case
-#: of letters; relative when it is none of what `_SERVICE_NOT_RELATIVE` matches, any other URL (`C:` among them) and a
-#: path written for a shell (`~` first, or a `$VARIABLE`), which the service refuses on its own, in its own words.
+#: of letters; relative when it is neither, nor any other URL (`URL_SCHEME`), nor a path written for a shell
+#: (`SHELL_PATH`), which the service refuses on its own, in its own words, and a site by the same two.
 _SERVICE_ABSOLUTE: Final = re.compile('/|file:', re.IGNORECASE)
-_SERVICE_NOT_RELATIVE: Final = re.compile(r'[A-Za-z][A-Za-z0-9+.-]*:|/|~|.*\$[{A-Za-z_]', re.DOTALL)
+#: A URL's scheme first, as the compute service's driver reads one: `C:` too.
+URL_SCHEME: Final = re.compile(r'[A-Za-z][A-Za-z0-9+.-]*:')
+#: A path written for a shell: `~` first, or a `$VARIABLE` anywhere, which the compute service's driver refuses and no
+#: shell on a site expands.
+SHELL_PATH: Final = re.compile(r'~|.*\$[{A-Za-z_]', re.DOTALL)
 
 
 def read_config(config: RunConfig | None, *, local: bool) -> ReadConfig:
-    """`config` (None says nothing) as a run reads it, `local`ly or on the compute service: the one place the rules
-    of its outputs folder and `relative_to` live. Every door reads it here and reports the problems its own way; a
-    `config` that is not a RunConfig, such as the folder itself, is one of them.
+    """`config` (None says nothing) as a run reads it, `local`ly or where there is no working directory, on a site
+    or the compute service: the one place the rules of its outputs folder and `relative_to` live. Every door reads it
+    here and reports the problems its own way, a `config` that is not a RunConfig, such as the folder itself, among
+    them; a site also refuses what this leaves to the service (`sophios.sites._site.site_config`).
 
     The rules: `relative_to` needs an outputs folder, and is an absolute path; an absolute outputs folder takes no
     `relative_to`; and, but in a local run, which reads it from the working directory, a relative outputs folder needs
@@ -306,7 +312,8 @@ def read_config(config: RunConfig | None, *, local: bool) -> ReadConfig:
     if out is not None and relative_to is not None and absolute(out):
         problems.append(f'the outputs folder {out!r} is an absolute path, and relative_to({relative_to!r}) is '
                         'given: give the folder relative to it, or give no relative_to')
-    if out is not None and relative_to is None and not local and not _SERVICE_NOT_RELATIVE.match(out):
+    if out is not None and relative_to is None and not local and not (
+            out.startswith('/') or URL_SCHEME.match(out) or SHELL_PATH.match(out)):
         problems.append(f'the outputs folder {out!r} is relative, and no relative_to is given to read it from, '
                         'as there is no working directory where the run runs: give relative_to(path), or an '
                         'absolute folder')

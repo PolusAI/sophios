@@ -11,7 +11,7 @@ to a Nextflow pipeline, which it runs with Nextflow, and sends it with its input
     run = service.submit(workflow, config)
     status = run.wait()
 
-A `RunConfig`, the one a local run takes too, is everything of the request but the workflow and its
+A `RunConfig`, the one a local run and a site take too, is everything of the request but the workflow and its
 inputs: the folder it may be made with is where the outputs go, `relative_to` is the request's `basepath`, its
 `SlurmSettings` the request's `leader` and `steps` (`SLURM_FIELDS`), and `log_level` its `logLevel`; without one,
 the run takes the service's settings.

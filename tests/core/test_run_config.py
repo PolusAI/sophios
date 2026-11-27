@@ -1,5 +1,6 @@
 """One `RunConfig` for every place a run runs: its surface, and the pair rules of its outputs folder and `relative_to`,
-which every door that takes one reads in `runners.read_config` and refuses the same."""
+which every door that takes one, a local run, a site and the compute service, reads in `runners.read_config` and
+refuses the same."""
 import inspect
 from collections.abc import Callable
 from dataclasses import FrozenInstanceError, fields
@@ -11,7 +12,8 @@ from hypothesis import given, strategies as st
 from jsonschema import Draft202012Validator
 
 import sophios.api.python.workflow as api
-from sophios import compute
+from sophios import compute, sites
+from sophios.lang.diagnostics import SophiosError
 from sophios.runtime import preflight, runners
 from sophios.runtime.runners import RunConfig, SlurmSettings
 
@@ -26,8 +28,8 @@ def test_one_run_config_serves_every_place_and_says_only_what_its_setters_set() 
     the runners. A RunConfig's public surface is its constructor, which takes the outputs folder, and three setters,
     each returning the config so the calls chain; it has no public reader. `SlurmSettings` is six optional strings,
     given by keyword alone, and frozen."""
-    assert api.RunConfig is compute.RunConfig is runners.RunConfig
-    assert api.SlurmSettings is compute.SlurmSettings is runners.SlurmSettings
+    assert api.RunConfig is compute.RunConfig is sites.RunConfig is runners.RunConfig
+    assert api.SlurmSettings is compute.SlurmSettings is sites.SlurmSettings is runners.SlurmSettings
     assert {'RunConfig', 'SlurmSettings'} <= set(api.__all__)
     public = {name for name in dir(RunConfig) if not name.startswith('_')}
     assert public == {'relative_to', 'slurm_settings', 'log_level'}
@@ -60,27 +62,43 @@ def _compute(config: RunConfig) -> list[str]:
     return []
 
 
+def _site(config: RunConfig) -> list[str]:
+    """A site's refusal, as `Machine.check` raises it before anything is compiled or sent; a config it takes reaches
+    the transport, here a command no computer has (`wic062`)."""
+    try:
+        sites.Machine('ssh://pairs', runs='/runs', bin='/bin').check(echo_workflow(), config)
+    except ValueError as refused:
+        return str(refused).splitlines()
+    except SophiosError as unreachable:
+        assert 'sophios-no-such-ssh' in str(unreachable), unreachable
+    return []
+
+
 #: Every door that takes a RunConfig: whether it runs where there is no working directory, and its refusal's lines.
 DOORS: Final[dict[str, tuple[bool, Callable[[RunConfig], list[str]]]]] = {
-    'local': (False, _local), 'compute': (True, _compute)}
+    'local': (False, _local), 'site': (True, _site), 'compute': (True, _compute)}
 
 
 @pytest.mark.fast
 @pytest.mark.parametrize('door', list(DOORS))
-@pytest.mark.parametrize('case', cases('run-config-pairs.yaml', 'folder', 'relative_to', 'refused', 'remote_only'))
+@pytest.mark.parametrize('case', cases('run-config-pairs.yaml', 'folder', 'relative_to', 'refused', 'remote_only',
+                                       'site_refused'))
 def test_every_door_refuses_the_pairs_of_folder_and_relative_to_the_rules_refuse(
         monkeypatch: pytest.MonkeyPatch, tmp_path: Path, door: str, case: dict[str, Any]) -> None:
     """`relative_to` needs an outputs folder and is absolute; an absolute folder takes no `relative_to`; and a relative
     folder needs one, but in a local run, which reads it from the working directory. Each door refuses a pair with
-    the same lines, in the user's words, every problem at once, before anything is compiled or sent."""
+    the same lines, in the user's words, every problem at once, before anything is compiled or sent; a site adds its
+    own after them."""
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(preflight, 'ready', lambda *_args, **_kwargs: None)  # this machine is not the question
+    # pylint: disable-next=protected-access  # the transport is the one thing a site's tests replace
+    monkeypatch.setattr(sites._ssh, '_transport', lambda url: ['sophios-no-such-ssh'])
     remote, refusal = DOORS[door]
     config = RunConfig(case['folder'])
     if case['relative_to'] is not None:
         config.relative_to(case['relative_to'])
     refused = case['refused'] if remote or not case.get('remote_only', False) else []
-    assert refusal(config) == refused
+    assert refusal(config) == [*refused, *(case.get('site_refused', []) if door == 'site' else [])]
 
 
 @pytest.mark.fast

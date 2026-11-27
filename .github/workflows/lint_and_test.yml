@@ -275,8 +275,8 @@ jobs:
 
       # No runner runs on Windows, so a run there stops at the pre-flight (wic029)
       # and starts nothing; nor does the compute client, which needs a Unix
-      # socket, reach a service (cmp002). The tests run on the Windows leg and
-      # skip elsewhere.
+      # socket, reach a service (cmp002), nor Sophios make a site, whose paths
+      # are POSIX (wic062). The tests run on the Windows leg and skip elsewhere.
       - name: PyTest Runs Where No Runner Runs
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         run: cd sophios/ && pytest tests/core/test_run_on_windows.py
@@ -313,6 +313,8 @@ jobs:
           echo "${RUNNER_TEMP}" >> "${GITHUB_PATH}"
           NXF_ANSI_LOG=false "${RUNNER_TEMP}/nextflow" -version | grep 'version 26.10.5'
 
+      # tests/core/test_sites.py: its rows marked `nextflow`, which need Nextflow in a site's bin; the package job runs
+      # the rest. tests/core/test_ci_coverage.py fails when a row marked so runs in no pull-request lane.
       - name: PyTest Nextflow Runtime
         if: ${{ runner.os == 'Linux' && !cancelled() && steps.setup.outcome == 'success' }}
         timeout-minutes: 20
@@ -320,7 +322,7 @@ jobs:
           NXF_ANSI_LOG: "false"
           NXF_OFFLINE: "true"
           NXF_VER: "26.10.5"
-        run: cd sophios/ && pytest tests/core/nextflow -m "nextflow and not nextflow_corpus"
+        run: cd sophios/ && pytest tests/core/nextflow tests/core/test_sites.py -m "nextflow and not nextflow_corpus"
 
       # NOTE: The steps below are for repository_dispatch only. For all other steps, please insert above
       # this comment.

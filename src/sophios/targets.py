@@ -129,8 +129,8 @@ TARGETS: Final[Mapping[str, Target[Any]]] = MappingProxyType({'cwl': _Cwl(), 'ne
 
 
 def for_run(row: Target[Any], view: ResolvedWorkflow, root_dir: Path) -> ResolvedWorkflow:
-    """`view` for a local run of `row`: its values as the runner reads them, each relative path read against
-    `root_dir` and written absolute, because a runner does not run where the workflow's paths are read."""
+    """`view` for a run of `row`, here or on a site: its values as the runner reads them, each relative path read
+    against `root_dir` and written absolute, because a runner does not run where the workflow's paths are read."""
     return bind(view, values=absolute_paths(row.run_values(view), root_dir))
 
 
