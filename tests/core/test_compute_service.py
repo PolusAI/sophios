@@ -266,6 +266,25 @@ def test_the_client_refuses_an_output_folder_and_relative_to_exactly_as_the_driv
                 folder, relative_to, ours, theirs)
 
 
+def test_the_client_refuses_a_time_of_0_exactly_as_the_driver_does(cluster: Cluster) -> None:
+    """A time of 0, which Slurm reads as no limit, in each form the schema takes, and the nearest times above 0, sent
+    as the run's and as the steps' time: the client refuses each (`compute.slurm_problems`, which a Slurm site shares)
+    exactly when the driver, sent it unchecked, refuses it as no time at all, so the client never refuses a time the
+    service takes, nor sends one it refuses. Each request also names a missing input, so the driver refuses every one
+    and starts no run."""
+    client = compute._Client(cluster.url)  # pylint: disable=protected-access  # the request, sent unchecked
+    for limit in ('0', '00', '0:0', '0:00', '00:00:00', '0-0', '0-00', '0-0:0', '0-0:0:0', '000-00:00:00',
+                  '1', '01', '10', '0:1', '1:0', '0:0:1', '0-1', '1-0', '0-0:1', '0-0:0:1', '0-00:00:01'):
+        ours = compute.slurm_problems(compute.SlurmSettings(time=limit, steps_time=limit))
+        request = compute.build_request(_workflow(cluster, location=str(cluster.shared / 'missing.txt')))
+        request |= {'leader': {'time': limit}, 'steps': {'time': limit}}
+        theirs = [error['message'] for error in client.call('POST', '/runs', body=request).json()['errors']]
+        assert [any(line.startswith(f'SlurmSettings({name}=...)') for line in ours) for name in ('time', 'steps_time')
+                ] == [any(line.startswith(f'{field} {limit} is no time at all') for line in theirs)
+                      for field in ('leader.time', 'steps.time')], (limit, ours, theirs)
+        assert any('missing.txt' in line for line in theirs), theirs
+
+
 def test_a_path_written_for_a_shell_is_sent_as_written_and_the_driver_refuses_it(cluster: Cluster) -> None:
     """Sophios walks no paths: the driver, the one authority on them, refuses `~` at the authored input, naming the
     shared roots, the only paths it reads."""

@@ -1,5 +1,6 @@
 """A run on a site: its status, its logs, waiting for it and cancelling it."""
 # pylint: disable=protected-access  # a run calls its site's scheduler
+import shlex
 import sys
 import time
 from datetime import datetime
@@ -53,14 +54,17 @@ class Run:
 
     # pylint: disable-next=too-many-locals  # what the one call printed
     def status(self) -> RunStatus:
-        """Where the run is now, read from its folder (design Appendix B); once it has ended, as it ended, read once.
+        """Where the run is now, read from its folder, and on Slurm from Slurm only when the folder has not decided
+        (design Appendix B); once it has ended, as it ended, read once.
 
-        A run whose job has not claimed it within `UNCLAIMED_MINUTES` of the submit is claimed `none`, and FAILED. A
-        run whose leader was killed outright, before its EXIT trap ran, has its outputs folder emptied here, and its
-        reason written, so that every later status reads the same end.
+        A run whose job has not claimed it within `UNCLAIMED_MINUTES` of the submit, and of which Slurm lists no job
+        that may still claim it, is claimed `none`, and FAILED. A run whose leader was killed outright, before its EXIT
+        trap ran, has its outputs folder emptied here, and its reason written, so that every later status reads the
+        same end. On Slurm, a run one of whose jobs Slurm will never start is stopped, its `reason` naming the setting
+        to change; the step jobs a runner that ended left are cancelled.
 
         Raises:
-            SophiosError: `wic062`: the site could not be asked.
+            SophiosError: `wic062`: the site, or its Slurm, could not be asked.
         """
         if self._ended is not None:
             return self._ended
@@ -77,13 +81,14 @@ class Run:
             *site._asked(self.id), 'echo "$(mtime leader) $(mtime exit)"', 'put exit 0', 'put reason 0',
             f'put run.log {len(self._log)}', 'if [ -f exit ]; then put stdout 0; fi'])))
         alive, now, submitted, leader = said.line().split(' ', 3)
+        queue = site._queue(self.id, said, int(now))
         claimed, ended = said.line().split(' ')
         code, written = said.file(), said.file()
         self._log += said.file() or b''
         exit_code = None if code is None else int(code)
         scratch = f'{self._folder}/toil' if self._runner.name == Toil.name else None
         decision = decide(Folder(leader, alive == 'yes', exit_code, None if written is None else written.decode(),
-                                 int(now) - int(submitted)), scratch)
+                                 int(now) - int(submitted)), scratch, queue)
         if self._act(decision) != 'none' and decision.claim_none:   # a leader claimed it first, or no claim is written
             decision = Decision(RunState.QUEUED)
         state = decision.state
@@ -96,14 +101,18 @@ class Run:
         return status
 
     def _act(self, decision: Decision) -> str:
-        """What `decision` says `status` must do there: claim the run `none`, or empty the outputs folder of a run whose
-        leader was killed outright and then write its `reason`, unless a status has written it since `decision` was
-        read: until then no other run may take the folder (`_Site._unfinished`), so it is still this run's. Returns
-        the claim then, '' when nothing was done."""
+        """What `decision` says `status` must do there: claim the run `none`; cancel the step jobs a runner that ended
+        left; empty the outputs folder of a run whose leader was killed outright and then write its `reason`, unless a
+        status has written it since `decision` was read: until then no other run may take the folder
+        (`_Site._unfinished`), so it is still this run's; or stop it as `cancel` does and then write its `reason`. A
+        `scancel` Slurm refuses ends the call, which raises, the `reason` unwritten. Returns the claim then, '' when
+        nothing was done."""
+        written = f'printf %s {_q(decision.reason or "")} > reason.partial; mv reason.partial reason'
         acts = [*(['ln -s none leader 2> /dev/null || true'] if decision.claim_none else []),
-                *([f'if [ ! -e reason ]; then {_emptied(self._record["outdir"][0])}; '
-                   f'printf %s {_q(decision.reason or "")} > reason.partial; mv reason.partial reason; fi']
-                  if decision.empty else [])]
+                *([f'{shlex.join(["scancel", *decision.cancel])} || exit 1'] if decision.cancel else []),
+                *([f'if [ ! -e reason ]; then {_emptied(self._record["outdir"][0])}; {written}; fi']
+                  if decision.empty else []),
+                *([*self._site._cancelling(self._folder), written] if decision.stop else [])]
         if not acts:
             return ''
         return _call(self._site.url, '\n'.join([f'cd {_q(self._folder)} || exit 1', *acts,

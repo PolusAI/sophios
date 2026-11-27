@@ -130,6 +130,9 @@ SLURM_FIELDS: Final = {'partition': ('leader', 'partition'), 'time': ('leader', 
 #: What the user wrote, by where the request holds it: `SLURM_FIELDS` read backwards, and the rest of a RunConfig.
 _WRITTEN: Final = {**{f'{job}.{key}': f'SlurmSettings({name}=...)' for name, (job, key) in SLURM_FIELDS.items()},
                    'basepath': 'relative_to(...)', 'workflowOutDir': 'RunConfig(...)', 'logLevel': 'log_level(...)'}
+#: The schema's judge of the request's `leader` and `steps` alone, which hold the Slurm settings.
+_SLURM_VALIDATOR: Final = Draft202012Validator({'$defs': SCHEMA['$defs'], 'properties': {
+    job: SCHEMA['properties'][job] for job in ('leader', 'steps')}})
 
 
 def new_run_id(name: str, now: datetime | None = None) -> str:
@@ -190,21 +193,45 @@ def request_for(run_id: str, workflow: Json, inputs: Json, config: RunConfig | N
     """
     engine = {'engine': 'nextflow'} if targets.target(target).name == 'nextflow' else {}
     read = read_config(config, local=False)
-    jobs: Json = {}
-    for name, (job, key) in SLURM_FIELDS.items():
-        if (value := getattr(read.slurm, name)) is not None:
-            jobs.setdefault(job, {})[key] = value
     given = {'workflowOutDir': read.out_dir, 'basepath': read.relative_to, 'logLevel': read.log_level}
     request: Json = {'id': run_id, **engine, 'workflow': workflow, 'inputs': inputs,
-                     **{field: value for field, value in given.items() if value is not None}, **jobs}
+                     **{field: value for field, value in given.items() if value is not None}, **_jobs(read.slurm)}
     # The folder's and relative_to's problems are read_config's lines, which the schema would say again: with them,
-    # the schema judges the rest, and every problem is one line of one refusal.
-    problems = [*read.problems, *(_schema_problem(error) for error in _VALIDATOR.iter_errors(
-        {field: value for field, value in request.items()
-         if not (read.problems and field in ('workflowOutDir', 'basepath'))}))]
+    # the schema judges the rest, and `slurm_problems` the Slurm settings, its lines where the schema's own lines of
+    # `leader` and `steps` are, else last; every problem is one line of one refusal.
+    problems, slurm = list(read.problems), slurm_problems(read.slurm)
+    for error in _VALIDATOR.iter_errors({field: value for field, value in request.items()
+                                         if not (read.problems and field in ('workflowOutDir', 'basepath'))}):
+        if list(error.absolute_path)[:1] in (['leader'], ['steps']):
+            problems, slurm = [*problems, *slurm], []
+        else:
+            problems.append(_schema_problem(error))
+    problems += slurm
     if problems:
         raise RequestRefused(*problems)
     return request
+
+
+def slurm_problems(settings: SlurmSettings) -> list[str]:
+    """The lines the compute client refuses `settings` with, each naming the field as the user wrote it: a value in a
+    form the vendored schema does not take, and a time of 0, which the service refuses as it takes the run, since
+    Slurm reads 0 as no limit. A Slurm site (`sophios.sites.Slurm`) refuses the same, in the same words."""
+    jobs = _jobs(settings)
+    errors = list(_SLURM_VALIDATOR.iter_errors(jobs))
+    refused = {tuple(error.absolute_path) for error in errors}
+    return [*map(_schema_problem, errors), *(
+        _refused(_WRITTEN[f'{job}.time'], limit, SCHEMA['$defs'][job.capitalize()]['properties']['time']['description'])
+        for job, fields in jobs.items() if isinstance(limit := fields.get('time'), str)
+        and (job, 'time') not in refused and set(limit) <= set('0:-'))]
+
+
+def _jobs(settings: SlurmSettings) -> Json:
+    """`settings` as the request holds them (`SLURM_FIELDS`), each job only when one of its fields is given."""
+    jobs: Json = {}
+    for name, (job, key) in SLURM_FIELDS.items():
+        if (value := getattr(settings, name)) is not None:
+            jobs.setdefault(job, {})[key] = value
+    return jobs
 
 
 def _params(pipeline: ServicePipeline) -> Json:
@@ -252,8 +279,13 @@ def _schema_problem(error: Any) -> str:
     where = _WRITTEN.get(where, where)
     what = error.schema.get('description') if isinstance(error.schema, dict) else None
     if what and error.validator in ('type', 'enum', 'pattern'):
-        return f'{where}: {error.instance!r} is not {what}'
+        return _refused(where, error.instance, what)
     return f'{where}: {error.message}'
+
+
+def _refused(where: str, value: Any, what: str) -> str:
+    """The line for `value` at `where`, which is not `what`, in the schema's words."""
+    return f'{where}: {value!r} is not {what}'
 
 
 def _named(pointer: str) -> str:

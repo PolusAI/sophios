@@ -373,8 +373,10 @@ class SophiosErrorCode(StrEnum):
         kind=Kind.MACHINE)
     SITE_RUN_UNKNOWN = _explained(
         'wic064',
-        'A run id that names no run on the site: there is no `<runs>/<id>/run.json`.',
-        'Check the id, the URL and `runs=`: the line `submit()` printed, `repr(run)`, attaches to the run.',
+        'A run id that names no run on the site: there is no `<runs>/<id>/run.json`, or another kind of site, a '
+        '`Machine` or a `Slurm`, submitted it.',
+        'Check the id, the URL and `runs=`: the line `submit()` printed, `repr(run)`, attaches to the run, with the '
+        'kind of site that submitted it, which the message names.',
         kind=Kind.MACHINE)
     SITE_NEXTFLOW_CONTAINER = _explained(
         'wic065',
@@ -388,6 +390,19 @@ class SophiosErrorCode(StrEnum):
         '(`--defaultMemory 4Gi`), and refuses to start it on a computer with less.',
         'Declare the memory the tool needs, `ramMin` in its `ResourceRequirement` '
         '(`CommandLineTool.resources(ram_min=...)` in Python); a site with 4 GiB or more runs it as it is.',
+        kind=Kind.MACHINE)
+    SITE_SLURM = _explained(
+        'wic067',
+        'Slurm on a site cannot run the run: one of its commands (`sbatch`, `squeue`, `sacct`, `scancel`, `sinfo`) is '
+        'missing or does not answer, `sacct` included; your login profile there sends jobs to another cluster '
+        '(`SBATCH_CLUSTERS`, `SLURM_CLUSTERS`), or sets an `SBATCH_ACCOUNT` the run cannot take; a partition a job of '
+        'the run goes to is not there, or a step asks for a GPU and no one partition has GPUs; the run would have no '
+        'time limit, or a partition, or a time, that Slurm or your `SBATCH_` settings give is in a form the setting '
+        'would not take; or the runner is one a `Slurm` site does not run yet, Nextflow.',
+        'Do what the message names: make your login profile there give the Slurm the cluster provides, ask the '
+        'administrators to turn on accounting, correct your login profile there, give the setting the message names '
+        "in the config's `SlurmSettings(...)` (a partition, `time=`, `steps_time=`, `gpu_partition=`), or run "
+        'Nextflow on a `Machine`.',
         kind=Kind.MACHINE)
     STALE_STEP_KEY = _explained(
         'wic068',

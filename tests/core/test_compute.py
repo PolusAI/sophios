@@ -257,7 +257,8 @@ def test_a_run_id_is_the_workflow_name_the_time_and_four_hex_digits_within_the_s
 def test_a_request_is_refused_or_sent_as_the_vendored_schema_says() -> None:
     """The vendored schema is a JSON Schema 2020-12 document that takes its own example. Every field it refuses is a
     line, all at once with the problems of the outputs folder and `relative_to`, naming what the user wrote and what
-    the field is in the schema's words, a folder or a `relative_to` that is not a string among them; a workflow with a
+    the field is in the schema's words, a folder or a `relative_to` that is not a string among them, and a time of 0,
+    which the service refuses as it takes the run, in the words of the field's own description; a workflow with a
     real-time analysis is refused before sending, naming the analysis, rather than dropped. The six rows that send
     `SlurmSettings` reach every property of the schema's Leader and Steps, each from exactly one field, in the order
     the class declares its fields; a RunConfig given every setting reaches exactly the schema's top-level properties
@@ -268,19 +269,26 @@ def test_a_request_is_refused_or_sent_as_the_vendored_schema_says() -> None:
     assert Draft202012Validator(compute.SCHEMA).is_valid(compute.SCHEMA['examples'][0])
     with pytest.raises(compute.RequestRefused) as refused:
         compute.build_request(_workflow(), RunConfig('results').relative_to('projects/lab').slurm_settings(
-            SlurmSettings(time='3 days', memory='8GB', steps_partition='a b'))
+            SlurmSettings(time='3 days', memory='8GB', steps_partition='a b', steps_time='0-0'))
             .log_level('LOUD'))  # type: ignore[arg-type]  # a level the schema refuses
     assert sorted(refused.value.messages) == [
         "SlurmSettings(memory=...): '8GB' is not the leader's memory, as Slurm writes it: a whole number with K, M, "
         'G or T, such as 8G',
         "SlurmSettings(steps_partition=...): 'a b' is not a Slurm partition of this cluster: letters, digits, '_', "
         "'.' or '-'",
+        "SlurmSettings(steps_time=...): '0-0' is not the Slurm time limit of each step job, above 0, in leader.time's "
+        'forms, within the limit of each step partition (of the largest partition when none is named) and, where '
+        "Slurm enforces them, the limits of the service account's QOS or association. A step that reaches it fails, "
+        "and the run's reason says so",
         "SlurmSettings(time=...): '3 days' is not a Slurm time limit: M, M:S, H:M:S, D-H, D-H:M or D-H:M:S, such as "
         '3-00:00:00',
         "log_level(...): 'LOUD' is not Toil's log level: DEBUG, INFO (the default), WARNING or ERROR; a Nextflow run "
         'does not use it',
         "relative_to('projects/lab') is not an absolute path: give the folder the relative paths are read from as "
         'one']
+    assert [line.partition(':')[0] for line in refused.value.messages] == [   # in the order the schema checks them
+        "relative_to('projects/lab') is not an absolute path", 'SlurmSettings(time=...)', 'SlurmSettings(memory=...)',
+        'SlurmSettings(steps_partition=...)', 'SlurmSettings(steps_time=...)', 'log_level(...)']
     workflow = {'class': 'Workflow', 'cwlVersion': 'v1.2'}
     path: typing.Any = Path('/x')  # a path, not the string the request holds
     for config, said in ((RunConfig(path), "RunConfig(...): PosixPath('/x') is not the outputs folder: "),

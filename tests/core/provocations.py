@@ -74,10 +74,11 @@ IMPORT_EDITS: Final[dict[SophiosErrorCode, tuple[str, str, str, str]]] = {
 }
 
 
-def _provoke_site(call: str = 'check', engine: str = 'docker', **options: Any) -> None:
-    """A site's `check` of a one-step workflow, or its `attach` of no run, on a site that is this computer: `ssh` a
-    local `bash`, with no login profile, as the site's own tests make it, and nothing of Sophios replaced. `bin` is
-    the empty `runs`, so it holds no runner; the problems are raised as Sophios raises any error."""
+def _provoke_site(call: str = 'check', engine: str = 'docker', site: str = 'Machine', **options: Any) -> None:
+    """A site's `check` of a one-step workflow, or its `attach` of no run, on a site of the kind `site` that is this
+    computer: `ssh` a local `bash`, with no login profile, as the site's own tests make it, and nothing of Sophios
+    replaced. `bin` is the empty `runs`, so it holds no runner, and this computer has no Slurm; the problems are raised
+    as Sophios raises any error."""
     from sophios import sites
     from sophios.api.python.workflow import Workflow
 
@@ -88,7 +89,7 @@ def _provoke_site(call: str = 'check', engine: str = 'docker', **options: Any) -
     # pylint: disable-next=protected-access  # the transport is the one thing a site's tests replace
     local = mock.patch.object(sites._ssh, '_transport', return_value=['bash', '-c'])
     with tempfile.TemporaryDirectory() as runs, mock.patch.dict(os.environ, {'HOME': runs}), local:
-        machine = sites.Machine('ssh://provoke', runs=runs, bin=runs, container_engine=engine)
+        machine = getattr(sites, site)('ssh://provoke', runs=runs, bin=runs, container_engine=engine)
         if call == 'attach':
             machine.attach('provoke-20261109T000000-00000000')
         raise SophiosError(machine.check(Workflow([adapter_step('touch', filename='empty.txt')], 'provoke'),
@@ -146,6 +147,7 @@ COMPILED: Final[dict[SophiosErrorCode, Callable[[], object]]] = {
     SophiosErrorCode.SITE_NEXTFLOW_CONTAINER: partial(_provoke_site, engine='podman', target='nextflow'),
     # touch declares no memory.
     SophiosErrorCode.SITE_DEFAULT_MEMORY: _provoke_site,
+    SophiosErrorCode.SITE_SLURM: partial(_provoke_site, site='Slurm'),
     **{code: partial(_import_edited, code) for code in IMPORT_EDITS},
 }
 
