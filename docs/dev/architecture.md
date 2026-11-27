@@ -259,9 +259,11 @@ for a `StepInput` default against the working directory.
   A package: `_ssh` (the transport and the shell functions), `_states` (a
   run's state from its folder, and on Slurm its jobs), `_runners` (what a
   site reads from a runner value and what each kind of site adds to its
-  command line), `_site` (the base class, whose scheduler hooks a
+  command line, or to a Nextflow run's configuration: on Slurm each task a
+  job of its own), `_site` (the base class, whose scheduler hooks a
   `Machine` fills, and `Machine`), `_slurm` (`Slurm`, which fills them for
-  a cluster: where a run's jobs go, and its leader's header) and `_run`
+  a cluster: where a run's jobs go, Toil's steps and Nextflow's tasks by one
+  placement, and its leader's header) and `_run`
   (`Run`). The Python API does not import it, and it never goes through
   the pre-flight.
 
