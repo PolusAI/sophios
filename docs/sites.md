@@ -10,16 +10,18 @@ How do I run a workflow on another computer, as myself? A **site** is a
 computer you can `ssh` to. `sophios.sites` compiles the workflow here, as
 `workflow.start()` does, copies the run's files (never your data) into a
 folder of the run there, and starts the runner from the `bin` folder you
-name, as a process of its own, which outlives ssh and Python. Nothing of
-Sophios is installed there, and no service runs: the run's folder is its
-record, and Sophios on any computer follows the run from it.
+name: as one Slurm job on a cluster, or as a process of its own on a
+machine, which outlives ssh and Python. Nothing of Sophios is installed
+there, and no service runs: the run's folder is its record, and Sophios on
+any computer follows the run from it.
 
 `sophios.sites` is a core feature of Sophios, but it is **not part of the
 Python API**: nothing under `sophios.api.python` exports or documents it.
-It is experimental. Its one kind of site is `Machine`: a computer of your
-own, macOS or Linux, such as a workstation or a cloud instance. A
-cluster's login node is not a `Machine`: a run there would run on the
-login node. The `RunConfig` it takes is the one a local run
+It is experimental. It has two kinds of site: `Machine`, a computer of
+your own, macOS or Linux, such as a workstation or a cloud instance; and
+`Slurm`, a cluster's login node, whose compute nodes share its folders. A
+login node is never a `Machine`: a run there would run on the login node.
+The `RunConfig` both take is the one a local run
 ([Choose where the results go](running.md#choose-where-the-results-go)) and
 the [compute service](compute.md) take, and a site reads it as the compute
 service does.
@@ -59,6 +61,81 @@ folder of `PATH`, which `:` splits. Every other value Sophios puts into a
 script there, a path or a flag of yours, goes in quoted, as one word,
 whatever it holds.
 
+## A Slurm cluster
+
+```python
+from sophios.sites import RunConfig, Slurm, SlurmSettings
+
+hpc = Slurm('ssh://me@login.cluster.example.org', runs='/project/me/runs', bin='/project/me/envs/run/bin')
+config = RunConfig('results').relative_to('/project/me/data').slurm_settings(SlurmSettings(time='12:00:00'))
+run = hpc.submit(workflow, config)        # Toil, each step a Slurm job of its own
+status = run.wait()
+```
+
+`submit` prints what a machine's does, and where the run's jobs go, each
+setting with where it came from, and the job Slurm took:
+
+```text
+Submitting segment-20261125T040118-82bd5020 to login.cluster.example.org: toil-cwl-runner (a site's default for cwl), at most 64 at once (Sophios's default).
+Slurm: partition normal (the cluster's default), time 12:00:00 (SlurmSettings(time=...)), steps_partition normal (the run's partition), steps_time 12:00:00 (the run's time), account lab (your SBATCH_ACCOUNT).
+Outputs: /project/me/data/results (RunConfig(...))
+Slurm has it as job 4242.
+From anywhere, Slurm(url='ssh://me@login.cluster.example.org', runs='/project/me/runs', bin='/project/me/envs/run/bin', container_engine='singularity').attach('segment-20261125T040118-82bd5020') follows it.
+```
+
+| `Slurm(...)` | What it is |
+|---|---|
+| `url` | The cluster's login node, as a `Machine`'s `url` |
+| `runs=` | As a `Machine`'s, on folders the compute nodes share; its letters, digits and `/ . _ - +` are what each job's `#SBATCH` lines can hold too |
+| `bin=` | As a `Machine`'s, on folders the compute nodes share |
+| `container_engine=` | As a `Machine`'s, `singularity` by default, which Apptainer provides |
+
+Where a run's jobs go is the config's `SlurmSettings`, the same six the
+[compute service](compute.md#running-a-workflow) takes, in the same forms
+and checked as the compute client checks them: a value in a form the
+service refuses, or a time of 0, which Slurm reads as no limit, is a
+`ValueError` in the client's words, every problem at once, before anything
+is compiled or sent. A setting about a job the run does not have is
+neither used nor refused:
+
+| `SlurmSettings` | What it sets | When it is not given | Runners |
+|---|---|---|---|
+| `partition=` | The partition of the leader, the Slurm job that runs the runner as long as the run lasts | Your `SBATCH_PARTITION` there, else the cluster's default partition | Toil; cwltool, unless a step asks for a GPU |
+| `time=` | The leader's time limit, the whole run's | Your `SBATCH_TIMELIMIT` there, else the longest its partition allows; with no limit, `check` refuses, `wic067`: give one | Toil, cwltool |
+| `memory=` | The leader's memory | None asked for; under cwltool, the most memory a step states (`ramMin`, else `ramMax`) | Toil, cwltool |
+| `steps_partition=` | Where each step's job goes | The run's partition | Toil |
+| `steps_time=` | How long each step's job may run | The shorter of the run's time and the shortest limit of the partitions the steps go to | Toil |
+| `gpu_partition=` | Where a step that asks for a GPU goes | The one partition with GPUs, which `sinfo -a` lists; with none or several, `check` refuses, `wic067`: name one | Toil; cwltool, whose one job goes there |
+
+The account is yours: your `SBATCH_ACCOUNT` there, written into the
+leader's `#SBATCH` lines and each step job's options, else Slurm's
+default. Any other `sbatch` option, such as a QOS, goes in your login
+profile there, `export SBATCH_QOS=...` in `~/.bash_profile` or
+`~/.profile`, and reaches the leader and every step job. Sophios writes
+the options it sets into the leader's `#SBATCH` lines and unsets, for
+`sbatch`, your `SBATCH_` variables of those options, which would beat the
+lines; the others stay yours. A partition or a time that Slurm or your
+`SBATCH_` settings give reaches the same lines, so it is held to the forms
+the setting takes, and a run needs a time limit, as on the compute
+service: `check` refuses either, `wic067`, naming the setting to give.
+Every partition a job of the run goes to must be one `sinfo -a` lists,
+`wic067` otherwise; a time is not checked against its partition's limit:
+Slurm keeps such a job waiting, and `status()` stops the run, naming the
+setting ([Following a run](#following-a-run)), or, on a cluster that
+enforces partition limits at submission, `sbatch` refuses it and `submit`
+raises `wic062`, quoting Slurm, as
+[Checking and submitting](#checking-and-submitting) says.
+
+**Under cwltool, the run is one job.** cwltool runs every step inside the
+leader, so the leader asks for what the largest step needs, as the steps
+state it in numbers (a requirement written as an expression is not read):
+`--cpus-per-task`, the most cores (`coresMin`, else `coresMax`), at least
+1; `--mem`, `memory=`, else the most memory a step states, else none; and,
+when a step asks for a GPU (`cwltool:CUDARequirement`), `--gres=gpu:<n>`,
+the most GPUs a step asks for, on the GPU partition, whose longest limit is
+then the time when neither `time=` nor your `SBATCH_TIMELIMIT` gives one.
+`steps_partition=` and `steps_time=` are not used.
+
 ## Reaching it
 
 Sophios runs your own `ssh`, so your keys, agent, `~/.ssh/config`, jump
@@ -81,7 +158,7 @@ profile applies: what a computer provides through an environment module,
 load it there. A profile may print what it likes. One that reads its input
 would eat part of the script, so Sophios sends the script's sha256 with it
 and runs it only when it arrives whole; otherwise it refuses with `wic062`.
-Sophios runs on macOS, Linux or WSL: on Windows itself, making a `Machine`
+Sophios runs on macOS, Linux or WSL: on Windows itself, making a site
 raises `wic062`.
 
 ## Checking and submitting
@@ -101,11 +178,17 @@ before anything reaches the site. One call there then checks every File
 and Directory the run reads, the runner in `bin` and its version, the
 container engine when a step runs in a container (`docker info`, or
 `singularity --version`), that `runs` can be written, and the outputs
-folder ([A folder you name](#a-folder-you-name)). It returns every problem
-at once, with every note the compile made, and under Toil a note, `wic066`,
-at each step whose tool declares no memory; it writes nothing, here or
-there. A workflow with real-time analyses is refused, `api008`: they watch
-cwltool's job folders here.
+folder ([A folder you name](#a-folder-you-name)). On Slurm the same call
+asks `sbatch`, `squeue`, `scancel`, `sacct` (accounting must answer: a run
+is read from it) and `sinfo -a` (the partitions, their limits and which
+have GPUs), reads your `SBATCH_ACCOUNT`, `SBATCH_PARTITION` and
+`SBATCH_TIMELIMIT`, and refuses `SBATCH_CLUSTERS` and `SLURM_CLUSTERS`,
+which send jobs to another cluster, where no runner follows its step jobs,
+each `wic067`. It returns every problem at once, with every note the
+compile made, and under Toil a note, `wic066`, at each step whose tool
+declares no memory; it writes nothing, here or there. A workflow with
+real-time analyses is refused, `api008`: they watch cwltool's job folders
+here.
 
 `submit(workflow, config)` makes every check of `check`, raises its errors
 as a `SophiosError` with nothing written, and otherwise prints the lines
@@ -116,6 +199,22 @@ starting the run and recording it; should it fail all the same, the error
 says how to attach to the run, which may have started. One that did not
 start holds its outputs folder for ten minutes after the submit, `QUEUED`
 until then, and then ends `FAILED`.
+
+On Slurm the call ends with `sbatch --parsable <run>/job.sh`. The leader
+job is named after the run and carries the comment `sophios:<id>`, as each
+of Toil's step jobs does. When the call fails or its answer is lost,
+`submit` asks Slurm for a job named after the run, where the compute
+service asks, `squeue` and then `sacct` since the submit, and adopts it;
+if there is none, it runs `sbatch` again on the same folder. A run has one
+leader all the same: the first job to start claims the run,
+`--dependency=singleton` runs one job of that name at a time, and a later
+one finds the claim and exits having changed nothing. When Slurm refuses
+that `sbatch` too, the run is claimed `none`, so no job of it ever runs
+it: `submit` raises `wic062`, quoting Slurm and saying the run did not
+start, its `status()` reads `FAILED` with Slurm's refusal as its
+`reason`, and its outputs folder is free for the same `RunConfig` again.
+Only when Sophios cannot tell, as when that second call fails too, does
+the error say how to attach to the run.
 
 ## The config
 
@@ -142,7 +241,7 @@ reads them.
 | `RunConfig(folder)` | The outputs folder: the folder there every output lands in, relative to `relative_to` when one is set, and then required, else absolute; missing in a folder that exists, or empty |
 | `RunConfig()` | No outputs folder, and so no `relative_to`: the outputs land in the run's own folder, `<runs>/<id>/out` |
 | `.relative_to(path)` | The absolute folder there that relative paths are relative to: those the tools read, and the outputs folder, which it requires; required when a tool reads a relative path |
-| `.slurm_settings(SlurmSettings(...))` | Not used: a machine has no Slurm job |
+| `.slurm_settings(SlurmSettings(...))` | On Slurm, where the run's jobs go and how long they may last ([A Slurm cluster](#a-slurm-cluster)); not used on a machine, which has no Slurm job |
 | `.log_level(level)` | Toil's `--logLevel`, given before the flags of `Toil(...)`, so a level given there wins; cwltool and Nextflow do not use it |
 
 Every path is a path there, absolute or relative to `relative_to`, or an
@@ -192,8 +291,9 @@ as the run starts:
 | `runs`, inside it, or around it | refused, `wic021`: `runs` holds every run's folder and the image cache, which a failed run's cleanup would empty |
 
 So a folder made beforehand works, and so does the same `RunConfig` again
-after a run that failed there, which left it empty; after a run that
-succeeded, the folder holds its outputs: name a new one. A folder that was
+after a run that failed there, which left it empty, or whose job Slurm
+refused; after a run that succeeded, the folder holds its outputs: name a
+new one. A folder that was
 free at `check` and holds something when the run starts stops the start,
 `wic062`, before anything is written there. A run that starts takes the
 folder: it writes its record, then looks for a run under the same `runs`
@@ -232,11 +332,11 @@ no `status()` ever empties a folder another run has written into since.
 A site runs each target with one runner from `bin` unless `runner=` names
 another:
 
-| Target | Runner | On a machine |
-|---|---|---|
-| `target='cwl'`, the default | Toil, by default | Toil's `single_machine` batch system: at most 64 steps at once (`--maxJobs`), each step's outputs and scratch in the run's folder |
-| `target='cwl'` | `runner=Cwltool(...)` | cwltool, one step at a time unless its flags say otherwise; it pulls the images it needs as it runs |
-| `target='nextflow'` | Nextflow | Nextflow's local executor: at most 64 tasks at once (`executor.queueSize`, which the site adds to the run's `nextflow.config`). The pipeline publishes the outputs into the outputs folder, as a local run does ([Outputs](nextflow.md#outputs)) |
+| Target | Runner | On a machine | On Slurm |
+|---|---|---|---|
+| `target='cwl'`, the default | Toil, by default | Toil's `single_machine` batch system: at most 64 steps at once (`--maxJobs`), each step's outputs and scratch in the run's folder | Toil's `slurm` batch system: each step a Slurm job of its own, on the steps' partition for the steps' time, a step that asks for a GPU on the GPU partition; at most 64 in Slurm's queue at once (`--maxJobs`); each step's outputs and scratch in the run's folder, its Slurm log in `<run>/batch` |
+| `target='cwl'` | `runner=Cwltool(...)` | cwltool, one step at a time unless its flags say otherwise; it pulls the images it needs as it runs | The same, inside the leader, one job sized to the largest step ([A Slurm cluster](#a-slurm-cluster)) |
+| `target='nextflow'` | Nextflow | Nextflow's local executor: at most 64 tasks at once (`executor.queueSize`, which the site adds to the run's `nextflow.config`). The pipeline publishes the outputs into the outputs folder, as a local run does ([Outputs](nextflow.md#outputs)) | Not yet: `check` refuses it, `wic067` |
 
 A site needs cwltool 3.1.20241217163858 (the version Sophios itself
 requires), Toil 9.5.0 and Nextflow 26.04.2 or later; `check` reads the
@@ -248,8 +348,8 @@ one. A Nextflow pipeline is written for the site's engine, `docker` or
 `singularity`; on a site with another engine each step with a container is
 refused, `wic065`, by name. A Toil step whose tool declares no memory gets
 4 GiB there (`--defaultMemory 4Gi`), and Toil refuses to start it on a
-machine with less: `check` notes each such step, `wic066`. The tool's own
-`ramMin` wins.
+machine with less, and on Slurm asks for 4 GiB for its job: `check` notes
+each such step, `wic066`. The tool's own `ramMin` wins.
 
 ### Runner flags
 
@@ -309,36 +409,64 @@ is `workflow.start()`, and the `Run` it returns has the local `RunHandle`'s
 | `wait(timeout=None)` | Blocks until the run ends, and returns its `RunStatus`; after `timeout` seconds it raises `TimeoutError`, and the run goes on | The same, reading every 5 s for a minute, then every minute, and printing what `run.log` gained and each change; Ctrl-C prints how to follow the run again, and the run goes on |
 | `outputs()` | The workflow's output object once the run has completed; `None` until then | The same, with paths there |
 | `logs()` | Everything the runner has printed so far | `run.log` so far: the job's and the runner's two streams |
-| `cancel()` | Stops the run: `True` once it is `CANCELLED`, by this call or before; `False` when it had ended `COMPLETED` or `FAILED`; its `reason` is `cancelled: the runner was stopped` | The same, its `reason` `cancelled`: a run whose job has not started never will, and a running one's process group gets TERM; it waits up to two minutes for the end |
+| `cancel()` | Stops the run: `True` once it is `CANCELLED`, by this call or before; `False` when it had ended `COMPLETED` or `FAILED`; its `reason` is `cancelled: the runner was stopped` | The same, its `reason` `cancelled`: a run whose job has not started never will, and a running one is stopped, its process group with TERM on a machine, every job named after it with `scancel` on Slurm, where a `scancel` Slurm refuses raises `wic062` having changed nothing; it waits up to two minutes for the end |
 | `collect(timeout=None)`, `workflow.run()` | `wait()`, then the run's `RunResult` | Local only |
-| `id`, `machine.attach(id)` | None | On a site only: the run's id, which `attach` follows from any computer, given the same URL and `runs`; `repr(run)` is that line |
+| `id`, `machine.attach(id)` | None | On a site only: the run's id, which `attach` follows from any computer, given the same kind of site, URL and `runs`; `repr(run)` is that line |
 
 The states are those of a local run. A run is `QUEUED` until its job has
-claimed it, a moment after the submit; one that no job has claimed ten
-minutes after the submit ended `FAILED`, and its `reason` says why. When
-ssh or the site does not answer, a method raises `wic062` and decides
-nothing.
+claimed it, a moment after the submit on a machine; one that no job has
+claimed ten minutes after the submit, and of which Slurm lists no job that
+may still claim it, ended `FAILED`, and its `reason` says why. When ssh or
+the site does not answer, a method raises `wic062` and decides nothing.
+
+On Slurm, `status()` reads the run's folder first, and asks Slurm only
+while the folder has not said how the run ended: `squeue` for the run's
+jobs, the leader by its name and Toil's step jobs by the run's comment, and
+`sacct` for a leader that has left the queue. When either fails,
+`status()` raises `wic062` and writes and cancels nothing.
+
+- **`QUEUED`** while the leader waits in Slurm's queue, its `reason`
+  Slurm's (`waiting in Slurm's queue (Priority)`), however long it waits;
+  such a run keeps its outputs folder.
+- **`RUNNING`** while the leader that claimed the run runs, and, while no
+  `exit` shows, for two minutes after Slurm says it ended, so that its
+  `exit` can show on a shared folder.
+- **A job Slurm will never start**, the leader or a step job waiting for a
+  limit no wait clears (`PartitionTimeLimit`, a per-job limit of your QOS
+  or account, an account or QOS you may not use): `status()` stops the
+  run, as `cancel()` does, and it ends `FAILED`, its `reason` naming what
+  to change, such as `give a shorter SlurmSettings(time=...)`, or
+  `steps_time=` for a step's job. The `reason` is written once Slurm has
+  taken the `scancel`.
+- **A leader that ended by no `exit` of its own**: `CANCELLED` when Slurm
+  cancelled it, else `FAILED` with Slurm's state; a time limit reads
+  `Slurm ended the run's job TIMEOUT: it reached its time limit: give a
+  longer SlurmSettings(time=...)`. The status that finds it cancels the
+  step jobs it left in Slurm's queue.
 
 ## The run's folder
 
 ```text
 <runs>/<id>/
-  run.json                  the id, the site's kind, the target, the runner and its flags, the settings it read
-                            and the outputs folder, each with its source, Sophios's version
+  run.json                  the id, the site's kind, the target, the runner and its flags, the settings it read,
+                            on Slurm where its jobs go, and the outputs folder, each with its source, Sophios's
+                            version
   job.sh                    the job script
   <workflow>.cwl            a CWL run's workflow, one document, and <workflow>_inputs.yml, its job
   nextflow_<workflow>/      a Nextflow run's pipeline, its configuration, its log and its work/ folder
-  leader                    the claim: a link to the job's pid, or to `cancelled` or `none`
+  leader                    the claim: a link to the job's pid, on Slurm its job id, or to `cancelled` or `none`
   run.log                   the job script's and the runner's two streams
   stdout                    the runner's standard output alone, which its outcome reads
-  provenance/               a CWL run's provenance, as a local run writes it
+  provenance/               a CWL run's provenance, as a local run writes it; Toil on Slurm writes none
+  batch/                    Toil's step jobs' Slurm logs, on Slurm
   output_<workflow>.json    cwltool's summary of the outputs, which its outcome reads
   toil/                     Toil's work/ and tmp/: every step's outputs and scratch, removed as --clean says
   jobStore_<workflow>/      Toil's job store, while it runs, and after it when --clean keeps it
   made/                     a Nextflow run's output folders given a name, before they are published
   out                       the outputs folder; when the config names one, a link to it
-  reason                    why the run failed, written by the status that found its job killed outright, or by
-                            the submit whose outputs folder another run took as it started
+  reason                    why the run ended, written by the status that found its job killed outright, or
+                            that stopped a run Slurm would never start, or by the submit whose job Slurm refused,
+                            or whose outputs folder another run took as it started
   exit                      the job script's exit status, written last, after the cleanup
 ```
 
@@ -358,7 +486,9 @@ removes its own temporary folders.
 
 A hard kill stops the job before its cleanup: the run reads `FAILED`, and
 for Toil its `reason` names `<run>/toil` and the `rm -rf` line that removes
-it. A kill of the job's process group stops the runner, but not what Toil
+it. On Slurm, the `status()` that finds a leader killed cancels the step
+jobs it left in Slurm's queue, by the run's comment, whatever `--clean`
+says. A kill of the job's process group stops the runner, but not what Toil
 started: each step runs in a worker of its own process group, which goes on
 until its step ends. Find such a worker with `ps` (its command line names
 the run's id) and stop its process group, `kill -- -<pgid>`.
@@ -389,22 +519,72 @@ service but for these:
   runs the pipeline a local run runs: it takes them, and an output whose copy
   took another name (`out.txt_2`) keeps the tool's own name as its
   `basename`, where the service reports the copy's.
-- **`SlurmSettings` are not used** on a machine, which has no Slurm job.
+- **`SlurmSettings` are not used** on a machine, which has no Slurm job,
+  nor, on Slurm, `steps_partition=` and `steps_time=` under cwltool, whose
+  run is one job.
 - **Containers** run under the site's `container_engine=`, Docker by
-  default on a machine; the service runs every container under Singularity.
+  default on a machine and Singularity on Slurm; the service runs every
+  container under Singularity.
 - **The run is yours.** It runs as you, everything it writes is yours with
   your umask, and no run's folder is deleted: the service runs as its own account,
   gives what a run wrote to the folder's group, deletes a run's own folder
-  some days after it ended, and refuses a run when its disk is full.
+  some days after it ended, and refuses a run when its disk is full. On
+  Slurm a site's jobs go to your account, your `SBATCH_ACCOUNT` or Slurm's
+  default, with your other `SBATCH_` settings, such as a QOS; the
+  service's go to its own account, and take none of yours.
+- **A time beyond a limit:** the service refuses, at submit, a `time=` or
+  `steps_time=` longer than its partition allows or than the service
+  account's QOS or association allows. A site checks no time against a
+  limit: Slurm keeps such a job waiting, and `status()` stops the run,
+  its `reason` naming the setting to change, or Slurm refuses it at
+  submission where it enforces partition limits.
+- **What is used when a setting is not given:** the service takes its
+  driver's own settings first. Then the leader's partition is the cluster's
+  default on both, a site taking your `SBATCH_PARTITION` before it; its time
+  the longest its partition and the service account allow on the service,
+  your `SBATCH_TIMELIMIT`, else the longest its partition allows, on a
+  site. The steps' time is the longest that the run's time, the steps'
+  partition, `gpu_partition=` and the service account allow on the service,
+  and on a site the shorter of the run's time and the limits of the
+  partitions the steps go to, the GPU partition only when a step asks for a
+  GPU. On both a run whose time would be no limit, a partition's with
+  none, is refused, asking for a time. A site also holds a partition or a
+  time that Slurm or your `SBATCH_` settings give to the forms the setting
+  takes, and refuses another, `wic067`; the service takes the cluster's as
+  Slurm writes it.
+- **Which partitions there are:** a site reads `sinfo -a`, which lists
+  hidden partitions too, so a `partition=` naming one is taken there; the
+  service reads `sinfo` alone, and refuses it.
+- **Nextflow on Slurm:** `target='nextflow'` is refused on a Slurm site,
+  `wic067`; the service runs it.
+- **A step that asks for a GPU with no `gpu_partition=`** is refused by the
+  service, unless its driver names a GPU partition; a site sends it to the
+  one partition with GPUs. A `gpu_partition=` the cluster does not have is
+  refused by the service even when no step asks for a GPU; a site checks it
+  only when one does.
+- **The leader's size under Toil:** the service's leader asks for 2 cores
+  and 16G unless its driver or `memory=` says otherwise; a site's asks for
+  no cores and, but for `memory=`, no memory.
+- **A Toil step on Slurm** that declares no memory gets 8 GiB on the
+  service and 4 GiB on a site; the service queues as many step jobs at once
+  as Toil makes, a site at most 64 (`--maxJobs`).
 - **A run's steps:** the service's `status().steps` lists each step's
   Slurm job, Toil's or a Nextflow task's, by its step's name, with its
   state, exit code and job id, while the run goes on and after it; a
   site's, under any runner, lists only the failed steps the runner's
   outcome names, with their exit codes and no job id, once the run has
   ended.
+- **How the jobs are named:** the service's comment on every job of a run
+  is `slurm-driver:<id>`, a site's `sophios:<id>`.
+- **Nodes left out:** the service's driver may name nodes no job of its
+  runs goes to (`--exclude`); a site leaves out none.
 - **Nextflow's own settings:** the service's Nextflow runs offline, with a
   home of the run's own, and reads none of the account's `NXF_` and `JAVA_`
   variables; a site's reads yours, as a local run does.
+- **A steps' time whose days are 0**, such as `0-12`: the service gives it
+  to Toil as written, which Toil 9.5 reads as 12 minutes; a site gives Toil
+  the time as hours, minutes and seconds, so a step may run 12 hours, as
+  Slurm reads the time.
 - **An input path** is refused at `check` when it is missing, unreadable,
   written for a shell, or relative without `relative_to`. A site writes it
   for the runner as a local run does, so the service's further refusals of
@@ -417,8 +597,8 @@ service but for these:
   any path you can.
 - **Your Toil settings:** the service does not start while its account's
   `~/.toil/default.yaml` sets an option, so its Toil reads none; a site
-  unsets only your `TOIL_` variables, so its Toil reads every option your
-  `~/.toil/default.yaml` sets.
+  unsets only your `TOIL_` variables, so its Toil, on a machine and on
+  Slurm, reads every option your `~/.toil/default.yaml` sets.
 - **Two runs into one outputs folder:** the service takes a folder for one
   run at a time, whoever submits them. A site does so among the runs under
   one `runs`; runs under another `runs`, or on another site, do not see
@@ -445,16 +625,27 @@ site is a code of kind `machine`, which `sophios --explain` explains:
 
 - `wic062`: the site cannot be reached or used: ssh failed, the login
   profile there read the script, a call there failed, the site is neither
-  macOS nor Linux, or an outputs folder filled between `check` and the
-  start. Run `ssh` to the host in a terminal and fix what it says; the
-  message quotes what ssh or the site said.
+  macOS nor Linux, an outputs folder filled between `check` and the
+  start, or Slurm refused the run's job. Run `ssh` to the host in a
+  terminal and fix what it says; the message quotes what ssh, the site or
+  Slurm said.
 - `wic063`: `bin` holds no runner you can run, or an older one than a site
   runs. Install the runner there, or name the folder that holds it.
-- `wic064`: `attach` was given an id that names no run under `runs`.
+- `wic064`: `attach` was given an id that names no run under `runs`, or
+  one that the other kind of site submitted: the message names the kind to
+  attach with.
 - `wic065`: a Nextflow step with a container, on a machine whose engine is
   neither Docker nor Singularity.
 - `wic066`, a note: a Toil step whose tool declares no memory, which gets
   4 GiB there.
+- `wic067`: Slurm cannot run the run: one of its commands is missing or
+  does not answer (`sacct` too), your login profile there sends jobs to
+  another cluster or sets an `SBATCH_ACCOUNT` the run cannot take, a
+  partition a job of the run goes to is not there, a step asks for a GPU
+  and no one partition has GPUs, the run would have no time limit, a
+  partition or a time Slurm or your `SBATCH_` settings give is in a form
+  the setting would not take, or the runner is Nextflow, which a `Slurm`
+  site does not run yet.
 - `wic015`, `wic016`, `wic021`: the container engine, an input or an output
   folder of the workflow, or a folder Sophios writes, as for a local run,
   each message naming the site.
@@ -470,3 +661,4 @@ say why, and `run.logs()` holds the rest.
 - It resumes nothing: a run that failed is submitted again from the start.
 - It deletes no run's folder, and finds no runner: `bin` names them.
 - It runs no real-time analysis, and no Windows computer is a site.
+- It does not run Nextflow on Slurm yet: `check` refuses it, `wic067`.

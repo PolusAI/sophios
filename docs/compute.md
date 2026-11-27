@@ -117,8 +117,11 @@ of it set, and returns the config, so the calls chain. What no setter sets
 is left out of the request, so the service's own settings apply: only the
 service knows the cluster. The values are strings in Slurm's own forms, such
 as `'2:00:00'` and `'4G'`; Sophios checks them against the service's schema
-when it builds the request, each problem naming what you wrote, such as
-`SlurmSettings(time=...)`. The service's own answers name the request's
+when it builds the request, and refuses a time of 0, which Slurm reads as
+no limit and the service refuses as it takes the run, each problem naming
+what you wrote, such as `SlurmSettings(time=...)`. A
+[Slurm site](sites.md#a-slurm-cluster) takes and refuses the same values,
+in the same words. The service's own answers name the request's
 fields: `relative_to` is its `basepath`, the outputs folder its
 `workflowOutDir`, and the Slurm settings its `leader` and `steps`, as below.
 
@@ -132,7 +135,7 @@ fields: `relative_to` is its `basepath`, the outputs folder its
 
 | `SlurmSettings` | The request's | What it sets |
 |---|---|---|
-| `partition=` | `leader.partition` | The partition of the leader, the Slurm job that runs Toil or Nextflow as long as the run lasts |
+| `partition=` | `leader.partition` | The partition of the leader, the Slurm job that runs the runner as long as the run lasts |
 | `time=` | `leader.time` | The leader's time limit, the whole run's |
 | `memory=` | `leader.memory` | The leader's memory |
 | `steps_partition=` | `steps.partition` | Where each step's job goes |

@@ -589,7 +589,8 @@ name, and one given an absolute path is refused. The site reads `-qs` (or
 a block it appends to the run's `nextflow.config`, 64 when not given; the
 other flags of `nextflow run` are passed on, but those the site sets itself,
 by either of their names (`-o`, `-output-dir`; `-w`, `-work-dir`), and the
-settings of that block (`-executor.queueSize`).
+settings of that block (`-executor.queueSize`). A `Slurm` site does not run
+Nextflow yet: `check` refuses it, `wic067`.
 
 ## GPUs
 

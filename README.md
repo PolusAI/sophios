@@ -10,7 +10,7 @@ Sophios's Python API has two halves. `sophios.api.python.workflow` builds workfl
 
 ## Documentation
 
-The documentation is on [Read the Docs](https://sophios.readthedocs.io/en/latest/). Start with [Install](docs/install.md), then [Your first workflow](docs/first-workflow.md). A workflow runs on this machine ([Running workflows](docs/running.md)), on another computer of your own over ssh ([Sites](docs/sites.md)), or on a cluster's compute service ([The compute service](docs/compute.md)), each taking the same `RunConfig`.
+The documentation is on [Read the Docs](https://sophios.readthedocs.io/en/latest/). Start with [Install](docs/install.md), then [Your first workflow](docs/first-workflow.md). A workflow runs on this machine ([Running workflows](docs/running.md)), on another computer of your own or a Slurm cluster, as yourself, over ssh ([Sites](docs/sites.md)), or on a cluster's compute service ([The compute service](docs/compute.md)), each taking the same `RunConfig`.
 
 ## Install
 
