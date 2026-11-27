@@ -589,8 +589,15 @@ name, and one given an absolute path is refused. The site reads `-qs` (or
 a block it appends to the run's `nextflow.config`, 64 when not given; the
 other flags of `nextflow run` are passed on, but those the site sets itself,
 by either of their names (`-o`, `-output-dir`; `-w`, `-work-dir`), and the
-settings of that block (`-executor.queueSize`). A `Slurm` site does not run
-Nextflow yet: `check` refuses it, `wic067`.
+settings of that block (`-executor.queueSize`). On a `Slurm` site, whose
+engine is Singularity unless it names another, Nextflow runs in the run's
+one long job, and the same block makes each task a Slurm job of its own:
+`process.executor = 'slurm'`, `queue` the steps' partition, or the GPU
+partition for a task that asks for a GPU, `time` the steps' time, in
+seconds, `memory` 4 GiB, which a process's own `memory` beats, and
+`clusterOptions` the run's comment, your account and a GPU task's
+`--gres=gpu:<n>`; a flag that sets one of these, such as
+`-process.queue`, is refused ([A Slurm cluster](sites.md#a-slurm-cluster)).
 
 ## GPUs
 
@@ -605,7 +612,11 @@ diagnostics. In Python, `compile(target="nextflow")` prints it on stderr, in the
 same words, and keeps it in `diagnostics`; a run, `run()`, `start()` or
 `run_async()`, prints it too and keeps it on the result. Where a task runs is
 the executor's choice: the local executor accepts the directive and runs the
-task on the machine as it is.
+task on the machine as it is, and the `slurm` executor asks Slurm for no GPU.
+On a `Slurm` site the site asks for them itself: such a task goes to the GPU
+partition with `--gres=gpu:<n>` ([A Slurm cluster](sites.md#a-slurm-cluster)).
+Inside a container, Singularity binds them and Docker gives none
+([Containers](#containers)).
 
 ## Staging with InitialWorkDirRequirement
 
