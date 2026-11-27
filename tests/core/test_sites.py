@@ -167,10 +167,10 @@ def _job_line(site: Path, runner: Runner, slurm: bool = False, **engine: str) ->
 
 
 #: Each runner on each site, and flags of the user's that no site sets: cwltool's own `--disable-pull` and `--quiet`
-#: among them. Nextflow runs on a machine alone.
+#: among them.
 _PASSED = [(on_slurm, kind, flags) for on_slurm in (False, True) for kind, flags in [
     (Cwltool, ('--disable-pull', '--quiet', '--timestamps')), (Toil, ('--targetTime', '1', '--disable-pull')),
-    (Nextflow, ('-resume', '-name', 'x'))] if not (on_slurm and kind is Nextflow)]
+    (Nextflow, ('-resume', '-name', 'x'))]]
 
 
 @pytest.mark.parametrize(('on_slurm', 'kind', 'flags'), _PASSED)
@@ -206,7 +206,7 @@ def test_a_site_refuses_the_options_its_job_sets_and_puts_every_other_flag_into_
     launch = type(targets.backend(kind())).launch
     monkeypatch.setattr(type(targets.backend(kind())), 'launch', lambda self, request: backends.Launch(
         (*launch(self, request).argv, '--brandNew'), {}, None, ''))
-    monkeypatch.setattr(_site._Site, '_block', lambda self, read, runner: {'process': {'brandNew': '1'}})
+    monkeypatch.setattr(type(machine), '_block', lambda self, run, read, runner: {'process': {'brandNew': '1'}})
     assert refused('--brandNew') and refused('-process.brandNew')
 
 
@@ -268,8 +268,10 @@ _PROBLEMS: list[Any] = [
     (_COPY, 'cwl', None, {}, None, [_MISSING], 'relative_to'),
     (partial(live_workflow, 'site'), 'cwl', None, {'container_engine': 'no-such-engine'}, None,
      [Code.REALTIME_NOT_ASYNC, Code.CONTAINER_ENGINE_UNAVAILABLE], ''),
-    *((_touch, 'nextflow', None, {'bin': 'data/empty', 'container_engine': engine}, None, [Code.SITE_RUNNER, *refused],
-       '') for engine, refused in (('podman', [Code.SITE_NEXTFLOW_CONTAINER]), ('docker', []), ('singularity', []))),
+    *((made, 'nextflow', None, {'bin': 'data/empty', 'container_engine': engine}, None, [Code.SITE_RUNNER, *refused],
+       '') for made, engine, refused in ((_touch, 'podman', [Code.SITE_NEXTFLOW_CONTAINER]),
+                                         (partial(_step, 'say', 'true'), 'podman', []),
+                                         (_touch, 'docker', []), (_touch, 'singularity', []))),
     *((partial(_filled, folder), target, 'results', {}, None, codes, said) for target in ('cwl', 'nextflow')
       for folder, codes, said in [
           ('masks', [], ''), *((name, [_MISSING], 'not one folder name') for name in ('seg/p1', '..', 'masks/')),
@@ -302,8 +304,7 @@ _PROBLEMS: list[Any] = [
     (_COPY, 'cwl', 'results', {'kind': sites.Slurm, 'bin': 'data/empty', 'broken': 'sacct', 'env': {
         'SBATCH_CLUSTERS': 'other', 'SLURM_CLUSTERS': 'other', 'SBATCH_TIMELIMIT': '0', 'SBATCH_ACCOUNT': "a'b\nc"}},
      None, [Code.SITE_RUNNER, *[Code.SITE_SLURM] * 5], 'sacct'),
-    (_COPY, 'cwl', 'results', {'kind': sites.Slurm, 'broken': 'sinfo'}, None, [Code.SITE_SLURM], 'sinfo'),
-    (_COPY, 'nextflow', 'results', {'kind': sites.Slurm}, None, [Code.SITE_SLURM], 'nextflow')]
+    (_COPY, 'cwl', 'results', {'kind': sites.Slurm, 'broken': 'sinfo'}, None, [Code.SITE_SLURM], 'sinfo')]
 #: The one row whose run needs Nextflow in `bin`, which only the lane that runs `nextflow` tests installs.
 _PROBLEMS = [pytest.param(*row, marks=pytest.mark.nextflow) if row[1] == 'nextflow' and not row[5] else row
              for row in _PROBLEMS]
@@ -497,7 +498,8 @@ _EACH = [pytest.param(kind, runner, settings, id=f'{kind.__name__}-{runner.name}
              *((sites.Machine, runner, SlurmSettings()) for runner in (_TOIL, Cwltool('--timestamps'),
                                                                        Nextflow('-qs', '3', '-resume'))),
              (sites.Slurm, _TOIL, SlurmSettings()),
-             (sites.Slurm, Cwltool('--timestamps'), SlurmSettings(steps_partition='no where', steps_time='never'))]]
+             (sites.Slurm, Cwltool('--timestamps'), SlurmSettings(steps_partition='no where', steps_time='never')),
+             (sites.Slurm, Nextflow('-qs', '3', '-resume'), SlurmSettings())]]
 
 
 @pytest.mark.parametrize(('kind', 'runner', 'settings'), _EACH)
@@ -518,10 +520,9 @@ def test_each_runner_returns_on_each_site_what_it_returns_in_a_local_run(
     assert [line for line in printed.out.splitlines() if not line.startswith('Slurm')][:3] == [
         f'Submitting {run.id} to localhost: {shlex.join([runner.name, *runner.flags])} (runner=){parallel}.',
         f'Outputs: {there} (RunConfig(...))', f'From anywhere, {run!r} follows it.']
-    assert printed.err.count('wic066') == (2 if toil else 0)   # Toil's memory note, at each step
-    status = run.wait(timeout=600)
+    assert printed.err.count('wic066') == (2 if toil or (on_slurm and target == 'nextflow') else 0)   # at each step
+    status, folder = run.wait(timeout=600), site / _RUNS / run.id
     assert status.state is RunState.COMPLETED and status.outputs is not None, run.logs()
-    folder = site / _RUNS / run.id
     assert run.logs() == (folder / 'run.log').read_text(encoding='utf-8')
     assert status.started_at is not None and status.ended_at is not None and status.started_at <= status.ended_at
     local = workflow.run(config=RunConfig('results/here').relative_to(str(site)), runner=runner, target=target,
@@ -539,7 +540,8 @@ def test_each_runner_returns_on_each_site_what_it_returns_in_a_local_run(
         assert line[line.index('--maxJobs') + 1] == '3' and line[line.index('--logLevel') + 1] == 'DEBUG'
         assert line.index('--logLevel') < line.index('--targetTime')
     if isinstance(runner, Nextflow):   # as Nextflow's executor took it; the output folder of the workflow's made
-        assert re.findall(r'capacity[:=] ?(\d+);', (folder / 'nextflow_site' / '.nextflow.log').read_text()) == ['3']
+        assert re.findall(r"executor '(\w+)' > .*?capacity[:=] ?(\d+);", (folder / 'nextflow_site' / '.nextflow.log')
+                          .read_text()) == [('slurm' if on_slurm else 'local', '3')]
         assert (folder / 'made' / 'masks').is_dir()
 
 

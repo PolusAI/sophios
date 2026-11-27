@@ -10,11 +10,13 @@ that cannot reach Slurm; `lose` makes the next `sbatch` fail before it takes the
 once the job it took has ended (`ended`), and the one after that as the next word says.
 
 Each option that decides what a command lists is read as Slurm reads it, so that a caller that leaves one out sees
-what it would see there: `squeue` lists every user's jobs but with `-u`, a header but with `-h`, and a job of a hidden
-partition only with `-a`; `sacct` lists only your own jobs, a header but with `-n`, each started job's steps but with
+what it would see there: `squeue` lists every user's jobs but with `-u`, of every partition but with `-p`, a header but
+with `-h` (`--noheader`), a job of a hidden partition only with `-a`, and a job that has ended only with `-t all`,
+which Nextflow gives; `sacct` lists only your own jobs, a header but with `-n`, each started job's steps but with
 `-X`, columns of fixed width but with `-P`, and only jobs that had not ended by its start, `-S`, midnight when not
 given; `sinfo` a header but with `-h`, and a hidden partition only with `-a`; `scancel` signals every job its filters
-name, and fails on another user's. `enqueue` puts a job of anyone's in the queue, with no watcher."""
+name, and fails on another user's. `sbatch` reads a long option's value written after it, `--mem 300M`, as Nextflow
+writes a task's header. `enqueue` puts a job of anyone's in the queue, with no watcher."""
 # pylint: disable=consider-using-with  # a job's streams and process outlive the call that opens them
 import json
 import math
@@ -36,6 +38,14 @@ PARTITIONS = (('normal*', '2-00:00:00', '(null)', False), ('short', '30:00', '(n
               ('gpu', 'infinite', 'gpu:2', False), ('hidden', '1:00:00', '(null)', True))
 #: Each command's short options that take a value.
 _TAKES = {'sbatch': 'Jopet', 'squeue': 'unojtp', 'sacct': 'SEoju', 'scancel': 'un', 'sinfo': 'o'}
+#: Each command's long options that take no value; any other long option of `sbatch` takes one. A long option of
+#: another command takes one only with `=`, or as `--format`.
+_FLAGS = {'sbatch': ('no-requeue', 'parsable')}
+#: The short name of each long option that is a flag, by command.
+_SHORT = {'squeue': {'noheader': 'h'}}
+#: `squeue`'s compact name of each state, `%t`.
+_COMPACT = {'PENDING': 'PD', 'RUNNING': 'R', 'COMPLETED': 'CD', 'FAILED': 'F', 'CANCELLED': 'CA', 'TIMEOUT': 'TO',
+            'OUT_OF_MEMORY': 'OOM', 'NODE_FAIL': 'NF', 'PREEMPTED': 'PR'}
 #: The title of each field a header names.
 _TITLES = {'i': 'JOBID', 'j': 'NAME', 'k': 'COMMENT', 'T': 'STATE', 't': 'ST', 'r': 'REASON', 'M': 'TIME',
            'P': 'PARTITION', 'l': 'TIMELIMIT', 'G': 'GRES', 'p': 'PRIO_TIER', 'c': 'CPUS', 'm': 'MEMORY'}
@@ -84,7 +94,8 @@ def _options(command: str, argv: list[str]) -> tuple[dict[str, str], list[str]]:
     for word in words:
         if word.startswith('--'):
             key, equals, value = word[2:].partition('=')
-            found[key] = value if equals or key != 'format' else next(words)
+            takes = key not in _FLAGS[command] if command in _FLAGS else key == 'format'
+            found[_SHORT.get(command, {}).get(key, key)] = value if equals or not takes else next(words)
         elif word.startswith('-') and len(word) == 2:
             key = _LONG.get(word[1], word[1]) if command == 'sbatch' else word[1]
             found[key] = next(words) if word[1] in _TAKES[command] else ''
@@ -190,7 +201,7 @@ def _fill(fields: str, value: Callable[[str], str]) -> str:
 def _field(field: str, job: dict[str, Any]) -> str:
     end, state = job.get('end'), job['state']
     return str({'i': job['id'], 'JobID': job['id'], 'JobIDRaw': job['id'], 'j': job['name'], 'k': job['comment'],
-                'T': state, 'State': state, 't': {'PENDING': 'PD', 'RUNNING': 'R'}.get(state, 'CG'),
+                'T': state, 'State': state, 't': _COMPACT[state.split()[0]],
                 'r': job['reason'], 'M': '0:01', 'N': '', 'ExitCode': job.get('exit', '0:0'),
                 'End': 'Unknown' if end is None else str(end) if os.environ.get('SLURM_TIME_FORMAT') == '%s' else
                 time.strftime('%Y-%m-%dT%H:%M:%S', time.localtime(end))}[field])
@@ -247,9 +258,12 @@ def main(command: str, argv: list[str]) -> None:  # pylint: disable=too-many-ret
                                for job in refused))
         return None
     if command == 'squeue':
-        fields = options.get('o', options.get('format', '%i %j %T'))
+        fields, states = options.get('o', options.get('format', '%i %j %T')), options.get('t')
+        if states not in (None, 'all'):
+            sys.exit(f'squeue: the fake takes -t all alone, not {states}')
         listed = [_fill(fields, partial(_field, job=job)) for job in chosen
-                  if 'end' not in job and ('a' in options or not _hidden(job))]
+                  if ('end' not in job or states == 'all') and ('a' in options or not _hidden(job))
+                  and ('p' not in options or job['options'].get('partition', 'normal') in options['p'].split(','))]
         return print('\n'.join(listed if 'h' in options else [_fill(fields, _TITLES.__getitem__), *listed]))
     return print(_accounted(chosen, options))
 

@@ -9,6 +9,7 @@ from pathlib import Path, PurePosixPath
 from typing import Final
 
 from .. import targets
+from ..nextflow.expr import groovy_literal
 from ..runtime.backends import Launch, RunRequest
 from ..runtime.runners import Cwltool, Nextflow, Runner, RunSettings, Toil
 
@@ -18,6 +19,9 @@ from ._ssh import _q
 #: How many steps a run has at once when its runner value does not say: Toil's `--maxJobs`, Nextflow's
 #: `executor.queueSize`.
 MAX_PARALLEL: Final = 64
+#: The memory, in GiB, a site gives a step whose tool declares none: Toil's `--defaultMemory`, and on Slurm a Nextflow
+#: task's `process.memory` (`wic066`).
+DEFAULT_MEMORY_GIB: Final = 4
 #: What `--clean` takes, Toil's own names; only Toil leaves scratch outside its outputs, so no other runner has it.
 _CLEAN: Final = ('always', 'onError', 'onSuccess', 'never')
 #: The flags a site reads from a runner value, by the runner's name, and the setting of the run each gives (decision
@@ -50,7 +54,7 @@ OLDEST: Final[Mapping[str, tuple[int, ...]]] = {
 def _toil(run: str, max_parallel: str, clean: str, system: str, *more: str) -> tuple[str, ...]:
     """Toil's flags on a site (design Appendix A): its batch system, the scratch in the run, `more`, and `--clean`."""
     return ('--batchSystem', system, '--bypass-file-store', '--leave-tmpdir', '--no-cwl-default-ram',
-            '--defaultMemory', '4Gi', '--maxJobs', max_parallel, '--workDir', f'{run}/toil/work',
+            '--defaultMemory', f'{DEFAULT_MEMORY_GIB}Gi', '--maxJobs', max_parallel, '--workDir', f'{run}/toil/work',
             '--tmpdir-prefix', f'{run}/toil/tmp/t', '--tmp-outdir-prefix', f'{run}/toil/tmp/o', *more, '--clean',
             clean)
 
@@ -93,11 +97,13 @@ ON_A_MACHINE: Final[Mapping[str, Callable[[str, Mapping[str, str]], tuple[str, .
     'toil-cwl-runner': lambda run, read: _toil(run, read['max_parallel'], read['clean'], 'single_machine'),
     'nextflow': lambda run, read: (),
 }
-#: What Slurm adds: cwltool is the run's one job, which its header places; Toil runs each step as a job of its own.
-#: Nextflow is not run on Slurm yet.
+#: What Slurm adds: cwltool is the run's one job, which its header places; Toil runs each step as a job of its own;
+#: Nextflow takes none, as on a machine: each of its tasks is a job of its own by its configuration
+#: (`nextflow_on_slurm`).
 ON_SLURM: Final[Mapping[str, Callable[[str, Mapping[str, str]], tuple[str, ...]]]] = {
     'cwltool': lambda run, read: (),
     'toil-cwl-runner': _toil_on_slurm,
+    'nextflow': lambda run, read: (),
 }
 
 
@@ -107,6 +113,22 @@ def nextflow_block(read: Mapping[str, str]) -> dict[str, dict[str, str]]:
     of the generated `nextflow.config`, the one configuration Nextflow reads (`-C`), since only a configuration sets a
     task's options by the task. At most `max_parallel` tasks at once."""
     return {'executor': {'queueSize': read['max_parallel']}}
+
+
+def nextflow_on_slurm(run: str, read: Mapping[str, str]) -> dict[str, dict[str, str]]:
+    """What a Slurm site sets for Nextflow: a machine's block, and each task a Slurm job of its own, placed as each of
+    Toil's step jobs is (`_toil_on_slurm`): on the steps' partition, or, for a task with an `accelerator`, on the GPU
+    partition, asking for as many GPUs, as Nextflow writes no `--gres` for it; for the steps' time, in seconds, a form
+    Nextflow reads (it refuses Slurm's), never none (`_slurm.placement`); asking for the memory a Toil step whose tool
+    declares none gets, which a process's own `memory` beats; with the run's comment and the account. Each value is one
+    single-quoted Groovy string (`groovy_literal`), which nothing in it ends."""
+    queue, options = groovy_literal(read['steps_partition']), groovy_literal(_steps_options(run, read))
+    if 'gpu_partition' in read:
+        queue = f"{{ task.accelerator ? {groovy_literal(read['gpu_partition'])} : {queue} }}"
+        options = f"{{ {options} + (task.accelerator ? ' --gres=gpu:' + task.accelerator.request : '') }}"
+    return {**nextflow_block(read), 'process': {
+        'executor': "'slurm'", 'queue': queue, 'time': groovy_literal(f"{int(seconds(read['steps_time']))}s"),
+        'memory': groovy_literal(f'{DEFAULT_MEMORY_GIB} GB'), 'clusterOptions': options}}
 
 
 def nextflow_config(block: Mapping[str, Mapping[str, str]]) -> str:

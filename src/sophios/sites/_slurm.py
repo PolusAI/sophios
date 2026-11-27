@@ -12,11 +12,11 @@ from ..compute import slurm_problems
 from ..ir.resolved import ResolvedWorkflow, tool_steps
 from ..lang.diagnostics import Diagnostic, SophiosError
 from ..lang.error_codes import SophiosErrorCode as Code
-from ..runtime.runners import Runner, SlurmSettings, Toil
+from ..runtime.runners import Cwltool, Nextflow, Runner, SlurmSettings, Toil
 from ..wic_types import Tool
 
 from ._run import Run
-from ._runners import ON_SLURM, seconds
+from ._runners import ON_SLURM, nextflow_on_slurm, seconds
 from ._site import _Placed, _Site, _error, _started, _winning
 from ._ssh import _ANSWER, _Said, _call, _q, _unreachable, host
 from ._states import Job, read_jobs
@@ -31,25 +31,32 @@ _VARIABLES: Final = ('SBATCH_ACCOUNT', 'SBATCH_PARTITION', 'SBATCH_TIMELIMIT', '
 _SUBMITTED: Final = '"$(date -r run.json +%Y-%m-%dT%H:%M:%S)"'
 #: How the `reason` of a run whose job Slurm refused, twice, starts; what `sbatch` said follows.
 _REFUSED: Final = 'Slurm refused its job: '
-#: Your `SBATCH_ACCOUNT`, as the leader's `#SBATCH` lines and Toil's `--slurmArgs`, which it splits as a shell does,
-#: carry it.
+#: Your `SBATCH_ACCOUNT`, as the leader's `#SBATCH` lines, Toil's `--slurmArgs`, which it splits as a shell does, and
+#: the `#SBATCH` line of a Nextflow task's `clusterOptions` carry it.
 _ACCOUNT: Final = re.compile(r'[A-Za-z0-9_./+-]+')
-#: The `sbatch` variables that set each option of a job script's header, which beat its `#SBATCH` line (sbatch(1),
-#: INPUT ENVIRONMENT VARIABLES): three set the memory, two the requeue.
+#: The `sbatch` variables that set each option of a job script's header, the leader's or a Nextflow task's, which beat
+#: its `#SBATCH` line (sbatch(1), INPUT ENVIRONMENT VARIABLES): three set the memory, two the requeue.
 _SBATCH_VARIABLES: Final[Mapping[str, tuple[str, ...]]] = {
     'job-name': ('SBATCH_JOB_NAME',), 'comment': (), 'account': ('SBATCH_ACCOUNT',),
     'partition': ('SBATCH_PARTITION',), 'time': ('SBATCH_TIMELIMIT',), 'cpus-per-task': (),
     'mem': ('SBATCH_MEM_PER_NODE', 'SBATCH_MEM_PER_CPU', 'SBATCH_MEM_PER_GPU'), 'gres': ('SBATCH_GRES',),
     'output': ('SBATCH_OUTPUT',), 'error': ('SBATCH_ERROR',), 'open-mode': ('SBATCH_OPEN_MODE',), 'chdir': (),
-    'no-requeue': ('SBATCH_NO_REQUEUE', 'SBATCH_REQUEUE'), 'dependency': ()}
+    'no-requeue': ('SBATCH_NO_REQUEUE', 'SBATCH_REQUEUE'), 'dependency': (), 'signal': ('SBATCH_SIGNAL',)}
+#: Each option of a task's header Nextflow writes on Slurm (`-J`, `-o`, `--no-requeue`, `--signal`, `-c`, `-t`,
+#: `--mem`, `-p`, and the comment, the account and a GPU task's `--gres` of `clusterOptions`), and `error`, which it
+#: leaves to `-o`, one file for both streams. The leader's login shell sets your `SBATCH_` variables again, which would
+#: beat a task's lines, so its job unsets those of these options before Nextflow starts; the account a task asks for is
+#: the one `check` read, written into `clusterOptions`.
+_TASK_OPTIONS: Final = ('job-name', 'output', 'error', 'no-requeue', 'signal', 'cpus-per-task', 'time', 'mem',
+                        'partition', 'comment', 'account', 'gres')
 
 
 @dataclass(frozen=True)
 class Slurm(_Site):
     """A Slurm cluster's login node you can `ssh` to, as a site: each run is one job, its leader, and under Toil each
-    step a job of its own (design Appendix A). Its compute nodes share `runs`, and the folders the run reads and writes,
-    with it. Where the jobs go and for how long is the config's `SlurmSettings`, else your `SBATCH_` settings there,
-    else the cluster's; the account is your `SBATCH_ACCOUNT`, else Slurm's default.
+    step, under Nextflow each task, a job of its own (design Appendix A). Its compute nodes share `runs`, and the
+    folders the run reads and writes, with it. Where the jobs go and for how long is the config's `SlurmSettings`, else
+    your `SBATCH_` settings there, else the cluster's; the account is your `SBATCH_ACCOUNT`, else Slurm's default.
 
     Args:
         url: As `Machine` takes it.
@@ -69,6 +76,7 @@ class Slurm(_Site):
     bin: str | None = None
     container_engine: str = 'singularity'
     _RUNNERS: ClassVar = ON_SLURM
+    _DEFAULT_MEMORY: ClassVar = (Toil.name, Nextflow.name)
     _CLAIMANT: ClassVar = '$SLURM_JOB_ID'
 
     def _questions(self) -> list[str]:
@@ -76,14 +84,15 @@ class Slurm(_Site):
         return [*(f'runs {command}' for command in _SLURM), *(f'variable {name}' for name in _VARIABLES)]
 
     def _slurm(self, slurm: SlurmSettings, runner: Runner) -> None:
-        """Check each setting of `slurm` the run uses is in a form the compute service takes: all six under Toil;
-        under cwltool, whose run is one job, all but the steps' partition and time, which are neither used nor refused.
+        """Check each setting of `slurm` the run uses is in a form the compute service takes: all six under Toil and
+        Nextflow, whose steps are jobs of their own; under cwltool, whose run is one job, all but the steps' partition
+        and time, which are neither used nor refused.
 
         Raises:
             ValueError: Each setting the run uses in a form the compute service refuses, a line each, in the compute
                 client's words (`sophios.compute.slurm_problems`).
         """
-        if problems := slurm_problems(slurm if runner.name == Toil.name else
+        if problems := slurm_problems(slurm if runner.name != Cwltool.name else
                                       replace(slurm, steps_partition=None, steps_time=None)):
             raise ValueError('\n'.join(problems))
 
@@ -127,6 +136,15 @@ class Slurm(_Site):
                    ('no-requeue', ''), ('dependency', 'singleton')]
         return [f'#SBATCH --{option}' + (f'={value}' if value else '') for option, value in options
                 if value is not None]
+
+    def _block(self, run: str, read: Mapping[str, str], runner: Runner) -> dict[str, dict[str, str]]:
+        """For Nextflow, each task a Slurm job of its own, where the run placed its steps (`nextflow_on_slurm`)."""
+        return nextflow_on_slurm(run, read) if runner.name == Nextflow.name else {}
+
+    def _before(self, runner: Runner) -> list[str]:
+        """For Nextflow, your `SBATCH_` variables of each option of a task's header unset (`_TASK_OPTIONS`)."""
+        return [f'unset {" ".join(name for option in _TASK_OPTIONS for name in _SBATCH_VARIABLES[option])}'] \
+            if runner.name == Nextflow.name else []
 
     def _leader(self, run: str, job: str) -> list[str]:
         """`sbatch --parsable`, the `SBATCH_` variables of each option `job`'s header sets unset: they beat its
@@ -207,17 +225,18 @@ def placement(rows: Sequence[Sequence[str]], variables: tuple[str, str], slurm: 
     `SBATCH_PARTITION` and `SBATCH_TIMELIMIT` (`variables`), the config's Slurm settings, the runner's name, and the
     most cores, memory in MiB and GPUs a step states (`needs`): each setting from the one that names it, else by the
     convention: the run's partition your `SBATCH_PARTITION`, else the cluster's default; its time your
-    `SBATCH_TIMELIMIT`, else the partition's longest; under Toil the steps' partition the run's, and their time the
-    shorter of the run's and the shortest limit of their partitions; a step that asks for a GPU, the one partition
-    with GPUs. Under cwltool the run is one job, asking for the largest cores, memory and GPUs a step states, on the
-    GPU partition when a step asks for a GPU. A partition a job goes to must be one `sinfo -a` lists; a value Slurm
-    or your profile gives is held to the forms of the setting that would give it (`slurm_problems`), as it reaches a
-    job's `#SBATCH` lines or Toil's flags; and the run must have a time limit, as on the compute service."""
+    `SBATCH_TIMELIMIT`, else the partition's longest; under a runner whose steps are jobs of their own (Toil,
+    Nextflow), the steps' partition the run's, and their time the shorter of the run's and the shortest limit of their
+    partitions; a step that asks for a GPU, the one partition with GPUs. Under cwltool the run is one job, asking for
+    the largest cores, memory and GPUs a step states, on the GPU partition when a step asks for a GPU. A partition a
+    job goes to must be one `sinfo -a` lists; a value Slurm or your profile gives is held to the forms of the setting
+    that would give it (`slurm_problems`), as it reaches a job's `#SBATCH` lines, Toil's flags or Nextflow's
+    configuration; and the run must have a time limit, as on the compute service."""
     partition, limit = variables
     limits = {name.rstrip('*'): row_limit for name, row_limit, _ in rows}
     gpus = sorted({name.rstrip('*') for name, _, gres in rows if gres != '(null)'})
     cores, memory, devices = needs
-    steps = runner == Toil.name
+    steps = runner != Cwltool.name
     chosen = ((slurm.partition, 'SlurmSettings(partition=...)') if slurm.partition else
               (partition, 'your SBATCH_PARTITION') if partition else
               (next((name[:-1] for name, _, _ in rows if name.endswith('*')), ''), "the cluster's default"))

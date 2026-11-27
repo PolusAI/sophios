@@ -27,6 +27,7 @@ from sophios.runtime import runners
 from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
 from sophios.api.python.workflow import Step, Workflow
 from sophios.runtime.status import RunState, RunStatus
+from sophios.sites._runners import nextflow_on_slurm
 from sophios.wic_types import TargetName
 
 from .helpers import import_python_file
@@ -283,6 +284,21 @@ def test_the_client_refuses_a_time_of_0_exactly_as_the_driver_does(cluster: Clus
                 ] == [any(line.startswith(f'{field} {limit} is no time at all') for line in theirs)
                       for field in ('leader.time', 'steps.time')], (limit, ours, theirs)
         assert any('missing.txt' in line for line in theirs), theirs
+
+
+def test_a_slurm_site_sends_each_nextflow_task_where_the_driver_sends_it_for_the_same_steps_settings(
+        cluster: Cluster) -> None:
+    """For the same steps' settings, a time in each form Slurm reads, a Slurm site's block for Nextflow gives each task
+    the queue and the time the driver's configuration gives it."""
+    for limit in ('30', '1:30', '2:00:00', '0-12', '1-0', '0-0:20', '0-1:2:3'):
+        placed = {'steps_partition': 'normal', 'steps_time': limit, 'gpu_partition': 'normal_gpu'}
+        run = compute.Service(cluster.url).submit(_workflow(cluster), RunConfig().slurm_settings(
+            compute.SlurmSettings(**placed)), target='nextflow')
+        written = (cluster.directory(run) / 'service.config').read_text('utf-8')
+        theirs = dict(line.strip().split(' = ', 1) for line in written.splitlines()
+                      if line.strip().startswith(('queue = ', 'time = ')))
+        ours = nextflow_on_slurm('/r/x', {'max_parallel': '64', **placed})['process']
+        assert theirs == {'queue': ours['queue'], 'time': ours['time']}, (limit, written)
 
 
 def test_a_path_written_for_a_shell_is_sent_as_written_and_the_driver_refuses_it(cluster: Cluster) -> None:

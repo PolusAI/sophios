@@ -36,8 +36,8 @@ from ..runtime.setup import Lowered
 from ..wic_types import Json, TargetName, Tool, Tools
 
 from ._run import Run, _run_folder
-from ._runners import (DEFAULT_RUNNER, OLDEST, ON_A_MACHINE, SAMPLE, argv, nextflow_block, nextflow_config, read_runner,
-                       set_by_the_site, _recorded)
+from ._runners import (DEFAULT_MEMORY_GIB, DEFAULT_RUNNER, OLDEST, ON_A_MACHINE, SAMPLE, argv, nextflow_block,
+                       nextflow_config, read_runner, set_by_the_site, _recorded)
 from ._ssh import _ALIVE, _CHECKS, _PUT, _USED, URL, _Said, _call, _q, _unreachable, host
 from ._states import UNCLAIMED_MINUTES, Job
 
@@ -115,6 +115,8 @@ class _Site:
     #: What the scheduler adds to the launch of each runner (design §5), by the runner's name, given the run's folder
     #: and the settings the site read: a machine's.
     _RUNNERS: ClassVar[Mapping[str, Callable[[str, Mapping[str, str]], tuple[str, ...]]]] = ON_A_MACHINE
+    #: The runners that give a step whose tool declares no memory `DEFAULT_MEMORY_GIB` GiB there (`wic066`): Toil.
+    _DEFAULT_MEMORY: ClassVar[tuple[str, ...]] = (Toil.name,)
 
     def __post_init__(self) -> None:
         found = URL.fullmatch(self.url) if isinstance(self.url, str) else None
@@ -145,8 +147,8 @@ class _Site:
         container engine when a step runs in a container, that `runs` can be written, and that the outputs folder
         is missing in a folder that exists, or empty, named by no run there that has not ended, and inside no
         Directory the run reads; on Slurm also its commands, your `SBATCH_` settings, and that every partition a job
-        of the run goes to is there (`wic067`). Under Toil, a note, `wic066`, at each step whose tool declares no
-        memory: Toil gives it 4 GiB there.
+        of the run goes to is there (`wic067`). Under Toil, and on Slurm under Nextflow, a note, `wic066`, at each
+        step whose tool declares no memory: it gets 4 GiB there.
 
         Args:
             workflow: The workflow, built with the Python API.
@@ -249,9 +251,6 @@ class _Site:
         given = runner is not None
         runner = targets.resolve(row.name, runner) if runner is not None else build(row.name, DEFAULT_RUNNER[row.name],
                                                                                     ())
-        if runner.name not in self._RUNNERS:   # Nextflow on Slurm
-            return [_error(Code.SITE_SLURM, f'Sophios does not run {runner.name} on a {type(self).__name__} site yet: '
-                           f"run it on a Machine, or with target='cwl' on {host(self.url)}")], {}, {}
         passed, read = self._read(runner)
         self._slurm(slurm, runner)
         run_id = f'{workflow.process_name}-{datetime.now(timezone.utc):%Y%m%dT%H%M%S}-{secrets.token_hex(4)}'
@@ -286,7 +285,8 @@ class _Site:
             needs = backend.needs(written.documents, ())
             files = {path.relative_to(staging).as_posix(): path.read_bytes().decode('utf-8')
                      for path in sorted(Path(staging).rglob('*')) if path.is_file()}
-        notes = _memory_notes(lowered.view, host(self.url)) if runner.name == Toil.name else []
+        notes = (_memory_notes(lowered.view, host(self.url), runner.name) if runner.name in self._DEFAULT_MEMORY
+                 else [])
         problems, placed = self._ask(settings.runner, needs, asks, outdir, refused, partial(
             self._place, slurm=slurm, runner=runner.name, view=lowered.view))
         found += [*lowered.notes, *notes, *refused, *problems]
@@ -298,7 +298,7 @@ class _Site:
             *(('--logLevel', log_level) if log_level is not None and runner.name == Toil.name else ()), *passed)))
         if runner.name == Nextflow.name:
             files[(nextflow_directory(Path(), written.name) / NEXTFLOW_CONFIG).as_posix()] += nextflow_config(
-                self._block(values, runner))
+                self._block(run, values, runner))
         files['job.sh'] = self._job(RunRequest(written.name, Path(run), settings), values, written.folders)
         record: Json = {
             'id': run_id, 'site': type(self).__name__, 'workflow': written.name, 'target': row.name,
@@ -316,7 +316,7 @@ class _Site:
         of the user's flags, given every setting it may give the runner (`SAMPLE`), and the block it writes into
         Nextflow's configuration."""
         there = self._there(runner, '/run', SAMPLE)
-        return read_runner(runner, set_by_the_site(there, self._block(SAMPLE, runner)))
+        return read_runner(runner, set_by_the_site(there, self._block('/run', SAMPLE, runner)))
 
     def _engined(self, runner: Runner) -> Runner:
         """The runner a site runs for the value `runner`, with none of its flags: the site's engine; never quiet, as
@@ -521,8 +521,9 @@ class _Site:
     def _job(self, request: RunRequest, read: Mapping[str, str], folders: Iterable[str]) -> str:
         """`job.sh`, the leader script (design Appendix A), for `request`, given the settings the site read and
         placed, `read`: on Slurm its header; the claim, by the leader's pid or job id, the record of how it ended in
-        `exit` whatever happens after the claim, `folders` made, and the runner's launch run from `bin`. Toil's
-        `--clean`, `read`'s `clean`, says when its scratch is removed; a runner that leaves none has none."""
+        `exit` whatever happens after the claim, `folders` made, what the scheduler runs before the runner (`_before`),
+        and the runner's launch run from `bin`. Toil's `--clean`, `read`'s `clean`, says when its scratch is removed; a
+        runner that leaves none has none."""
         runner, run, outdir, clean = request.run.runner, str(request.basepath), request.run.outdir, read.get('clean')
         launch = targets.backend(runner).launch(request)
         if runner.name == Toil.name:
@@ -540,7 +541,8 @@ class _Site:
             f'[ "$(readlink {leader})" = {claimant} ] || exit 0',
             f'trap {_q(_recorded(run, clean, outdir))} EXIT', "trap 'exit 143' TERM", *self._environment(), *caches,
             *(f'export {name}={_q(value)}' for name, value in launch.env.items()),
-            *(f'mkdir -p {_q(folder)}' for folder in folders), f'cd {_q(str(launch.cwd or run))}',
+            *(f'mkdir -p {_q(folder)}' for folder in folders), *self._before(runner),
+            f'cd {_q(str(launch.cwd or run))}',
             f'{{ {shlex.join(argv(self.bin, runner, launch))} | tee {_q(f"{run}/stdout")}; }} >> '
             f'{_q(f"{run}/run.log")} 2>&1', ''])
 
@@ -608,10 +610,16 @@ class _Site:
         del run, read
         return []
 
-    def _block(self, read: Mapping[str, str], runner: Runner) -> dict[str, dict[str, str]]:
-        """What the scheduler sets in the configuration of `runner`, given the settings the site read: for Nextflow, a
-        machine's block (`nextflow_block`); none for a CWL runner."""
+    def _block(self, run: str, read: Mapping[str, str], runner: Runner) -> dict[str, dict[str, str]]:
+        """What the scheduler sets in the configuration of `runner`, for the run in `run`, given the settings the site
+        read and placed: for Nextflow, a machine's block (`nextflow_block`); none for a CWL runner."""
+        del run
         return nextflow_block(read) if runner.name == Nextflow.name else {}
+
+    def _before(self, runner: Runner) -> list[str]:
+        """The lines the job runs just before `runner`, after your login profile: none on a machine."""
+        del runner
+        return []
 
     def _leader(self, run: str, job: str) -> list[str]:
         """The lines that start the leader, `job` being its script: on a machine, in a process group of its own
@@ -689,20 +697,22 @@ def _announce(there: str, record: Json) -> str:
             + (f'Slurm: {placed}.\n' if placed else '') + f'Outputs: {record["outdir"][0]} ({record["outdir"][1]})')
 
 
-def _memory_notes(view: ResolvedWorkflow, there: str) -> list[Diagnostic]:
-    """`wic066` at each step Toil gives `--defaultMemory 4Gi` (decision 11), which it refuses to start on a computer
-    with less: its tool declares no memory."""
+def _memory_notes(view: ResolvedWorkflow, there: str, runner: str) -> list[Diagnostic]:
+    """`wic066` at each step whose tool declares no memory: Toil gives it `--defaultMemory` (decision 11), and refuses
+    to start it on a computer with less; on Slurm Nextflow's task asks for the same (decision 44)."""
+    given = (f'Toil gives it {DEFAULT_MEMORY_GIB} GiB on {there} (--defaultMemory {DEFAULT_MEMORY_GIB}Gi), and '
+             'refuses to start it on a computer with less' if runner == Toil.name else
+             f'its Slurm job on {there} asks for {DEFAULT_MEMORY_GIB} GiB (process.memory)')
     return [Diagnostic(Severity.NOTE, Code.SITE_DEFAULT_MEMORY,
-                       f'its tool declares no memory, so Toil gives it 4 GiB on {there} (--defaultMemory 4Gi), and '
-                       'refuses to start it on a computer with less: declare what it needs with ramMin',
+                       f'its tool declares no memory, so {given}: declare what it needs with ramMin',
                        tool.step.span, Locator(step=tool.step.name))
             for tool in tool_steps(view) if isinstance(tool.step.run, Tool)
             and not _declares_memory(tool.step.run.cwl, tool.step.inherited)]
 
 
 def _declares_memory(tool: Any, inherited: Iterable[Requirement]) -> bool:
-    """Whether Toil gives a step its tool's memory, not `--defaultMemory`: the ResourceRequirement that wins names
-    `ramMin` or `ramMax`."""
+    """Whether Toil gives a step its tool's memory, not `--defaultMemory`, and Nextflow on Slurm a task, not the block's
+    `process.memory`: the ResourceRequirement that wins names `ramMin` or `ramMax`. Else `check` notes it, `wic066`."""
     found = _winning(tool, inherited, 'ResourceRequirement')
     return isinstance(found, Mapping) and ('ramMin' in found or 'ramMax' in found)
 
