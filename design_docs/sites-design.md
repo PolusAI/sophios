@@ -1,7 +1,8 @@
 # Sites: Run a Workflow on a Cluster or a Machine as Yourself — Design
 
-**Status:** Approved by the owner on 2026-11-09. Experimental. S1 is implemented; S2, S3 and S4 are not yet. A commit
-that changes this file has a subject beginning with `design:`.
+**Status:** Approved by the owner on 2026-11-09. Experimental. S1 and S2 are implemented; S3 and S4 are not yet, so
+what this file says of `Slurm` is their plan, not built. A commit that changes this file has a subject beginning with
+`design:`. What S2 found while it was built is in §17.
 **Baseline:** PolusAI/sophios#586 (`feat/one-target-table`, measured at `865a3455`), itself on #585. Read against
 Toil 9.5.0, cwltool 3.2.20260413085819 and Nextflow 26.04.2. It supersedes the sites design of 2026-10-29; every
 measured fact below that this design keeps was measured for that design's draft of 2026-10-28.
@@ -15,19 +16,20 @@ commit.
 
 Sophios stays a local install. A site is any computer you can `ssh` to: a Slurm login node, an EC2 instance, a
 workstation. Sophios compiles and lowers the workflow here, through #586's target table, and writes the run's files
-here. It copies those files (never the data) into a run folder there, and starts the target's runner, from the `bin`
-folder you name: as one leader job on Slurm, or as a detached process on a machine. Every target of the target table
-runs on every site, each with one runner. Nothing of Sophios is installed there, and no service runs. The
-run folder is the record, and any Sophios on any computer follows the run from it. `wf.run()` and `collect()` stay
-local only.
+here. It copies those files (never the data) into a run folder there, and starts the runner, from the `bin` folder
+you name: as one leader job on Slurm, or as a detached process on a machine. Every target of the target table runs on
+every site, by a default runner or the one `runner=` names. A run takes the `RunConfig` a local run and the compute
+service take, and its outputs folder behaves as the service's. Nothing of Sophios is installed there, and no service
+runs. The run folder is the record, and any Sophios on any computer follows the run from it. `wf.run()` and
+`collect()` stay local only.
 
 ## 2. The first message (every doc page and demo opens with it)
 
 > **Your data must already be on the site.** Sophios sends the workflow there, never your data, and the results stay
-> there beside your data. Write input paths relative to your project folder (`data/plate1`, not `/Users/me/...`),
-> and run Python from that folder. The same line then reads `./data/plate1` here and `/project/me/cp/data/plate1`
-> there. **Your runners are yours:** `bin` names the folder that holds them on the site. **Your container images
-> must be in a registry the site can pull from.**
+> there beside your data. Give the project folder there as `relative_to`, and write input paths relative to it
+> (`data/plate1`, not `/Users/me/...`): the same line then reads `./data/plate1` here and
+> `/data/project/data/plate1` there. **Your runners are yours:** `bin` names the folder that holds them on the site.
+> **Your container images must be in a registry the site can pull from.**
 
 What still differs: the container engine (Docker here, Apptainer on a cluster), and a Toil step that declares no
 memory gets no limit here and 4 GiB there.
@@ -35,22 +37,26 @@ memory gets no limit here and 4 GiB there.
 ## 3. What a scientist writes
 
 ```python
-from sophios.sites import Machine, Slurm
+from sophios.api.python.workflow import Cwltool
+from sophios.sites import Machine, RunConfig
 
-hpc = Slurm('me@cluster', root='/project/me/cp', bin='/project/me/envs/run/bin')
-ec2 = Machine('my-ec2', root='/data/cp', bin='/opt/conda/envs/run/bin')   # a Host in ~/.ssh/config
+ec2 = Machine('ssh://me@my-ec2', runs='/data/runs', bin='/data/envs/run/bin')   # or a Host: ssh://my-ec2
 
 segment.inputs.images = {'class': 'Directory', 'location': 'data/plate1'}  # relative: here and there
-run = wf.start()                                    # here
-run = hpc.submit(wf)                                # there: CWL with toil-cwl-runner, each step a Slurm job
-# Submitting segment-20261109T142205-7f3a91c2 to me@cluster: toil-cwl-runner (a site's runner for cwl),
-# partition normal (the cluster's default), time 2-00:00:00 (its longest), at most 64 step jobs (Sophios's default).
-# Outputs: /project/me/cp/sophios/runs/segment-20261109T142205-7f3a91c2/out
-run = ec2.submit(wf, target='nextflow')             # there: Nextflow, Docker, the local executor
+config = RunConfig('results').relative_to('/data/project')
+run = wf.start(config=RunConfig('results'))         # here
+run = ec2.submit(wf, config)                        # there: CWL with Toil, single_machine
+# Submitting segment-20261109T142205-7f3a91c2 to my-ec2: toil-cwl-runner (a site's default for cwl), at most 64 at
+# once (Sophios's default).
+# Outputs: /data/project/results (RunConfig(...))
+run = ec2.submit(wf, RunConfig('masks').relative_to('/data/project'), target='nextflow')   # Nextflow, Docker
 status = run.wait()          # Ctrl-C stops following; the run goes on
-later = hpc.attach('segment-20261109T142205-7f3a91c2')
-diagnostics = hpc.check(wf, target='nextflow')      # every problem submit would hit, at once; writes nothing
+later = ec2.attach('segment-20261109T142205-7f3a91c2')
+diagnostics = ec2.check(wf, config, runner=Cwltool())    # every problem submit would hit, at once; writes nothing
 ```
+
+On Slurm (S3, not yet built) the same calls take `Slurm('ssh://me@cluster', runs=..., bin=...)`, and the config's
+`SlurmSettings` say where the jobs go.
 
 ## 4. The surface
 
@@ -58,29 +64,36 @@ diagnostics = hpc.check(wf, target='nextflow')      # every problem submit would
 with `sophios.compute`.
 
 ```python
-Slurm(host, *, root, bin, container_engine='singularity', account=None, partition=None, gpu_partition=None,
-      time=None, modules=())
-Machine(host, *, root, bin, container_engine='docker', modules=())
-site.check(workflow, *, target='cwl', outdir=None, max_parallel=64, clean='always', tool_registry=None,
+Machine(url, *, runs, bin=None, container_engine='docker')
+Slurm(url, *, runs, bin=None, container_engine='singularity')          # S3, not yet built
+site.check(workflow, config=None, *, target='cwl', runner=None, tool_registry=None,
            inference=Inference()) -> list[Diagnostic]
-site.submit(workflow, *, target='cwl', outdir=None, max_parallel=64, clean='always', tool_registry=None,
+site.submit(workflow, config=None, *, target='cwl', runner=None, tool_registry=None,
             inference=Inference()) -> Run
 site.attach(run_id) -> Run
 Run: id, status() -> RunStatus, wait(timeout=None) -> RunStatus, outputs() -> Json | None, logs() -> str,
      cancel() -> bool
 ```
 
-- **`target=` names the runner too** (decision 26): a site runs each target with one runner, `toil-cwl-runner` for
-  `cwl` and `nextflow` for `nextflow`, so `check` and `submit` take no `runner=`.
-- **`bin` is required.** It is the folder on the site that holds the runners and what they need:
-  `toil-cwl-runner`, `nextflow` and the Java it runs on. Sophios never searches a login shell for a runner.
+- **A site's constructor says only what the computer is** (decision 30): `url`, `ssh://[user@]host[:port]` and
+  nothing else, ssh given `[user@]host` and `-p <port>`; `runs`, the absolute folder there that holds a folder per
+  run; `bin`; the container engine. Messages name the host.
+- **`bin` is the folder on the site that holds the runners** and what they need: `toil-cwl-runner`, `cwltool`,
+  `nextflow` and the Java Nextflow runs on. `check` and `submit` need it, a `ValueError` naming `bin=` without it;
+  `attach` does not. Sophios never searches a login shell for a runner.
+- **`config` is the `RunConfig`** a local run and the compute service take (decision 28), read as the service reads
+  it, its outputs folder behaving as the service's (decision 33).
+- **`target=` and `runner=` are `Workflow.run`'s** (decisions 34 to 36): `runner=None` is Toil for `cwl` and
+  Nextflow for `nextflow`; any runner of the target runs on a site, cwltool too; its flags are passed on, but those
+  the site sets itself; its own settings stay their defaults.
 - **`check` returns diagnostics, as #586's `Workflow.check` does**, and writes nothing on either side. `submit`
   runs every check of `check` and raises them as a `SophiosError`.
 - **`Run` is the local handle's protocol** (`status`, `wait`, `outputs`, `logs`, `cancel`, as `RunHandle` and
   `sophios.compute.Run`), plus `id`, with no `collect`. Its `repr` is the line that attaches to it. Its run outlives
   Python. When SSH or the scheduler does not answer, `status()` raises and decides nothing.
-- **No setting takes shell code.** Each is checked against a pattern when the site is built (a `ValueError` names
-  it), and enters a script only quoted. `root` and `bin` hold only `[A-Za-z0-9/._+-]`: they go into `#SBATCH` lines.
+- **No setting takes shell code.** The URL is checked against its pattern and `runs` and `bin` are absolute folders
+  of letters, digits and `/ . _ - +` only when the site is built (a `ValueError` names the one that is not, decision
+  30); every other value, a path or a flag, enters a script only quoted, as one word, whatever it holds.
 - **`Machine` is a computer of your own, never a login node.** Workstations are macOS and Linux; Windows is refused.
 
 ## 5. The one table Sites adds: each target's runner on each scheduler
@@ -89,27 +102,30 @@ A site is a transport and a scheduler. The transport is your own `ssh` for every
 The scheduler is the only per-site code: how the leader starts so it outlives SSH, how its state is read, how it is
 stopped, and how each runner spreads the steps over it:
 
-| Target (one of `targets.TARGETS`) / its runner on a site | `Machine` | `Slurm` |
+| Target (one of `targets.TARGETS`) / its runner on a site | `Machine` | `Slurm` (S3 and S4, not yet built) |
 |---|---|---|
-| `cwl` / `toil-cwl-runner` | `--batchSystem single_machine` | `--batchSystem slurm`, each step a Slurm job of its own (Appendix A) |
+| `cwl` / `toil-cwl-runner`, the default | `--batchSystem single_machine` | `--batchSystem slurm`, each step a Slurm job of its own (Appendix A) |
+| `cwl` / `cwltool` | as locally, one process | one job, sized to the largest step, on the GPU partition when a step asks for a GPU |
 | `nextflow` / `nextflow` | the local executor | `executor = 'slurm'`, each task a Slurm job of its own; a GPU task on the GPU partition, with `--gres` |
 
-- **Every target of the table runs on every scheduler.** A test walks `targets.TARGETS` across both schedulers, so
-  a target added there cannot silently miss Sites.
-- **One runner runs a target on a site, and no site runs cwltool** (decisions 22 and 26). Toil runs the same CWL on a
-  machine and on Slurm, so a site needs one CWL runner. With one runner for a target there is nothing to choose: the
-  runner follows from `target=`, as locally the target follows from the runner value `run()` takes (#600).
-- **Nextflow's containers need Docker on a site.** That is the restriction of the pipeline `compile()` writes, which
-  a site runs, not Sites': its generated `nextflow.config` enables Docker, and each process with a container reads
-  its image's entrypoint with `docker image inspect` in its `beforeScript`. On a site whose `container_engine` is not
-  `docker`, `check` refuses each process with a container, by name; a workflow whose processes have none runs on Slurm.
+- **Every target of the table runs on every scheduler.** A test holds that every target of `targets.TARGETS` has a
+  runner a site runs it with by default, and every runner of `runners.RUNNERS` a line on a machine, so a target or a
+  runner added there cannot silently miss Sites.
+- **Each target has a default runner on a site, and any runner of the target runs there** (decision 35). Toil runs
+  the same CWL on a machine and on Slurm, so it is the default for `cwl`, where a local run's is cwltool; `runner=`
+  names another, as locally.
+- **A Nextflow pipeline is written for the site's engine** (decisions 29 and 36): Docker's or Singularity's, as a
+  local run writes it for its runner's. On a site whose `container_engine` is neither, `check` refuses each process
+  with a container, by name (`wic065`); a workflow whose processes have none runs there.
 - **What a site sets for Nextflow is a block it appends to the run's copy of the generated `nextflow.config`,** the
   one configuration the backend has Nextflow read (`-C`), from one function in `sophios.sites` (decision 25). Nextflow
   is set by its configuration, and only a configuration sets a task's options by the task. The Nextflow backend never
   learns of sites (decision 18).
-- **`max_parallel`** is Toil's `--maxJobs` and Nextflow's `executor.queueSize`.
-- **`outdir`** is a CWL runner's `--outdir`, by default `<run>/out`. A Nextflow run's outputs stay in its work
-  folder, where the Nextflow target leaves them, so `outdir=` is refused with `target='nextflow'`.
+- **How many steps run at once** is Toil's `--maxJobs` and Nextflow's `executor.queueSize`: 64, or what the runner
+  value says, with `--maxJobs`, or with Nextflow's `-qs`, which the site writes in that block.
+- **The outputs folder** is the config's, as on the compute service (decision 33), by default `<runs>/<id>/out`: a
+  CWL runner's `--outdir`, and the folder a Nextflow pipeline publishes into, `-output-dir` (decision 29), on every
+  target alike.
 
 ## 6. On #586: a backend describes, the machine acts (S1)
 
@@ -136,8 +152,8 @@ had it:
    nothing**; the caller writes the summary (`output_<name>.json`) that Toil's and Nextflow's outcomes wrote on #586.
    A site reads them over SSH, once, when the run has ended.
 
-Reading relative paths against the site's `root` needs nothing new: `targets.for_run` reads them against a
-`PurePath` and touches no filesystem (the 2026-10-29 design's first PR is gone).
+Reading relative paths against the config's `relative_to` needs nothing new: `targets.for_run` reads them against a
+`Path` it never touches, so a site's folder is read as a name (the 2026-10-29 design's first PR is gone).
 
 ### 6.1 The protocol, as S1 builds it
 
@@ -210,51 +226,62 @@ stdout and stderr, with no difference. 3654 cases exit non-zero on both sides, e
 ## 7. How a run goes
 
 **Every call** is `ssh -T -o BatchMode=yes -o RemoteCommand=none -o ConnectTimeout=20 -o ServerAliveInterval=15 -o
-ServerAliveCountMax=3 <host> "bash -l -c '<guard>'"`. The script comes on stdin, and the guard runs it only when its
-sha256 matches: a profile that reads its input would eat part of the script and run the rest (measured). A two-factor
-cluster works through a shared connection (`ControlMaster`) opened by hand. Tests replace `ssh <host>` with a local
-`bash`, and nothing else.
+ServerAliveCountMax=3 [-p <port>] [<user>@]<host> "bash -l -c '<guard>'"`. The script comes on stdin, and the guard
+runs it only when its sha256 matches: a profile that reads its input would eat part of the script and run the rest
+(measured). The guard prints the hash before it runs the script, so what a login profile prints is never read as the
+script's (§17). A two-factor cluster works through a shared connection (`ControlMaster`) opened by hand. Tests
+replace `ssh [<user>@]<host>` with a local `bash`, and nothing else.
 
-**`check()`** compiles and lowers here, through the target table, so a workflow the target cannot run is refused with
-its `nf-s` code before anything reaches the site. It reads relative paths against `root`, refusing `..`, `~`, `$` and
-real-time analyses. One call then reports every File and Directory the run reads, by the backend's `needs`; the
-runner, `<bin>/<program>`, and its version against the range Sophios supports; the container engine (`docker info`
-on a machine; `singularity` or `apptainer` on Slurm); on Slurm `sbatch`, `squeue`, `sacct` (it must answer),
-`scancel` and `sinfo -a`, and your `SBATCH_ACCOUNT`, `_PARTITION` and `_TIMELIMIT`; and whether `<root>/sophios` is
-writable and `outdir` is free. `SBATCH_CLUSTERS` is refused: no runner can follow step jobs to another cluster.
+**`check()`** reads the config (decision 33), then compiles and lowers here, through the target table, so a workflow
+the target cannot run is refused with its `nf-s` code before anything reaches the site. It reads relative paths
+against `relative_to`, by name, and refuses a path written for a shell (`~`, `$`), a relative path with no
+`relative_to`, an output folder of the workflow given a path, and real-time analyses. One call then reports its
+platform; every File and Directory the run reads, by the backend's `needs`; the runner, `<bin>/<name>`, and its
+version against the range Sophios supports (§17); the container engine when a step runs in a container (`docker
+info`, or `singularity --version`); whether `runs` is writable; and whether the outputs folder the config names is
+missing in a folder that exists, or empty, and named by no run in `runs` that has not ended. On Slurm (S3, not yet
+built) it also asks `sbatch`, `squeue`, `sacct` (it must answer), `scancel` and `sinfo -a`, and your
+`SBATCH_ACCOUNT`, `_PARTITION` and `_TIMELIMIT`; `SBATCH_CLUSTERS` is refused there: no runner can follow step jobs
+to another cluster.
 
-**`submit()`** prints the id, the runner, the partition, time and `max_parallel` with their sources, and the outputs
-folder. One call sets `trap '' HUP PIPE` (a dropped connection cannot stop it between starting the leader and the
-record), makes `<run>` and `outdir` exclusively, writes the files, and starts the leader: on Slurm `sbatch --parsable
-<run>/job.sh`, with the `SBATCH_` variables of the options `job.sh` sets unset, since they beat `#SBATCH` lines; on
-a machine `setsid nohup bash -l <run>/job.sh > <run>/run.log 2>&1 < /dev/null &`. Run ids are
+**`submit()`** prints the id, the runner and its flags as given, how many steps run at once, and the outputs folder,
+each with its source. One call sets `trap '' HUP PIPE` (a dropped connection cannot stop it between starting the
+leader and the record), refuses an outputs folder that is no longer missing or empty, or is a link, makes `<run>`
+exclusively and the outputs folder when it is missing, writes the files, and starts the leader: on a machine `set -m;
+nohup bash -l <run>/job.sh >> <run>/run.log 2>&1 < /dev/null &`, bash's job control giving the leader a process
+group of its own, whose id is its pid (§17); on Slurm (S3) `sbatch --parsable <run>/job.sh`, with the `SBATCH_`
+variables of the options `job.sh` sets unset, since they beat `#SBATCH` lines. Run ids are
 `<workflow>-<YYYYMMDD>T<HHMMSS>-<8 hex>`.
 
 **`status()`** reads the folder and asks the scheduler only when the folder has not decided (Appendix B). Once the
 run has ended, its outputs and failed steps are the backend's own `outcome` over the run's `stdout`, `run.log` and
 summary, read once: a run there reads as it does here. **`wait()`** polls every 5 s for a minute, then every 60 s,
 printing each change and what `run.log` gained; Ctrl-C prints the `attach` line and leaves the run going.
-**`cancel()`** claims the run as `cancelled`, stops the leader (`scancel -u "$(id -un)" -n <id>`; on a machine,
-TERM to the job's process group), waits about 2 minutes, and returns whether it ended CANCELLED.
+**`cancel()`** claims the run as `cancelled`, stops the leader (on a machine, TERM to the job's process group; on
+Slurm, S3, `scancel -u "$(id -un)" -n <id>`), waits about 2 minutes, and returns whether it ended CANCELLED.
 
 ```
-<root>/sophios/runs/<id>/
-  run.json     the settings, each with its source, the target, runner and clean, Sophios's version
+<runs>/<id>/
+  run.json     the id, the site's kind, the target, the runner and its flags as given, the settings it read
+               (max_parallel, clean), each with its source, the outputs folder and its source, Sophios's version
   job.sh       the leader script (Appendix A); beside it, what the backend's `write` wrote
-  leader       the claim: a link to the leader's job id (its pid on a machine), or to `cancelled` or `none`
-  run.log      the job script's and the runner's two streams; batch/ holds Toil's step jobs' Slurm logs
+  leader       the claim: a link to the leader's pid (its job id on Slurm), or to `cancelled` or `none`
+  run.log      the job script's and the runner's two streams
   stdout       the runner's standard output alone, which its `outcome` reads
-  toil/        Toil's work/ and tmp/ (every step's outputs and scratch), removed as clean= says
-  out/         the outputs, unless outdir= names another folder (a CWL runner's --outdir)
-  reason       only when status() stopped a run the scheduler would never start
+  toil/        Toil's work/ and tmp/ (every step's outputs and scratch), removed as its --clean says
+  made/        a Nextflow run's output folders given a name, made empty here and published by name
+  out/         the outputs, unless the config names an outputs folder
+  reason       why the run failed, when status() found its leader killed outright
   exit         the job script's exit status, written last, after the cleanup
+<runs>/.images the image cache under Singularity (decision 32)
 ```
 
 ## 8. One leader per run
 
-SSH can drop after Slurm accepted the job, `sbatch` can fail or time out after Slurm took it, and Slurm may list a
-job only later. So a run can get two leaders, and "Slurm has no job" is never proof. **Sophios never deletes a run
-folder.**
+On Slurm (S3, not yet built), SSH can drop after Slurm accepted the job, `sbatch` can fail or time out after Slurm
+took it, and Slurm may list a job only later. So a run can get two leaders, and "Slurm has no job" is never proof.
+**Sophios never deletes a run folder,** on any site. A machine starts its leader once, in the submit call, so it
+adopts nothing; its claim takes `$$`, and `cancel()` and `status()` end a run before it starts as below.
 
 - **Adopt, then submit again.** When the submit call fails or its answer is lost, `submit()` asks Slurm for a job
   named after the run (`squeue -n <id>`, then `sacct --name=<id> --starttime=<submit>`). If one exists, it adopts
@@ -269,19 +296,26 @@ folder.**
 
 ## 9. Cleanup
 
-**`clean='always'` is the default: a run cleans up however it ends,** success, failure, cancel or time limit. What
-is cleaned is the runner's scratch, and only Toil leaves any outside its outputs: Toil's `--clean always` removes the
-job store, and once Toil has stopped the EXIT trap removes `toil/tmp` and `toil/work`, `chmod -R u+rwX` first for a
-folder a tool left unwritable. Neither follows a link, so linked inputs stay intact. On a cancel or the time limit
-Slurm sends TERM to every process of the job; Toil stops its step jobs and exits, and only then, the runner being in
-the foreground, does bash run its traps. Nothing is forwarded: a second TERM would cut Toil's shutdown short.
-`'onSuccess'` and `'never'` are Toil's names: the first keeps the job store and `toil/` after any end but a success.
-A Nextflow run's work folder holds its outputs, so for Nextflow only the default is accepted.
+**Toil's `--clean always` is the default: a run cleans up however it ends,** success, failure, cancel or time
+limit. What is cleaned is the runner's scratch, and only Toil leaves any outside its outputs: Toil's `--clean always`
+removes the job store, and once Toil has stopped the EXIT trap removes `toil/tmp` and `toil/work`, `chmod -R u+rwX`
+first for a folder a tool left unwritable. Neither follows a link, so linked inputs stay intact. On a cancel (or, on
+Slurm, the time limit) TERM reaches every process of the job; Toil stops its step jobs and exits, and only then, the
+runner being in the foreground, does bash run its traps. Nothing is forwarded: a second TERM would cut Toil's shutdown
+short. `onSuccess`, `onError` and `never` are Toil's names, given in the runner value (`Toil('--clean',
+'onSuccess')`): the first keeps the job store and `toil/` after any end but a success, the second after a success.
+Nextflow takes no `--clean`: its work folder, `nextflow_<name>/work` in the run, stays with the run, and the pipeline
+publishes the outputs into the outputs folder (decision 29).
+
+**A run that does not succeed leaves its outputs folder empty** (decision 33), as the compute service's does: the
+folder was missing or empty when the run started, so everything in it is the run's, and the same EXIT trap empties
+it, `chmod -R u+rwX` first, unless the run exited 0.
 
 **Known leftovers.** A hard kill (SIGKILL, a node failure, the leader out of memory, an instance stopped) stops the
 runner before its cleanup, and the trap too unless only the runner died: `<run>/toil` stays, and `status().reason`
-says so, with the `rm` line. The `status()` that finds a hard kill cancels the step jobs still queued with the run's
-comment, `sophios:<id>`, which Sites puts on every step job of every runner, under every `clean`.
+says so, with the `rm` line. The `status()` that finds a hard kill empties the outputs folder and writes `reason`,
+so every later status reads the same end; on Slurm (S3) it also cancels the step jobs still queued with the run's
+comment, `sophios:<id>`, which Sites puts on every step job of every runner, under every `--clean`.
 
 **Disk.** Nothing is node-local: every step's outputs and scratch stay in the run until it ends. Toil runs with
 `--bypass-file-store --leave-tmpdir`: the bypass alone collapses a scattered step's same-named outputs into one file
@@ -293,16 +327,18 @@ comment, `sophios:<id>`, which Sites puts on every step job of every runner, und
 
 | What | Convention | Override |
 |---|---|---|
-| The runner | the one a site runs the target with: `toil-cwl-runner` for `cwl`, `nextflow` for `nextflow` | `target=` |
-| Outputs | `<run>/out`, printed with the id; a Nextflow run's in its work folder | `outdir=` (CWL runners) |
-| The leader | your `SBATCH_PARTITION`, else the default partition; your `SBATCH_TIMELIMIT`, else that partition's longest | `partition=`, `time=`, `account=` |
-| Steps | each tool's resources; the run's partition, or for a GPU step the one partition with GPUs; `time=`, else the shortest limit of those partitions | `gpu_partition=` (several GPU partitions), `time=` |
-| Memory | a Toil step that declares none gets 4 GiB, `--no-cwl-default-ram --defaultMemory 4Gi` (Toil reads `4G` as 4·10⁹ bytes); `check()` warns for each such step; Nextflow as it runs locally | the tool's own `ramMin` |
-| Parallel | at most 64: Toil's `--maxJobs`, Nextflow's `executor.queueSize` | `max_parallel=` |
-| The runners | `<bin>/<program>`, `bin` first on PATH in every job | `bin=` (required) |
-| Modules | none | `modules=` (names) |
+| The runner | Toil for `cwl`, Nextflow for `nextflow` | `runner=`, any runner of the target (decision 35) |
+| Outputs | `<runs>/<id>/out`, printed with the id, for every runner | `RunConfig(folder)`, missing or empty, as on the compute service (decision 33) |
+| The leader (S3) | your `SBATCH_PARTITION`, else the default partition; your `SBATCH_TIMELIMIT`, else that partition's longest; your `SBATCH_ACCOUNT` | `SlurmSettings(partition=, time=, memory=)` |
+| Steps (S3) | each tool's resources; the run's partition, or for a GPU step the one partition with GPUs; the shorter of the run's time and the shortest limit of those partitions | `SlurmSettings(steps_partition=, steps_time=, gpu_partition=)` |
+| Memory | a Toil step that declares none gets 4 GiB, `--no-cwl-default-ram --defaultMemory 4Gi` (Toil reads `4G` as 4·10⁹ bytes); `check()` notes each such step (`wic066`, §17); cwltool and Nextflow as they run locally | the tool's own `ramMin` |
+| Parallel | at most 64: Toil's `--maxJobs`, Nextflow's `executor.queueSize`; cwltool as its flags say | `runner=`: `Toil('--maxJobs', '8')`, `Nextflow('-qs', '8')` |
+| Toil's scratch | removed however the run ends | `runner=Toil('--clean', 'onSuccess')` |
+| The runners | `<bin>/<name>`, `bin` first on PATH in every job | `bin=` (needed by `check` and `submit`) |
+| What a module provides | your login profile there (decision 31) | - |
 | The container engine | `docker` on a machine, `singularity` on Slurm | `container_engine=` |
-| Any other `sbatch` option | `export SBATCH_QOS=...` and the like, in your login profile there | - (decision 23) |
+| The image cache | `<runs>/.images` under Singularity (decision 32) | your `SINGULARITY_CACHEDIR`, `APPTAINER_CACHEDIR` for theirs |
+| Any other `sbatch` option (S3) | `export SBATCH_QOS=...` and the like, in your login profile there | - (decision 23) |
 
 ## 11. Codes
 
@@ -310,19 +346,30 @@ A problem on a site is a problem of the machine a run needs, so it is a `wic0NN`
 `sophios --explain` and listed in `docs/error_codes.md`, as #586 does for every code. Where the meaning is the one an
 existing code has (a missing input file is `wic016` here and there), the site reuses that code, with a message naming
 the site. Problems only a site has (it cannot be reached, a scheduler command is missing, a runner
-`bin` lacks, a run id names no run, Nextflow's containers without Docker) get new `wic0NN` codes. No new range.
+`bin` lacks, a run id names no run, Nextflow's containers under another engine) get new `wic0NN` codes. No new range.
+
+| Code | Meaning | PR |
+|---|---|---|
+| `wic062` | the site cannot be reached or used: ssh, a login profile that read the script, a call that failed there (an outputs folder filled between `check` and the start among them), a platform that is neither macOS nor Linux, or Sophios on Windows itself | S2 |
+| `wic063` | `bin` lacks the runner, it does not run, or it is older than a site runs | S2 |
+| `wic064` | a run id names no run under `runs` | S2 |
+| `wic065` | a Nextflow process with a container on a site whose engine is neither Docker nor Singularity | S2 |
+| `wic066` | a note: a step Toil gives 4 GiB on a site, its tool declaring no memory (§10) | S2 |
+| reused | `wic015` the engine; `wic016` an input, a path written for a shell, a relative one with no `relative_to`, or an output folder of the workflow given a path or in a list; `wic021` `runs`, or the outputs folder: not missing or empty, a link, its parent missing, used by a run that has not ended, inside a folder the run reads, or `runs`, inside it or around it; `api008` a real-time analysis (the call's, as `run_async`'s) | S2 |
+| `wic067` | a scheduler command that is missing (S3, not yet built) | S3 |
 
 ## 12. What Sites does not do
 
 - **No Sophios on a site, no service, no daemon** (decision 16): nothing to install, version, run or upgrade there.
 - **No search for a runner:** `bin` names it.
+- **No `module load`** (decision 31): what a computer provides through a module comes from your login profile.
 - **No shell code in any setting:** no `setup=`, no `sbatch=` lines, no `qos=` yet.
 - **No copying of data, no fetch of outputs.** `rsync` exists, and the messages show it.
 - **No resume** (decision 21). A failed run is submitted again from the start.
 - **No sweep of what a hard kill leaves.** `<run>/toil` stays, and the reason names the `rm` line.
 - **No real-time analyses on a site:** they watch cwltool's job folders here.
-- **No Apptainer for Nextflow's containers** (decision 19): that is a change to the pipeline `compile()` writes, which
-  a site runs.
+- **No output folder written in place** (decision 37): an output folder of the workflow given an absolute path is
+  refused on a site, on either target.
 - **No cloud plumbing:** a VM is a `Machine`; Sophios never creates, sizes or stops one.
 - **No settings file, no site registry, no CLI in v1:** a site is one line of Python; `attach` is "come back
   tomorrow".
@@ -337,7 +384,8 @@ the site. Problems only a site has (it cannot be reached, a scheduler command is
 2. **`wf.run()` and `collect()` are local only.** The site submits: `Slurm(...).submit(wf)`, `.attach(id)`.
 3. **The user is responsible for where the inputs are**, and every doc opens with it.
 4. **The login and compute nodes share a filesystem** on the owner's clusters.
-5. **Cleanup is the default** (`clean=`); leftover step jobs are cancelled under every `clean`.
+5. **Cleanup is the default** (`clean=`); leftover step jobs are cancelled under every `clean`. *Since 27 it is
+   Toil's `--clean`, in the runner value.*
 6. **No setting ever takes shell code:** `setup=` would teach scientists remote code execution through strings.
 7. **Words:** "site" in the docs, the sites `Slurm` and `Machine`, the verbs `submit` and `attach`; a site is never
    called a backend (a runner's `Backend` is #586's).
@@ -346,8 +394,9 @@ the site. Problems only a site has (it cannot be reached, a scheduler command is
 10. **No node-local scratch.**
 11. **4 GiB for a Toil step that declares no memory**; its own `ramMin` or `ramMax` wins; the warning stays.
 12. **Site settings are Python only in v1.**
-13. **`max_parallel` is 64.**
-14. **No `sophios_dir=`, no `retries=`**; `gpu_partition=` is an override only.
+13. **`max_parallel` is 64.** *Since 27 the runner value says another: `--maxJobs`, or Nextflow's `-qs`.*
+14. **No `sophios_dir=`, no `retries=`**; `gpu_partition=` is an override only. *Replaced by 28 and 30:
+    `gpu_partition` is a field of `SlurmSettings`, and the folder a site keeps its runs in is `runs=`.*
 15. **2026-10-29:** cleanup however a run ends; one leader per run; `--leave-tmpdir` until Toil's fix ships; your
     own umask.
 16. **2026-11-09: Sophios stays a local install.** Nothing of Sophios goes on a site. The user names the runners'
@@ -358,10 +407,11 @@ the site. Problems only a site has (it cannot be reached, a scheduler command is
 18. **2026-11-09: the Nextflow design's non-goal gets one exception, for sites,** worded so it can be removed
     whole: a site sets the executor options of its own scheduler, through the run's ordinary passthrough
     arguments, from one function in `sophios.sites`. The backend never learns of sites, so lifting the non-goal
-    later deletes a sentence and changes no code. *Its channel is replaced by 25.*
+    later deletes a sentence and changes no code. *Its channel is replaced by 25; the user's own flags are passed on
+    since 34.*
 19. **2026-11-09: Nextflow's containerized processes stay Docker-only on a site**, the restriction of the pipeline
-    `compile()` writes; Apptainer would be a change to that pipeline. *Its premise went with 29: the pipeline is
-    written for Singularity too.*
+    `compile()` writes; Apptainer would be a change to that pipeline. *Replaced by 29 and 36: the pipeline is written
+    for the site's engine, Docker or Singularity.*
 20. **2026-11-09: the default runners:** a machine runs the target's default (cwltool for `cwl`, as locally); Slurm
     runs `toil-cwl-runner` for `cwl`. *Replaced by 22.*
 21. **2026-11-09: no resume until Sites has met real use.** (It was open question 1; the 2026-10-29 design's "Later:
@@ -371,26 +421,38 @@ the site. Problems only a site has (it cannot be reached, a scheduler command is
     to the largest step, no one step at a time, no GPU step refused for a runner that asks Slurm for none.
     `runner='cwltool'` is refused there, `wic063`, so decision 17 holds. Toil must be in `bin` (it installs cwltool
     with it), and on a machine Toil holds each step to the machine's memory, so a step that declares none needs
-    4 GiB there (the `wic066` note). *The refusal went with `runner=`, 26.*
+    4 GiB there (the `wic066` note). *Replaced by 35: any runner of the target runs on a site, cwltool too; Toil
+    stays the default for `cwl`.*
 23. **2026-11-10: no QOS of Sites' own.** A site sets no QOS, as compute's request has none; one your login profile
     (`SBATCH_QOS`) or the cluster sets applies to every job. Where a QOS allows less time than the partition, the
-    first `status()` fails the run, naming `time=`.
+    first `status()` fails the run, naming `time=`. *Since 28 that is `SlurmSettings(time=)`.*
 24. **2026-11-10: every step job gets one time,** `time=`, else the shortest limit of the partitions the run uses,
     under Toil and Nextflow alike: Toil 9.5 gives every step job one `--time`, so a CPU step longer than a shorter
-    GPU limit needs `time=`.
+    GPU limit needs `time=`. *Since 28 the steps' time is `SlurmSettings(steps_time=)`, else the shorter of the run's
+    time and that shortest limit (S3).*
 25. **2026-11-11: what a site sets for Nextflow is a block it appends to the run's copy of the generated
-    `nextflow.config`,** not passthrough arguments: Nextflow is set by its configuration, and only a configuration
-    sets a task's options by the task, so a GPU task under Nextflow on Slurm goes to the GPU partition with `--gres`,
-    as Toil's step does. Measured with the pinned Nextflow: a closure given as `-process.queue` reaches the task as
-    its text, a `withName:` selector on the command line is ignored, and the backend's `-C` ignores a second file
-    given to `run -c`. The backend still never learns of sites, and lifting the non-goal still deletes a sentence
-    and changes no code of the backend.
+    `nextflow.config`,** not passthrough arguments: Nextflow is set by its configuration, and only a configuration sets
+    a task's options by the task, so a GPU task under Nextflow on Slurm goes to the GPU partition with `--gres`, as
+    Toil's step does. Measured with the pinned Nextflow: a closure given as `-process.queue` reaches the task as its
+    text, a `withName:` selector on the command line is ignored, and the backend's `-C` ignores a second file given to
+    `run -c`. The backend still never learns of sites, and lifting the non-goal still deletes a sentence and changes no
+    code of the backend. *Since 34 a setting of the block given as a flag, `-executor.queueSize`, is refused.*
 26. **2026-11-17: a site takes no `runner=`.** Since 22 a site runs each target with one runner, so the runner
     follows from `target=`. Locally #600 made the runner a value, `run(runner=Toil(...))`; a site taking that value
     would take settings that are this machine's (where images are pulled, the cache, the provenance) and flags that
     compete with the ones the site sets. So `check` and `submit` take `target=` alone, nothing is refused for its
     runner, `wic063` is only a runner that `bin` lacks, that does not run there or that is too old, and 17's test
-    walks the targets.
+    walks the targets. *Replaced by 27.*
+27. **2026-11-24: a site takes the runner value, and from it only the flags a site knows.** `check` and `submit` take
+    `target=` and `runner=` as `Workflow.run` does, and `max_parallel=` and `clean=` are gone: a keyword of a site's
+    own is the wrong shape for a setting the runner value already carries. The value is the one runner a site runs
+    the target with (22), or it is refused. One table, by runner, names each flag a site takes and the setting it
+    gives, `--maxJobs` and `--clean` from Toil, `-qs` from Nextflow; the site reads each value, a count or one of
+    `--clean`'s names, and gives it to the runner where the runner reads it: Toil's command line, Nextflow's
+    configuration (25). Any other flag is refused, and so is a value with a setting of its own changed (the engine is
+    the site's `container_engine=`, the rest act on this machine). Every refusal is a `ValueError`, before anything
+    is compiled. A run's record keeps `max_parallel` and `clean`, each with the flag that gave it. *Replaced by 34,
+    35 and 36: the other flags are passed on, any runner of the target runs.*
 28. **2026-11-24: one `RunConfig` for every place a run runs.** A local run (`Workflow.run(config=)`, `start`,
     `run_async`, `check`), a site and the compute service take the same class, the same object, from
     `sophios.runtime.runners`:
@@ -459,6 +521,118 @@ the site. Problems only a site has (it cannot be reached, a scheduler command is
       file, puts a folder inside the folder of its name, and on a third run fails after every task has run; with
       the replacing form, three runs into one folder, the third with `-resume`, each publish a file and a folder at
       the same paths, keep the folder's other files, and replace a link without touching what it names.
+30. **2026-11-24: a site's constructor says only what the computer is:** `Machine(url, *, runs, bin=None,
+    container_engine='docker')`, and on Slurm (S3) `Slurm(url, *, runs, bin=None, container_engine='singularity')`.
+    - **`url`** is `ssh://[user@]host[:port]` and nothing else, no path and no query, the one way to name the
+      computer, as the compute service is named: a `ValueError` otherwise. ssh is given `[user@]host`, and
+      `-p <port>` with a port, so a `Host` of `~/.ssh/config` is `ssh://<Host>`. A user and a host start with a
+      letter, a digit or `_`, so neither reads to ssh as an option. Messages name the host.
+    - **`runs`** is required, an absolute folder there: a run lives in `<runs>/<id>/`, its default outputs folder
+      `<runs>/<id>/out`. It replaces `root=` and its `<root>/sophios/runs`: one folder, named for what it holds,
+      and no folder of Sophios's own beside the user's.
+    - **`bin`** is the folder that holds the runners. `check` and `submit` need it, a `ValueError` naming `bin=`
+      without it; `attach` does not, so a run is followed from a computer that knows only the URL and `runs`.
+    - **`runs` and `bin` are letters, digits and `/ . _ - +` only,** as the service's driver takes its own folders,
+      a `ValueError` when the site is made: every runner must run in them, and Toil's single-machine batch system
+      runs each step's command through a shell, its job store, in `runs`, on that command, so a quote, a blank or a
+      `$(...)` there breaks every Toil run or runs as shell; `bin` is a folder of `PATH`, which `:` splits.
+    - **No `account`, `partition`, `gpu_partition` or `time` argument:** they are a run's, not the computer's, and are
+      the config's `SlurmSettings` (28); the account is your `SBATCH_ACCOUNT`. A `Machine` asks nothing about Slurm.
+31. **2026-11-24: no `module load` line.** `modules=` goes: what a computer provides through an environment module
+    comes from your login profile there, which every call and every job reads (`bash -l`), as it does in a terminal.
+    One way, the one you already use, instead of a second list of module names that must agree with the profile.
+32. **2026-11-24: the image cache is `<runs>/.images`,** once `<root>/sophios/images`: the CWL runners'
+    `CWL_SINGULARITY_CACHE`, with `SINGULARITY_CACHEDIR` and `APPTAINER_CACHEDIR` defaulting to
+    `<runs>/.images/cache`, and a Nextflow run's `NXF_SINGULARITY_CACHEDIR`, `<runs>/.images/nextflow`, each only
+    under Singularity. A run id starts as a workflow's name, never with a dot, so the cache is never a run's folder,
+    nor read as one.
+33. **2026-11-24: a site reads the config as the compute service does, and its outputs folder behaves as the
+    service's** (`docs/compute.md`), so a config written for one is written for the other.
+    - **The pair rules** are `read_config`'s (28), read as where there is no working directory. A site also refuses
+      itself what that reading leaves to the service, which refuses it in its own words, since a site has no service
+      behind it: a folder or `relative_to` that is not a string or is written for a shell (`~` first, a
+      `$VARIABLE`), an empty folder, a folder that is a URL, `file:` too, and a folder the driver refuses as cwltool
+      would read it otherwise than as the path it spells (a control character, a blank first, `?` or `#`, a
+      `%`-escape). Its lines live in one function of the package, `_site.site_config`, which the pairs table reaches
+      through the site's door. The folder is read as the service's driver reads it, `..`, `.` and a doubled or
+      trailing `/` resolved by name.
+    - **The outputs folder**: none, `<runs>/<id>/out`; relative, `<relative_to>/<folder>`; absolute, itself. It is
+      missing in a folder that exists, or empty, no link, named by no run in `runs` that has not ended, that folder,
+      one inside it or one around it, inside no Directory the run reads, and neither `runs`, inside it nor around it
+      (the service refuses a folder among its runs: a failed run's cleanup would empty every run's folder and the
+      image cache), all `wic021` at `check`; it is missing or empty again, and no link, when the run starts
+      (`wic062`), and made then, one level.
+    - **The start takes the folder against every run in `runs`:** it writes the run's record, with `out` a link to
+      the folder, and only then looks for a run there that has not ended and uses the folder, one inside it or one
+      around it (`_USED`); finding one, the run is claimed `none`, its `reason` written, and `submit` raises
+      `wic021` naming it. Two runs that start at once each write before they look, so at least one finds the other,
+      and no run's EXIT trap empties a folder another run there has written into. Runs under another `runs` do not
+      see each other, which `docs/sites.md` says.
+    - **A run that fails or is cancelled leaves it empty,** as the service's: the folder held nothing when the run
+      started, so the job's EXIT trap empties it unless the run exited 0, and so does the status that finds a leader
+      killed outright. That run has not ended until such a status writes its `reason`: until then its folder is its
+      own, and `check` and the start refuse another run there, so no status empties a folder another run has written
+      into since, and a status that read the leader gone empties nothing once a `reason` is there.
+    - **A relative File or Directory input is read from `relative_to`,** by name, as the runner reads it; with no
+      `relative_to` it is `wic016`, one line per input, whose remedy names `relative_to`. A path written for a shell
+      is `wic016`.
+    - **An output folder of the workflow** (a Directory a tool writes into and returns) given one name is made empty
+      in the run, where no file of the run's is named so (a CWL runner makes it itself; for Nextflow it is
+      `<run>/made/<name>`), and its filled copy lands in the outputs folder under that name; a name with a `/` is
+      refused, `wic016`, as on the service. Output folders given in a list, as a scattered step takes them, are
+      `wic016`, each element judged as one folder is, since a local run makes none of them either.
+    - **`SlurmSettings` are not used on a `Machine`** (28); `log_level` is Toil's `--logLevel`, before the runner
+      value's flags, so a `--logLevel` there wins, as in a local run, and is never refused.
+34. **2026-11-24: a runner value's flags are passed on, but those the site sets itself.** A site runs the runner a
+    local run would run, so its flags mean there what they mean here. They are passed on to the program in order,
+    after the site's own. A site reads three itself, in both spellings (`--flag value`, `--flag=value`), since it
+    needs their values in the run's record and in the leader's EXIT trap: Toil's `--maxJobs` and `--clean` and
+    Nextflow's `-qs`, 64 and `always` when not given. A flag whose option the site or the runner's backend already
+    sets is refused, a `ValueError` naming it. The set refused is derived, never written by hand: the options of the
+    command line the site runs with none of the user's flags (its engine, never quiet, without the `--disable-pull`
+    cwltool's backend gives it), and each setting of Nextflow's configuration block as `-<scope>.<name>`, but those
+    the site reads; an option the backend or the block starts to set is refused at once. Another name the runner
+    gives one of those options is that option, refused or read (`_runners._OTHER_NAMES`: Toil's `--jobstore`,
+    cwltool's `-w`, Nextflow's `-o`, `-w` and `-queue-size`), as passed on each was measured to break the run or
+    its record: Nextflow refuses an option given twice ("Can only specify option -o once"), so a run `check` took
+    failed at its start; `-queue-size 5` ran 5 tasks at once where the record said 64; and `--jobstore` made Toil's
+    job store outside the run's folder. A test compares the table with Toil's and cwltool's parsers and with
+    `nextflow run -h`. A flag that undoes one the site sets (Toil's `--cwl-default-ram`, cwltool's
+    `--leave-outputs`) and an abbreviation cwltool takes for an option (`--outd`; Toil and Nextflow take none) are
+    passed on, as a local run passes them, and the runner reads the last.
+35. **2026-11-24: any runner of the target runs on a site, cwltool too.** `runner=None` is Toil for `cwl`, which runs
+    the same CWL on a machine and on Slurm, and Nextflow for `nextflow`. cwltool runs from `<bin>/cwltool`, not
+    Sophios's own `cwltool_filterlog`, which is not there; without `--disable-pull`, since nothing pulled the images
+    first, so cwltool pulls them, into the image cache under Singularity; and never quiet. Its oldest version is the
+    one Sophios requires (`pyproject.toml`). On Slurm (S3) it is one job, sized to the largest step, on the GPU
+    partition when a step asks for a GPU.
+36. **2026-11-24: a runner value's own settings stay their defaults on a site.** The engine is the site's
+    `container_engine=`, and the site evolves the value to it, so it reaches the backend as a local run's engine
+    does: the CWL runners' flags, and the Nextflow pipeline, written for Docker or Singularity (29), with its record;
+    any other engine is `wic065` for a process with a container. A value that sets an engine, `pull_dir`,
+    `ignore_install`, `ignore_processes`, `provenance`, `remove_entrypoints` or `cachedir` is a `ValueError` saying
+    what decides it there (the site's `container_engine=`, or that a site pulls, checks and caches by itself).
+    `Cwltool(quiet=...)` is not used and never refused: a site's run is never quiet, as its log is where a failed
+    step is read from.
+37. **2026-11-24: where a site differs from the compute service for the same call,** each because a site runs the
+    workflow as a local run does, as you, with no service: an output folder of the workflow given an absolute path is
+    refused on either target, with the remedy "give it a name" (the service writes one in place on CWL); one given a
+    name with a final `/`, or in a list, is refused, as a local run refuses it (the service takes it); an outputs
+    folder written as a `file:` URL is refused (the service takes it); a path is read by name, never resolved through
+    a link, so an outputs folder that is a link is refused and one inside an input only through a link is not seen
+    as inside it (the service reads real paths); under Nextflow an output Nextflow would rename, or one the workflow
+    does not declare, is taken and reported under its own name, as a local run reports it (the service refuses it,
+    `wic061`); `SlurmSettings` are not used on a `Machine`; containers run under the site's engine, not always
+    Singularity; a run is yours, written with your umask, and no run's folder is deleted; an input path is refused
+    only when it is missing, unreadable, written for a shell or relative with no `relative_to`, and is written for
+    the runner as a local run writes it; a path outside the service's shared folders is read; Toil reads your
+    `~/.toil/default.yaml` (the service refuses to start while its account's sets an option); `status().steps` lists
+    only the failed steps the runner's outcome names, once the run has ended (the service's lists each step's job,
+    while it runs too); Nextflow reads your `NXF_` and `JAVA_` variables and is not offline; a cancelled run's
+    `reason` is `cancelled` (the service's, `cancelled by request`); and runs into one folder see each other only
+    under one `runs` (33). Two ways a site differs from a local run: a cancelled run's `reason` (the local one's,
+    `cancelled: the runner was stopped`), and a `StepInput(default=...)` path names a path of this computer (§17,
+    16). `docs/sites.md` lists each of these.
 
 ## 14. Open for the owner
 
@@ -471,13 +645,18 @@ code and tests, and its docs (two or three commits):
 
 1. **S1. A backend describes, the machine acts:** the four changes of §6; local runs byte for byte as on #586. It
    adds this document. No user-visible change, so no docs commit.
-2. **S2. `Machine`:** the transport, the run folder, `job.sh`, the claim, the states, `check`, `submit`, `attach` and
-   `Run`, every target of the table (Toil `single_machine`, Nextflow's local executor), the codes,
-   and `docs/sites.md`. An EC2 instance works from here on.
-3. **S3. `Slurm` with the CWL runners:** `sbatch`, the claim and adoption, the defaults and the steps' time, Toil's
-   Slurm flags, a leader or step job that would never start, leftover step jobs.
+2. **S2. `Machine`:** the package `sophios.sites` (`_ssh`, `_states`, `_runners`, `_site` with the base class and its
+   scheduler hooks, `_run`), the transport, the run folder, `job.sh`, the claim, the states, `check`, `submit`,
+   `attach` and `Run`, every target of the table with each of its runners (Toil `single_machine`, cwltool, Nextflow's
+   local executor), the config read as the compute service reads it, the codes, and `docs/sites.md`. An EC2 instance
+   works from here on.
+3. **S3. `Slurm` with the CWL runners:** a class beside `Machine`, `sbatch`, the claim and adoption, the
+   `SlurmSettings` and their defaults, the steps' time, Toil's Slurm flags, cwltool as one job, a leader or step job
+   that would never start, leftover step jobs; `run.json` records the site's kind, and `attach` refuses a run another
+   kind of site submitted.
 4. **S4. Nextflow on Slurm:** Slurm's settings in the block the exception S2 makes already allows (decision 25),
-   each GPU task on the partition with GPUs; S2's refusal of containers without Docker applies on Slurm as on any site.
+   each GPU task on the partition with GPUs, the pipeline written for Singularity, Slurm's default engine; S2's
+   refusal of containers under another engine applies on Slurm as on any site.
 
 ## 16. Tests
 
@@ -501,20 +680,151 @@ The owner's hierarchy (property, then fixture, then a table, then a single case)
   runner's own form. In `tests/core/data/runner-transcripts`, the summary cwltool leaves is kept byte for byte, and which
   runs name it. In `tests/core/test_python_api_workflow.py`, `--docker_remove_entrypoints` rewrites a real-time
   analysis's images too, through the second `write`.
+- **S2,** in `tests/core/test_sites_unit.py` (what needs no site) and `tests/core/test_sites.py` (the walks), with a
+  local `bash` for `ssh [user@]host`: in the package job, the states over every life a run's folder can have on a
+  machine (exhaustively: each claim, each exit status, with and without a hard kill, and a `reason` written over each);
+  every value a script carries printed back by the real `bash` through the guard, over generated strings; a login
+  profile that prints, and one that reads its input; the URL and what ssh is given; Toil's argv, as `job.sh` writes it,
+  read back by Toil's own parser over generated steps at once, `--clean`, engine and outputs folder; the leader's EXIT
+  trap run by `bash` for each `--clean` and exit status, emptying the outputs folder; the options a site refuses against
+  the command line it builds; how a runner value's flags are read or passed on; the outputs folder read as the service's
+  driver reads it; `check` finding every problem at once and writing nothing; the settings, config and runner values
+  refused; whether a step declares memory, as `check` reads it for `wic066`, against cwltool's own lookup, which Toil
+  asks; every value a user gives, holding spaces, quotes, a command substitution and a newline, reaching the runner as
+  one word; and, end to end, a run that fails, one cancelled while it runs, one killed outright, and one whose job, held
+  in its login profile, finds the run claimed `cancelled` by `cancel` or `none` by `status`, each leaving its outputs
+  folder empty, a second submit into it refused while it runs, and once killed until its status, and taken after; a late
+  status of the killed run deletes nothing the next run wrote. The same workflow run on a machine and here, by each
+  runner, returns the same outputs, value for value and place for place. The rows that need Nextflow are marked
+  `nextflow`, and only for them does the tests' site hold Nextflow in `bin`; Lint And Test's Nextflow Runtime step
+  selects them in `tests/core/test_sites.py` with `tests/core/nextflow`. The one test there that needs no site, which
+  checks the other names of the options a site sets or reads against Toil's and cwltool's parsers and `nextflow run -h`,
+  stays there, so that one file holds every test that needs Nextflow and `tests/core/test_sites_unit.py` stays under 750
+  lines. `tests/core/test_ci_coverage.py` fails when a package lane selects one, or no pull-request lane does. The pair
+  rules of `tests/core/data/run-config-pairs.yaml` run through the site's door beside the local and the compute doors,
+  with the lines only a site adds (`site_refused`). The site codes' provocations (`tests/core/provocations.py`) go
+  through the same local `bash`; on the Windows leg, where Sophios makes no site, only `wic062` fires, and
+  `tests/core/test_run_on_windows.py` checks that a `Machine` is refused there.
 - **No cluster probes** (the compute design's decision 38). By hand on one of the owner's clusters before a site
-  leaves "experimental": the claim and `exit` over NFS, a cleanup cut short by `KillWait`, `module load` under
-  `set -u`, Apptainer across nodes, Nextflow's head job under the partition's default memory.
+  leaves "experimental": the claim and `exit` over NFS, a cleanup cut short by `KillWait`, a login profile's
+  `module load` under `set -u`, Apptainer across nodes, Nextflow's head job under the partition's default memory.
+
+## 17. What S2 found while it was built
+
+Each is the smallest change that keeps the design's intent.
+
+1. **No `setsid` on macOS.** A workstation may be a Mac, which has no `setsid`. The submit call runs `set -m` before
+   `nohup bash -l <run>/job.sh ... &`: bash's job control puts the leader in a process group of its own, whose id is
+   its pid, the claim, which `cancel()` signals. Measured with bash 3.2 (macOS) and 5 (Linux).
+2. **The traps follow the claim at once** (Appendix A): a line of the environment that fails under `set -e` is
+   recorded in `exit` as the job's failure rather than read as a hard kill, and a TERM before the runner starts is a
+   cancel. A leader that loses the claim exits before it sets them, so it records nothing.
+3. **Toil's scratch folders are made before Toil starts:** Toil 9.5 refuses a `--workDir` that does not exist
+   (measured), so `job.sh` makes `<run>/toil/work` and `<run>/toil/tmp`, as it makes Nextflow's output folders, and
+   goes to `<run>`, or to the folder `launch` names.
+4. **What a login profile prints is never read as the script's:** the guard prints the script's hash before it runs
+   it, and Sophios reads only what follows. A profile that prints a banner is common; one that reads its input is
+   refused, `wic062`.
+5. **The range Sophios supports** for a runner on a site is a floor: cwltool 3.1.20241217163858, the version Sophios
+   requires, Toil 9.5.0 and Nextflow 26.04.2, the versions this design was read against. The version is the last
+   `a.b.c` that `<bin>/<name> --version` (`-version` for Nextflow) prints.
+6. **On a machine, Toil's `single_machine` holds each step to the machine's memory:** it gives no more than the
+   machine has, and refuses a step that asks for more when it would start it (measured with Toil 9.5 under
+   `--maxMemory 2Gi`: a step that declares no memory fails, asking for 4 GiB; one with `ramMin` runs). So the memory
+   note holds on a machine as on Slurm: `check()` notes, `wic066`, each Toil step whose tool declares no memory. A
+   step declares memory as Toil reads it: the `ResourceRequirement` that wins by cwltool's lookup (the tool's own
+   requirement, else the one it inherits, else its own hint, else the hint it inherits) names `ramMin` or `ramMax`.
+7. **Decision 18's exception lands with S2,** the first PR that runs a generated pipeline on a site and sets one of
+   its settings (`executor.queueSize`, in the block it appends to the run's configuration, decision 25), so the
+   Nextflow design's non-goal says so from the PR that makes it true.
+8. **On a machine, a run unclaimed 10 minutes after its submit is claimed `none`,** as on Slurm, so a job script that
+   died before its claim (a login profile that exits, say) does not read QUEUED for ever. A hard kill's reason names
+   `<run>/toil` only for Toil, and only without `exit`, since with one the trap ran.
+9. **`outcome` reads each file it names in a call of its own, once:** the ended status is kept, so however often
+   `status()` is asked, a run's outcome is read once.
+10. **Sophios on Windows itself makes no site:** `Machine(...)` raises `wic062` when it is made, as
+    `sophios.compute.Service` refuses Windows when it is made: a site's paths are POSIX paths, which Python on Windows
+    reads as its own. Inside WSL, Sophios makes one.
+11. **Under `--bypass-file-store`, Toil cannot read its own form of an empty folder** (`toildir:` fails: no such file
+    or directory, measured), the form a local Toil run writes for an output folder of the workflow. A site writes
+    both CWL runners' files as cwltool's backend writes them, the folder a CWL literal, `{"class": "Directory",
+    "basename": ..., "listing": []}`, which Toil reads under the bypass, as the compute service sends it.
+12. **A live leader is found by the run's id, not by its folder:** `ps` prints a newline in an argument as `\012`
+    (measured on macOS), so with a `runs` holding one a live run read as killed, and its status would have emptied
+    its outputs folder. The id holds no character `ps` prints otherwise.
+13. **On a site, Nextflow fills a copy of an output folder given a name** in its work folder: `<run>/made/<name>`
+    stays empty, and the filled copy is published into the outputs folder (measured).
+14. **Toil, cwltool and Nextflow each fail on a path that holds a newline,** a local run's as a site's (measured), so
+    the test of hostile values runs a recording stand-in for the runner; the quoting is what it checks.
+15. **The lowering for a site lives in `sophios.sites._site`,** beside its other reading of the workflow:
+    `api/python/_workflow_runtime.py` stays within its line budget, and a site reaches the compile through
+    `compile_workflow_result` and the resolved view, as the runtime adapter does.
+16. **Known limit: a `StepInput(default=...)` File or Directory** is made absolute against the working directory
+    when the Python document is built, before any target or site sees it, so on a site it names a path here. It
+    sits in the document, not the job, so neither the pre-flight nor a site's `check` reads it, and the runner there
+    reports it. Bind such a value on a workflow input instead, which is read from `relative_to`; `docs/sites.md` says
+    so.
+17. **A run killed outright has not ended until a status says so:** with the leader gone and no `exit`, `check`
+    once read the run as ended, so a second run could take its outputs folder and complete there, and the first
+    status of the killed run then emptied the second run's outputs (measured with Toil). Such a run now holds its
+    folder until a status has emptied it and written its `reason`, and the status's emptying runs only while no
+    `reason` is there (decision 33).
+18. **A hard kill of the leader's process group leaves Toil's steps running:** each runs in a worker of its own
+    process group, which goes on until its step ends (measured with Toil 9.5 on macOS). `docs/sites.md` says so, and
+    the tests end every process that names the test's folder.
 
 ## Appendix A. The leader script
 
-One script for every runner and both schedulers. Sophios fills each `<...>` with a validated, quoted value. On
-Slurm, with `toil-cwl-runner`:
+One script for every runner and both schedulers. Sophios fills each `<...>` with a quoted value, one word whatever it
+holds. On a machine, with `toil-cwl-runner`, as S2 writes it:
 
 ```bash
 #!/bin/bash -l
+set -euo pipefail
+ln -s "$$" <run>/leader 2> /dev/null || [ -L <run>/leader ] || ln -s "$$" <run>/leader
+[ "$(readlink <run>/leader)" = "$$" ] || exit 0
+trap 'code=$?; set +e; chmod -R u+rwX <run>/toil/tmp <run>/toil/work; rm -rf <run>/toil/tmp <run>/toil/work; [ "$code" = 0 ] || { chmod -R u+rwX <outdir>; find <outdir> -mindepth 1 -delete; }; echo "$code" > <run>/exit.partial; mv <run>/exit.partial <run>/exit' EXIT
+trap 'exit 143' TERM
+unset "${!TOIL_@}" "${!PYTHON@}"
+export PYTHONNOUSERSITE=1 TOIL_HISTORY=False
+export PATH=<bin>:"$PATH"
+mkdir -p <run>/toil/work
+mkdir -p <run>/toil/tmp
+cd <run>
+{ <bin>/toil-cwl-runner <launch's flags, the --outdir <outdir> among them> \
+    --batchSystem single_machine --bypass-file-store --leave-tmpdir \
+    --no-cwl-default-ram --defaultMemory 4Gi --maxJobs <max_parallel> \
+    --workDir <run>/toil/work --tmpdir-prefix <run>/toil/tmp/t --tmp-outdir-prefix <run>/toil/tmp/o \
+    --clean <clean> [--logLevel <the config's log_level>] <the runner value's other flags> \
+    <the documents> | tee <run>/stdout; } >> <run>/run.log 2>&1
+```
+
+`<run>` is `<runs>/<id>`, `<outdir>` the outputs folder (decision 33), and `<max_parallel>` and `<clean>` what the
+runner value's `--maxJobs` and `--clean` say, else 64 and `always` (decision 34).
+
+**What varies.** Only the scheduler's lines, the runner's line and the trap's scratch:
+
+- **cwltool:** `<bin>/cwltool` with `launch`'s flags, without the `--disable-pull` `launch` gives it and never quiet
+  (decision 35), then the runner value's flags, a `--disable-pull` or `--quiet` of its own among them; the trap
+  removes no scratch.
+- **Nextflow:** `<bin>/nextflow` with `launch`'s flags (`-output-dir <outdir>` among them), then the runner value's
+  flags but `-qs` (`-queue-size`); `export NXF_SYNTAX_PARSER=v2`, `launch`'s variable; `cd` to the pipeline's
+  folder; what the site sets is the block it appends to the run's copy of the generated `nextflow.config` (decision
+  25), `executor { queueSize = <max_parallel> }`; before it, `mkdir -p` of each folder `write` returned; the trap
+  removes no scratch.
+- **Written only when needed:** under Singularity, the image caches (decision 32): `export
+  CWL_SINGULARITY_CACHE=<runs>/.images` for a CWL runner, `export NXF_SINGULARITY_CACHEDIR=<runs>/.images/nextflow`
+  for Nextflow, and for both `export SINGULARITY_CACHEDIR=${SINGULARITY_CACHEDIR:-<runs>/.images/cache}` and the
+  same for `APPTAINER_CACHEDIR`; Toil's `--logLevel` with the config's `log_level`.
+- **`--clean`** (Toil only): `onSuccess` and `onError` pass on, and the trap removes `toil/` only after a success, or
+  only after a failure; `never` passes on, and the trap removes nothing.
+- **On Slurm (S3, not yet built):** the header below; the claim takes `$SLURM_JOB_ID` for `$$`; Toil runs
+  `--batchSystem slurm` with the steps' partition and time from the config's `SlurmSettings` and the account from
+  your `SBATCH_ACCOUNT`; cwltool is one job sized to the largest step.
+
+```bash
 #SBATCH --job-name=<id>
 #SBATCH --comment=sophios:<id>
-#SBATCH --account=<account>
 #SBATCH --partition=<partition>
 #SBATCH --time=<time>
 #SBATCH --output=<run>/run.log
@@ -523,53 +833,20 @@ Slurm, with `toil-cwl-runner`:
 #SBATCH --chdir=<run>
 #SBATCH --no-requeue
 #SBATCH --dependency=singleton
-set -euo pipefail
-ln -s "$SLURM_JOB_ID" <run>/leader 2> /dev/null || [ -L <run>/leader ] || ln -s "$SLURM_JOB_ID" <run>/leader
-[ "$(readlink <run>/leader)" = "$SLURM_JOB_ID" ] || exit 0
-unset "${!TOIL_@}" "${!PYTHON@}"
-export PYTHONNOUSERSITE=1 TOIL_HISTORY=False
-module load <modules>
-export PATH=<bin>:$PATH
-export CWL_SINGULARITY_CACHE=<root>/sophios/images
-export SINGULARITY_CACHEDIR="${SINGULARITY_CACHEDIR:-<root>/sophios/images/cache}"
-export APPTAINER_CACHEDIR="${APPTAINER_CACHEDIR:-<root>/sophios/images/cache}"
-trap 'code=$?; set +e; chmod -R u+rwX <run>/toil/tmp <run>/toil/work; rm -rf <run>/toil/tmp <run>/toil/work; echo "$code" > <run>/exit.partial; mv <run>/exit.partial <run>/exit' EXIT
-trap 'exit 143' TERM
-{ <bin>/toil-cwl-runner <launch's flags, as on #586> \
-    --batchSystem slurm --bypass-file-store --leave-tmpdir \
-    --no-cwl-default-ram --defaultMemory 4Gi --maxJobs <max_parallel> \
-    --workDir <run>/toil/work --tmpdir-prefix <run>/toil/tmp/t --tmp-outdir-prefix <run>/toil/tmp/o \
-    --batchLogsDir <run>/batch --slurmPartition <partition> --slurmTime <steps' time> \
-    '--slurmArgs=--comment=sophios:<id> --account=<account>' --clean <clean> \
-    <the documents> | tee <run>/stdout; } >> <run>/run.log 2>&1
 ```
 
-**What varies.** Only the scheduler's header, the runner's line and the trap's scratch:
-
-- **On a machine:** no `#SBATCH` lines; the claim takes `$$` for `$SLURM_JOB_ID`, so `leader` names the pid
-  `cancel()` signals; Toil runs `--batchSystem single_machine` and no `--slurm*` flags.
-- **Nextflow:** `<bin>/nextflow` with `launch`'s flags and none of the site's: what the site sets is the block it
-  appends to the run's copy of the generated `nextflow.config` (decision 25): `executor { queueSize = <max_parallel> }`,
-  and on Slurm `process { executor = 'slurm'; queue = '<partition>'; time = '<steps' time in seconds>s';
-  clusterOptions = '--comment=sophios:<id> --account=<account>' }` (no `time` when the steps have no limit), where for
-  a workflow with GPU steps `queue` and `clusterOptions` are each a closure on `task.accelerator`, giving a GPU task
-  the GPU partition and `--gres=gpu:<count>`; before it, `mkdir -p` of each folder `write` returned; the trap removes
-  no scratch; no image caches.
-- **Written only when needed:** `--account` (both places) with `account=`; `module load` with `modules=`;
-  `--slurmGPUPartition` for a workflow with GPU steps; the image caches with `singularity`.
-- **`clean=`** (Toil only): `'onSuccess'` passes `--clean onSuccess`, and the trap removes `toil/` only when `$code`
-  is 0; `'never'` passes `--clean never`, and the trap removes nothing.
-
-**Facts it relies on** (measured, 2026-10-28): `--slurmArgs=` needs its `=`, or Toil refuses the comment; the `TOIL_`
-unset keeps a `TOIL_SLURM_ARGS` in your profile from overriding the step flags; `TOIL_HISTORY=False` keeps every run
-out of one SQLite file in an NFS home; `--defaultMemory` does nothing without `--no-cwl-default-ram`; a requeued
-leader would start on its first attempt's job store; `#!/bin/bash -l` makes `module` and your profile available to
-the job; `--error` is written, since an `SBATCH_ERROR` in your profile would take stderr elsewhere. With `set -o
-pipefail` the pipeline's status is the runner's, so the EXIT trap records the runner's exit.
+**Facts it relies on** (measured, 2026-10-28): the `TOIL_` unset keeps a `TOIL_SLURM_ARGS` in your profile from
+overriding the step flags; `TOIL_HISTORY=False` keeps every run out of one SQLite file in an NFS home;
+`--defaultMemory` does nothing without `--no-cwl-default-ram`; `#!/bin/bash -l` makes your profile, and what it
+loads, available to the job. With `set -o pipefail` the pipeline's status is the runner's, so the EXIT trap records
+the runner's exit. On Slurm, `--slurmArgs=` needs its `=`, or Toil refuses the comment; a requeued leader would start
+on its first attempt's job store; `--error` is written, since an `SBATCH_ERROR` in your profile would take stderr
+elsewhere.
 
 ## Appendix B. The states
 
-The first row that applies decides.
+The first row that applies decides. What names Slurm (`sacct`, `squeue`, step jobs) is S3's plan, not yet built; a
+machine reads its folder and `ps` alone.
 
 | State | How `status()` reads it |
 |---|---|
@@ -588,6 +865,7 @@ The first row that applies decides.
   only from a `squeue` that exited 0. The 2 minutes let `exit` show over NFS, which caches entries up to 60 s.
 - **A leader or step job that will never start** (`PartitionTimeLimit`, `QOSMaxWallDurationPerJobLimit`, ...):
   `status()` writes `reason`, naming the setting to change, and cancels as `cancel()` does.
-- **On a machine**, `ps -ww -o args= -p <pid>` naming `<run>/job.sh` is RUNNING, read before the files (a job found
-  gone has left its `exit`); gone with no `exit` is a hard kill. `started_at` is the claim's time, `ended_at`
-  `exit`'s, `outputs` and `steps` from the backend's `outcome`.
+- **On a machine**, `ps -ww -o args= -p <pid>` naming `/<id>/job.sh` is RUNNING, read before the files (a job found
+  gone has left its `exit`); gone with no `exit` is a hard kill, whose status empties the outputs folder and writes
+  `reason`, so every later status reads the same end; a run no job has claimed 10 minutes after its submit is claimed
+  `none`. `started_at` is the claim's time, `ended_at` `exit`'s, `outputs` and `steps` from the backend's `outcome`.
