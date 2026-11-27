@@ -1,8 +1,8 @@
 # Sites: Run a Workflow on a Cluster or a Machine as Yourself — Design
 
-**Status:** Approved by the owner on 2026-11-09. Experimental. S1, S2 and S3 are implemented; S4 is not yet, so
-what this file says of Nextflow on Slurm is its plan, not built. A commit that changes this file has a subject beginning
-with `design:`. What S2 found while it was built is in §17, what S3 found in §18.
+**Status:** Approved by the owner on 2026-11-09. Experimental. S1 to S4 are implemented. A commit that changes this
+file has a subject beginning with `design:`. What S2 found while it was built is in §17, what S3 found in §18, what S4
+found in §19.
 **Baseline:** PolusAI/sophios#586 (`feat/one-target-table`, measured at `865a3455`), itself on #585. Read against
 Toil 9.5.0, cwltool 3.2.20260413085819 and Nextflow 26.04.2. It supersedes the sites design of 2026-10-29; every
 measured fact below that this design keeps was measured for that design's draft of 2026-10-28.
@@ -63,6 +63,8 @@ hpc = Slurm('ssh://me@login.cluster', runs='/project/me/runs', bin='/project/me/
 run = hpc.submit(wf, config.slurm_settings(SlurmSettings(time='12:00:00')))   # Toil, each step a Slurm job
 # Slurm: partition normal (the cluster's default), time 12:00:00 (SlurmSettings(time=...)), steps_partition normal
 # (the run's partition), steps_time 12:00:00 (the run's time), account lab (your SBATCH_ACCOUNT).
+run = hpc.submit(wf, RunConfig('masks').relative_to('/project/me/data').slurm_settings(
+    SlurmSettings(time='12:00:00')), target='nextflow')   # Nextflow, each task a Slurm job, placed as Toil's steps
 ```
 
 ## 4. The surface
@@ -103,9 +105,9 @@ Run: id, status() -> RunStatus, wait(timeout=None) -> RunStatus, outputs() -> Js
   30); every other value, a path or a flag, enters a script only quoted, as one word, whatever it holds.
 - **`Machine` is a computer of your own, never a login node.** Workstations are macOS and Linux; Windows is refused.
 - **`Slurm` is a cluster's login node** whose compute nodes share `runs`, `bin` and the folders a run reads and writes.
-  Each run is one Slurm job, its leader, and under Toil each step a job of its own, placed as the config's
-  `SlurmSettings` say (decisions 38 to 40). Its `runs`, letters, digits and `/ . _ - +` only as every site's
-  (decision 30), is also what each job's `#SBATCH` lines can hold (decision 41).
+  Each run is one Slurm job, its leader, and under Toil each step, under Nextflow each task, a job of its own, placed as
+  the config's `SlurmSettings` say (decisions 38 to 40 and 44). Its `runs`, letters, digits and `/ . _ - +` only as
+  every site's (decision 30), is also what each job's `#SBATCH` lines can hold (decision 41).
 
 ## 5. The one table Sites adds: each target's runner on each scheduler
 
@@ -117,7 +119,7 @@ stopped, and how each runner spreads the steps over it:
 |---|---|---|
 | `cwl` / `toil-cwl-runner`, the default | `--batchSystem single_machine` | `--batchSystem slurm`, each step a Slurm job of its own (Appendix A) |
 | `cwl` / `cwltool` | as locally, one process | one job, sized to the largest step, on the GPU partition when a step asks for a GPU (decision 42) |
-| `nextflow` / `nextflow` | the local executor | S4, not yet built: `executor = 'slurm'`, each task a Slurm job of its own; a GPU task on the GPU partition, with `--gres`. Until then `check` refuses it, `wic067` |
+| `nextflow` / `nextflow` | the local executor | `executor = 'slurm'`, each task a Slurm job of its own, placed as Toil's steps are; a GPU task on the GPU partition, with `--gres` (decision 44) |
 
 - **Every target of the table runs on every scheduler.** A test holds that every target of `targets.TARGETS` has a
   runner a site runs it with by default, and every runner of `runners.RUNNERS` a line on a machine, so a target or a
@@ -351,8 +353,8 @@ comment, `sophios:<id>`, which Sites puts on every step job of every runner, und
 | The runner | Toil for `cwl`, Nextflow for `nextflow` | `runner=`, any runner of the target (decision 35) |
 | Outputs | `<runs>/<id>/out`, printed with the id, for every runner | `RunConfig(folder)`, missing or empty, as on the compute service (decision 33) |
 | The leader | your `SBATCH_PARTITION`, else the default partition; your `SBATCH_TIMELIMIT`, else that partition's longest; no memory, under cwltool the largest step's; your `SBATCH_ACCOUNT` (decisions 40 to 42) | `SlurmSettings(partition=, time=, memory=)` |
-| Steps (Toil) | each tool's resources; the run's partition, or for a GPU step the one partition with GPUs; the shorter of the run's time and the shortest limit of those partitions (decision 40) | `SlurmSettings(steps_partition=, steps_time=, gpu_partition=)` |
-| Memory | a Toil step that declares none gets 4 GiB, `--no-cwl-default-ram --defaultMemory 4Gi` (Toil reads `4G` as 4·10⁹ bytes); `check()` notes each such step (`wic066`, §17); cwltool and Nextflow as they run locally | the tool's own `ramMin` |
+| Steps (Toil, Nextflow) | each tool's resources; the run's partition, or for a GPU step the one partition with GPUs; the shorter of the run's time and the shortest limit of those partitions (decision 40) | `SlurmSettings(steps_partition=, steps_time=, gpu_partition=)` |
+| Memory | a Toil step that declares none gets 4 GiB, `--no-cwl-default-ram --defaultMemory 4Gi` (Toil reads `4G` as 4·10⁹ bytes); `check()` notes each such step (`wic066`, §17); on Slurm a Nextflow task that declares none asks for 4 GiB too, `process.memory` (44); cwltool, and Nextflow on a machine, as they run locally | the tool's own `ramMin` |
 | Parallel | at most 64: Toil's `--maxJobs`, Nextflow's `executor.queueSize`; cwltool as its flags say | `runner=`: `Toil('--maxJobs', '8')`, `Nextflow('-qs', '8')` |
 | Toil's scratch | removed however the run ends | `runner=Toil('--clean', 'onSuccess')` |
 | The runners | `<bin>/<name>`, `bin` first on PATH in every job | `bin=` (needed by `check` and `submit`) |
@@ -375,9 +377,9 @@ the site. Problems only a site has (it cannot be reached, a scheduler command is
 | `wic063` | `bin` lacks the runner, it does not run, or it is older than a site runs | S2 |
 | `wic064` | a run id names no run under `runs`, or one the other kind of site submitted (decision 43) | S2, S3 |
 | `wic065` | a Nextflow process with a container on a site whose engine is neither Docker nor Singularity | S2 |
-| `wic066` | a note: a step Toil gives 4 GiB on a site, its tool declaring no memory (§10) | S2 |
+| `wic066` | a note: a step Toil gives 4 GiB on a site, or whose Nextflow task asks Slurm for 4 GiB, its tool declaring no memory (§10) | S2, S4 |
 | reused | `wic015` the engine; `wic016` an input, a path written for a shell, a relative one with no `relative_to`, or an output folder of the workflow given a path or in a list; `wic021` `runs`, or the outputs folder: not missing or empty, a link, its parent missing, used by a run that has not ended, inside a folder the run reads, or `runs`, inside it or around it; `api008` a real-time analysis (the call's, as `run_async`'s) | S2 |
-| `wic067` | Slurm cannot run the run: one of its commands is missing or does not answer (`sacct` included); your login profile there sends jobs to another cluster (`SBATCH_CLUSTERS`, `SLURM_CLUSTERS`) or sets an `SBATCH_ACCOUNT` the run cannot take; a partition a job of the run goes to is not one `sinfo -a` lists; a step asks for a GPU and no one partition has GPUs; the run would have no time limit, or a partition or time Slurm or your `SBATCH_` settings give is in a form the setting would not take (decision 40); or the runner is Nextflow, which S4 runs on Slurm | S3 |
+| `wic067` | Slurm cannot run the run: one of its commands is missing or does not answer (`sacct` included); your login profile there sends jobs to another cluster (`SBATCH_CLUSTERS`, `SLURM_CLUSTERS`) or sets an `SBATCH_ACCOUNT` the run cannot take; a partition a job of the run goes to is not one `sinfo -a` lists; a step asks for a GPU and no one partition has GPUs; the run would have no time limit, or a partition or time Slurm or your `SBATCH_` settings give is in a form the setting would not take (decision 40) | S3 |
 
 ## 12. What Sites does not do
 
@@ -413,7 +415,8 @@ the site. Problems only a site has (it cannot be reached, a scheduler command is
 8. **`sacct` is required.**
 9. **Images are pulled in the leader's job** (a Nextflow task pulls its own, as the Nextflow target does).
 10. **No node-local scratch.**
-11. **4 GiB for a Toil step that declares no memory**; its own `ramMin` or `ramMax` wins; the warning stays.
+11. **4 GiB for a Toil step that declares no memory**; its own `ramMin` or `ramMax` wins; the warning stays. *Since
+    44, on Slurm a Nextflow task that declares none asks for the same.*
 12. **Site settings are Python only in v1.**
 13. **`max_parallel` is 64.** *Since 27 the runner value says another: `--maxJobs`, or Nextflow's `-qs`.*
 14. **No `sophios_dir=`, no `retries=`**; `gpu_partition=` is an override only. *Replaced by 28 and 30:
@@ -664,8 +667,8 @@ the site. Problems only a site has (it cannot be reached, a scheduler command is
     reads it, where the service's reaches it as Toil 9.5 misreads it, 12 minutes; a partition or time Slurm or your
     `SBATCH_` settings give is held to the setting's forms, where the service takes the cluster's as it is; a site
     reads `sinfo -a`, so a hidden partition is one, where the service reads `sinfo` and refuses it; every job's
-    comment is `sophios:<id>` (the service's, `slurm-driver:<id>`); a site leaves out no node (the service's driver
-    may, `--exclude`); and Nextflow is refused on a Slurm site until S4.*
+    comment is `sophios:<id>` (the service's, `slurm-driver:<id>`); and a site leaves out no node (the service's
+    driver may, `--exclude`). Decision 47 adds Nextflow's on Slurm.*
 38. **2026-11-25: the Slurm settings are the config's, never the constructor's.** A `Slurm` site reads the six
     `SlurmSettings` of the `RunConfig` (28), the same object the compute service takes, so a config written for the
     service places a run on a Slurm site, and the constructor says only what the computer is (30). They are read at
@@ -689,29 +692,30 @@ the site. Problems only a site has (it cannot be reached, a scheduler command is
     partition: the setting, else your `SBATCH_PARTITION`, else the cluster's default. Its time: the setting, else your
     `SBATCH_TIMELIMIT`, else its partition's longest; a run with no limit is refused, `wic067`, asking for `time=`, as
     the service's driver refuses a leader with none, so a site and the service take the same configs here, and the
-    steps' time below is never none either. Your `SBATCH_TIMELIMIT` is read only when the setting is not given, as
-    your `SBATCH_PARTITION` is. Each value Slurm or your profile gives, a partition's name or a time, reaches a job's
-    `#SBATCH` lines or Toil's flags as a setting's would, so it is held to the setting's forms (`slurm_problems`),
-    `wic067` otherwise, naming the setting to give; a partition is given to Toil as `--slurmPartition=<name>`, one
-    word, which a name that starts with `-` cannot break. Its memory: the setting, as the
-    leader's `--mem`, else no line (under cwltool, decision 42). Under Toil, the steps' partition: the setting, else
-    the run's; a GPU step's: the setting, else the one partition `sinfo -a` lists with GPUs; the steps' time: the
-    setting, else the shorter of the run's time and the shortest limit of the partitions the steps go to, so a step
-    never asks for more than its partition allows, nor for longer than the run. Every partition a job goes to must be
-    one `sinfo -a` lists, `wic067` at `check`, naming the setting to give; the steps' partitions are checked only for
-    a runner with step jobs, the GPU partition only for a GPU step. No time is checked against a limit at `check`:
-    Slurm keeps such a job waiting, and `status()` stops the run, naming the setting (Appendix B). `submit` prints, and
-    `run.json` records, each setting in force with where it came from, and what the leader's header and Toil's flags
-    hold is what the record says.
-41. **2026-11-25: the account is your `SBATCH_ACCOUNT`, read from your login profile there.** No `account=` argument
-    and no setting: the account is a person's, not a run's, and Slurm's default applies without one. `check` reads it
-    with the profile every job reads, and the site writes it into the leader's `#SBATCH` lines and into each step job's
-    options (Toil's `--slurmArgs`, which Toil splits as a shell does), so it must be letters, digits and `_ . / + -`
-    only (`wic067` otherwise), as an `SBATCH_TIMELIMIT` must be a time the config would take. A `Slurm` site's
-    `runs`, which each header holds (`--output`, `--chdir`), needs no rule of its own: every site's is letters, digits
-    and `/ . _ - +` only (30), and in an `#SBATCH` line none of these ends a word, is read as a quote or `\`, starts a
-    comment (`#`) or a pattern (`%`). Every other `SBATCH_` setting of yours stays yours (23), but those of the options
-    the header sets, which `sbatch` would read before its lines: the site unsets them for `sbatch`.
+    steps' time below is never none either. Your `SBATCH_TIMELIMIT` is read only when the setting is not given, as your
+    `SBATCH_PARTITION` is. Each value Slurm or your profile gives, a partition's name or a time, reaches a job's
+    `#SBATCH` lines, Toil's flags or Nextflow's configuration as a setting's would, so it is held to the setting's forms
+    (`slurm_problems`), `wic067` otherwise, naming the setting to give; a partition is given to Toil as
+    `--slurmPartition=<name>`, one word, which a name that starts with `-` cannot break. Its memory: the setting, as the
+    leader's `--mem`, else no line (under cwltool, decision 42). Under Toil and Nextflow (44), the steps' partition: the
+    setting, else the run's; a GPU step's: the setting, else the one partition `sinfo -a` lists with GPUs; the steps'
+    time: the setting, else the shorter of the run's time and the shortest limit of the partitions the steps go to, so a
+    step never asks for more than its partition allows, nor for longer than the run. Every partition a job goes to must
+    be one `sinfo -a` lists, `wic067` at `check`, naming the setting to give; the steps' partitions are checked only for
+    a runner with step jobs, the GPU partition only for a GPU step. No time is checked against a limit at `check`: Slurm
+    keeps such a job waiting, and `status()` stops the run, naming the setting (Appendix B). `submit` prints, and
+    `run.json` records, each setting in force with where it came from, and what the leader's header, Toil's flags and
+    Nextflow's block hold is what the record says.
+41. **2026-11-25: the account is your `SBATCH_ACCOUNT`, read from your login profile there.** No `account=` argument and
+    no setting: the account is a person's, not a run's, and Slurm's default applies without one. `check` reads it with
+    the profile every job reads, and the site writes it into the leader's `#SBATCH` lines and into each step job's
+    options (Toil's `--slurmArgs`, which Toil splits as a shell does; a Nextflow task's `clusterOptions`, 45), so it
+    must be letters, digits and `_ . / + -` only (`wic067` otherwise), as an `SBATCH_TIMELIMIT` must be a time the
+    config would take. A `Slurm` site's `runs`, which each header holds (`--output`, `--chdir`), needs no rule of its
+    own: every site's is letters, digits and `/ . _ - +` only (30), and in an `#SBATCH` line none of these ends a
+    word, is read as a quote or `\`, starts a comment (`#`) or a pattern (`%`).
+    Every other `SBATCH_` setting of yours stays yours (23), but those of the options the header sets, which `sbatch`
+    would read before its lines: the site unsets them for `sbatch`.
 42. **2026-11-25: cwltool on Slurm is one job.** cwltool runs every step inside its own process, so its run is the
     leader alone, sized to the largest step as the steps state it in numbers: `--cpus-per-task` the most cores
     (`coresMin`, else `coresMax`, rounded up, at least 1); `--mem` the `memory` setting, else the most `ramMin` (else
@@ -723,6 +727,46 @@ the site. Problems only a site has (it cannot be reached, a scheduler command is
     folder is its record, and a `Machine` and a `Slurm` read a run's state differently (its claim is a pid or a job
     id), so `attach` of a run the other kind submitted is `wic064`, its message naming the kind to attach with, the
     same URL and `runs`; a `Slurm` with no `bin` attaches, as a `Machine` does.
+44. **2026-11-25: Nextflow runs on Slurm, each task a Slurm job of its own, placed as Toil's steps are.** Nextflow runs
+    in the leader, its one long job, which the header places as for Toil (40); its tasks are its step jobs, so every
+    steps setting is used and checked, as under Toil: there is one placement, and Nextflow's block is written from it,
+    never derived a second time. The block appended to the run's `nextflow.config` (25) holds `executor.queueSize`, the
+    count at once (27); `process.executor = 'slurm'`; `queue`, the steps' partition, or, when a step asks for a GPU, a
+    closure that gives a task with an `accelerator` the GPU partition; `time`, the steps' time in seconds, the one form
+    Nextflow reads (it refuses Slurm's, §19); `memory`, 4 GiB, the memory a Toil step whose tool declares none gets
+    (11), from the same constant, which a process's own `memory` beats, so neither the cluster's default nor your
+    `SBATCH_MEM_PER_CPU` decides such a task, and `check` notes it, `wic066`; and `clusterOptions`, the run's comment,
+    by which a status finds the run's jobs, the account (41), and a GPU task's `--gres=gpu:<n>`, since Nextflow's
+    `slurm` executor asks for no GPU. Every value is one single-quoted Groovy string, written by the Nextflow target's
+    one escaper, so nothing in a value ends it. The block sets nothing of Singularity's: the pipeline is written for the
+    site's engine by the Nextflow writer (29, 36), Singularity by default on Slurm, `--nv` for a process that asks for a
+    GPU, and the job exports Nextflow's image cache (32). Each setting of the block is an option the site sets (34), so
+    `-process.queue` and its kin are refused as flags of `Nextflow(...)`. A property over generated placements holds
+    that the block asks what Toil's own parser reads from the line the site writes for the same run.
+45. **2026-11-25: before Nextflow starts, the job unsets your `SBATCH_` variables of each option of a task's
+    header.** Nextflow writes each task's own `#SBATCH` lines (`-J`, `-o`, `--no-requeue`, `--signal`, `-c`, `-t`,
+    `--mem`, `-p`, and the line of `clusterOptions`), and the leader's job reads your login profile again, whose
+    `SBATCH_` variables would beat them; so the job unsets those of each of these options, and `SBATCH_ERROR`, since
+    Nextflow sends both streams to `-o`. `SBATCH_ACCOUNT` is among them: the account a task asks for is the one
+    `check` read and `run.json` records, written into `clusterOptions` (41), as Toil gives it on `sbatch`'s command
+    line, where it beats the variable; with none read, a task takes Slurm's default, as the record says. Every other
+    `SBATCH_` setting, a QOS say, stays yours (23) and reaches every task. Toil's steps read the same profile, and
+    Toil's `sbatch` command line beats all of these but three, which reach a Toil step and no Nextflow task:
+    `SBATCH_GRES` on a step that asks for no GPU, `SBATCH_REQUEUE` and `SBATCH_NO_REQUEUE`; `docs/sites.md` says so.
+46. **2026-11-25: the fake Slurm reads what Nextflow asks of it as Slurm reads it.** A task's header writes long
+    options with their value apart (`--mem 300M`, `--signal B:USR2@30`); Nextflow polls
+    `squeue --noheader -o '%i %t' -t all -p <queue> -u <user>`, which lists ended jobs in their compact states, and
+    cancels its own tasks with `scancel <ids>`. The fake reads each of these as Slurm does, so a task job records the
+    options it asked for. It models only what Sophios, Toil and Nextflow send it, and is never made more lenient than
+    Slurm.
+47. **2026-11-25: what Nextflow on Slurm adds to where a site differs from the compute service (37).** A task that
+    declares no memory asks for 4 GiB (the service's, 8 GB); at most 64 task jobs are in the queue at once (the
+    service's, Nextflow's default, 100, measured); a GPU task with no `gpu_partition` goes to the one partition with
+    GPUs, else the run is refused (the service's goes to the steps' partition, unchecked); a task's job keeps
+    Nextflow's own name, `nf-<process>` (the service's, `<id>:<process>`); and on a Docker site a GPU task's container
+    is given no GPU (the service's Singularity binds it, `--nv`). The leader's size, the comment's prefix and the
+    nodes a driver leaves out differ under Nextflow as under Toil (37), and so, on any site, do `status().steps` and
+    Nextflow's own settings (37). `docs/sites.md` lists each.
 
 ## 14. Open for the owner
 
@@ -745,8 +789,9 @@ code and tests, and its docs (two or three commits):
    `SlurmSettings` and their defaults, the steps' time, Toil's Slurm flags, cwltool as one job, a leader or step job
    that would never start, leftover step jobs; `run.json` records the site's kind, and `attach` refuses a run another
    kind of site submitted.
-4. **S4. Nextflow on Slurm:** Slurm's settings in the block the exception S2 makes already allows (decision 25),
-   each GPU task on the partition with GPUs, the pipeline written for Singularity, Slurm's default engine; S2's
+4. **S4. Nextflow on Slurm** (built): Slurm's settings in the block the exception S2 makes already allows (decisions
+   25 and 44), from the one placement S3 built, each GPU task on the GPU partition with its GPUs, the pipeline written
+   for Singularity, Slurm's default engine; the job unsets the `SBATCH_` variables of a task's header (45); S2's
    refusal of containers under another engine applies on Slurm as on any site.
 
 ## 16. Tests
@@ -814,6 +859,18 @@ The owner's hierarchy (property, then fixture, then a table, then a single case)
   nothing, and that a stop or a cancel Slurm refuses does nothing. In `tests/core/test_sites.py`, end to end with the
   real Toil and cwltool: the same outputs as a local run and a `Machine`, which sends no script that names Slurm, and a
   submit whose answer is lost before or after Slurm took the job.
+- **S4,** in the same two files and lanes, the fake Slurm reading what Nextflow asks of it (46). In
+  `tests/core/test_sites_unit.py`: over generated placements, the block a Slurm site appends to Nextflow's configuration
+  asks what Toil's own parser reads from the line the same site writes, the 4 GiB of a task that declares no memory
+  Toil's `--defaultMemory`, and a machine's block holds the count at once alone; the variables the job unsets before
+  Nextflow, against a hand-written list of each option of a task's header as Nextflow 26.10 writes it (§19), and
+  `error`, none on a machine; over generated partitions, accounts and run ids, each value of the block is one Groovy
+  string that reads back as it was; the placement property places Nextflow's tasks as Toil's steps, sources and problems
+  alike; and a steps setting the compute client refuses is refused under Nextflow. In `tests/core/test_sites.py`, end to
+  end with the pinned Nextflow: the same outputs as a local run and a `Machine`, the executor and the count at once
+  Nextflow reports, and the `wic066` note; the block's options refused as flags; and a workflow with no container
+  taken on a podman site. In the compute service lane, the queue and the time of a task, for steps' times in every
+  form, against the configuration the service's driver writes.
 - **No cluster probes** (the compute design's decision 38). By hand on one of the owner's clusters before a site
   leaves "experimental": the claim and `exit` over NFS, a cleanup cut short by `KillWait`, a login profile's
   `module load` under `set -u`, Apptainer across nodes, Nextflow's head job under the partition's default memory.
@@ -922,6 +979,33 @@ Each is the smallest change that keeps the design's intent.
 10. **`sacct --starttime` is the submit's time,** `run.json`'s, read on the site (`date -r run.json`); the two minutes
     are counted on the site's clock against `sacct`'s End (`SLURM_TIME_FORMAT=%s`).
 
+## 19. What S4 found while it was built
+
+Each is the smallest change that keeps the design's intent.
+
+1. **Nextflow refuses Slurm's time forms** (measured: `time = '0-0:20'` is "Not a valid `time` value"), so the block
+   gives the steps' time in seconds, `'1200s'`, as the service's driver does; Nextflow writes it as `-t 00:20:00`.
+2. **Nextflow 26.10's task header** (measured against the fake Slurm): `-J nf-<process>`, `-o <task>/.command.log`,
+   `--no-requeue`, `--signal B:USR2@30`, `-c` and `--mem` for a process that states them, `-t`, `-p`, then
+   `clusterOptions` on a line of its own; no `-e`, no `-D`, no `--gres` for `accelerator`. Decision 45 unsets the
+   variables of exactly these.
+3. **Nextflow's `slurm` executor queues 100 tasks at once by default** (measured: `capacity: 100`), the service's
+   count; a site's `executor.queueSize` is 64, or `-qs`, and the run's log says it (`capacity: 3` for `-qs 3`).
+4. **A failed Nextflow run names its failed step** on Slurm as on a machine, from Nextflow's own outcome; a failed
+   task is not tried again, so a failed run leaves the leader's job and the task's.
+5. **A cancelled Nextflow run leaves no task job** (measured against the fake Slurm, whose `scancel` sends TERM to
+   the leader's process group; a real Slurm's is not verified): Nextflow cancels its own tasks as it stops; a leader killed outright leaves its tasks to the status that finds it
+   gone, which cancels them by the run's comment (§18, 3), as it does Toil's.
+6. **A site's Slurm block needed one hook more, and a wider one:** `_block` is given the run's folder, whose name is
+   the comment, and `_before` gives the lines the job runs just before the runner, the `unset` of decision 45, which
+   a machine leaves empty. Nothing else of `_site` changed for Nextflow but the removal of its refusal, and the
+   runners whose steps `check` notes for the memory a site gives them (`_DEFAULT_MEMORY`), Nextflow among them on
+   Slurm.
+7. **Nextflow reads `process.memory = '4 GB'` as 4 GiB** (measured against the fake Slurm, Nextflow 26.10.5): a task
+   whose tool declares no memory is submitted with `--mem 4096M`, and one whose process states `memory "300 MB"`
+   with `--mem 300M`, its own directive beating the configuration's, as Toil's steps get `--mem=4096` and
+   `--mem=300`.
+
 ## Appendix A. The leader script
 
 One script for every runner and both schedulers. Sophios fills each `<...>` with a quoted value, one word whatever it
@@ -959,8 +1043,8 @@ runner value's `--maxJobs` and `--clean` say, else 64 and `always` (decision 34)
 - **Nextflow:** `<bin>/nextflow` with `launch`'s flags (`-output-dir <outdir>` among them), then the runner value's
   flags but `-qs` (`-queue-size`); `export NXF_SYNTAX_PARSER=v2`, `launch`'s variable; `cd` to the pipeline's
   folder; what the site sets is the block it appends to the run's copy of the generated `nextflow.config` (decision
-  25), `executor { queueSize = <max_parallel> }`; before it, `mkdir -p` of each folder `write` returned; the trap
-  removes no scratch.
+  25), `executor { queueSize = <max_parallel> }`, and on Slurm its `process` scope (decision 44); before it,
+  `mkdir -p` of each folder `write` returned, and on Slurm the `unset` of decision 45; the trap removes no scratch.
 - **Written only when needed:** under Singularity, the image caches (decision 32): `export
   CWL_SINGULARITY_CACHE=<runs>/.images` for a CWL runner, `export NXF_SINGULARITY_CACHEDIR=<runs>/.images/nextflow`
   for Nextflow, and for both `export SINGULARITY_CACHEDIR=${SINGULARITY_CACHEDIR:-<runs>/.images/cache}` and the
@@ -972,8 +1056,9 @@ runner value's `--maxJobs` and `--clean` say, else 64 and `always` (decision 34)
   --slurmPartition=<steps_partition> --slurmTime <steps_time> [--slurmGPUPartition=<gpu_partition>]
   '--slurmArgs=--comment=sophios:<id> [--account=<account>]'`, each as placed (decision 40); the steps' time as
   `H:MM:SS`, which Toil reads as Slurm does (§18), and never no limit (decision 40). cwltool's line is a machine's:
-  its run is the leader alone, which the header sizes (decision 42). The values are where the site placed the run,
-  the same values `run.json` records.
+  its run is the leader alone, which the header sizes (decision 42). Nextflow's line is a machine's: its tasks are
+  placed by its configuration block (decision 44). The values are where the site placed the run, the same values
+  `run.json` records.
 
 ```bash
 #SBATCH --job-name=<id>
