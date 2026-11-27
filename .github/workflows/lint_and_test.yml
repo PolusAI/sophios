@@ -313,8 +313,9 @@ jobs:
           echo "${RUNNER_TEMP}" >> "${GITHUB_PATH}"
           NXF_ANSI_LOG=false "${RUNNER_TEMP}/nextflow" -version | grep 'version 26.10.5'
 
-      # tests/core/test_sites.py: its rows marked `nextflow`, which need Nextflow in a site's bin; the package job runs
-      # the rest. tests/core/test_ci_coverage.py fails when a row marked so runs in no pull-request lane.
+      # tests/core/test_sites.py: its rows marked `nextflow`, which need Nextflow in a site's bin: Nextflow on a machine,
+      # and on Slurm against the tests' fake Slurm, each task a job of its own; the package job runs the rest.
+      # tests/core/test_ci_coverage.py fails when a row marked so runs in no pull-request lane.
       - name: PyTest Nextflow Runtime
         if: ${{ runner.os == 'Linux' && !cancelled() && steps.setup.outcome == 'success' }}
         timeout-minutes: 20

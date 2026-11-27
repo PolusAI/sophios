@@ -20,8 +20,8 @@ any computer. A run takes the `RunConfig` a local run and the compute service ta
 outputs land, and its `relative_to` is where a relative path is read from there.
 
 A `Machine` is a computer of your own, macOS or Linux: a workstation or a cloud instance, never a login node. A
-`Slurm` site is a cluster's login node: each run is one Slurm job, and under Toil each step a job of its own, placed
-as the config's `SlurmSettings` say.
+`Slurm` site is a cluster's login node: each run is one Slurm job, and under Toil each step, under Nextflow each
+task, a job of its own, placed as the config's `SlurmSettings` say.
 """
 from ..runtime.runners import RunConfig, SlurmSettings
 from ._run import Run

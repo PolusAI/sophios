@@ -386,8 +386,9 @@ class SophiosErrorCode(StrEnum):
         kind=Kind.MACHINE)
     SITE_DEFAULT_MEMORY = _explained(
         'wic066',
-        'Note: a step Toil runs on a site whose tool declares no memory. Toil gives it 4 GiB there '
-        '(`--defaultMemory 4Gi`), and refuses to start it on a computer with less.',
+        'Note: a step Toil runs on a site, or a Nextflow task on a `Slurm` site, whose tool declares no memory. Toil '
+        'gives it 4 GiB there (`--defaultMemory 4Gi`), and refuses to start it on a computer with less; Nextflow asks '
+        'Slurm for 4 GiB for its task (`process.memory`).',
         'Declare the memory the tool needs, `ramMin` in its `ResourceRequirement` '
         '(`CommandLineTool.resources(ram_min=...)` in Python); a site with 4 GiB or more runs it as it is.',
         kind=Kind.MACHINE)
@@ -397,12 +398,11 @@ class SophiosErrorCode(StrEnum):
         'missing or does not answer, `sacct` included; your login profile there sends jobs to another cluster '
         '(`SBATCH_CLUSTERS`, `SLURM_CLUSTERS`), or sets an `SBATCH_ACCOUNT` the run cannot take; a partition a job of '
         'the run goes to is not there, or a step asks for a GPU and no one partition has GPUs; the run would have no '
-        'time limit, or a partition, or a time, that Slurm or your `SBATCH_` settings give is in a form the setting '
-        'would not take; or the runner is one a `Slurm` site does not run yet, Nextflow.',
+        'time limit; or a partition, or a time, that Slurm or your `SBATCH_` settings give is in a form the setting '
+        'would not take.',
         'Do what the message names: make your login profile there give the Slurm the cluster provides, ask the '
-        'administrators to turn on accounting, correct your login profile there, give the setting the message names '
-        "in the config's `SlurmSettings(...)` (a partition, `time=`, `steps_time=`, `gpu_partition=`), or run "
-        'Nextflow on a `Machine`.',
+        'administrators to turn on accounting, correct your login profile there, or give the setting the message names '
+        "in the config's `SlurmSettings(...)` (a partition, `time=`, `steps_time=`, `gpu_partition=`).",
         kind=Kind.MACHINE)
     STALE_STEP_KEY = _explained(
         'wic068',

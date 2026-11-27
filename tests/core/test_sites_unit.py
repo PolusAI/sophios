@@ -28,6 +28,7 @@ from sophios.api.python.workflow import Step, Workflow
 from sophios.ir.resolved import Requirement
 from sophios.lang.diagnostics import SophiosError
 from sophios.lang.error_codes import SophiosErrorCode as Code
+from sophios.nextflow.expr import GROOVY_LITERAL, groovy_unescape
 from sophios.runtime import runners
 from sophios.runtime.backends import RunRequest
 from sophios.runtime.runners import Cwltool, Nextflow, Runner, RunSettings, SlurmSettings, Toil
@@ -291,6 +292,8 @@ _REFUSED: list[tuple[type[sites.Machine | sites.Slurm], dict[str, Any], dict[str
     (sites.Slurm, {}, {'config': RunConfig().slurm_settings(SlurmSettings(time='0'))}, "SlurmSettings(time=...): '0'"),
     (sites.Slurm, {}, {'config': RunConfig().slurm_settings(SlurmSettings(steps_time='0-0', memory='8GB'))},
      "8G\nSlurmSettings(steps_time=...): '0-0'"),   # under Toil, the steps' too, every problem at once
+    (sites.Slurm, {}, {'config': RunConfig().slurm_settings(SlurmSettings(steps_time='0')), 'target': 'nextflow',
+                       'runner': Nextflow()}, "SlurmSettings(steps_time=...): '0'"),   # Nextflow's tasks' time
     *((sites.Machine, {}, options, said) for options, said in _CHECKED)]
 
 
@@ -349,11 +352,11 @@ _PLACED = st.fixed_dictionaries(
        st.sampled_from(['docker', 'podman', 'singularity']), st.sampled_from(['out', 'results/p1']),
        st.none() | _PLACED)
 # pylint: disable-next=too-many-arguments,too-many-positional-arguments,too-many-locals  # the draw, and what Toil read
-def test_toils_command_line_reads_back_as_the_site_set_it(tmp_path_factory: pytest.TempPathFactory, max_parallel: int,
-                                                          clean: str, engine: str, outdir: str,
-                                                          placed: dict[str, str] | None) -> None:
-    """The runner's line of `job.sh`, as Toil's own parser reads it (design Appendix A); on Slurm (`placed`) each step
-    a job where the site placed it, and the leader's header, with each `SBATCH_` variable that beats a line unset."""
+def test_toils_command_line_reads_back_as_the_site_set_it_and_nextflows_block_asks_the_same(
+        tmp_path_factory: pytest.TempPathFactory, max_parallel: int, clean: str, engine: str, outdir: str,
+        placed: dict[str, str] | None) -> None:
+    """Toil's line of `job.sh` as its parser reads it (design Appendix A), on Slurm (`placed`) with the leader's header
+    and the `SBATCH_` variables unset before each job; the block the same site gives Nextflow asks what Toil read."""
     from toil.cwl.cwltoil import get_options  # pylint: disable=import-outside-toplevel  # it imports `pwd`
     run = str(tmp_path_factory.mktemp('runs') / 'wf-1')
     site = (sites.Machine if placed is None else sites.Slurm)('ssh://h', runs='/r', bin='/opt/run/bin',
@@ -377,9 +380,18 @@ def test_toils_command_line_reads_back_as_the_site_set_it(tmp_path_factory: pyte
         f'{run}/{outdir}', f'file:{run}/jobStore_wf', f'{run}/wf.cwl', [f'{run}/wf_inputs.yml'])
     header = dict(line.removeprefix('#SBATCH --').partition('=')[::2] for line in script.splitlines()
                   if line.startswith('#SBATCH'))
+    block = site._block(run, read, Nextflow())
+    assert block['executor'] == {'queueSize': str(found.max_jobs)}
     if placed is None:
-        assert (found.batchSystem, found.batch_logs_dir, header) == ('single_machine', None, {})
+        assert (found.batchSystem, found.batch_logs_dir, header, list(block), site._before(Nextflow())) == (
+            'single_machine', None, {}, ['executor'], [])
         return
+    queue, options = f"'{found.slurm_partition}'", f"'{found.slurm_args}'"
+    if found.slurm_gpu_partition:   # a GPU task's, by the task
+        queue = f"{{ task.accelerator ? '{found.slurm_gpu_partition}' : {queue} }}"
+        options = f"{{ {options} + (task.accelerator ? ' --gres=gpu:' + task.accelerator.request : '') }}"
+    assert block['process'] == {'executor': "'slurm'", 'queue': queue, 'time': f"'{found.slurm_time}s'",
+                                'memory': f"'{found.defaultMemory // 2 ** 30} GB'", 'clusterOptions': options}
     account = [f'--account={placed["account"]}'] if 'account' in placed else []
     assert (found.batchSystem, found.batch_logs_dir, found.slurm_partition, found.slurm_gpu_partition,
             shlex.split(found.slurm_args), found.slurm_time) == (   # as Toil splits them: the account one word
@@ -396,6 +408,31 @@ def test_toils_command_line_reads_back_as_the_site_set_it(tmp_path_factory: pyte
         'SBATCH_NO_REQUEUE', 'SBATCH_REQUEUE', *(['SBATCH_ACCOUNT'] if 'account' in placed else []),
         *(['SBATCH_MEM_PER_NODE', 'SBATCH_MEM_PER_CPU', 'SBATCH_MEM_PER_GPU'] if 'memory' in placed else []),
         *(['SBATCH_GRES'] if 'gpus' in placed else [])}
+    assert set(site._before(Nextflow())[0].split()[1:]) == {   # each option of a task's header, as Nextflow 26.10
+        'SBATCH_JOB_NAME', 'SBATCH_OUTPUT', 'SBATCH_ERROR', 'SBATCH_NO_REQUEUE', 'SBATCH_REQUEUE',   # writes it (§19)
+        'SBATCH_SIGNAL', 'SBATCH_TIMELIMIT', 'SBATCH_MEM_PER_NODE', 'SBATCH_MEM_PER_CPU', 'SBATCH_MEM_PER_GPU',
+        'SBATCH_PARTITION', 'SBATCH_ACCOUNT', 'SBATCH_GRES'}
+
+
+#: Text a Groovy string reads otherwise than as written: both quotes, a backslash, a `$`, braces, blanks, a newline.
+_UNQUOTED = st.text(st.sampled_from(list('a1_.-/+\'"\\${} \t\n#%')), min_size=1, max_size=8)
+
+
+@pytest.mark.fast
+@budget(25)
+@given(_UNQUOTED, st.none() | _UNQUOTED, _UNQUOTED, _UNQUOTED.filter(lambda name: '/' not in name and name != '.'))
+def test_each_value_of_nextflows_block_on_slurm_is_one_groovy_string(partition: str, gpu: str | None, account: str,
+                                                                     run_id: str) -> None:
+    """Whatever a partition, the account or the run's id holds, it reaches the block as one Groovy string that reads
+    back as it was."""
+    read = {'max_parallel': '3', 'steps_partition': partition, 'steps_time': '1:00', 'account': account,
+            **({'gpu_partition': gpu} if gpu is not None else {})}
+    process = _runners.nextflow_on_slurm(f'/r/{run_id}', read)['process']
+    options = f'--comment=sophios:{run_id} --account={account}'
+    assert {name: [groovy_unescape(found[1:-1]) for found in GROOVY_LITERAL.findall(value)]
+            for name, value in process.items()} == {
+        'executor': ['slurm'], 'queue': [partition] if gpu is None else [gpu, partition], 'time': ['60s'],
+        'memory': ['4 GB'], 'clusterOptions': [options] if gpu is None else [options, ' --gres=gpu:', '']}
 
 
 #: A partition a setting names, which `sinfo` lists or not; a time a setting or your `SBATCH_TIMELIMIT` gives.
@@ -472,6 +509,8 @@ def test_a_run_goes_where_its_settings_say_else_where_slurms_conventions_put_it(
     problems, placed = _slurm.placement(rows, variables, slurm, runner, needs, 'h')
     expected = _oracle(slurm, variables, rows, runner, needs)
     assert (placed, bool(problems)) == (expected or {}, expected is None)
+    if runner == Toil.name:   # Nextflow's tasks are placed as Toil's steps are, sources and problems alike
+        assert _slurm.placement(rows, variables, slurm, Nextflow.name, needs, 'h') == (problems, placed)
 
 
 _CPU = 'normal*|2-00:00:00|(null) short|30:00|(null)'
