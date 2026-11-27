@@ -281,7 +281,7 @@ Run it later on this machine, or read it to see what a run does.
 filtered out. The compiled workflow and job file it names are standard CWL,
 so a CWL runner on another machine needs only them, the step files beside
 them, and the files the job and the tools name. To run a workflow on another computer of
-your own over ssh, see [Sites](sites.md); to send it to the cluster's compute
+your own or a Slurm cluster over ssh, see [Sites](sites.md); to send it to the cluster's compute
 service instead, see [The compute service](compute.md).
 
 ## Images that rely on an entrypoint

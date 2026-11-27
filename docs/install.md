@@ -200,7 +200,7 @@ and a pointer to WSL. Validating a tool there, at compile or with
 document only: the rest of cwltool's validation needs a module that exists
 only on POSIX. A run on the cluster or on a site needs WSL too:
 `sophios.compute`'s `Service(url)` raises `cmp002` on Windows itself, and
-`sophios.sites`'s `Machine(...)` raises `wic062`.
+`sophios.sites`'s `Machine(...)` and `Slurm(...)` raise `wic062`.
 
 ## Troubleshooting
 
